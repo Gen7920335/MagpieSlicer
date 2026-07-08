@@ -193,11 +193,19 @@ enum SupportMaterialInterfacePattern {
 
 // BBS
 enum SupportType {
-    stNormalAuto, stTreeAuto, stNormal, stTree
+    stNormalAuto, stTreeAuto, stNormal, stTree, stNormalCuraAuto, stNormalCura
 };
 inline bool is_tree(SupportType stype)
 {
     return std::set<SupportType>{stTreeAuto, stTree}.count(stype) != 0;
+};
+inline bool is_normal_cura(SupportType stype)
+{
+    return std::set<SupportType>{stNormalCuraAuto, stNormalCura}.count(stype) != 0;
+};
+inline bool is_normal_prusa(SupportType stype)
+{
+    return std::set<SupportType>{stNormalAuto, stNormal}.count(stype) != 0;
 };
 inline bool is_tree_slim(SupportType type, SupportMaterialStyle style)
 {
@@ -205,7 +213,7 @@ inline bool is_tree_slim(SupportType type, SupportMaterialStyle style)
 };
 inline bool is_auto(SupportType stype)
 {
-    return std::set<SupportType>{stNormalAuto, stTreeAuto}.count(stype) != 0;
+    return std::set<SupportType>{stNormalAuto, stTreeAuto, stNormalCuraAuto}.count(stype) != 0;
 };
 
 enum SeamPosition {

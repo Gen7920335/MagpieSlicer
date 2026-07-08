@@ -4304,6 +4304,8 @@ void PrintObject::_generate_support_material()
         tree_support.generate();
     }
     else {
+        // OrcaProject: Normal (Cura style) is routed here for now. The Cura-style
+        // area generator will replace this fallback in a later implementation step.
         PrintObjectSupportMaterial support_material(this, m_slicing_params);
         support_material.generate(*this);
     }
