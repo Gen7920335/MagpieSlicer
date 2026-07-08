@@ -135,6 +135,8 @@ struct SupportParameters {
         this->raft_interface_fill_pattern = this->raft_interface_density > 0.95 ? ipRectilinear : ipSupportBase;
         if (object_config.support_interface_pattern == smipGrid)
             this->contact_fill_pattern = ipGrid;
+        else if (object_config.support_interface_pattern == smipTriangles)
+            this->contact_fill_pattern = ipTriangles;
         else if (object_config.support_interface_pattern == smipRectilinearInterlaced)
             this->contact_fill_pattern = ipRectilinear;
         else

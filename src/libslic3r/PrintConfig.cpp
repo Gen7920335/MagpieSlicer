@@ -334,7 +334,8 @@ static t_config_enum_values s_keys_map_SupportMaterialInterfacePattern {
     { "rectilinear",    smipRectilinear },
     { "concentric",     smipConcentric },
     { "rectilinear_interlaced", smipRectilinearInterlaced},
-    { "grid",           smipGrid }
+    { "grid",           smipGrid },
+    { "triangles",      smipTriangles }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SupportMaterialInterfacePattern)
 
@@ -6374,11 +6375,13 @@ void PrintConfigDef::init_fff_params()
     def->enum_values.push_back("concentric");
     def->enum_values.push_back("rectilinear_interlaced");
     def->enum_values.push_back("grid");
+    def->enum_values.push_back("triangles");
     def->enum_labels.push_back(L("Default"));
     def->enum_labels.push_back(L("Rectilinear"));
     def->enum_labels.push_back(L("Concentric"));
     def->enum_labels.push_back(L("Rectilinear Interlaced"));
     def->enum_labels.push_back(L("Grid"));
+    def->enum_labels.push_back(L("Triangles"));
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<SupportMaterialInterfacePattern>(smipAuto));
 

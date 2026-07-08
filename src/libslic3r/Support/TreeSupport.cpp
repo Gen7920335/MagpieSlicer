@@ -1556,7 +1556,8 @@ void TreeSupport::generate_toolpaths()
                         fill_params.density = bottom_interface_density;
                         filler_interface->spacing = interface_flow.spacing();
 
-                        if (m_object_config->support_interface_pattern == smipGrid) {
+                        if (m_object_config->support_interface_pattern == smipGrid ||
+                            m_object_config->support_interface_pattern == smipTriangles) {
                             filler_interface->angle = base_support_angle;
                             fill_params.dont_sort = true;
                         }
@@ -1579,7 +1580,8 @@ void TreeSupport::generate_toolpaths()
                         fill_params.density       = interface_density;
                         filler_interface->spacing = interface_flow.spacing();
 
-                        if (m_object_config->support_interface_pattern == smipGrid) {
+                        if (m_object_config->support_interface_pattern == smipGrid ||
+                            m_object_config->support_interface_pattern == smipTriangles) {
                             filler_interface->angle = base_support_angle;
                             fill_params.dont_sort = true;
                         }

@@ -188,7 +188,7 @@ enum LongRectrationLevel
 };
 
 enum SupportMaterialInterfacePattern {
-    smipAuto, smipRectilinear, smipConcentric, smipRectilinearInterlaced, smipGrid
+    smipAuto, smipRectilinear, smipConcentric, smipRectilinearInterlaced, smipGrid, smipTriangles
 };
 
 // BBS
