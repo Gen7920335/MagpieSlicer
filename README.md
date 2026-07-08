@@ -24,6 +24,7 @@ Status:
 - Reserved branch for replacing or bypassing Orca's normal support area generator.
 - Target scope is normal support only, not organic/tree support.
 - No Cura-like support generator implementation yet.
+- Design plan: `docs/orcaproject/cura_style_normal_support_plan.md`
 
 ## Local Build
 
