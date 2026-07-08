@@ -402,6 +402,7 @@ Milestone 1:
 - Add enum values and labels only.
 - Route Cura-style modes to the existing normal generator temporarily.
 - This proves UI/preset compatibility.
+- Status: implemented in this branch.
 
 Milestone 2:
 - Add `CuraStyleSupportGenerator` with basic overhang + top-down propagation.
@@ -417,4 +418,3 @@ Milestone 4:
 
 Milestone 5:
 - Tune smoothing, small-area removal, and support join distance.
-
