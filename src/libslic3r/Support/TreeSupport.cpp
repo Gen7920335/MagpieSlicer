@@ -684,9 +684,12 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
     const coordf_t extrusion_width = config.get_abs_value("line_width", nozzle_diameter);
     const coordf_t extrusion_width_scaled = scale_(extrusion_width);
     const coordf_t max_bridge_length = scale_(config.max_bridge_length.value);
-    const bool bridge_no_support = max_bridge_length > 0;
-    const bool support_critical_regions_only = config.support_critical_regions_only.value;
-    bool config_remove_small_overhangs = config.support_remove_small_overhang.value;
+    const bool explicit_threshold = config.support_threshold_angle.value > 0;
+    // An explicit auto-support threshold is authoritative. Optional tree heuristics
+    // must not discard areas which the requested angle classified as overhangs.
+    const bool bridge_no_support = max_bridge_length > 0 && !explicit_threshold;
+    const bool support_critical_regions_only = config.support_critical_regions_only.value && !explicit_threshold;
+    bool config_remove_small_overhangs = config.support_remove_small_overhang.value && !explicit_threshold;
     bool config_detect_sharp_tails = g_config_support_sharp_tails;
     const int enforce_support_layers = config.enforce_support_layers.value;
     const double area_thresh_well_supported = SQ(scale_(6));
@@ -1088,7 +1091,7 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
             append(layer->loverhangs, layer->cantilevers);
         }
 
-        if (max_bridge_length > 0 && layer->loverhangs.size() > 0 && lower_layer) {
+        if (bridge_no_support && !layer->loverhangs.empty() && lower_layer) {
             // do not break bridge as the interface will be poor, see #4318
             bool break_bridge = false;
             m_object->remove_bridges_from_contacts(lower_layer, layer, extrusion_width_scaled, &layer->loverhangs, max_bridge_length, break_bridge);

@@ -341,11 +341,11 @@ CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SupportMaterialInterfacePattern)
 
 static t_config_enum_values s_keys_map_SupportType{
     { "normal(auto)",   stNormalAuto },
+    { "normal_cura(auto)", stNormalCuraAuto },
     { "tree(auto)", stTreeAuto },
     { "normal(manual)", stNormal },
-    { "tree(manual)", stTree },
-    { "normal_cura(auto)", stNormalCuraAuto },
-    { "normal_cura(manual)", stNormalCura }
+    { "normal_cura(manual)", stNormalCura },
+    { "tree(manual)", stTree }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SupportType)
 
@@ -6125,7 +6125,7 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Support");
     def->tooltip = L("Normal (Prusa style, auto), Normal (Cura style, auto), and Tree (auto) are used to generate support automatically. "
                      "If a manual style is selected, only support enforcers are generated. "
-                     "Normal (Cura style) is an experimental OrcaProject mode and currently falls back to the existing normal generator.");
+                     "Normal (Cura style) is an experimental OrcaProject support-area generator.");
     def->enum_keys_map = &ConfigOptionEnum<SupportType>::get_enum_values();
     def->enum_values.push_back("normal(auto)");
     def->enum_values.push_back("normal_cura(auto)");

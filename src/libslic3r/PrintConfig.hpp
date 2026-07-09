@@ -193,7 +193,7 @@ enum SupportMaterialInterfacePattern {
 
 // BBS
 enum SupportType {
-    stNormalAuto, stTreeAuto, stNormal, stTree, stNormalCuraAuto, stNormalCura
+    stNormalAuto, stNormalCuraAuto, stTreeAuto, stNormal, stNormalCura, stTree
 };
 inline bool is_tree(SupportType stype)
 {

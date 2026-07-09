@@ -176,20 +176,6 @@ static std::vector<std::pair<TreeSupportSettings, std::vector<size_t>>> group_me
     return grouped_meshes;
 }
 
-#if 0
-// todo remove as only for debugging relevant
-[[nodiscard]] static std::string getPolygonAsString(const Polygons& poly)
-{
-    std::string ret;
-    for (auto path : poly)
-        for (Point p : path) {
-            if (ret != "")
-                ret += ",";
-            ret += "(" + std::to_string(p.x()) + "," + std::to_string(p.y()) + ")";
-        }
-    return ret;
-}
-
 [[nodiscard]] static const std::vector<Polygons> generate_overhangs(const TreeSupportSettings &settings, PrintObject &print_object, std::function<void()> throw_on_cancel)
 {
     const size_t num_raft_layers   = settings.raft_layers.size();
@@ -207,8 +193,11 @@ static std::vector<std::pair<TreeSupportSettings, std::vector<size_t>>> group_me
     print_object.project_and_append_custom_facets(false, EnforcerBlockerType::BLOCKER, blockers_layers);
     const int                support_threshold      = config.support_threshold_angle.value;
     const bool               support_threshold_auto = support_threshold == 0;
-    // +1 makes the threshold inclusive
-    double                   tan_threshold          = support_threshold_auto ? 0. : tan(M_PI * double(support_threshold + 1) / 180.);
+    // +1 makes the threshold inclusive. Keep the effective angle below 90 degrees:
+    // tan(90) is undefined and the previous 90-degree UI value became tan(91),
+    // producing a negative offset and suppressing most automatic tree overhangs.
+    const double             effective_threshold   = std::min<double>(support_threshold + 1, 89.);
+    double                   tan_threshold          = support_threshold_auto ? 0. : tan(M_PI * effective_threshold / 180.);
     //FIXME this is a fudge constant!
     auto                     enforcer_overhang_offset = scaled<double>(config.tree_support_tip_diameter.value);
     const coordf_t radius_sample_resolution = g_config_tree_support_collision_resolution;
@@ -269,7 +258,7 @@ static std::vector<std::pair<TreeSupportSettings, std::vector<size_t>>> group_me
                 //}
             }
             //check_self_intersections(overhangs, "generate_overhangs1");
-            if (! enforcers_layers.empty() && ! enforcers_layers[layer_id].empty()) {
+            if (!enforcers_layers.empty() && !enforcers_layers[layer_id].empty()) {
                 // Has some support enforcers at this layer, apply them to the overhangs, don't apply the support threshold angle.
                 //enforcers_layers[layer_id] = union_(enforcers_layers[layer_id]);
                 //check_self_intersections(enforcers_layers[layer_id], "generate_overhangs - enforcers");
@@ -321,7 +310,6 @@ static std::vector<std::pair<TreeSupportSettings, std::vector<size_t>>> group_me
 
     return out;
 }
-#endif
 
 /*!
  * \brief Precalculates all avoidances, that could be required.
@@ -3451,40 +3439,43 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
         //FIXME generating overhangs just for the first mesh of the group.
         assert(processing.second.size() == 1);
 
-#if 1
-        // use smart overhang detection
         std::vector<Polygons>        overhangs;
-        tree_support->detect_overhangs();
-        const int       num_raft_layers = int(config.raft_layers.size());
-        const int       num_layers = int(print_object.layer_count()) + num_raft_layers;
-        overhangs.resize(num_layers);
-        for (size_t i = 0; i < print_object.layer_count(); i++) {
-            for (ExPolygon& expoly : print_object.get_layer(i)->loverhangs) {
-                Polygons polys = to_polygons(expoly);
-                if (tree_support->overhang_types[&expoly] == TreeSupport::SharpTail) { polys = offset(polys, scale_(0.2));
-                }
-                append(overhangs[i + num_raft_layers], polys);
-            }
-        }
-        // add vertical enforcer points
-        std::vector<float> zs = zs_from_layers(print_object.layers());
-        Polygon            base_circle = make_circle(scale_(0.5), SUPPORT_TREE_CIRCLE_RESOLUTION);
-        for (auto &pt_and_normal :tree_support->m_vertical_enforcer_points) {
-            auto pt     = pt_and_normal.first;
-            auto normal = pt_and_normal.second; // normal seems useless
-            auto iter   = std::lower_bound(zs.begin(), zs.end(), pt.z());
-            if (iter != zs.end()) {
-                size_t layer_nr = iter - zs.begin();
-                if (layer_nr > 0 && layer_nr < print_object.layer_count()) {
-                    Polygon circle = base_circle;
-                    circle.translate(to_2d(pt).cast<coord_t>());
-                    overhangs[layer_nr + num_raft_layers].emplace_back(std::move(circle));
+        if (print_object.config().support_threshold_angle.value > 0) {
+            // TreeSupport3D's native detector preserves the area difference produced
+            // by the requested threshold. The smart detector reduces each layer to
+            // contact features, making low and high thresholds converge to nearly
+            // identical organic trees.
+            overhangs = generate_overhangs(config, print_object, throw_on_cancel);
+        } else {
+            // Keep Orca's smart fallback for the automatic (zero-angle) mode.
+            tree_support->detect_overhangs();
+            const int num_raft_layers = int(config.raft_layers.size());
+            const int num_layers = int(print_object.layer_count()) + num_raft_layers;
+            overhangs.resize(num_layers);
+            for (size_t i = 0; i < print_object.layer_count(); i++) {
+                for (ExPolygon& expoly : print_object.get_layer(i)->loverhangs) {
+                    Polygons polys = to_polygons(expoly);
+                    if (tree_support->overhang_types[&expoly] == TreeSupport::SharpTail)
+                        polys = offset(polys, scale_(0.2));
+                    append(overhangs[i + num_raft_layers], polys);
                 }
             }
+            // Add vertical enforcer points used by the smart detector.
+            std::vector<float> zs = zs_from_layers(print_object.layers());
+            Polygon base_circle = make_circle(scale_(0.5), SUPPORT_TREE_CIRCLE_RESOLUTION);
+            for (auto &pt_and_normal :tree_support->m_vertical_enforcer_points) {
+                auto pt = pt_and_normal.first;
+                auto iter = std::lower_bound(zs.begin(), zs.end(), pt.z());
+                if (iter != zs.end()) {
+                    size_t layer_nr = iter - zs.begin();
+                    if (layer_nr > 0 && layer_nr < print_object.layer_count()) {
+                        Polygon circle = base_circle;
+                        circle.translate(to_2d(pt).cast<coord_t>());
+                        overhangs[layer_nr + num_raft_layers].emplace_back(std::move(circle));
+                    }
+                }
+            }
         }
-#else
-        std::vector<Polygons>        overhangs = generate_overhangs(config, *print.get_object(processing.second.front()), throw_on_cancel);
-#endif
         // ### Precalculate avoidances, collision etc.
         size_t num_support_layers = precalculate(print, overhangs, processing.first, processing.second, volumes, throw_on_cancel);
         bool   has_support = num_support_layers > 0;

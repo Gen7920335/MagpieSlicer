@@ -94,6 +94,18 @@ std::pair<SupportGeneratorLayersPtr, SupportGeneratorLayersPtr> generate_interfa
             Polygons top_polys = regularize(std::move(top), minimum_island_radius_top);
             append(bottom_polys, std::move(top_polys));
             bottom = intersection(std::move(bottom_polys), intermediate_layer.polygons);
+            if (smooth_supports && type == SupporLayerType::TopInterface && !bottom.empty()) {
+                // The base intersection may reintroduce a stair-stepped outline on
+                // the underside of a projected interface. Smooth that final outline,
+                // but keep it within one interface spacing of printable support.
+                Polygons support_envelope = offset(intermediate_layer.polygons, smoothing_distance);
+                bottom = intersection(
+                    smooth_outward(
+                        closing(std::move(bottom), 2 * closing_distance, closing_distance,
+                                SUPPORT_SURFACES_OFFSET_PARAMETERS),
+                        smoothing_distance),
+                    support_envelope);
+            }
             if (has_top_interface) {
                 // Don't trim the precomputed Organic supports top interface with base layer
                 // as the precomputed top interface likely expands over multiple tree tips.
@@ -199,9 +211,11 @@ std::pair<SupportGeneratorLayersPtr, SupportGeneratorLayersPtr> generate_interfa
                     SupportGeneratorLayer *interface_layer          = nullptr;
                     if (! polygons_bottom_contact_projected_interface.empty() || ! polygons_top_contact_projected_interface.empty() ||
                         (top_interface_layer && ! top_interface_layer->polygons.empty())) {
+                        const SupporLayerType interface_type = polygons_top_contact_projected_interface.empty() ?
+                            SupporLayerType::BottomInterface : SupporLayerType::TopInterface;
                         interface_layer = insert_layer(
                             intermediate_layer, polygons_bottom_contact_projected_interface, std::move(polygons_top_contact_projected_interface), top_interface_layer,
-                            nullptr, polygons_top_contact_projected_interface.empty() ? SupporLayerType::BottomInterface : SupporLayerType::TopInterface);
+                            nullptr, interface_type);
                         interface_layers[idx_intermediate_layer] = interface_layer;
                     }
                     if (! polygons_bottom_contact_projected_base.empty() || ! polygons_top_contact_projected_base.empty() ||
@@ -1722,15 +1736,24 @@ void generate_support_toolpaths(
                     filler->spacing = raft_contact ? support_params.raft_interface_flow.spacing() :
                         interface_as_base ? support_params.support_material_flow.spacing() : support_params.support_material_interface_flow.spacing();
                     filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / density));
-                    fill_expolygons_generate_paths(
-                        // Destination
-                        layer_ex.extrusions,
-                        // Regions to fill
-                        union_safety_offset_ex(layer_ex.polygons_to_extrude()),
-                        // Filler and its parameters
-                        filler, float(density),
-                        // Extrusion parameters
-                        interface_as_base ? ExtrusionRole::erSupportMaterial : ExtrusionRole::erSupportMaterialInterface, interface_flow);
+                    ExPolygons regions = union_safety_offset_ex(layer_ex.polygons_to_extrude());
+                    const ExtrusionRole role = interface_as_base ?
+                        ExtrusionRole::erSupportMaterial : ExtrusionRole::erSupportMaterialInterface;
+                    if (!interface_as_base && config.support_interface_pattern == smipTriangles) {
+                        FillParams fill_params;
+                        fill_params.density          = float(density);
+                        fill_params.dont_adjust      = true;
+                        fill_params.multiline        = 1;
+                        fill_params.anchor_length    = 0.f;
+                        fill_params.anchor_length_max = 0.f;
+                        fill_expolygons_generate_paths(
+                            layer_ex.extrusions, std::move(regions), filler, fill_params,
+                            float(density), role, interface_flow);
+                    } else {
+                        fill_expolygons_generate_paths(
+                            layer_ex.extrusions, std::move(regions), filler, float(density),
+                            role, interface_flow);
+                    }
                 }
             };
             const bool top_interfaces = support_params.num_top_interface_layers > 0;

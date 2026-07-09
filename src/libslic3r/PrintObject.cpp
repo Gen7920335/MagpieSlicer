@@ -12,6 +12,7 @@
 #include "PrintConfig.hpp"
 #include "SLA/IndexedMesh.hpp"
 #include "Support/SupportMaterial.hpp"
+#include "Support/CuraStyleSupport.hpp"
 #include "Support/SupportSpotsGenerator.hpp"
 #include "Support/TreeSupport.hpp"
 #include "Surface.hpp"
@@ -4303,9 +4304,11 @@ void PrintObject::_generate_support_material()
         tree_support.throw_on_cancel = [this]() { this->throw_if_canceled(); };
         tree_support.generate();
     }
+    else if (is_normal_cura(m_config.support_type.value)) {
+        CuraStyleSupportGenerator support_material(this, m_slicing_params);
+        support_material.generate(*this);
+    }
     else {
-        // OrcaProject: Normal (Cura style) is routed here for now. The Cura-style
-        // area generator will replace this fallback in a later implementation step.
         PrintObjectSupportMaterial support_material(this, m_slicing_params);
         support_material.generate(*this);
     }
