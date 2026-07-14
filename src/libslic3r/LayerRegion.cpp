@@ -12,6 +12,7 @@
 
 #include <string>
 #include <map>
+#include <cmath>
 
 #include <boost/log/trivial.hpp>
 #include <boost/algorithm/clamp.hpp>
@@ -35,11 +36,16 @@ Flow LayerRegion::bridging_flow(FlowRole role, bool thick_bridge) const
     const PrintObject       &print_object   = *this->layer()->object();
     Flow bridge_flow;
     // Here this->extruder(role) - 1 may underflow to MAX_INT, but then the get_at() will fall back to zero'th element, so everything is all right.
-    auto nozzle_diameter = float(print_object.print()->config().nozzle_diameter.get_at(region.extruder(role) - 1));
-    const ConfigOptionFloatOrPercent& bridge_width_opt = region_config.bridge_line_width;
-    const double                      bridge_width      = bridge_width_opt.get_abs_value(nozzle_diameter);
-    const bool                        has_bridge_width  = bridge_width > 0.;
-    const double                      bridge_flow_ratio = region_config.bridge_flow;
+    const PrintConfig &print_config = print_object.print()->config();
+    const int          extruder_id  = int(region.extruder(role));
+    auto nozzle_diameter = float(print_config.nozzle_diameter.get_at(extruder_id - 1));
+    ConfigOptionFloatOrPercent bridge_width_opt = region_config.bridge_line_width;
+    const FloatOrPercent       toolhead_bridge_width = print_config.toolhead_bridge_line_width.get_at(extruder_id > 0 ? size_t(extruder_id - 1) : 0);
+    if (toolhead_bridge_width.value > 0.)
+        bridge_width_opt = ConfigOptionFloatOrPercent(toolhead_bridge_width.value, toolhead_bridge_width.percent);
+    const double bridge_width      = bridge_width_opt.get_abs_value(nozzle_diameter);
+    const bool   has_bridge_width  = bridge_width > 0.;
+    const double bridge_flow_ratio = region_config.bridge_flow;
 
     if (thick_bridge) {
         // The old Slic3r way (different from all other slicers): Use rounded extrusions.

@@ -44,6 +44,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <chrono>
 
 
@@ -90,7 +91,7 @@ static std::string get_view_type_string(libvgcode::EViewType view_type)
     else if (view_type == libvgcode::EViewType::ActualVolumetricFlowRate)
         return _u8L("Actual Flow");
     else if (view_type == libvgcode::EViewType::Tool)
-        return _u8L("Tool");
+        return _u8L("Nozzle used");
     else if (view_type == libvgcode::EViewType::ColorPrint)
         return _u8L("Filament");
     else if (view_type == libvgcode::EViewType::LayerTimeLinear)
@@ -101,6 +102,45 @@ static std::string get_view_type_string(libvgcode::EViewType view_type)
     else if (view_type == libvgcode::EViewType::PressureAdvance)
         return _u8L("Pressure Advance");
     return "";
+}
+
+static std::vector<std::string> nozzle_used_palette(size_t count)
+{
+    std::vector<std::string> palette;
+    palette.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        const float h = std::fmod(0.58f + 0.61803398875f * float(i), 1.0f);
+        const float s = 0.78f;
+        const float v = 1.0f;
+        const float c = v * s;
+        const float x = c * (1.0f - std::fabs(std::fmod(h * 6.0f, 2.0f) - 1.0f));
+        const float m = v - c;
+
+        float r = 0.0f;
+        float g = 0.0f;
+        float b = 0.0f;
+        if (h < 1.0f / 6.0f) {
+            r = c; g = x;
+        } else if (h < 2.0f / 6.0f) {
+            r = x; g = c;
+        } else if (h < 3.0f / 6.0f) {
+            g = c; b = x;
+        } else if (h < 4.0f / 6.0f) {
+            g = x; b = c;
+        } else if (h < 5.0f / 6.0f) {
+            r = x; b = c;
+        } else {
+            r = c; b = x;
+        }
+
+        char color[8];
+        std::snprintf(color, sizeof(color), "#%02X%02X%02X",
+            int((r + m) * 255.0f + 0.5f),
+            int((g + m) * 255.0f + 0.5f),
+            int((b + m) * 255.0f + 0.5f));
+        palette.emplace_back(color);
+    }
+    return palette;
 }
 
 // Find an index of a value in a sorted vector, which is in <z-eps, z+eps>.
@@ -1081,8 +1121,9 @@ void GCodeViewer::update_by_mode(ConfigOptionMode mode)
     view_type_items.push_back(libvgcode::EViewType::ActualSpeed);
     view_type_items.push_back(libvgcode::EViewType::Acceleration);
     view_type_items.push_back(libvgcode::EViewType::Jerk);
-    view_type_items.push_back(libvgcode::EViewType::Height);
+    view_type_items.push_back(libvgcode::EViewType::Tool);
     view_type_items.push_back(libvgcode::EViewType::Width);
+    view_type_items.push_back(libvgcode::EViewType::Height);
     view_type_items.push_back(libvgcode::EViewType::VolumetricFlowRate);
     view_type_items.push_back(libvgcode::EViewType::ActualVolumetricFlowRate);
     view_type_items.push_back(libvgcode::EViewType::LayerTimeLinear);
@@ -1098,9 +1139,6 @@ void GCodeViewer::update_by_mode(ConfigOptionMode mode)
     for (int i = 0; i < view_type_items.size(); i++) {
         view_type_items_str.push_back(get_view_type_string(view_type_items[i]));
     }
-
-    // BBS for first layer inspection
-    view_type_items.push_back(libvgcode::EViewType::Tool);
 
     options_items.push_back(EMoveType::Travel);
     options_items.push_back(EMoveType::Retract);
@@ -1135,10 +1173,11 @@ void GCodeViewer::load_as_gcode(const GCodeProcessorResult& gcode_result, const 
         //BBS: add logs
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": the same id %1%, return directly, result %2% ") % m_last_result_id % (&gcode_result);
 
-        // collect tool colors
+        // collect nozzle colors
+        const std::vector<std::string> nozzle_colors = nozzle_used_palette(str_tool_colors.size());
         libvgcode::Palette tools_colors;
-        tools_colors.reserve(str_tool_colors.size());
-        for (const std::string& color : str_tool_colors) {
+        tools_colors.reserve(nozzle_colors.size());
+        for (const std::string& color : nozzle_colors) {
             tools_colors.emplace_back(libvgcode::convert(color));
         }
         m_viewer.set_tool_colors(tools_colors);
@@ -1173,7 +1212,8 @@ void GCodeViewer::load_as_gcode(const GCodeProcessorResult& gcode_result, const 
     }
 
     // convert data from PrusaSlicer format to libvgcode format
-    libvgcode::GCodeInputData data = libvgcode::convert(gcode_result, str_tool_colors, str_color_print_colors, m_viewer);
+    const std::vector<std::string> nozzle_colors = nozzle_used_palette(str_tool_colors.size());
+    libvgcode::GCodeInputData data = libvgcode::convert(gcode_result, nozzle_colors, str_color_print_colors, m_viewer);
 
 //#define ENABLE_DATA_EXPORT 1
 //#if ENABLE_DATA_EXPORT
@@ -3733,8 +3773,8 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
             model_used_filaments_g.push_back(model_used_filament_g);
         }
 
-        offsets = calculate_offsets({ { "Extruder NNN", {""}}}, icon_size);
-        append_headers({ {_u8L("Filament"), offsets[0]}, {_u8L("Usage"), offsets[1]} });
+        offsets = calculate_offsets({ { "Nozzle NNN", {""}}}, icon_size);
+        append_headers({ {_u8L("Nozzle"), offsets[0]}, {_u8L("Usage"), offsets[1]} });
         break;
     }
     case libvgcode::EViewType::ColorPrint:
@@ -3993,7 +4033,7 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
         for (uint8_t extruder_id : used_extruders_ids) {
             const std::string weight_text = format_compact_weight(model_used_filaments_g[i], imperial_units);
             ::sprintf(buf, imperial_units ? "%.2f in    %s" : "%.2f m    %s", model_used_filaments_m[i], weight_text.c_str());
-            append_item(EItemType::Rect, libvgcode::convert(m_viewer.get_tool_colors()[extruder_id]), { { _u8L("Extruder") + " " + std::to_string(extruder_id + 1), offsets[0]}, {buf, offsets[1]} });
+            append_item(EItemType::Rect, libvgcode::convert(m_viewer.get_tool_colors()[extruder_id]), { { _u8L("Nozzle") + " " + std::to_string(extruder_id + 1), offsets[0]}, {buf, offsets[1]} });
             // append_item(EItemType::Rect, libvgcode::convert(m_viewer.get_tool_colors()[extruder_id]), _u8L("Extruder") + " " + std::to_string(extruder_id + 1),
             // true, "", 0.0f, 0.0f, offsets, used_filaments_m[extruder_id], used_filaments_g[extruder_id]);
             i++;

@@ -97,6 +97,7 @@ public:
 
     //BBS
     Flow                        smaller_ext_perimeter_flow;
+    int                         detail_wall_count = 1;
     std::vector<Polygons>       m_lower_polygons_series;
     std::vector<Polygons>       m_external_lower_polygons_series;
     std::vector<Polygons>       m_smaller_external_lower_polygons_series;

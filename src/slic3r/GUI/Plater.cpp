@@ -3,7 +3,9 @@
 #include "libslic3r_version.h"
 
 #include <cstddef>
+#include <array>
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 #include <limits>
 #include <vector>
@@ -25,6 +27,7 @@
 #include <wx/stattext.h>
 #include <wx/button.h>
 #include <wx/bmpcbox.h>
+#include <wx/combobox.h>
 #include <wx/display.h>
 #include <wx/statbox.h>
 #include <wx/statbmp.h>
@@ -525,6 +528,7 @@ struct Sidebar::priv
 
     PlaterPresetComboBox *combo_print = nullptr;
     std::vector<PlaterPresetComboBox*> combos_filament;
+    std::vector<wxComboBox*> combos_toolhead_nozzle;
     int editing_filament = -1;
     wxBoxSizer *sizer_filaments = nullptr;
 
@@ -927,6 +931,60 @@ static bool has_junction_deviation(const DynamicPrintConfig* printer_config)
 }
 
 static DynamicFilamentList dynamic_filament_list;
+
+static const std::array<double, 6> s_toolhead_nozzle_choices = {0.15, 0.20, 0.40, 0.60, 0.80, 1.00};
+
+static wxString format_toolhead_nozzle_diameter(double diameter)
+{
+    return wxString::Format("%.2g", diameter);
+}
+
+static int toolhead_nozzle_selection_for(double diameter)
+{
+    int best = 0;
+    double best_delta = std::numeric_limits<double>::max();
+    for (int i = 0; i < int(s_toolhead_nozzle_choices.size()); ++i) {
+        const double delta = std::abs(s_toolhead_nozzle_choices[i] - diameter);
+        if (delta < best_delta) {
+            best = i;
+            best_delta = delta;
+        }
+    }
+    return best;
+}
+
+static void set_float_or_percent_vector_at(DynamicPrintConfig &config, const DynamicPrintConfig &current, const char *key, size_t index, const FloatOrPercent &value)
+{
+    std::vector<FloatOrPercent> values;
+    if (const auto *opt = current.option<ConfigOptionFloatsOrPercents>(key))
+        values = opt->values;
+    if (values.size() <= index)
+        values.resize(index + 1, FloatOrPercent(0., false));
+    values[index] = value;
+    config.set_key_value(key, new ConfigOptionFloatsOrPercents(values));
+}
+
+static double rounded_toolhead_width(double value)
+{
+    return std::round(value * 1000.) / 1000.;
+}
+
+static void set_toolhead_width_defaults_for_nozzle(DynamicPrintConfig &config, const DynamicPrintConfig &current, size_t index, double nozzle_diameter)
+{
+    const FloatOrPercent default_width(rounded_toolhead_width(nozzle_diameter * 1.125), false);
+    const FloatOrPercent first_layer_width(rounded_toolhead_width(nozzle_diameter * 1.4), false);
+    const FloatOrPercent nozzle_width(rounded_toolhead_width(nozzle_diameter), false);
+
+    set_float_or_percent_vector_at(config, current, "toolhead_line_width", index, default_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_initial_layer_line_width", index, first_layer_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_outer_wall_line_width", index, default_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_inner_wall_line_width", index, default_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_top_surface_line_width", index, nozzle_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_sparse_infill_line_width", index, default_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_internal_solid_infill_line_width", index, default_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_support_line_width", index, nozzle_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_bridge_line_width", index, nozzle_width);
+}
 
 class AMSCountPopupWindow : public PopupWindow
 {
@@ -2117,7 +2175,7 @@ Sidebar::Sidebar(Plater *parent)
     wxBoxSizer* bSizer39;
     bSizer39 = new wxBoxSizer( wxHORIZONTAL );
     p->m_filament_icon = new ScalableButton(p->m_panel_filament_title, wxID_ANY, "filament");
-    p->m_staticText_filament_settings = new Label(p->m_panel_filament_title, _L("Project Filaments"), LB_PROPAGATE_MOUSE_EVENT);
+    p->m_staticText_filament_settings = new Label(p->m_panel_filament_title, _L("Project Toolheads"), LB_PROPAGATE_MOUSE_EVENT);
     bSizer39->Add(p->m_filament_icon, 0, wxALIGN_CENTER | wxLEFT, FromDIP(SidebarProps::TitlebarMargin()));
     bSizer39->Add(p->m_staticText_filament_settings, 0, wxALIGN_CENTER | wxLEFT | wxRIGHT, FromDIP(SidebarProps::ElementSpacing()));
     bSizer39->SetMinSize(-1, FromDIP(30));
@@ -2157,7 +2215,7 @@ Sidebar::Sidebar(Plater *parent)
     bSizer39->Hide(p->m_flushing_volume_btn); // ORCA Ensure button is hidden on launch while 1 filament exist
 
     ScalableButton* add_btn = new ScalableButton(p->m_panel_filament_title, wxID_ANY, "add_filament");
-    add_btn->SetToolTip(_L("Add one filament"));
+    add_btn->SetToolTip(_L("Add one toolhead"));
     add_btn->Bind(wxEVT_BUTTON, [this, scrolled_sizer](wxCommandEvent& e){
         add_filament();
         update_filaments_counter();
@@ -2167,7 +2225,7 @@ Sidebar::Sidebar(Plater *parent)
     // ORCA Moved add button after delete button to prevent add button position change when remove icon automatically hidden
 
     ScalableButton* del_btn = new ScalableButton(p->m_panel_filament_title, wxID_ANY, "delete_filament");
-    del_btn->SetToolTip(_L("Remove last filament"));
+    del_btn->SetToolTip(_L("Remove last toolhead"));
     del_btn->Bind(wxEVT_BUTTON, [this, scrolled_sizer](wxCommandEvent &e) {
         delete_filament();
         update_filaments_counter();
@@ -2181,7 +2239,7 @@ Sidebar::Sidebar(Plater *parent)
 
     ams_btn = new ScalableButton(p->m_panel_filament_title, wxID_ANY, "ams_fila_sync", wxEmptyString, wxDefaultSize, wxDefaultPosition,
                                                  wxBU_EXACTFIT | wxNO_BORDER, false, 16); // ORCA match icon size with other icons as 16x16
-    ams_btn->SetToolTip(_L("Synchronize filament list from AMS"));
+    ams_btn->SetToolTip(_L("Synchronize toolhead material list from AMS"));
     ams_btn->Bind(wxEVT_BUTTON, [this, scrolled_sizer](wxCommandEvent &e) {
         sync_ams_list();
     });
@@ -2193,7 +2251,7 @@ Sidebar::Sidebar(Plater *parent)
     //bSizer39->Add(FromDIP(10), 0, 0, 0, 0 );
 
     ScalableButton* set_btn = new ScalableButton(p->m_panel_filament_title, wxID_ANY, "settings");
-    set_btn->SetToolTip(_L("Set filaments to use"));
+    set_btn->SetToolTip(_L("Set toolhead materials to use"));
     set_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
         p->editing_filament = -1;
         // wxGetApp().params_dialog()->Popup();
@@ -2402,6 +2460,54 @@ void Sidebar::init_filament_combo(PlaterPresetComboBox **combo, const int filame
     combo_and_btn_sizer->Add((*combo)->clr_picker, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(SidebarProps::ElementSpacing()) - FromDIP(2)); // ElementSpacing - 2 (from combo box))
     combo_and_btn_sizer->Add(*combo, 1, wxALL | wxEXPAND, FromDIP(2))->SetMinSize({-1, 30 * wxGetApp().em_unit() / 10}); // ORCA ensure height matches with PlaterPresetComboBox
 
+    auto *nozzle_combo = new wxComboBox(p->m_panel_filament_content, wxID_ANY, wxEmptyString, wxDefaultPosition,
+                                        wxSize(FromDIP(58), FromDIP(26)), 0, nullptr, wxCB_READONLY);
+    nozzle_combo->SetToolTip(_L("Toolhead nozzle diameter"));
+    for (double diameter : s_toolhead_nozzle_choices)
+        nozzle_combo->Append(format_toolhead_nozzle_diameter(diameter));
+
+    double current_nozzle_diameter = 0.4;
+    if (auto *nozzle_opt = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter")) {
+        if (!nozzle_opt->values.empty()) {
+            const size_t nozzle_idx = std::min<size_t>(filament_idx, nozzle_opt->values.size() - 1);
+            current_nozzle_diameter = nozzle_opt->values[nozzle_idx];
+        }
+    }
+    nozzle_combo->SetSelection(toolhead_nozzle_selection_for(current_nozzle_diameter));
+    nozzle_combo->Bind(wxEVT_COMBOBOX, [this, filament_idx](wxCommandEvent &evt) {
+        auto *combo = dynamic_cast<wxComboBox*>(evt.GetEventObject());
+        if (!combo)
+            return;
+        const int selection = combo->GetSelection();
+        if (selection < 0 || selection >= int(s_toolhead_nozzle_choices.size()))
+            return;
+
+        PresetBundle &preset_bundle = *wxGetApp().preset_bundle;
+        const DynamicPrintConfig &current_config = preset_bundle.printers.get_edited_preset().config;
+        std::vector<double> nozzle_values;
+        if (auto *nozzle_opt = current_config.option<ConfigOptionFloats>("nozzle_diameter"))
+            nozzle_values = nozzle_opt->values;
+        if (nozzle_values.empty())
+            nozzle_values.push_back(0.4);
+        if (nozzle_values.size() <= size_t(filament_idx))
+            nozzle_values.resize(size_t(filament_idx) + 1, nozzle_values.back());
+
+        const double nozzle_diameter = s_toolhead_nozzle_choices[size_t(selection)];
+        nozzle_values[size_t(filament_idx)] = nozzle_diameter;
+
+        DynamicPrintConfig new_config;
+        new_config.set_key_value("nozzle_diameter", new ConfigOptionFloats(nozzle_values));
+        set_toolhead_width_defaults_for_nozzle(new_config, current_config, size_t(filament_idx), nozzle_diameter);
+
+        wxGetApp().get_tab(Preset::TYPE_PRINTER)->load_config(new_config);
+        wxGetApp().plater()->on_config_change(preset_bundle.full_config());
+        wxGetApp().plater()->update();
+    });
+    if (p->combos_toolhead_nozzle.size() <= size_t(filament_idx))
+        p->combos_toolhead_nozzle.resize(size_t(filament_idx) + 1, nullptr);
+    p->combos_toolhead_nozzle[size_t(filament_idx)] = nozzle_combo;
+    combo_and_btn_sizer->Add(nozzle_combo, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::ElementSpacing()) - FromDIP(2));
+
     /* BBS hide del_btn
     ScalableButton* del_btn = new ScalableButton(p->m_panel_filament_content, wxID_ANY, "delete_filament");
     del_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& e){
@@ -2463,9 +2569,15 @@ void Sidebar::remove_unused_filament_combos(const size_t current_extruder_count)
         const int last = p->combos_filament.size() - 1;
         auto sizer_filaments = this->p->sizer_filaments->GetItem(last % 2)->GetSizer();
         sizer_filaments->Remove(last / 2);
+        if (last < int(p->combos_toolhead_nozzle.size()) && p->combos_toolhead_nozzle[last]) {
+            p->combos_toolhead_nozzle[last]->Destroy();
+            p->combos_toolhead_nozzle[last] = nullptr;
+        }
         (*p->combos_filament[last]).Destroy();
         p->combos_filament.pop_back();
     }
+    if (p->combos_toolhead_nozzle.size() > current_extruder_count)
+        p->combos_toolhead_nozzle.resize(current_extruder_count);
     // BBS:  filament double columns
     auto sizer_filaments0 = this->p->sizer_filaments->GetItem((size_t)0)->GetSizer();
     auto sizer_filaments1 = this->p->sizer_filaments->GetItem(1)->GetSizer();
@@ -2537,7 +2649,7 @@ void Sidebar::update_all_preset_comboboxes()
 		p->m_staticText_filament_settings->SetLabel(_L("Pellets"));
         p->m_filament_icon->SetBitmap_("pellets");
     } else {
-		p->m_staticText_filament_settings->SetLabel(_L("Filament"));
+		p->m_staticText_filament_settings->SetLabel(_L("Toolheads"));
         p->m_filament_icon->SetBitmap_("filament");
     }
 

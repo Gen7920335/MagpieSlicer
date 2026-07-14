@@ -3,6 +3,7 @@
 #include "Print.hpp"
 #include <cmath>
 #include <assert.h>
+#include <limits>
 
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -62,6 +63,118 @@ static inline FlowRole opt_key_to_flow_role(const std::string &opt_key)
 static inline void throw_on_missing_variable(const std::string &opt_key, const char *dependent_opt_key) 
 {
 	throw FlowErrorMissingVariable((boost::format(L("Failed to calculate line width of %1%. Cannot get value of \u201c%2%\u201d ")) % opt_key % dependent_opt_key).str());
+}
+
+static ConfigOptionFloatOrPercent to_config_option(const FloatOrPercent &value)
+{
+    return ConfigOptionFloatOrPercent(value.value, value.percent);
+}
+
+static bool is_line_width_set(const ConfigOptionFloatOrPercent &value)
+{
+    return value.value > 0.;
+}
+
+static ConfigOptionFloatOrPercent indexed_toolhead_line_width(const ConfigOptionFloatsOrPercents &values, int extruder_id)
+{
+    const size_t idx = extruder_id > 0 ? size_t(extruder_id - 1) : 0;
+    return to_config_option(values.get_at(idx));
+}
+
+ConfigOptionFloatOrPercent toolhead_line_width_or(const PrintConfig &print_config, FlowRole role, int extruder_id, bool first_layer, const ConfigOptionFloatOrPercent &fallback)
+{
+    if (first_layer) {
+        ConfigOptionFloatOrPercent first_layer_width = indexed_toolhead_line_width(print_config.toolhead_initial_layer_line_width, extruder_id);
+        if (is_line_width_set(first_layer_width))
+            return first_layer_width;
+    }
+
+    const ConfigOptionFloatsOrPercents *role_widths = nullptr;
+    switch (role) {
+    case frExternalPerimeter:
+        role_widths = &print_config.toolhead_outer_wall_line_width;
+        break;
+    case frPerimeter:
+        role_widths = &print_config.toolhead_inner_wall_line_width;
+        break;
+    case frInfill:
+        role_widths = &print_config.toolhead_sparse_infill_line_width;
+        break;
+    case frSolidInfill:
+        role_widths = &print_config.toolhead_internal_solid_infill_line_width;
+        break;
+    case frTopSolidInfill:
+        role_widths = &print_config.toolhead_top_surface_line_width;
+        break;
+    case frSupportMaterial:
+    case frSupportMaterialInterface:
+    case frSupportTransition:
+        role_widths = &print_config.toolhead_support_line_width;
+        break;
+    }
+
+    if (role_widths != nullptr) {
+        ConfigOptionFloatOrPercent role_width = indexed_toolhead_line_width(*role_widths, extruder_id);
+        if (is_line_width_set(role_width))
+            return role_width;
+    }
+
+    ConfigOptionFloatOrPercent default_width = indexed_toolhead_line_width(print_config.toolhead_line_width, extruder_id);
+    if (is_line_width_set(default_width))
+        return default_width;
+
+    return fallback;
+}
+
+unsigned int detail_external_perimeter_extruder_1based(const PrintConfig &print_config, const PrintRegionConfig &region_config, unsigned int base_extruder_id)
+{
+    if (!region_config.use_smaller_nozzles_in_crisp_corners.value || base_extruder_id == 0)
+        return base_extruder_id;
+
+    const size_t extruder_count = print_config.nozzle_diameter.values.size();
+    const size_t base_idx       = size_t(base_extruder_id - 1);
+    if (extruder_count == 0 || base_idx >= extruder_count)
+        return base_extruder_id;
+
+    const double base_nozzle = print_config.nozzle_diameter.get_at(base_idx);
+    if (base_nozzle <= EPSILON)
+        return base_extruder_id;
+
+    auto is_smaller_candidate = [&](size_t idx) {
+        return idx < extruder_count && idx != base_idx &&
+               print_config.nozzle_diameter.get_at(idx) > EPSILON &&
+               print_config.nozzle_diameter.get_at(idx) < base_nozzle - EPSILON;
+    };
+
+    auto best_smaller = [&](bool require_same_colour) -> unsigned int {
+        const std::string base_colour = print_config.filament_colour.get_at(base_idx);
+        double       best_nozzle = std::numeric_limits<double>::max();
+        unsigned int best_id     = 0;
+        for (size_t idx = 0; idx < extruder_count; ++idx) {
+            if (!is_smaller_candidate(idx))
+                continue;
+            if (require_same_colour && print_config.filament_colour.get_at(idx) != base_colour)
+                continue;
+            const double nozzle = print_config.nozzle_diameter.get_at(idx);
+            if (nozzle < best_nozzle) {
+                best_nozzle = nozzle;
+                best_id     = unsigned(idx + 1);
+            }
+        }
+        return best_id;
+    };
+
+    if (unsigned int same_colour = best_smaller(true); same_colour != 0)
+        return same_colour;
+
+    const int manual_toolhead = region_config.crisp_corner_detail_toolhead.value;
+    if (manual_toolhead > 0 && is_smaller_candidate(size_t(manual_toolhead - 1)))
+        return unsigned(manual_toolhead);
+
+    if (unsigned int any_smaller = best_smaller(false); any_smaller != 0)
+        return any_smaller;
+
+    return base_extruder_id;
 }
 
 // Used to provide hints to the user on default extrusion width values, and to provide reasonable values to the PlaceholderParser.
@@ -231,12 +344,15 @@ double Flow::mm3_per_mm() const
 
 Flow support_material_flow(const PrintObject *object, float layer_height)
 {
+    const PrintConfig &print_config = object->print()->config();
+    ConfigOptionFloatOrPercent width = (object->config().support_line_width.value > 0) ? object->config().support_line_width : object->config().line_width;
+    width = toolhead_line_width_or(print_config, frSupportMaterial, object->config().support_filament, false, width);
     return Flow::new_from_config_width(
         frSupportMaterial,
         // The width parameter accepted by new_from_config_width is of type ConfigOptionFloatOrPercent, the Flow class takes care of the percent to value substitution.
-        (object->config().support_line_width.value > 0) ? object->config().support_line_width : object->config().line_width,
+        width,
         // if object->config().support_filament == 0 (which means to not trigger tool change, but use the current extruder instead), get_at will return the 0th component.
-        float(object->print()->config().nozzle_diameter.get_at(object->config().support_filament-1)),
+        float(print_config.nozzle_diameter.get_at(object->config().support_filament-1)),
         (layer_height > 0.f) ? layer_height : float(object->config().layer_height.value));
 }
 //BBS
@@ -250,23 +366,28 @@ Flow support_transition_flow(const PrintObject* object)
 Flow support_material_1st_layer_flow(const PrintObject *object, float layer_height)
 {
     const PrintConfig &print_config = object->print()->config();
-    const auto &width = (print_config.initial_layer_line_width.value > 0) ? print_config.initial_layer_line_width : object->config().support_line_width;
+    ConfigOptionFloatOrPercent width = (print_config.initial_layer_line_width.value > 0) ? print_config.initial_layer_line_width : object->config().support_line_width;
+    width = (width.value > 0) ? width : object->config().line_width;
+    width = toolhead_line_width_or(print_config, frSupportMaterial, object->config().support_filament, true, width);
     return Flow::new_from_config_width(
         frSupportMaterial,
         // The width parameter accepted by new_from_config_width is of type ConfigOptionFloatOrPercent, the Flow class takes care of the percent to value substitution.
-        (width.value > 0) ? width : object->config().line_width,
+        width,
         float(print_config.nozzle_diameter.get_at(object->config().support_filament-1)),
         (layer_height > 0.f) ? layer_height : float(print_config.initial_layer_print_height.value));
 }
 
 Flow support_material_interface_flow(const PrintObject *object, float layer_height)
 {
+    const PrintConfig &print_config = object->print()->config();
+    ConfigOptionFloatOrPercent width = (object->config().support_line_width > 0) ? object->config().support_line_width : object->config().line_width;
+    width = toolhead_line_width_or(print_config, frSupportMaterialInterface, object->config().support_interface_filament, false, width);
     return Flow::new_from_config_width(
         frSupportMaterialInterface,
         // The width parameter accepted by new_from_config_width is of type ConfigOptionFloatOrPercent, the Flow class takes care of the percent to value substitution.
-        (object->config().support_line_width > 0) ? object->config().support_line_width : object->config().line_width,
+        width,
         // if object->config().support_interface_filament == 0 (which means to not trigger tool change, but use the current extruder instead), get_at will return the 0th component.
-        float(object->print()->config().nozzle_diameter.get_at(object->config().support_interface_filament-1)),
+        float(print_config.nozzle_diameter.get_at(object->config().support_interface_filament-1)),
         (layer_height > 0.f) ? layer_height : float(object->config().layer_height.value));
 }
 

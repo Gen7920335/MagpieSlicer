@@ -1472,6 +1472,55 @@ void PrintConfigDef::init_fff_params()
                        "will be ignored for outer-inner or inner-outer-inner wall sequences.");
     def->set_default_value(new ConfigOptionBool{true});
 
+    def = this->add("use_smaller_nozzles_in_crisp_corners", coBool);
+    def->label = L("Use smaller nozzles in crisp corners");
+    def->category = L("Quality");
+    def->tooltip = L("Print crisp outer details such as sharp corners and text outlines with a smaller nozzle toolhead when one is available.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("crisp_corner_detail_toolhead", coInt);
+    def->gui_type = ConfigOptionDef::GUIType::i_enum_open;
+    def->label = L("Crisp corner toolhead");
+    def->category = L("Quality");
+    def->tooltip = L("Toolhead used when no same-colour smaller nozzle is found. Auto keeps the slicer's automatic selection.");
+    def->min = 0;
+    def->max = 16;
+    def->enum_values.push_back("0");
+    def->enum_labels.push_back(L("Auto"));
+    for (int i = 1; i <= 16; ++i) {
+        def->enum_values.push_back(std::to_string(i));
+        def->enum_labels.push_back((boost::format("Toolhead %1%") % i).str());
+    }
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("crisp_corner_small_nozzle_wall_count", coInt);
+    def->label = L("Small nozzle wall count");
+    def->category = L("Quality");
+    def->tooltip = L("Number of outer walls to print with the smaller nozzle. Set to 0 to let the slicer calculate it from the wall geometry.");
+    def->min = 0;
+    def->max = 100;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("crisp_corner_nozzle_wall_overlap", coPercent);
+    def->label = L("Small/large nozzle wall overlap");
+    def->category = L("Quality");
+    def->tooltip = L("Physical overlap between adjacent walls printed by small and large nozzles. This improves bonding and reduces delamination at the nozzle-size boundary.");
+    def->sidetext = "%";
+    def->min = 0;
+    def->max = 80;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionPercent(15));
+
+    def = this->add("crisp_corner_interlace_small_nozzle_walls", coBool);
+    def->label = L("Interlace small nozzle walls");
+    def->category = L("Quality");
+    def->tooltip = L("Alternate the number of small-nozzle walls between layers to overlap the small/large nozzle boundary and improve bonding.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(true));
+
     def = this->add("only_one_wall_top", coBool);
     def->label = L("Only one wall on top surfaces");
     def->category = L("Quality");
@@ -3318,6 +3367,114 @@ void PrintConfigDef::init_fff_params()
     def->max_literal = 10;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(0., false));
+
+    def = this->add("toolhead_line_width", coFloatsOrPercents);
+    def->label = L("Default");
+    def->category = L("Printer");
+    def->tooltip = L("Default line width for this toolhead. If set to 0, the process or object line width is used. If expressed as a %, it will be computed over this toolhead's nozzle diameter.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min = 0;
+    def->max = 1000;
+    def->max_literal = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatsOrPercents{FloatOrPercent(0., false)});
+
+    def = this->add("toolhead_initial_layer_line_width", coFloatsOrPercents);
+    def->label = L("First layer");
+    def->category = L("Printer");
+    def->tooltip = L("First layer line width for this toolhead. If set to 0, the process or object line width is used.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min = 0;
+    def->max = 1000;
+    def->max_literal = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatsOrPercents{FloatOrPercent(0., false)});
+
+    def = this->add("toolhead_outer_wall_line_width", coFloatsOrPercents);
+    def->label = L("Outer wall");
+    def->category = L("Printer");
+    def->tooltip = L("Outer wall line width for this toolhead. If set to 0, the process or object line width is used.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min = 0;
+    def->max = 1000;
+    def->max_literal = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatsOrPercents{FloatOrPercent(0., false)});
+
+    def = this->add("toolhead_inner_wall_line_width", coFloatsOrPercents);
+    def->label = L("Inner wall");
+    def->category = L("Printer");
+    def->tooltip = L("Inner wall line width for this toolhead. If set to 0, the process or object line width is used.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min = 0;
+    def->max = 1000;
+    def->max_literal = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatsOrPercents{FloatOrPercent(0., false)});
+
+    def = this->add("toolhead_top_surface_line_width", coFloatsOrPercents);
+    def->label = L("Top surface");
+    def->category = L("Printer");
+    def->tooltip = L("Top surface line width for this toolhead. If set to 0, the process or object line width is used.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min = 0;
+    def->max = 1000;
+    def->max_literal = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatsOrPercents{FloatOrPercent(0., false)});
+
+    def = this->add("toolhead_sparse_infill_line_width", coFloatsOrPercents);
+    def->label = L("Sparse infill");
+    def->category = L("Printer");
+    def->tooltip = L("Sparse infill line width for this toolhead. If set to 0, the process or object line width is used.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min = 0;
+    def->max = 1000;
+    def->max_literal = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatsOrPercents{FloatOrPercent(0., false)});
+
+    def = this->add("toolhead_internal_solid_infill_line_width", coFloatsOrPercents);
+    def->label = L("Internal solid infill");
+    def->category = L("Printer");
+    def->tooltip = L("Internal solid infill line width for this toolhead. If set to 0, the process or object line width is used.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min = 0;
+    def->max = 1000;
+    def->max_literal = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatsOrPercents{FloatOrPercent(0., false)});
+
+    def = this->add("toolhead_support_line_width", coFloatsOrPercents);
+    def->label = L("Support");
+    def->category = L("Printer");
+    def->tooltip = L("Support and support interface line width for this toolhead. If set to 0, the process or object line width is used.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min = 0;
+    def->max = 1000;
+    def->max_literal = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatsOrPercents{FloatOrPercent(0., false)});
+
+    def = this->add("toolhead_bridge_line_width", coFloatsOrPercents);
+    def->label = L("Bridge");
+    def->category = L("Printer");
+    def->tooltip = L("Bridge line width for this toolhead. If set to 0, the process or object bridge line width is used.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min = 0;
+    def->max = 100;
+    def->max_literal = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatsOrPercents{FloatOrPercent(0., false)});
 
     def = this->add("initial_layer_print_height", coFloat);
     def->label = L("First layer height");
@@ -7431,7 +7588,11 @@ void PrintConfigDef::init_extruder_option_keys()
 {
     // ConfigOptionFloats, ConfigOptionPercents, ConfigOptionBools, ConfigOptionStrings
     m_extruder_option_keys = {
-        "extruder_type", "nozzle_diameter", "default_nozzle_volume_type", "min_layer_height", "max_layer_height", "extruder_offset",
+        "extruder_type", "nozzle_diameter",
+        "toolhead_line_width", "toolhead_initial_layer_line_width", "toolhead_outer_wall_line_width", "toolhead_inner_wall_line_width",
+        "toolhead_top_surface_line_width", "toolhead_sparse_infill_line_width", "toolhead_internal_solid_infill_line_width",
+        "toolhead_support_line_width", "toolhead_bridge_line_width",
+        "default_nozzle_volume_type", "min_layer_height", "max_layer_height", "extruder_offset",
         "extruder_printable_height", "nozzle_volume", "nozzle_type", "nozzle_flush_dataset",
         "retraction_length", "z_hop", "z_hop_types", "travel_slope", "retract_lift_above", "retract_lift_below", "retract_lift_enforce", "retraction_speed", "deretraction_speed",
         "retract_before_wipe", "retract_restart_extra", "retraction_minimum_travel", "wipe", "wipe_distance",
@@ -8534,6 +8695,15 @@ std::set<std::string> filament_options_with_variant = {
 std::set<std::string> printer_extruder_options = {
     "extruder_type",
     "nozzle_diameter",
+    "toolhead_line_width",
+    "toolhead_initial_layer_line_width",
+    "toolhead_outer_wall_line_width",
+    "toolhead_inner_wall_line_width",
+    "toolhead_top_surface_line_width",
+    "toolhead_sparse_infill_line_width",
+    "toolhead_internal_solid_infill_line_width",
+    "toolhead_support_line_width",
+    "toolhead_bridge_line_width",
     "default_nozzle_volume_type",
     "extruder_printable_area",
     "extruder_printable_height",
@@ -10480,7 +10650,6 @@ std::map<std::string, std::string> validate(const FullPrintConfig &cfg, bool und
             error_message.emplace("nozzle_diameter", L("invalid value ") + cfg.nozzle_diameter.serialize());
             break;
         }
-
     // --perimeters
     if (cfg.wall_loops.value < 0) {
         error_message.emplace("wall_loops", L("invalid value ") + std::to_string(cfg.wall_loops.value));

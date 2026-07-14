@@ -4,6 +4,7 @@
 #include "ClipperUtils.hpp"
 #include "ExtrusionEntity.hpp"
 #include "ExtrusionEntityCollection.hpp"
+#include "Flow.hpp"
 #include "Feature/FuzzySkin/FuzzySkin.hpp"
 #include "PrintConfig.hpp"
 #include "ShortestPath.hpp"
@@ -53,6 +54,139 @@ public:
 };
 
 using PerimeterGeneratorLoops = std::vector<PerimeterGeneratorLoop>;
+
+static bool detail_candidate_available(const PerimeterGenerator &perimeter_generator)
+{
+    if (!perimeter_generator.config->use_smaller_nozzles_in_crisp_corners.value ||
+        perimeter_generator.config->outer_wall_filament_id.value <= 0)
+        return false;
+
+    const unsigned int detail_extruder = detail_external_perimeter_extruder_1based(
+        *perimeter_generator.print_config, *perimeter_generator.config, perimeter_generator.config->outer_wall_filament_id.value);
+    return detail_extruder != 0 && detail_extruder != perimeter_generator.config->outer_wall_filament_id.value;
+}
+
+static bool polygon_needs_detail_nozzle(const Polygon &polygon, bool is_contour, double large_nozzle_diameter, double large_width, double wall_overlap)
+{
+    if (polygon.points.size() < 3 || large_nozzle_diameter <= EPSILON)
+        return false;
+
+    const bool ccw = polygon.is_counter_clockwise();
+    for (size_t i = 0; i < polygon.points.size(); ++i) {
+        const Point &prev = polygon.points[(i + polygon.points.size() - 1) % polygon.points.size()];
+        const Point &curr = polygon.points[i];
+        const Point &next = polygon.points[(i + 1) % polygon.points.size()];
+        const double prev_len = unscale_((curr - prev).cast<double>().norm());
+        const double next_len = unscale_((next - curr).cast<double>().norm());
+        if (prev_len <= EPSILON || next_len <= EPSILON)
+            continue;
+
+        const auto orientation = Geometry::orient(prev, curr, next);
+        const bool positive_corner =
+            is_contour ?
+                ((ccw && orientation == Geometry::ORIENTATION_CCW) || (!ccw && orientation == Geometry::ORIENTATION_CW)) :
+                ((ccw && orientation == Geometry::ORIENTATION_CW) || (!ccw && orientation == Geometry::ORIENTATION_CCW));
+        if (!positive_corner)
+            continue;
+
+        const Vec2d v_prev = (curr - prev).cast<double>().normalized();
+        const Vec2d v_next = (next - curr).cast<double>().normalized();
+        const double turn = std::acos(std::clamp(v_prev.dot(v_next), -1.0, 1.0));
+        if (turn <= PI / 180.)
+            continue;
+
+        const double corner_reach = std::min(prev_len, next_len) * std::tan(0.5 * turn);
+        const double required_reach = std::max(large_nozzle_diameter, large_width * std::max(0., 0.5 - wall_overlap));
+        if (corner_reach < required_reach)
+            return true;
+    }
+
+    return false;
+}
+
+static int interlaced_detail_wall_count(const PerimeterGenerator &perimeter_generator, int base_count, int max_count)
+{
+    if (!perimeter_generator.config->crisp_corner_interlace_small_nozzle_walls.value)
+        return base_count;
+    if (perimeter_generator.layer_id % 2 == 0)
+        return base_count;
+    return std::min(max_count, base_count + 1);
+}
+
+static int detail_wall_count_from_classic_loops(const PerimeterGenerator &perimeter_generator,
+                                                const std::vector<PerimeterGeneratorLoops> &contours,
+                                                const std::vector<PerimeterGeneratorLoops> &holes,
+                                                int loop_number)
+{
+    if (!detail_candidate_available(perimeter_generator) || loop_number <= 0)
+        return 1;
+
+    if (perimeter_generator.config->crisp_corner_small_nozzle_wall_count.value > 0) {
+        const int manual_count = std::min(loop_number + 1, perimeter_generator.config->crisp_corner_small_nozzle_wall_count.value);
+        return interlaced_detail_wall_count(perimeter_generator, manual_count, loop_number + 1);
+    }
+
+    const double large_nozzle = perimeter_generator.print_config->nozzle_diameter.get_at(perimeter_generator.config->inner_wall_filament_id.value - 1);
+    const double large_width  = perimeter_generator.perimeter_flow.width();
+    const double wall_overlap = std::clamp(perimeter_generator.config->crisp_corner_nozzle_wall_overlap.value / 100., 0., 0.8);
+    for (int depth = 1; depth <= loop_number; ++depth) {
+        bool large_wall_can_handle = true;
+        for (const PerimeterGeneratorLoop &loop : contours[depth])
+            if (polygon_needs_detail_nozzle(loop.polygon, true, large_nozzle, large_width, wall_overlap)) {
+                large_wall_can_handle = false;
+                break;
+            }
+        if (large_wall_can_handle) {
+            for (const PerimeterGeneratorLoop &loop : holes[depth])
+                if (polygon_needs_detail_nozzle(loop.polygon, false, large_nozzle, large_width, wall_overlap)) {
+                    large_wall_can_handle = false;
+                    break;
+                }
+        }
+        if (large_wall_can_handle)
+            return interlaced_detail_wall_count(perimeter_generator, depth, loop_number + 1);
+    }
+
+    return loop_number + 1;
+}
+
+static int detail_wall_count_from_arachne_lines(const PerimeterGenerator &perimeter_generator,
+                                                const std::vector<Arachne::VariableWidthLines> &perimeters,
+                                                int loop_number)
+{
+    if (!detail_candidate_available(perimeter_generator) || loop_number <= 0)
+        return 1;
+
+    if (perimeter_generator.config->crisp_corner_small_nozzle_wall_count.value > 0) {
+        const int manual_count = std::min(loop_number + 1, perimeter_generator.config->crisp_corner_small_nozzle_wall_count.value);
+        return interlaced_detail_wall_count(perimeter_generator, manual_count, loop_number + 1);
+    }
+
+    const double large_nozzle = perimeter_generator.print_config->nozzle_diameter.get_at(perimeter_generator.config->inner_wall_filament_id.value - 1);
+    const double large_width  = perimeter_generator.perimeter_flow.width();
+    const double wall_overlap = std::clamp(perimeter_generator.config->crisp_corner_nozzle_wall_overlap.value / 100., 0., 0.8);
+    for (int depth = 1; depth <= loop_number && depth < int(perimeters.size()); ++depth) {
+        bool large_wall_can_handle = true;
+        for (const Arachne::ExtrusionLine &line : perimeters[depth]) {
+            if (line.junctions.size() < 3)
+                continue;
+            Polygon polygon;
+            polygon.points.reserve(line.junctions.size());
+            for (const Arachne::ExtrusionJunction &junction : line.junctions)
+                polygon.points.emplace_back(junction.p);
+            if (line.is_closed && polygon.points.front() == polygon.points.back())
+                polygon.points.pop_back();
+            if (polygon_needs_detail_nozzle(polygon, line.is_contour(), large_nozzle, large_width, wall_overlap)) {
+                large_wall_can_handle = false;
+                break;
+            }
+        }
+        if (large_wall_can_handle)
+            return interlaced_detail_wall_count(perimeter_generator, depth, loop_number + 1);
+    }
+
+    return loop_number + 1;
+}
 
 template<class _T>
 static bool detect_steep_overhang(const PrintRegionConfig *config,
@@ -111,6 +245,7 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
     for (const PerimeterGeneratorLoop &loop : loops) {
         bool is_external = loop.is_external();
         bool is_small_width = loop.is_smaller_width_perimeter;
+        const bool use_detail_wall_flow = loop.depth >= 0 && loop.depth < perimeter_generator.detail_wall_count;
 
         ExtrusionRole role;
         ExtrusionLoopRole loop_role;
@@ -141,10 +276,10 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
                 extrusion_width = perimeter_generator.ext_perimeter_flow.width();
             }
         } else {
-            //BBS: normal perimeter
-            lower_polygons_series = &perimeter_generator.m_lower_polygons_series;
-            extrusion_mm3_per_mm = perimeter_generator.mm3_per_mm();
-            extrusion_width = perimeter_generator.perimeter_flow.width();
+            const Flow &wall_flow = use_detail_wall_flow ? perimeter_generator.ext_perimeter_flow : perimeter_generator.perimeter_flow;
+            lower_polygons_series = use_detail_wall_flow ? &perimeter_generator.m_external_lower_polygons_series : &perimeter_generator.m_lower_polygons_series;
+            extrusion_mm3_per_mm = wall_flow.mm3_per_mm();
+            extrusion_width = wall_flow.width();
         }
 
         // Apply fuzzy skin if it is enabled for at least some part of the polygon.
@@ -381,6 +516,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
             continue;
 
         const bool    is_external = extrusion->inset_idx == 0;
+        const bool    use_detail_wall_flow = extrusion->inset_idx < size_t(perimeter_generator.detail_wall_count);
         ExtrusionRole role = is_external ? erExternalPerimeter : erPerimeter;
 
         const bool  is_contour = !extrusion->is_closed || pg_extrusion.is_contour;
@@ -417,7 +553,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
 
             // get non-overhang paths by intersecting this loop with the grown lower slices
             extrusion_paths_append(paths, clip_extrusion(extrusion_path, lower_slices_paths, ClipperLib_Z::ctIntersection), role,
-                                   is_external ? perimeter_generator.ext_perimeter_flow : perimeter_generator.perimeter_flow);
+                                   use_detail_wall_flow ? perimeter_generator.ext_perimeter_flow : perimeter_generator.perimeter_flow);
 
             // Always reverse extrusion if use fuzzy skin: https://github.com/OrcaSlicer/OrcaSlicer/pull/2413#issuecomment-1769735357
             if (overhangs_reverse && perimeter_generator.has_fuzzy_skin) {
@@ -519,13 +655,14 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
                 steep_overhang_hole    = true;
             }
 
-            extrusion_paths_append(paths, *extrusion, role, is_external ? perimeter_generator.ext_perimeter_flow : perimeter_generator.perimeter_flow);
+            extrusion_paths_append(paths, *extrusion, role, use_detail_wall_flow ? perimeter_generator.ext_perimeter_flow : perimeter_generator.perimeter_flow);
         }
 
         // Append paths to collection.
         if (!paths.empty()) {
             if (extrusion->is_closed) {
                 ExtrusionLoop extrusion_loop(std::move(paths), pg_extrusion.is_contour ? elrDefault : elrHole);
+                extrusion_loop.inset_idx = int(extrusion->inset_idx);
                 if ((perimeter_generator.config->wall_direction == WallDirection::CounterClockwise) ==
                     (pg_extrusion.is_contour || pg_extrusions.size() == 2))
                     extrusion_loop.make_counter_clockwise();
@@ -553,6 +690,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
                     assert(std::prev(it)->polyline.last_point() == it->polyline.first_point());
                 }
                 ExtrusionMultiPath multi_path;
+                multi_path.inset_idx = int(extrusion->inset_idx);
                 multi_path.paths.emplace_back(std::move(paths.front()));
 
                 for (auto it_path = std::next(paths.begin()); it_path != paths.end(); ++it_path) {
@@ -620,7 +758,8 @@ void PerimeterGenerator::split_top_surfaces(const ExPolygons &orig_polygons, ExP
     // get the real top surface
     ExPolygons grown_lower_slices;
     ExPolygons bridge_checker;
-    auto nozzle_diameter = this->print_config->nozzle_diameter.get_at(this->config->outer_wall_filament_id - 1);
+    const unsigned int external_wall_filament = this->config->outer_wall_filament_id.value;
+    auto nozzle_diameter = this->print_config->nozzle_diameter.get_at(external_wall_filament - 1);
     // Check whether surface be bridge or not
     if (this->lower_slices != NULL) {
         // BBS: get the Polygons below the polygon this layer
@@ -1161,6 +1300,11 @@ void PerimeterGenerator::process_classic()
         ext_perimeter_spacing2 = scaled<coord_t>(0.5f * (this->ext_perimeter_flow.width() + this->perimeter_flow.width()));
     else
         ext_perimeter_spacing2 = scaled<coord_t>(0.5f * (this->ext_perimeter_flow.spacing() + this->perimeter_flow.spacing()));
+    if (detail_candidate_available(*this)) {
+        const double wall_overlap = std::clamp(this->config->crisp_corner_nozzle_wall_overlap.value / 100., 0., 0.8);
+        const coord_t overlap = scaled<coord_t>(std::min(this->ext_perimeter_flow.width(), this->perimeter_flow.width()) * wall_overlap);
+        ext_perimeter_spacing2 = std::max<coord_t>(1, ext_perimeter_spacing2 - overlap);
+    }
 
     // overhang perimeters
     m_mm3_per_mm_overhang      		= this->overhang_flow.mm3_per_mm();
@@ -1173,7 +1317,8 @@ void PerimeterGenerator::process_classic()
         // We consider overhang any part where the entire nozzle diameter is not supported by the
         // lower layer, so we take lower slices and offset them by half the nozzle diameter used
         // in the current layer
-        double nozzle_diameter = this->print_config->nozzle_diameter.get_at(this->config->outer_wall_filament_id - 1);
+        const unsigned int external_wall_filament = this->config->outer_wall_filament_id.value;
+        double nozzle_diameter = this->print_config->nozzle_diameter.get_at(external_wall_filament - 1);
         m_lower_slices_polygons = offset(*this->lower_slices, float(scale_(+nozzle_diameter / 2)));
     }
 
@@ -1447,6 +1592,7 @@ void PerimeterGenerator::process_classic()
                 steep_overhang_contour = true;
                 steep_overhang_hole    = true;
             }
+            this->detail_wall_count = detail_wall_count_from_classic_loops(*this, contours, holes, loop_number);
             ExtrusionEntityCollection entities = traverse_loops(*this, contours.front(), thin_walls, steep_overhang_contour, steep_overhang_hole, false);
             // All walls are counter-clockwise initially, so we don't need to reorient it if that's what we want
             if (config->overhang_reverse) {
@@ -2103,6 +2249,11 @@ void PerimeterGenerator::process_arachne()
     coord_t ext_perimeter_width = this->ext_perimeter_flow.scaled_width();
     coord_t ext_perimeter_spacing = this->ext_perimeter_flow.scaled_spacing();
     coord_t ext_perimeter_spacing2 = scaled<coord_t>(0.5f * (this->ext_perimeter_flow.spacing() + this->perimeter_flow.spacing()));
+    if (detail_candidate_available(*this)) {
+        const double wall_overlap = std::clamp(this->config->crisp_corner_nozzle_wall_overlap.value / 100., 0., 0.8);
+        const coord_t overlap = scaled<coord_t>(std::min(this->ext_perimeter_flow.width(), this->perimeter_flow.width()) * wall_overlap);
+        ext_perimeter_spacing2 = std::max<coord_t>(1, ext_perimeter_spacing2 - overlap);
+    }
     // overhang perimeters
     m_mm3_per_mm_overhang = this->overhang_flow.mm3_per_mm();
 
@@ -2114,7 +2265,8 @@ void PerimeterGenerator::process_arachne()
         // We consider overhang any part where the entire nozzle diameter is not supported by the
         // lower layer, so we take lower slices and offset them by half the nozzle diameter used
         // in the current layer
-        double nozzle_diameter = this->print_config->nozzle_diameter.get_at(this->config->outer_wall_filament_id - 1);
+        const unsigned int external_wall_filament = this->config->outer_wall_filament_id.value;
+        double nozzle_diameter = this->print_config->nozzle_diameter.get_at(external_wall_filament - 1);
         m_lower_slices_polygons = offset(*this->lower_slices, float(scale_(+nozzle_diameter / 2)));
     }
 
@@ -2468,6 +2620,7 @@ void PerimeterGenerator::process_arachne()
             steep_overhang_contour = true;
             steep_overhang_hole    = true;
         }
+        this->detail_wall_count = detail_wall_count_from_arachne_lines(*this, perimeters, loop_number);
         if (ExtrusionEntityCollection extrusion_coll = traverse_extrusions(*this, ordered_extrusions, steep_overhang_contour, steep_overhang_hole); !extrusion_coll.empty()) {
             if (config->overhang_reverse) {
                 reorient_perimeters(extrusion_coll, steep_overhang_contour, steep_overhang_hole,
@@ -2547,7 +2700,8 @@ bool PerimeterGeneratorLoop::is_internal_contour() const
 
 std::vector<Polygons> PerimeterGenerator::generate_lower_polygons_series(float width)
 {
-    float nozzle_diameter = print_config->nozzle_diameter.get_at(config->outer_wall_filament_id - 1);
+    const unsigned int external_wall_filament = config->outer_wall_filament_id.value;
+    float nozzle_diameter = print_config->nozzle_diameter.get_at(external_wall_filament - 1);
     float start_offset = -0.5 * width;
     float end_offset = 0.5 * nozzle_diameter;
 

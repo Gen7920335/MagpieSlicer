@@ -8,7 +8,9 @@
 #include "GCode.hpp"
 #include "Exception.hpp"
 #include "ExtrusionEntity.hpp"
+#include "Flow.hpp"
 #include "EdgeGrid.hpp"
+#include "Geometry.hpp"
 #include "Geometry/ConvexHull.hpp"
 #include "GCode/PrintExtents.hpp"
 #include "GCode/Thumbnails.hpp"
@@ -4148,6 +4150,152 @@ inline std::vector<GCode::ObjectByExtruder::Island>& object_islands_by_extruder(
     return islands;
 }
 
+static bool detail_path_needs_smaller_nozzle(const ExtrusionPath &path, double base_nozzle_diameter)
+{
+    if (path.role() != erExternalPerimeter && path.role() != erOverhangPerimeter)
+        return false;
+    if (base_nozzle_diameter <= EPSILON || path.polyline.points.size() < 3)
+        return false;
+
+    if (path.width > 0.f && double(path.width) < base_nozzle_diameter * 0.98)
+        return true;
+
+    double accumulated_turn = 0.;
+    double accumulated_len  = 0.;
+    for (size_t i = 1; i + 1 < path.polyline.points.size(); ++i) {
+        const Vec2d prev = (path.polyline.points[i]     - path.polyline.points[i - 1]).cast<double>().head<2>();
+        const Vec2d next = (path.polyline.points[i + 1] - path.polyline.points[i]).cast<double>().head<2>();
+        const double prev_len = unscale_(prev.norm());
+        const double next_len = unscale_(next.norm());
+        if (prev_len <= EPSILON || next_len <= EPSILON)
+            continue;
+
+        const double dot = std::clamp(prev.normalized().dot(next.normalized()), -1.0, 1.0);
+        const double turn = std::acos(dot);
+        const double local_len = std::min(prev_len, next_len);
+        if (turn > PI / 4. && local_len < base_nozzle_diameter * 8.)
+            return true;
+
+        if (local_len < base_nozzle_diameter * 3.) {
+            accumulated_turn += turn;
+            accumulated_len += local_len;
+            if (accumulated_turn > PI / 3. && accumulated_len < base_nozzle_diameter * 12.)
+                return true;
+        } else {
+            accumulated_turn = 0.;
+            accumulated_len = 0.;
+        }
+    }
+
+    return false;
+}
+
+static bool detail_entity_needs_smaller_nozzle(const ExtrusionEntity &entity, double base_nozzle_diameter)
+{
+    if (const auto *path = dynamic_cast<const ExtrusionPath*>(&entity))
+        return detail_path_needs_smaller_nozzle(*path, base_nozzle_diameter);
+    if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath*>(&entity)) {
+        for (const ExtrusionPath &path : multipath->paths)
+            if (detail_path_needs_smaller_nozzle(path, base_nozzle_diameter))
+                return true;
+        return false;
+    }
+    if (const auto *loop = dynamic_cast<const ExtrusionLoop*>(&entity)) {
+        const Polygon polygon = loop->polygon();
+        const bool ccw = polygon.is_counter_clockwise();
+        for (const ExtrusionPath &path : loop->paths) {
+            if (detail_path_needs_smaller_nozzle(path, base_nozzle_diameter))
+                return true;
+        }
+        for (const ExtrusionPath &path : loop->paths) {
+            if (path.role() != erExternalPerimeter && path.role() != erOverhangPerimeter)
+                continue;
+            const Points points = to_points(path.polyline.points);
+            if (points.size() < 3)
+                continue;
+            for (size_t i = 1; i + 1 < points.size(); ++i) {
+                const auto orientation = Geometry::orient(points[i - 1], points[i], points[i + 1]);
+                if ((ccw && orientation == Geometry::ORIENTATION_CCW) ||
+                    (!ccw && orientation == Geometry::ORIENTATION_CW))
+                    return true;
+            }
+        }
+        return false;
+    }
+    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection*>(&entity)) {
+        for (const ExtrusionEntity *child : collection->entities)
+            if (child != nullptr && detail_entity_needs_smaller_nozzle(*child, base_nozzle_diameter))
+                return true;
+    }
+    return false;
+}
+
+static bool detail_collection_needs_smaller_nozzle(const ExtrusionEntityCollection &extrusions, const PrintConfig &config, const PrintRegionConfig &region_config)
+{
+    if (!region_config.use_smaller_nozzles_in_crisp_corners.value)
+        return false;
+    if (region_config.outer_wall_filament_id.value <= 0)
+        return false;
+
+    const size_t base_idx = size_t(region_config.outer_wall_filament_id.value - 1);
+    if (base_idx >= config.nozzle_diameter.values.size())
+        return false;
+
+    return detail_entity_needs_smaller_nozzle(extrusions, config.nozzle_diameter.get_at(base_idx));
+}
+
+static double detail_wall_width_for_region(const PrintConfig &config, const PrintRegionConfig &region_config, double layer_height)
+{
+    if (!region_config.use_smaller_nozzles_in_crisp_corners.value || region_config.outer_wall_filament_id.value <= 0)
+        return 0.;
+
+    const unsigned int detail_extruder = detail_external_perimeter_extruder_1based(config, region_config, region_config.outer_wall_filament_id.value);
+    if (detail_extruder == 0 || detail_extruder == region_config.outer_wall_filament_id.value)
+        return 0.;
+
+    const size_t small_idx = size_t(detail_extruder - 1);
+    if (small_idx >= config.nozzle_diameter.values.size())
+        return 0.;
+
+    const Flow small_flow = Flow::new_from_config_width(frExternalPerimeter,
+        toolhead_line_width_or(config, frExternalPerimeter, int(detail_extruder), false, region_config.outer_wall_line_width),
+        float(config.nozzle_diameter.get_at(small_idx)), float(layer_height));
+    return small_flow.width();
+}
+
+static bool entity_has_width_at_most(const ExtrusionEntity &entity, double width)
+{
+    if (width <= EPSILON)
+        return false;
+    if (const auto *path = dynamic_cast<const ExtrusionPath*>(&entity))
+        return path->width > 0.f && path->width <= width + 0.01;
+    if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath*>(&entity)) {
+        for (const ExtrusionPath &path : multipath->paths)
+            if (path.width > 0.f && path.width <= width + 0.01)
+                return true;
+        return false;
+    }
+    if (const auto *loop = dynamic_cast<const ExtrusionLoop*>(&entity)) {
+        for (const ExtrusionPath &path : loop->paths)
+            if (path.width > 0.f && path.width <= width + 0.01)
+                return true;
+        return false;
+    }
+    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection*>(&entity)) {
+        for (const ExtrusionEntity *child : collection->entities)
+            if (child != nullptr && entity_has_width_at_most(*child, width))
+                return true;
+    }
+    return false;
+}
+
+static bool entity_is_detail_wall(const ExtrusionEntity &entity, double detail_width)
+{
+    const ExtrusionRole role = entity.role();
+    return role == erExternalPerimeter || role == erOverhangPerimeter ||
+           (role == erPerimeter && entity_has_width_at_most(entity, detail_width));
+}
+
 std::vector<GCode::InstanceToPrint> GCode::sort_print_object_instances(
     std::vector<GCode::ObjectByExtruder> 		&objects_by_extruder,
     const std::vector<LayerToPrint> 			&layers,
@@ -5054,9 +5202,25 @@ LayerResult GCode::process_layer(
 
                         auto process_extrusions = [&](const ExtrusionEntityCollection *current_extrusions,
                                                        const ExtrusionEntityCollection *overrides_key,
-                                                       bool                             use_overrides) {
+                                                       bool                             use_overrides,
+                                                       int                              forced_extruder_id) {
                             // This extrusion is part of certain Region, which tells us which extruder should be used for it.
-                            int correct_extruder_id = layer_tools.extruder(*current_extrusions, region);
+                            int correct_extruder_id = forced_extruder_id >= 0 ? forced_extruder_id : layer_tools.extruder(*current_extrusions, region);
+                            const bool can_use_detail_nozzle =
+                                forced_extruder_id < 0 &&
+                                entity_type == ObjectByExtruder::Island::Region::PERIMETERS &&
+                                (current_extrusions->role() == erExternalPerimeter ||
+                                 current_extrusions->role() == erOverhangPerimeter ||
+                                 (current_extrusions->role() == erPerimeter &&
+                                  entity_is_detail_wall(*current_extrusions->entities.front(), detail_wall_width_for_region(print.config(), region.config(), layer.height))) ||
+                                 current_extrusions->role() == erMixed);
+                            if (can_use_detail_nozzle &&
+                                detail_collection_needs_smaller_nozzle(*current_extrusions, print.config(), region.config())) {
+                                const unsigned int detail_extruder_id = detail_external_perimeter_extruder_1based(
+                                    print.config(), region.config(), region.config().outer_wall_filament_id.value);
+                                if (detail_extruder_id > 0)
+                                    correct_extruder_id = int(detail_extruder_id - 1);
+                            }
 
                             const WipingExtrusions::ExtruderPerCopy *entity_overrides = nullptr;
                             if (! layer_tools.has_extruder(correct_extruder_id)) {
@@ -5103,32 +5267,36 @@ LayerResult GCode::process_layer(
                             }
                         };
 
+                        const unsigned int external_wall_filament =
+                            detail_external_perimeter_extruder_1based(print.config(), region.config(), region.config().outer_wall_filament_id.value);
                         bool split_mixed_perimeters =
                             entity_type == ObjectByExtruder::Island::Region::PERIMETERS &&
-                            region.config().outer_wall_filament_id.value != region.config().inner_wall_filament_id.value &&
+                            external_wall_filament != region.config().inner_wall_filament_id.value &&
                             extrusions->role() == erMixed;
 
                         if (split_mixed_perimeters) {
-                            auto outer_perimeters = std::make_unique<ExtrusionEntityCollection>();
-                            auto inner_perimeters = std::make_unique<ExtrusionEntityCollection>();
+                            auto detail_perimeters = std::make_unique<ExtrusionEntityCollection>();
+                            auto large_perimeters = std::make_unique<ExtrusionEntityCollection>();
+                            const double detail_wall_width = detail_wall_width_for_region(print.config(), region.config(), layer.height);
                             for (const ExtrusionEntity *entity : extrusions->entities) {
-                                const ExtrusionRole role = entity->role();
-                                if (role == erExternalPerimeter || role == erOverhangPerimeter)
-                                    outer_perimeters->append(*entity);
-                                else if (role == erPerimeter)
-                                    inner_perimeters->append(*entity);
+                                if (entity_is_detail_wall(*entity, detail_wall_width))
+                                    detail_perimeters->append(*entity);
+                                else if (entity->role() == erPerimeter)
+                                    large_perimeters->append(*entity);
                             }
 
-                            if (!outer_perimeters->entities.empty()) {
-                                split_perimeter_storage.emplace_back(std::move(outer_perimeters));
-                                process_extrusions(split_perimeter_storage.back().get(), nullptr, false);
+                            if (!detail_perimeters->entities.empty()) {
+                                const int detail_extruder_id = int(detail_external_perimeter_extruder_1based(
+                                    print.config(), region.config(), region.config().outer_wall_filament_id.value)) - 1;
+                                split_perimeter_storage.emplace_back(std::move(detail_perimeters));
+                                process_extrusions(split_perimeter_storage.back().get(), nullptr, false, detail_extruder_id);
                             }
-                            if (!inner_perimeters->entities.empty()) {
-                                split_perimeter_storage.emplace_back(std::move(inner_perimeters));
-                                process_extrusions(split_perimeter_storage.back().get(), nullptr, false);
+                            if (!large_perimeters->entities.empty()) {
+                                split_perimeter_storage.emplace_back(std::move(large_perimeters));
+                                process_extrusions(split_perimeter_storage.back().get(), nullptr, false, -1);
                             }
                         } else {
-                            process_extrusions(extrusions, extrusions, true);
+                            process_extrusions(extrusions, extrusions, true, -1);
                         }
                     }
                 }

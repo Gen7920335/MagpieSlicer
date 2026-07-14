@@ -9,6 +9,8 @@
 namespace Slic3r {
 
 class PrintObject;
+class PrintConfig;
+class PrintRegionConfig;
 
 // Extra spacing of bridge threads, in mm.
 #define BRIDGE_EXTRA_SPACING 0.05
@@ -143,6 +145,8 @@ extern Flow support_material_flow(const PrintObject* object, float layer_height 
 extern Flow support_transition_flow(const PrintObject *object); //BBS
 extern Flow support_material_1st_layer_flow(const PrintObject *object, float layer_height = 0.f);
 extern Flow support_material_interface_flow(const PrintObject *object, float layer_height = 0.f);
+extern ConfigOptionFloatOrPercent toolhead_line_width_or(const PrintConfig &print_config, FlowRole role, int extruder_id, bool first_layer, const ConfigOptionFloatOrPercent &fallback);
+extern unsigned int detail_external_perimeter_extruder_1based(const PrintConfig &print_config, const PrintRegionConfig &region_config, unsigned int base_extruder_id);
 
 }
 

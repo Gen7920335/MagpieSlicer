@@ -3,6 +3,7 @@
 #include "ToolOrdering.hpp"
 #include "Layer.hpp"
 #include "ClipperUtils.hpp"
+#include "Flow.hpp"
 #include "ParameterUtils.hpp"
 #include "GCode/ToolOrderUtils.hpp"
 #include "FilamentGroupUtils.hpp"
@@ -35,6 +36,12 @@ namespace Slic3r {
 
 const static bool g_wipe_into_objects = false;
 constexpr double similar_color_threshold_de2000 = 20.0;
+
+static unsigned int detail_external_perimeter_filament_1based(const PrintConfig *print_config, const PrintRegion &region, unsigned int base_filament_id)
+{
+    return print_config == nullptr ? base_filament_id :
+        detail_external_perimeter_extruder_1based(*print_config, region.config(), base_filament_id);
+}
 
 static std::set<int>get_filament_by_type(const std::vector<unsigned int>& used_filaments, const PrintConfig* print_config, const std::string& type)
 {
@@ -83,7 +90,10 @@ bool check_filament_printable_after_group(const std::vector<unsigned int> &used_
 unsigned int LayerTools::wall_extruder_id(const PrintRegion &region) const
 {
 	assert(region.config().outer_wall_filament_id.value > 0);
-	return ((this->extruder_override == 0) ? region.config().outer_wall_filament_id.value : this->extruder_override) - 1;
+	const unsigned int outer_wall_filament = (this->extruder_override == 0) ?
+        detail_external_perimeter_filament_1based(this->print_config, region, region.config().outer_wall_filament_id.value) :
+        this->extruder_override;
+	return outer_wall_filament - 1;
 }
 
 unsigned int LayerTools::sparse_infill_filament_id(const PrintRegion &region) const
@@ -126,7 +136,7 @@ unsigned int LayerTools::extruder(const ExtrusionEntityCollection &extrusions, c
             if (role == erPerimeter)
                 extruder = region.config().inner_wall_filament_id.value;
             else
-                extruder = region.config().outer_wall_filament_id.value;
+                extruder = detail_external_perimeter_filament_1based(this->print_config, region, region.config().outer_wall_filament_id.value);
         }
     } else
         extruder = this->extruder_override;
@@ -541,7 +551,8 @@ std::vector<unsigned int> ToolOrdering::generate_first_layer_tool_order(const Pr
             return tool_order;
 
         for (auto layerm : target_layer->regions()) {
-            int extruder_id = layerm->region().config().option("outer_wall_filament_id")->getInt();
+            int extruder_id = int(detail_external_perimeter_filament_1based(&print.config(), layerm->region(),
+                layerm->region().config().outer_wall_filament_id.value));
 
             for (auto expoly : layerm->raw_slices) {
                 const double nozzle_diameter = print.config().nozzle_diameter.get_at(0);
@@ -605,7 +616,8 @@ std::vector<unsigned int> ToolOrdering::generate_first_layer_tool_order(const Pr
         return tool_order;
 
     for (auto layerm : target_layer->regions()) {
-        int extruder_id = layerm->region().config().option("outer_wall_filament_id")->getInt();
+        int extruder_id = int(detail_external_perimeter_filament_1based(&object.print()->config(), layerm->region(),
+            layerm->region().config().outer_wall_filament_id.value));
         for (auto expoly : layerm->raw_slices) {
             const double nozzle_diameter = object.print()->config().nozzle_diameter.get_at(0);
             const coordf_t line_width = object.config().get_abs_value("line_width", nozzle_diameter);
@@ -673,6 +685,7 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
     // Collect the object extruders.
     for (auto layer : object.layers()) {
         LayerTools &layer_tools = this->tools_for_layer(layer->print_z);
+        layer_tools.print_config = m_print_config_ptr;
 
         // Override extruder with the next
     	for (; it_per_layer_extruder_override != per_layer_extruder_switches.end() && it_per_layer_extruder_override->first < layer->print_z + EPSILON; ++ it_per_layer_extruder_override)
@@ -696,11 +709,14 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                 }
 
                 if (something_nonoverriddable){
-               		layer_tools.extruders.emplace_back((extruder_override == 0) ? region.config().outer_wall_filament_id.value : extruder_override);
+                    const unsigned int outer_wall_filament = (extruder_override == 0) ?
+                        detail_external_perimeter_filament_1based(m_print_config_ptr, region, region.config().outer_wall_filament_id.value) :
+                        extruder_override;
+                    layer_tools.extruders.emplace_back(outer_wall_filament);
                     if (extruder_override == 0 && region.config().wall_loops.value > 1)
                         layer_tools.extruders.emplace_back(region.config().inner_wall_filament_id.value);
                     if (layerCount == 0) {
-                        firstLayerExtruders.emplace_back((extruder_override == 0) ? region.config().outer_wall_filament_id.value : extruder_override);
+                        firstLayerExtruders.emplace_back(outer_wall_filament);
                     }
                 }
 
@@ -756,6 +772,7 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
     // Collect the support extruders.
     for (auto support_layer : object.support_layers()) {
         LayerTools   &layer_tools   = this->tools_for_layer(support_layer->print_z);
+        layer_tools.print_config = m_print_config_ptr;
         ExtrusionRole role          = support_layer->support_fills.role();
         bool          has_support   = false;
         bool          has_interface = false;

@@ -385,6 +385,15 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             osteps.emplace_back(posSimplifySupportPath);
         } else if (
                opt_key == "initial_layer_line_width"
+            || opt_key == "toolhead_line_width"
+            || opt_key == "toolhead_initial_layer_line_width"
+            || opt_key == "toolhead_outer_wall_line_width"
+            || opt_key == "toolhead_inner_wall_line_width"
+            || opt_key == "toolhead_top_surface_line_width"
+            || opt_key == "toolhead_sparse_infill_line_width"
+            || opt_key == "toolhead_internal_solid_infill_line_width"
+            || opt_key == "toolhead_support_line_width"
+            || opt_key == "toolhead_bridge_line_width"
             || opt_key == "min_layer_height"
             || opt_key == "max_layer_height"
             //|| opt_key == "resolution"
@@ -2031,6 +2040,7 @@ Flow Print::brim_flow() const
         width = m_print_regions.front()->config().inner_wall_line_width;
     if (width.value <= 0)
         width = m_objects.front()->config().line_width;
+    width = toolhead_line_width_or(m_config, frPerimeter, m_print_regions.front()->config().outer_wall_filament_id, true, width);
 
     /* We currently use a random region's perimeter extruder.
        While this works for most cases, we should probably consider all of the perimeter
@@ -2052,6 +2062,7 @@ Flow Print::skirt_flow() const
     ConfigOptionFloatOrPercent width = m_config.initial_layer_line_width;
     if (width.value <= 0)
         width = m_objects.empty() ? m_config.initial_layer_line_width : m_objects.front()->config().line_width;
+    width = toolhead_line_width_or(m_config, frPerimeter, m_objects.empty() ? 1 : m_objects.front()->config().support_filament, true, width);
 
     /* We currently use a random object's support material extruder.
        While this works for most cases, we should probably consider all of the support material

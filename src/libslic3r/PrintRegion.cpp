@@ -49,7 +49,11 @@ Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_he
     
     // Get the configured nozzle_diameter for the extruder associated to the flow role requested.
     // Here this->extruder(role) - 1 may underflow to MAX_INT, but then the get_at() will follback to zero'th element, so everything is all right.
-    auto nozzle_diameter = float(print_config.nozzle_diameter.get_at(this->extruder(role) - 1));
+    unsigned int extruder_id = this->extruder(role);
+    if (role == frExternalPerimeter)
+        extruder_id = detail_external_perimeter_extruder_1based(print_config, m_config, extruder_id);
+    config_width = toolhead_line_width_or(print_config, role, int(extruder_id), first_layer, config_width);
+    auto nozzle_diameter = float(print_config.nozzle_diameter.get_at(extruder_id - 1));
     return Flow::new_from_config_width(role, config_width, nozzle_diameter, float(layer_height));
 }
 

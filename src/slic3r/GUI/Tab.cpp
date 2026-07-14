@@ -62,6 +62,7 @@
 #endif // WIN32
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <unordered_set>
 
@@ -78,6 +79,39 @@ int mode_to_selection(ConfigOptionMode mode)
     return mode == comExpert ? 2 :
            mode == comAdvanced ? 1 :
            0;
+}
+
+static void set_float_or_percent_vector_at(DynamicPrintConfig &config, const DynamicPrintConfig &current, const char *key, size_t index, const FloatOrPercent &value)
+{
+    std::vector<FloatOrPercent> values;
+    if (const auto *opt = current.option<ConfigOptionFloatsOrPercents>(key))
+        values = opt->values;
+    if (values.size() <= index)
+        values.resize(index + 1, FloatOrPercent(0., false));
+    values[index] = value;
+    config.set_key_value(key, new ConfigOptionFloatsOrPercents(values));
+}
+
+static double rounded_toolhead_width(double value)
+{
+    return std::round(value * 1000.) / 1000.;
+}
+
+static void set_toolhead_width_defaults_for_nozzle(DynamicPrintConfig &config, const DynamicPrintConfig &current, size_t index, double nozzle_diameter)
+{
+    const FloatOrPercent default_width(rounded_toolhead_width(nozzle_diameter * 1.125), false);
+    const FloatOrPercent first_layer_width(rounded_toolhead_width(nozzle_diameter * 1.4), false);
+    const FloatOrPercent nozzle_width(rounded_toolhead_width(nozzle_diameter), false);
+
+    set_float_or_percent_vector_at(config, current, "toolhead_line_width", index, default_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_initial_layer_line_width", index, first_layer_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_outer_wall_line_width", index, default_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_inner_wall_line_width", index, default_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_top_surface_line_width", index, nozzle_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_sparse_infill_line_width", index, default_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_internal_solid_infill_line_width", index, default_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_support_line_width", index, nozzle_width);
+    set_float_or_percent_vector_at(config, current, "toolhead_bridge_line_width", index, nozzle_width);
 }
 }
 
@@ -2601,17 +2635,6 @@ void TabPrint::build()
         optgroup->append_single_option_line("layer_height","quality_settings_layer_height");
         optgroup->append_single_option_line("initial_layer_print_height","quality_settings_layer_height");
 
-        optgroup = page->new_optgroup(L("Line width"), L"param_line_width");
-        optgroup->append_single_option_line("line_width","quality_settings_line_width");
-        optgroup->append_single_option_line("initial_layer_line_width","quality_settings_line_width#first-layer");
-        optgroup->append_single_option_line("outer_wall_line_width","quality_settings_line_width#outer-wall");
-        optgroup->append_single_option_line("inner_wall_line_width","quality_settings_line_width#inner-wall");
-        optgroup->append_single_option_line("top_surface_line_width","quality_settings_line_width#top-surface");
-        optgroup->append_single_option_line("sparse_infill_line_width","quality_settings_line_width#sparse-infill");
-        optgroup->append_single_option_line("internal_solid_infill_line_width","quality_settings_line_width#internal-solid-infill");
-        optgroup->append_single_option_line("support_line_width","quality_settings_line_width#support");
-        optgroup->append_single_option_line("bridge_line_width","quality_settings_line_width#bridge");
-
         optgroup = page->new_optgroup(L("Seam"), L"param_seam");
         optgroup->append_single_option_line("seam_position", "quality_settings_seam#seam-position");
         optgroup->append_single_option_line("staggered_inner_seams", "quality_settings_seam#staggered-inner-seams");
@@ -2648,6 +2671,11 @@ void TabPrint::build()
         optgroup->append_single_option_line("hole_to_polyhole_threshold", "quality_settings_precision#polyholes");
         optgroup->append_single_option_line("hole_to_polyhole_twisted", "quality_settings_precision#polyholes");
         optgroup->append_single_option_line("hole_to_polyhole_max_edges", "quality_settings_precision#polyholes");
+        optgroup->append_single_option_line("use_smaller_nozzles_in_crisp_corners", "quality_settings_precision#smaller-nozzles-crisp-corners");
+        optgroup->append_single_option_line("crisp_corner_detail_toolhead", "quality_settings_precision#smaller-nozzles-crisp-corners");
+        optgroup->append_single_option_line("crisp_corner_small_nozzle_wall_count", "quality_settings_precision#smaller-nozzles-crisp-corners");
+        optgroup->append_single_option_line("crisp_corner_nozzle_wall_overlap", "quality_settings_precision#smaller-nozzles-crisp-corners");
+        optgroup->append_single_option_line("crisp_corner_interlace_small_nozzle_walls", "quality_settings_precision#smaller-nozzles-crisp-corners");
 
         optgroup = page->new_optgroup(L("Ironing"), L"param_ironing");
         optgroup->append_single_option_line("ironing_type", "quality_settings_ironing#type");
@@ -5472,40 +5500,56 @@ if (is_marlin_flavor)
             optgroup->m_on_change = [this, extruder_idx](const t_config_option_key& opt_key, boost::any value)
             {
                 bool is_SEMM = m_config->opt_bool("single_extruder_multi_material");
-                if (is_SEMM && m_extruders_count > 1 && opt_key.find_first_of("nozzle_diameter") != std::string::npos)
-                {
+                if (opt_key.find("nozzle_diameter") != std::string::npos) {
                     SuppressBackgroundProcessingUpdate sbpu;
                     const double new_nd = boost::any_cast<double>(value);
+                    DynamicPrintConfig new_conf = *m_config;
                     std::vector<double> nozzle_diameters = static_cast<const ConfigOptionFloats*>(m_config->option("nozzle_diameter"))->values;
+                    if (nozzle_diameters.size() <= extruder_idx)
+                        nozzle_diameters.resize(extruder_idx + 1, new_nd);
+                    if (is_SEMM && nozzle_diameters.size() < size_t(m_extruders_count))
+                        nozzle_diameters.resize(size_t(m_extruders_count), new_nd);
+                    nozzle_diameters[extruder_idx] = new_nd;
 
-                    // if value was changed
-                    if (fabs(nozzle_diameters[extruder_idx == 0 ? 1 : 0] - new_nd) > EPSILON)
+                    if (is_SEMM && m_extruders_count > 1)
                     {
-                        const wxString msg_text = _(L("This is a single extruder multi-material printer, diameters of all extruders "
-                            "will be set to the new value. Do you want to proceed?"));
-                        //wxMessageDialog dialog(parent(), msg_text, _(L("Nozzle diameter")), wxICON_WARNING | wxYES_NO);
-                        MessageDialog dialog(parent(), msg_text, _(L("Nozzle diameter")), wxICON_WARNING | wxYES_NO);
+                        // if value was changed
+                        if (fabs(nozzle_diameters[extruder_idx == 0 ? 1 : 0] - new_nd) > EPSILON)
+                        {
+                            const wxString msg_text = _(L("This is a single extruder multi-material printer, diameters of all extruders "
+                                "will be set to the new value. Do you want to proceed?"));
+                            //wxMessageDialog dialog(parent(), msg_text, _(L("Nozzle diameter")), wxICON_WARNING | wxYES_NO);
+                            MessageDialog dialog(parent(), msg_text, _(L("Nozzle diameter")), wxICON_WARNING | wxYES_NO);
 
-                        DynamicPrintConfig new_conf = *m_config;
-                        if (dialog.ShowModal() == wxID_YES) {
-                            for (size_t i = 0; i < nozzle_diameters.size(); i++) {
-                                if (i == extruder_idx)
-                                    continue;
-                                nozzle_diameters[i] = new_nd;
+                            if (dialog.ShowModal() == wxID_YES) {
+                                for (size_t i = 0; i < nozzle_diameters.size(); i++)
+                                    nozzle_diameters[i] = new_nd;
                             }
+                            else
+                                nozzle_diameters[extruder_idx] = nozzle_diameters[extruder_idx == 0 ? 1 : 0];
                         }
-                        else
-                            nozzle_diameters[extruder_idx] = nozzle_diameters[extruder_idx == 0 ? 1 : 0];
-
-                        new_conf.set_key_value("nozzle_diameter", new ConfigOptionFloats(nozzle_diameters));
-                        load_config(new_conf);
                     }
-                }
 
+                    new_conf.set_key_value("nozzle_diameter", new ConfigOptionFloats(nozzle_diameters));
+                    for (size_t i = 0; i < nozzle_diameters.size(); ++i)
+                        set_toolhead_width_defaults_for_nozzle(new_conf, *m_config, i, nozzle_diameters[i]);
+                    load_config(new_conf);
+                }
                 update_dirty();
                 on_value_change(opt_key, value);
                 update();
             };
+
+            optgroup = page->new_optgroup(L("Toolhead line width"), L"param_line_width", -1, true);
+            optgroup->append_single_option_line("toolhead_line_width", "printer_extruder_toolhead_line_width", extruder_idx);
+            optgroup->append_single_option_line("toolhead_initial_layer_line_width", "printer_extruder_toolhead_line_width#first-layer", extruder_idx);
+            optgroup->append_single_option_line("toolhead_outer_wall_line_width", "printer_extruder_toolhead_line_width#outer-wall", extruder_idx);
+            optgroup->append_single_option_line("toolhead_inner_wall_line_width", "printer_extruder_toolhead_line_width#inner-wall", extruder_idx);
+            optgroup->append_single_option_line("toolhead_top_surface_line_width", "printer_extruder_toolhead_line_width#top-surface", extruder_idx);
+            optgroup->append_single_option_line("toolhead_sparse_infill_line_width", "printer_extruder_toolhead_line_width#sparse-infill", extruder_idx);
+            optgroup->append_single_option_line("toolhead_internal_solid_infill_line_width", "printer_extruder_toolhead_line_width#internal-solid-infill", extruder_idx);
+            optgroup->append_single_option_line("toolhead_support_line_width", "printer_extruder_toolhead_line_width#support", extruder_idx);
+            optgroup->append_single_option_line("toolhead_bridge_line_width", "printer_extruder_toolhead_line_width#bridge", extruder_idx);
 
             optgroup = page->new_optgroup(L("Layer height limits"), L"param_layer_height");
             optgroup->append_single_option_line("min_layer_height", "printer_extruder_basic_information#extruder-layer-height-limits", extruder_idx);
