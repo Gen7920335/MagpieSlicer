@@ -135,6 +135,9 @@ unsigned int detail_external_perimeter_extruder_1based(const PrintConfig &print_
     const size_t base_idx       = size_t(base_extruder_id - 1);
     if (extruder_count == 0 || base_idx >= extruder_count)
         return base_extruder_id;
+    if (print_config.extruder_type.values.size() < extruder_count ||
+        print_config.nozzle_volume_type.values.size() < extruder_count)
+        return base_extruder_id;
 
     const double base_nozzle = print_config.nozzle_diameter.get_at(base_idx);
     if (base_nozzle <= EPSILON)
@@ -147,13 +150,18 @@ unsigned int detail_external_perimeter_extruder_1based(const PrintConfig &print_
     };
 
     auto best_smaller = [&](bool require_same_colour) -> unsigned int {
-        const std::string base_colour = print_config.filament_colour.get_at(base_idx);
+        auto filament_colour_at = [&](size_t idx) -> std::string {
+            return idx < print_config.filament_colour.values.size() ? print_config.filament_colour.get_at(idx) : std::string();
+        };
+        const bool        base_colour_known = base_idx < print_config.filament_colour.values.size();
+        const std::string base_colour       = filament_colour_at(base_idx);
         double       best_nozzle = std::numeric_limits<double>::max();
         unsigned int best_id     = 0;
         for (size_t idx = 0; idx < extruder_count; ++idx) {
             if (!is_smaller_candidate(idx))
                 continue;
-            if (require_same_colour && print_config.filament_colour.get_at(idx) != base_colour)
+            if (require_same_colour &&
+                (!base_colour_known || idx >= print_config.filament_colour.values.size() || filament_colour_at(idx) != base_colour))
                 continue;
             const double nozzle = print_config.nozzle_diameter.get_at(idx);
             if (nozzle < best_nozzle) {

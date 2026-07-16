@@ -66,6 +66,28 @@ static bool detail_candidate_available(const PerimeterGenerator &perimeter_gener
     return detail_extruder != 0 && detail_extruder != perimeter_generator.config->outer_wall_filament_id.value;
 }
 
+static Flow detail_external_perimeter_flow(const PerimeterGenerator &perimeter_generator)
+{
+    const unsigned int base_extruder = perimeter_generator.config->outer_wall_filament_id.value;
+    const unsigned int detail_extruder = detail_external_perimeter_extruder_1based(
+        *perimeter_generator.print_config, *perimeter_generator.config, base_extruder);
+    if (detail_extruder == 0 || detail_extruder == base_extruder)
+        return perimeter_generator.ext_perimeter_flow;
+
+    const size_t detail_idx = size_t(detail_extruder - 1);
+    if (detail_idx >= perimeter_generator.print_config->nozzle_diameter.values.size())
+        return perimeter_generator.ext_perimeter_flow;
+
+    const float nozzle_diameter = float(perimeter_generator.print_config->nozzle_diameter.get_at(detail_idx));
+    ConfigOptionFloatOrPercent width = toolhead_line_width_or(
+        *perimeter_generator.print_config,
+        frExternalPerimeter,
+        int(detail_extruder),
+        false,
+        perimeter_generator.config->outer_wall_line_width);
+    return Flow::new_from_config_width(frExternalPerimeter, width, nozzle_diameter, float(perimeter_generator.layer_height));
+}
+
 static bool polygon_needs_detail_nozzle(const Polygon &polygon, bool is_contour, double large_nozzle_diameter, double large_width, double wall_overlap)
 {
     if (polygon.points.size() < 3 || large_nozzle_diameter <= EPSILON)
@@ -1300,11 +1322,6 @@ void PerimeterGenerator::process_classic()
         ext_perimeter_spacing2 = scaled<coord_t>(0.5f * (this->ext_perimeter_flow.width() + this->perimeter_flow.width()));
     else
         ext_perimeter_spacing2 = scaled<coord_t>(0.5f * (this->ext_perimeter_flow.spacing() + this->perimeter_flow.spacing()));
-    if (detail_candidate_available(*this)) {
-        const double wall_overlap = std::clamp(this->config->crisp_corner_nozzle_wall_overlap.value / 100., 0., 0.8);
-        const coord_t overlap = scaled<coord_t>(std::min(this->ext_perimeter_flow.width(), this->perimeter_flow.width()) * wall_overlap);
-        ext_perimeter_spacing2 = std::max<coord_t>(1, ext_perimeter_spacing2 - overlap);
-    }
 
     // overhang perimeters
     m_mm3_per_mm_overhang      		= this->overhang_flow.mm3_per_mm();
@@ -1339,9 +1356,11 @@ void PerimeterGenerator::process_classic()
     // BBS: this flow is for smaller external perimeter for small area
     coord_t ext_min_spacing_smaller = coord_t(ext_perimeter_spacing * (1 - SMALLER_EXT_INSET_OVERLAP_TOLERANCE));
     this->smaller_ext_perimeter_flow = this->ext_perimeter_flow;
-    // BBS: to be checked
-    this->smaller_ext_perimeter_flow = this->smaller_ext_perimeter_flow.with_width(SCALING_FACTOR *
-        (ext_perimeter_width - 0.5 * SMALLER_EXT_INSET_OVERLAP_TOLERANCE * ext_perimeter_spacing));
+    if (detail_candidate_available(*this))
+        this->smaller_ext_perimeter_flow = detail_external_perimeter_flow(*this);
+    else
+        this->smaller_ext_perimeter_flow = this->smaller_ext_perimeter_flow.with_width(SCALING_FACTOR *
+            (ext_perimeter_width - 0.5 * SMALLER_EXT_INSET_OVERLAP_TOLERANCE * ext_perimeter_spacing));
     m_ext_mm3_per_mm_smaller_width = this->smaller_ext_perimeter_flow.mm3_per_mm();
 
     // prepare grown lower layer slices for overhang detection
@@ -2249,11 +2268,6 @@ void PerimeterGenerator::process_arachne()
     coord_t ext_perimeter_width = this->ext_perimeter_flow.scaled_width();
     coord_t ext_perimeter_spacing = this->ext_perimeter_flow.scaled_spacing();
     coord_t ext_perimeter_spacing2 = scaled<coord_t>(0.5f * (this->ext_perimeter_flow.spacing() + this->perimeter_flow.spacing()));
-    if (detail_candidate_available(*this)) {
-        const double wall_overlap = std::clamp(this->config->crisp_corner_nozzle_wall_overlap.value / 100., 0., 0.8);
-        const coord_t overlap = scaled<coord_t>(std::min(this->ext_perimeter_flow.width(), this->perimeter_flow.width()) * wall_overlap);
-        ext_perimeter_spacing2 = std::max<coord_t>(1, ext_perimeter_spacing2 - overlap);
-    }
     // overhang perimeters
     m_mm3_per_mm_overhang = this->overhang_flow.mm3_per_mm();
 
