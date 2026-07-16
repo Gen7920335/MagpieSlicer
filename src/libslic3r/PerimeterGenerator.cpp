@@ -298,8 +298,8 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
                 extrusion_width = perimeter_generator.ext_perimeter_flow.width();
             }
         } else {
-            const Flow &wall_flow = use_detail_wall_flow ? perimeter_generator.ext_perimeter_flow : perimeter_generator.perimeter_flow;
-            lower_polygons_series = use_detail_wall_flow ? &perimeter_generator.m_external_lower_polygons_series : &perimeter_generator.m_lower_polygons_series;
+            const Flow &wall_flow = use_detail_wall_flow ? perimeter_generator.smaller_ext_perimeter_flow : perimeter_generator.perimeter_flow;
+            lower_polygons_series = use_detail_wall_flow ? &perimeter_generator.m_smaller_external_lower_polygons_series : &perimeter_generator.m_lower_polygons_series;
             extrusion_mm3_per_mm = wall_flow.mm3_per_mm();
             extrusion_width = wall_flow.width();
         }
@@ -575,7 +575,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
 
             // get non-overhang paths by intersecting this loop with the grown lower slices
             extrusion_paths_append(paths, clip_extrusion(extrusion_path, lower_slices_paths, ClipperLib_Z::ctIntersection), role,
-                                   use_detail_wall_flow ? perimeter_generator.ext_perimeter_flow : perimeter_generator.perimeter_flow);
+                                   use_detail_wall_flow ? perimeter_generator.smaller_ext_perimeter_flow : perimeter_generator.perimeter_flow);
 
             // Always reverse extrusion if use fuzzy skin: https://github.com/OrcaSlicer/OrcaSlicer/pull/2413#issuecomment-1769735357
             if (overhangs_reverse && perimeter_generator.has_fuzzy_skin) {
@@ -677,7 +677,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
                 steep_overhang_hole    = true;
             }
 
-            extrusion_paths_append(paths, *extrusion, role, use_detail_wall_flow ? perimeter_generator.ext_perimeter_flow : perimeter_generator.perimeter_flow);
+            extrusion_paths_append(paths, *extrusion, role, use_detail_wall_flow ? perimeter_generator.smaller_ext_perimeter_flow : perimeter_generator.perimeter_flow);
         }
 
         // Append paths to collection.

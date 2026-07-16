@@ -1843,9 +1843,15 @@ void generate_support_toolpaths(
                         fill_params.multiline        = 1;
                         fill_params.anchor_length    = 0.f;
                         fill_params.anchor_length_max = 0.f;
+                        // FillTriangles splits density across three sweep directions. Reduce the
+                        // pattern spacing instead of overdriving density, so the configured
+                        // support interface spacing applies to each visible direction.
+                        const coordf_t original_spacing = filler->spacing;
+                        filler->spacing = original_spacing / 3.;
                         fill_expolygons_generate_paths(
                             layer_ex.extrusions, std::move(regions), filler, fill_params,
                             float(density), role, interface_flow);
+                        filler->spacing = original_spacing;
                     } else {
                         fill_expolygons_generate_paths(
                             layer_ex.extrusions, std::move(regions), filler, float(density),
