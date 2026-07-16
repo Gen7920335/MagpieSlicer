@@ -1393,7 +1393,10 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "detect_thin_wall"
             || opt_key == "precise_outer_wall"
             || opt_key == "use_smaller_nozzles_in_crisp_corners"
-            || opt_key == "crisp_corner_detail_toolhead") {
+            || opt_key == "crisp_corner_detail_toolhead"
+            || opt_key == "crisp_corner_small_nozzle_wall_count"
+            || opt_key == "crisp_corner_nozzle_wall_overlap"
+            || opt_key == "crisp_corner_interlace_small_nozzle_walls") {
             steps.emplace_back(posPerimeters);
             steps.emplace_back(posSupportMaterial);
         } else if (opt_key == "bridge_flow" || opt_key == "internal_bridge_flow") {
