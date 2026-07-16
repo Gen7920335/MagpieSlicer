@@ -2906,6 +2906,21 @@ void TabPrint::build()
         optgroup->append_single_option_line("support_interface_top_layers", "support_settings_advanced#interface-layers");
         optgroup->append_single_option_line("support_interface_bottom_layers", "support_settings_advanced#interface-layers");
         optgroup->append_single_option_line("support_interface_pattern", "support_settings_advanced#interface-pattern");
+        optgroup->append_single_option_line("support_interface_sublayer_pattern", "support_settings_advanced#interface-pattern");
+        {
+            Line sublayer_range_line = { L("Interface sublayer range"), L("Interface layer range using the sublayer pattern. The model-contact interface layer is layer 1.") };
+            sublayer_range_line.label_path = "support_settings_advanced#interface-pattern";
+            auto sublayer_start_opt = optgroup->get_option("support_interface_sublayer_start_layer");
+            auto sublayer_end_opt = optgroup->get_option("support_interface_sublayer_end_layer");
+            sublayer_start_opt.opt.label = L("From");
+            sublayer_end_opt.opt.label = L("To");
+            sublayer_range_line.append_option(sublayer_start_opt);
+            sublayer_range_line.append_option(sublayer_end_opt);
+            optgroup->append_line(sublayer_range_line);
+        }
+        optgroup->append_single_option_line("support_interface_sublayer_pattern_type", "support_settings_advanced#interface-pattern");
+        optgroup->append_single_option_line("support_interface_sublayer_angle", "support_settings_advanced#interface-pattern");
+        optgroup->append_single_option_line("support_interface_sublayer_temperature", "support_settings_advanced#interface-pattern");
         optgroup->append_single_option_line("support_interface_spacing", "support_settings_advanced#interface-spacing");
         optgroup->append_single_option_line("support_bottom_interface_spacing", "support_settings_advanced#interface-spacing");
         optgroup->append_single_option_line("support_expansion", "support_settings_advanced#normal-support-expansion");
@@ -3142,6 +3157,15 @@ void TabPrint::toggle_options()
         }
         cb->SetValue(n);
     }
+
+    const bool sublayer_available = m_config->opt_int("support_interface_top_layers") > 1;
+    const bool sublayer_enabled = sublayer_available && m_config->opt_bool("support_interface_sublayer_pattern");
+    toggle_option("support_interface_sublayer_pattern", sublayer_available);
+    toggle_option("support_interface_sublayer_start_layer", sublayer_enabled);
+    toggle_option("support_interface_sublayer_end_layer", sublayer_enabled);
+    toggle_option("support_interface_sublayer_pattern_type", sublayer_enabled);
+    toggle_option("support_interface_sublayer_angle", sublayer_enabled);
+    toggle_option("support_interface_sublayer_temperature", sublayer_enabled);
 
     // BBL printers do not support cone wipe tower
     field = m_active_page->get_field("wipe_tower_wall_type");

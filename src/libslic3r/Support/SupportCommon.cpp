@@ -43,6 +43,23 @@ namespace Slic3r {
 //#define SUPPORT_SURFACES_OFFSET_PARAMETERS ClipperLib::jtMiter, 1.5
 #define SUPPORT_SURFACES_OFFSET_PARAMETERS ClipperLib::jtSquare, 0.
 
+static InfillPattern interface_pattern_to_fill_pattern(
+    SupportMaterialInterfacePattern pattern,
+    const SupportParameters        &support_params)
+{
+    if (pattern == smipGrid)
+        return ipGrid;
+    if (pattern == smipTriangles)
+        return ipTriangles;
+    if (pattern == smipRectilinearInterlaced)
+        return ipRectilinear;
+    if (pattern == smipConcentric)
+        return ipConcentric;
+    if (pattern == smipRectilinear)
+        return ipRectilinear;
+    return support_params.contact_fill_pattern;
+}
+
 // Convert some of the intermediate layers into top/bottom interface layers as well as base interface layers.
 std::pair<SupportGeneratorLayersPtr, SupportGeneratorLayersPtr> generate_interface_layers(
     const PrintObjectConfig           &config,
@@ -1563,9 +1580,68 @@ void generate_support_toolpaths(
     };
     std::vector<LayerCache>             layer_caches(support_layers.size());
 
+    std::vector<int> top_interface_numbers(support_layers.size(), 0);
+    std::vector<int> bottom_interface_numbers(support_layers.size(), 0);
+    {
+        std::vector<char> has_top_contact(support_layers.size(), 0);
+        std::vector<char> has_top_interface(support_layers.size(), 0);
+        std::vector<char> has_bottom_contact(support_layers.size(), 0);
+        std::vector<char> has_bottom_interface(support_layers.size(), 0);
+        auto support_layer_idx_at_print_z = [&support_layers](coordf_t print_z) -> size_t {
+            auto it = std::lower_bound(support_layers.begin(), support_layers.end(), print_z - EPSILON,
+                [](const SupportLayer *layer, coordf_t z) { return layer->print_z < z; });
+            return it != support_layers.end() && std::abs((*it)->print_z - print_z) < EPSILON ?
+                size_t(std::distance(support_layers.begin(), it)) : size_t(-1);
+        };
+        auto mark_layers = [&](const SupportGeneratorLayersPtr &layers) {
+            for (const SupportGeneratorLayer *layer : layers) {
+                const size_t idx = support_layer_idx_at_print_z(layer->print_z);
+                if (idx == size_t(-1))
+                    continue;
+                if (layer->layer_type == SupporLayerType::TopContact)
+                    has_top_contact[idx] = 1;
+                else if (layer->layer_type == SupporLayerType::TopInterface)
+                    has_top_interface[idx] = 1;
+                else if (layer->layer_type == SupporLayerType::BottomContact)
+                    has_bottom_contact[idx] = 1;
+                else if (layer->layer_type == SupporLayerType::BottomInterface)
+                    has_bottom_interface[idx] = 1;
+            }
+        };
+        mark_layers(top_contacts);
+        mark_layers(bottom_contacts);
+        mark_layers(interface_layers);
+
+        const int top_total = int(support_params.num_top_interface_layers);
+        int top_number = 0;
+        for (int idx = int(support_layers.size()) - 1; idx >= 0; --idx) {
+            if (has_top_contact[idx])
+                top_number = 1;
+            if (has_top_interface[idx] && top_number > 0 && top_total > 1) {
+                top_number = std::min(top_number + 1, top_total);
+                top_interface_numbers[size_t(idx)] = top_number;
+            } else if (!has_top_contact[idx] && !has_top_interface[idx]) {
+                top_number = 0;
+            }
+        }
+
+        const int bottom_total = int(support_params.num_bottom_interface_layers);
+        int bottom_number = 0;
+        for (size_t idx = 0; idx < support_layers.size(); ++idx) {
+            if (has_bottom_contact[idx])
+                bottom_number = 1;
+            if (has_bottom_interface[idx] && bottom_number > 0 && bottom_total > 1) {
+                bottom_number = std::min(bottom_number + 1, bottom_total);
+                bottom_interface_numbers[idx] = bottom_number;
+            } else if (!has_bottom_contact[idx] && !has_bottom_interface[idx]) {
+                bottom_number = 0;
+            }
+        }
+    }
+
     tbb::parallel_for(tbb::blocked_range<size_t>(n_raft_layers, support_layers.size()),
         [&config, &slicing_params, &support_params, &support_layers, &bottom_contacts, &top_contacts, &intermediate_layers, &interface_layers, &base_interface_layers, &layer_caches, &loop_interface_processor,
-            &bbox_object, &angles, n_raft_layers, link_max_length_factor]
+            &bbox_object, &angles, &top_interface_numbers, &bottom_interface_numbers, n_raft_layers, link_max_length_factor]
             (const tbb::blocked_range<size_t>& range) {
         // Indices of the 1st layer in their respective container at the support layer height.
         size_t idx_layer_bottom_contact   = size_t(-1);
@@ -1584,6 +1660,7 @@ void generate_support_toolpaths(
             Fill::new_from_type(support_params.raft_interface_fill_pattern) : nullptr);
         // Pointer to the 1st layer interface filler.
         auto filler_raft_contact     = filler_raft_contact_ptr ? filler_raft_contact_ptr.get() : filler_interface.get();
+        auto filler_sublayer = std::unique_ptr<Fill>(Fill::new_from_type(interface_pattern_to_fill_pattern(config.support_interface_sublayer_pattern_type, support_params)));
         // Filler for the base interface (to be used for soluble interface / non soluble base, to produce non soluble interface layer below soluble interface layer).
         auto filler_base_interface  = std::unique_ptr<Fill>(base_interface_layers.empty() ? nullptr :
             Fill::new_from_type(support_params.top_interface_density > 0.95 || support_params.with_sheath ? ipRectilinear : ipSupportBase));
@@ -1593,6 +1670,7 @@ void generate_support_toolpaths(
             filler_first_layer_ptr->set_bounding_box(bbox_object);
         if (filler_raft_contact_ptr)
             filler_raft_contact_ptr->set_bounding_box(bbox_object);
+        filler_sublayer->set_bounding_box(bbox_object);
         if (filler_base_interface)
             filler_base_interface->set_bounding_box(bbox_object);
         filler_support->set_bounding_box(bbox_object);
@@ -1714,9 +1792,24 @@ void generate_support_toolpaths(
                     // ORCA: detect bottom interface layers for density selection.
                     bool bottom_interface  = interface_layer_type == InterfaceLayerType::BottomContact ||
                         (interface_layer_type == InterfaceLayerType::Interface && layer_ex.layer->layer_type == SupporLayerType::BottomInterface);
+                    const int interface_number =
+                        layer_ex.layer->layer_type == SupporLayerType::TopInterface ? top_interface_numbers[support_layer_id] :
+                        layer_ex.layer->layer_type == SupporLayerType::BottomInterface ? bottom_interface_numbers[support_layer_id] : 1;
+                    const int interface_total = bottom_interface ?
+                        int(support_params.num_bottom_interface_layers) : int(support_params.num_top_interface_layers);
+                    const int sublayer_start = std::min(
+                        std::max(2, config.support_interface_sublayer_start_layer.value),
+                        std::max(1, interface_total));
+                    const int sublayer_end = std::min(
+                        std::max(sublayer_start, config.support_interface_sublayer_end_layer.value),
+                        std::max(1, interface_total));
+                    const bool use_sublayer_pattern =
+                        config.support_interface_sublayer_pattern.value &&
+                        !interface_as_base && !raft_contact &&
+                        interface_total > 1 && interface_number >= sublayer_start && interface_number <= sublayer_end;
                     //FIXME Bottom interfaces are extruded with the briding flow. Some bridging layers have its height slightly reduced, therefore
                     // the bridging flow does not quite apply. Reduce the flow to area of an ellipse? (A = pi * a * b)
-                    auto *filler = raft_contact ? filler_raft_contact : filler_interface.get();
+                    auto *filler = raft_contact ? filler_raft_contact : (use_sublayer_pattern ? filler_sublayer.get() : filler_interface.get());
                     auto interface_flow = layer_ex.layer->bridging ?
                         Flow::bridging_flow(layer_ex.layer->height, support_params.support_material_bottom_interface_flow.nozzle_diameter()) :
                         (raft_contact ? &support_params.raft_interface_flow :
@@ -1728,7 +1821,8 @@ void generate_support_toolpaths(
                             // Use interface angle for the interface layers.
                             raft_contact ?
                                 support_params.raft_interface_angle(support_layer.interface_id()) :
-                                support_interface_angle;
+                                (use_sublayer_pattern ?
+                                    float(config.support_interface_sublayer_angle.value * M_PI / 180.) : support_interface_angle);
                     // ORCA: pick density based on interface type.
                     double density = raft_contact ? support_params.raft_interface_density :
                         interface_as_base ? support_params.support_density :
@@ -1738,8 +1832,11 @@ void generate_support_toolpaths(
                     filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / density));
                     ExPolygons regions = union_safety_offset_ex(layer_ex.polygons_to_extrude());
                     const ExtrusionRole role = interface_as_base ?
-                        ExtrusionRole::erSupportMaterial : ExtrusionRole::erSupportMaterialInterface;
-                    if (!interface_as_base && config.support_interface_pattern == smipTriangles) {
+                        ExtrusionRole::erSupportMaterial :
+                        (use_sublayer_pattern ? ExtrusionRole::erSupportMaterialInterfaceSublayer : ExtrusionRole::erSupportMaterialInterface);
+                    const SupportMaterialInterfacePattern effective_interface_pattern =
+                        use_sublayer_pattern ? config.support_interface_sublayer_pattern_type.value : config.support_interface_pattern.value;
+                    if (!interface_as_base && effective_interface_pattern == smipTriangles) {
                         FillParams fill_params;
                         fill_params.density          = float(density);
                         fill_params.dont_adjust      = true;

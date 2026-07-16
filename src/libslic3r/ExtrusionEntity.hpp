@@ -34,6 +34,7 @@ enum ExtrusionRole : uint8_t {
     erBrim,
     erSupportMaterial,
     erSupportMaterialInterface,
+    erSupportMaterialInterfaceSublayer,
     erSupportTransition,
     erWipeTower,
     erCustom,
@@ -108,6 +109,7 @@ inline bool is_support(ExtrusionRole role)
 {
     return role == erSupportMaterial
         || role == erSupportMaterialInterface
+        || role == erSupportMaterialInterfaceSublayer
         || role == erSupportTransition;
 }
 

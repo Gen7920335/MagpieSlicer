@@ -6392,6 +6392,73 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<SupportMaterialInterfacePattern>(smipAuto));
 
+    def = this->add("support_interface_sublayer_pattern", coBool);
+    def->label = L("Interface sublayer pattern");
+    def->category = L("Support");
+    def->tooltip = L("Use a separate pattern for support interface sublayers below the model-contact interface layer.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("support_interface_sublayer_start_layer", coInt);
+    def->label = L("Interface sublayer start");
+    def->category = L("Support");
+    def->tooltip = L("First support interface layer to use the sublayer pattern. "
+                     "The model-contact interface layer is layer 1.");
+    def->sidetext = L("layer");
+    def->min = 2;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(2));
+
+    def = this->add("support_interface_sublayer_end_layer", coInt);
+    def->label = L("Interface sublayer end");
+    def->category = L("Support");
+    def->tooltip = L("Last support interface layer to use the sublayer pattern. "
+                     "Values above the configured interface layer count are clamped automatically.");
+    def->sidetext = L("layer");
+    def->min = 2;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(2));
+
+    def = this->add("support_interface_sublayer_pattern_type", coEnum);
+    def->label = L("Interface sublayer pattern type");
+    def->category = L("Support");
+    def->tooltip = L("Line pattern used for support interface sublayers when Interface sublayer pattern is enabled.");
+    def->enum_keys_map = &ConfigOptionEnum<SupportMaterialInterfacePattern>::get_enum_values();
+    def->enum_values.push_back("auto");
+    def->enum_values.push_back("rectilinear");
+    def->enum_values.push_back("concentric");
+    def->enum_values.push_back("rectilinear_interlaced");
+    def->enum_values.push_back("grid");
+    def->enum_values.push_back("triangles");
+    def->enum_labels.push_back(L("Default"));
+    def->enum_labels.push_back(L("Rectilinear"));
+    def->enum_labels.push_back(L("Concentric"));
+    def->enum_labels.push_back(L("Rectilinear Interlaced"));
+    def->enum_labels.push_back(L("Grid"));
+    def->enum_labels.push_back(L("Triangles"));
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<SupportMaterialInterfacePattern>(smipRectilinear));
+
+    def = this->add("support_interface_sublayer_angle", coFloat);
+    def->label = L("Interface sublayer angle");
+    def->category = L("Support");
+    def->tooltip = L("Pattern angle used for interface sublayers.");
+    def->sidetext = L("deg");
+    def->min = 0;
+    def->max = 180;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.));
+
+    def = this->add("support_interface_sublayer_temperature", coInt);
+    def->label = L("Interface sublayer temperature");
+    def->category = L("Support");
+    def->tooltip = L("Nozzle temperature used while printing support interface sublayers. 0 disables sublayer temperature control.");
+    def->sidetext = L("°C");
+    def->min = 0;
+    def->max = 300;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
+
     def = this->add("support_base_pattern_spacing", coFloat);
     def->label = L("Base pattern spacing");
     def->category = L("Support");
@@ -11498,7 +11565,7 @@ CustomGcodeSpecificConfigDef::CustomGcodeSpecificConfigDef()
 // change_extrusion_role_gcode
     std::string extrusion_role_types = "Possible Values:\n[\"Perimeter\", \"ExternalPerimeter\", "
                                                      "\"OverhangPerimeter\", \"InternalInfill\", \"SolidInfill\", \"TopSolidInfill\", \"BottomSurface\", \"BridgeInfill\", \"GapFill\", \"Ironing\", "
-                                                     "\"Skirt\", \"Brim\", \"SupportMaterial\", \"SupportMaterialInterface\", \"SupportTransition\", \"WipeTower\", \"Mixed\"]";
+                                                     "\"Skirt\", \"Brim\", \"SupportMaterial\", \"SupportMaterialInterface\", \"SupportMaterialInterfaceSublayer\", \"SupportTransition\", \"WipeTower\", \"Mixed\"]";
 
     new_def("extrusion_role", coString, "Extrusion role", "The new extrusion role/type that is going to be used\n" + extrusion_role_types);
     new_def("last_extrusion_role", coString, "Last extrusion role", "The previously used extrusion role/type\nPossible Values:\n" + extrusion_role_types);

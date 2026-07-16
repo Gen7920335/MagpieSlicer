@@ -987,6 +987,12 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatsNullable,      support_interface_speed))
     ((ConfigOptionEnum<SupportMaterialPattern>, support_base_pattern))
     ((ConfigOptionEnum<SupportMaterialInterfacePattern>, support_interface_pattern))
+    ((ConfigOptionBool,                support_interface_sublayer_pattern))
+    ((ConfigOptionInt,                 support_interface_sublayer_start_layer))
+    ((ConfigOptionInt,                 support_interface_sublayer_end_layer))
+    ((ConfigOptionEnum<SupportMaterialInterfacePattern>, support_interface_sublayer_pattern_type))
+    ((ConfigOptionFloat,               support_interface_sublayer_angle))
+    ((ConfigOptionInt,                 support_interface_sublayer_temperature))
     // Spacing between support material lines (the hatching distance).
     ((ConfigOptionFloat,               support_base_pattern_spacing))
     ((ConfigOptionFloat,               support_expansion))

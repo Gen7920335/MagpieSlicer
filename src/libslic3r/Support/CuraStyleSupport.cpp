@@ -107,6 +107,15 @@ static Polygons close_unprintable_parts(const Polygons &polygons, coord_t half_m
     return closed.empty() ? Polygons{} : offset(closed, float(half_min_feature), SUPPORT_SURFACES_OFFSET_PARAMETERS);
 }
 
+static Polygons close_interface_footprint(const Polygons &polygons, coord_t close_distance)
+{
+    if (polygons.empty())
+        return {};
+
+    Polygons closed = offset(polygons, float(close_distance), SUPPORT_SURFACES_OFFSET_PARAMETERS);
+    return closed.empty() ? Polygons{} : offset(closed, -float(close_distance), SUPPORT_SURFACES_OFFSET_PARAMETERS);
+}
+
 static std::vector<Polygons> propagate_cura_style_support(
     const PrintObject               &object,
     const SlicingParameters         &slicing_params,
@@ -190,7 +199,8 @@ static InterfaceFootprints make_cura_style_interface_footprints(
     const PrintObject           &object,
     const SlicingParameters     &slicing_params,
     const SupportParameters     &support_params,
-    const std::vector<Polygons> &full_overhangs)
+    const std::vector<Polygons> &full_overhangs,
+    const std::vector<Polygons> &support_body)
 {
     const PrintObjectConfig &config = object.config();
     const size_t layer_count = object.layer_count();
@@ -206,22 +216,43 @@ static InterfaceFootprints make_cura_style_interface_footprints(
     const size_t top_gap_layers = std::max<size_t>(1, size_t(std::ceil(slicing_params.gap_support_object / layer_height)));
     const coord_t support_expansion = scale_(config.support_expansion.value);
     const coord_t xy_gap = scale_(support_params.gap_xy);
-    const coord_t half_min_feature = std::max<coord_t>(support_params.support_material_interface_flow.scaled_width() / 2, scale_(0.05));
+    double interface_margin_scaled = std::max<double>(
+        support_params.support_material_interface_flow.scaled_spacing(),
+        support_params.support_material_interface_flow.scaled_width());
+    interface_margin_scaled = std::max<double>(interface_margin_scaled, support_params.support_material_flow.scaled_width());
+    interface_margin_scaled = std::max<double>(interface_margin_scaled, support_expansion);
+    interface_margin_scaled = std::max<double>(interface_margin_scaled, scale_(0.2));
+    const coord_t interface_margin = coord_t(std::ceil(interface_margin_scaled));
+    const coord_t close_distance = std::max<coord_t>(support_params.support_material_interface_flow.scaled_width() / 2, scale_(0.05));
 
     for (size_t overhang_layer_idx = top_gap_layers; overhang_layer_idx < full_overhangs.size(); ++overhang_layer_idx) {
-        Polygons footprint = full_overhangs[overhang_layer_idx];
+        Polygons overhang_seed = full_overhangs[overhang_layer_idx];
+        if (overhang_seed.empty())
+            continue;
+
+        const size_t contact_layer_idx = overhang_layer_idx - top_gap_layers;
+        Polygons footprint = contact_layer_idx < support_body.size() ? support_body[contact_layer_idx] : Polygons{};
+        if (footprint.empty())
+            footprint = overhang_seed;
+
+        // Use the actual support top as the interface footprint, but limit it to
+        // the support island that belongs to this overhang. The raw overhang
+        // polygon alone often leaves only a narrow boundary strip.
+        Polygons interface_envelope = offset(overhang_seed, float(interface_margin), SUPPORT_SURFACES_OFFSET_PARAMETERS);
+        if (!interface_envelope.empty())
+            footprint = intersection(footprint, interface_envelope);
         if (footprint.empty())
             continue;
 
-        if (support_expansion != 0)
-            footprint = offset(footprint, float(support_expansion), SUPPORT_SURFACES_OFFSET_PARAMETERS);
+        footprint = close_interface_footprint(footprint, close_distance);
+        if (footprint.empty())
+            continue;
 
-        const size_t contact_layer_idx = overhang_layer_idx - top_gap_layers;
         const Polygons model_on_contact_layer = layer_polygons(object, contact_layer_idx);
         if (!model_on_contact_layer.empty())
             footprint = diff(footprint, offset(model_on_contact_layer, float(xy_gap), SUPPORT_SURFACES_OFFSET_PARAMETERS));
 
-        footprint = close_unprintable_parts(footprint, half_min_feature);
+        footprint = close_interface_footprint(footprint, close_distance);
         if (footprint.empty())
             continue;
 
@@ -312,7 +343,7 @@ void CuraStyleSupportGenerator::generate(PrintObject &object)
 
     std::vector<Polygons> full_overhangs = compute_cura_style_full_overhangs(object, support_params);
     std::vector<Polygons> support_body   = propagate_cura_style_support(object, m_slicing_params, support_params, full_overhangs);
-    InterfaceFootprints interface_footprints = make_cura_style_interface_footprints(object, m_slicing_params, support_params, full_overhangs);
+    InterfaceFootprints interface_footprints = make_cura_style_interface_footprints(object, m_slicing_params, support_params, full_overhangs, support_body);
     std::vector<Polygons> non_base_support_by_layer(support_body.size(), Polygons{});
 
     for (size_t layer_idx = 0; layer_idx < support_body.size(); ++layer_idx) {

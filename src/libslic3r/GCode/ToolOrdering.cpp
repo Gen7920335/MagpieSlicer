@@ -762,7 +762,7 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
         for (const ExtrusionEntity *ee : support_layer->support_fills.entities) {
             ExtrusionRole er = ee->role();
             if (er == erSupportMaterial || er == erSupportTransition) has_support = true;
-            if (er == erSupportMaterialInterface) has_interface = true;
+            if (er == erSupportMaterialInterface || er == erSupportMaterialInterfaceSublayer) has_interface = true;
             if (has_support && has_interface) break;
         }
         unsigned int extruder_support   = object.config().support_filament.value;
@@ -1608,7 +1608,7 @@ bool WipingExtrusions::is_support_overriddable(const ExtrusionRole role, const P
     else if (role == erSupportMaterial || role == erSupportTransition) {
         return object.config().support_filament == 0;
     }
-    else if (role == erSupportMaterialInterface) {
+    else if (role == erSupportMaterialInterface || role == erSupportMaterialInterfaceSublayer) {
         return object.config().support_interface_filament == 0;
     }
 
@@ -1740,7 +1740,7 @@ float WipingExtrusions::mark_wiping_extrusions(const Print& print, unsigned int 
                     if (support_intf_overriddable && !is_support_interface_overridden(object)) {
                         set_support_interface_extruder_override(object, copy, new_extruder, num_of_copies);
                         for (const ExtrusionEntity* ee : entities) {
-                            if (ee->role() == erSupportMaterialInterface)
+                            if (ee->role() == erSupportMaterialInterface || ee->role() == erSupportMaterialInterfaceSublayer)
                                 volume_to_wipe -= ee->total_volume();
 
                             if (volume_to_wipe <= 0.f)

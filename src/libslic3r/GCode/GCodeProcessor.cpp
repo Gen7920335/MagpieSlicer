@@ -3899,7 +3899,10 @@ void GCodeProcessor::process_G1(const std::array<std::optional<double>, 4>& axes
         float volume_extruded_filament = area_filament_cross_section * delta_pos[E];
         float area_toolpath_cross_section = volume_extruded_filament / delta_xyz;
 
-        if(m_extrusion_role == ExtrusionRole::erSupportMaterial || m_extrusion_role == ExtrusionRole::erSupportMaterialInterface || m_extrusion_role ==ExtrusionRole::erSupportTransition)
+        if(m_extrusion_role == ExtrusionRole::erSupportMaterial ||
+           m_extrusion_role == ExtrusionRole::erSupportMaterialInterface ||
+           m_extrusion_role == ExtrusionRole::erSupportMaterialInterfaceSublayer ||
+           m_extrusion_role == ExtrusionRole::erSupportTransition)
             m_used_filaments.increase_support_caches(volume_extruded_filament);
         else if (m_extrusion_role==ExtrusionRole::erWipeTower) {
             m_used_filaments.increase_wipe_tower_caches(volume_extruded_filament);

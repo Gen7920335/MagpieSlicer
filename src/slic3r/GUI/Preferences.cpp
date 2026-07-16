@@ -368,6 +368,8 @@ wxBoxSizer *PreferencesDialog::create_item_language_combobox(wxString title, wxS
     };
 
     auto translations = wxTranslations::Get()->GetAvailableTranslations(SLIC3R_APP_KEY);
+    if (translations.empty() && wxString(SLIC3R_APP_KEY) != "OrcaSlicer")
+        translations = wxTranslations::Get()->GetAvailableTranslations("OrcaSlicer");
     std::vector<const wxLanguageInfo *> language_infos;
     language_infos.emplace_back(wxLocale::GetLanguageInfo(wxLANGUAGE_ENGLISH));
     for (size_t i = 0; i < translations.GetCount(); ++i) {

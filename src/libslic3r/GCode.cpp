@@ -4905,7 +4905,7 @@ LayerResult GCode::process_layer(
             if (! support_layer.support_fills.entities.empty()) {
                 ExtrusionRole   role               = support_layer.support_fills.role();
                 bool            has_support        = role == erMixed || role == erSupportMaterial || role == erSupportTransition;
-                bool            has_interface      = role == erMixed || role == erSupportMaterialInterface;
+                bool            has_interface      = role == erMixed || role == erSupportMaterialInterface || role == erSupportMaterialInterfaceSublayer;
                 // Extruder ID of the support base. -1 if "don't care".
                 unsigned int    support_extruder   = object.config().support_filament.value - 1;
                 // Shall the support be printed with the active extruder, preferably with non-soluble, to avoid tool changes?
@@ -5447,14 +5447,15 @@ LayerResult GCode::process_layer(
                     bool support_intf_overridden = wiping_extrusions.is_support_interface_overridden(layer_to_print.original_object);
 
                     ExtrusionRole support_extrusion_role = instance_to_print.object_by_extruder.support_extrusion_role;
-                    bool is_overridden = support_extrusion_role == erSupportMaterialInterface ? support_intf_overridden : support_overridden;
+                    bool is_overridden = (support_extrusion_role == erSupportMaterialInterface || support_extrusion_role == erSupportMaterialInterfaceSublayer) ?
+                        support_intf_overridden : support_overridden;
                     if (is_overridden == (print_wipe_extrusions != 0)) {
                         gcode += this->extrude_support(
                             // support_extrusion_role is erSupportMaterial, erSupportTransition, erSupportMaterialInterface or erMixed for all extrusion paths.
                             *instance_to_print.object_by_extruder.support, support_extrusion_role);
 
                         // Make sure ironing is the last
-                        if (support_extrusion_role == erMixed || support_extrusion_role == erSupportMaterialInterface) {
+                        if (support_extrusion_role == erMixed || support_extrusion_role == erSupportMaterialInterface || support_extrusion_role == erSupportMaterialInterfaceSublayer) {
                             gcode += this->extrude_support(*instance_to_print.object_by_extruder.support, erIroning);
                         }
                     }
@@ -6212,6 +6213,7 @@ std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fill
 {
     static constexpr const char* support_label            = "support material";
     static constexpr const char* support_interface_label  = "support material interface";
+    static constexpr const char* support_sublayer_label   = "support material interface sublayer";
     static constexpr const char* support_transition_label = "support transition";
     static constexpr const char* support_ironing_label    = "support ironing";
 
@@ -6221,7 +6223,7 @@ std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fill
 
         double small_perimeter_speed = -1.0;
 
-        const auto base_speed = (role == erSupportMaterialInterface) 
+        const auto base_speed = (role == erSupportMaterialInterface || role == erSupportMaterialInterfaceSublayer)
             ? NOZZLE_CONFIG(support_interface_speed) : NOZZLE_CONFIG(support_speed);
 
         if (NOZZLE_CONFIG(small_support_perimeter_speed).value == 0)
@@ -6250,18 +6252,47 @@ std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fill
         if (!support_fills.no_sort)
             chain_and_reorder_extrusion_entities(extrusions, m_last_pos.to_point());
 
+        const int sublayer_temperature = m_config.support_interface_sublayer_temperature.value;
+        const auto normal_temperature_for_current_extruder = [this]() {
+            const unsigned int extruder_id = m_writer.filament()->id();
+            return this->on_first_layer() ?
+                m_config.nozzle_temperature_initial_layer.get_at(extruder_id) :
+                m_config.nozzle_temperature.get_at(extruder_id);
+        };
+        bool sublayer_temperature_active = false;
+        const auto set_sublayer_temperature = [&]() {
+            if (sublayer_temperature > 0 && !sublayer_temperature_active) {
+                gcode += m_writer.set_temperature(sublayer_temperature, false);
+                sublayer_temperature_active = true;
+            }
+        };
+        const auto restore_normal_temperature = [&]() {
+            if (sublayer_temperature_active) {
+                const int normal_temperature = normal_temperature_for_current_extruder();
+                if (normal_temperature > 0)
+                    gcode += m_writer.set_temperature(normal_temperature, false);
+                sublayer_temperature_active = false;
+            }
+        };
+
         for (const ExtrusionEntity *ee : extrusions) {
             ExtrusionRole role = ee->role();
             assert(is_support(role) || role == erIroning);
 
             const char* label = (role == erSupportMaterial) ? support_label :
-                ((role == erSupportMaterialInterface) ? support_interface_label : 
+                ((role == erSupportMaterialInterface || role == erSupportMaterialInterfaceSublayer) ?
+                (role == erSupportMaterialInterfaceSublayer ? support_sublayer_label : support_interface_label) :
                 ((role == erIroning) ? support_ironing_label : support_transition_label));
 
             const ExtrusionPath* path = dynamic_cast<const ExtrusionPath*>(ee);
             const ExtrusionMultiPath* multipath = dynamic_cast<const ExtrusionMultiPath*>(ee);
             const ExtrusionLoop* loop = dynamic_cast<const ExtrusionLoop*>(ee);
             const ExtrusionEntityCollection* collection = dynamic_cast<const ExtrusionEntityCollection*>(ee);
+
+            if (role == erSupportMaterialInterfaceSublayer)
+                set_sublayer_temperature();
+            else
+                restore_normal_temperature();
 
             if (path) {
                 gcode += extrude_path(*path, label, speed_for_path(path->length(), role));
@@ -6279,6 +6310,7 @@ std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fill
                 throw Slic3r::InvalidArgument("Unknown extrusion type");
             }
         }
+        restore_normal_temperature();
     }
     return gcode;
 }
@@ -6546,7 +6578,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             _mm3_per_mm *= m_config.gap_fill_flow_ratio;
         } else if (path.role() == erSupportMaterial) { // Should this condition also cover erSupportTransition?
             _mm3_per_mm *= m_config.support_flow_ratio;
-        } else if (path.role() == erSupportMaterialInterface) {
+        } else if (path.role() == erSupportMaterialInterface || path.role() == erSupportMaterialInterfaceSublayer) {
             _mm3_per_mm *= m_config.support_interface_flow_ratio;
         }
 
@@ -6592,7 +6624,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             speed = NOZZLE_CONFIG(gap_infill_speed);
         } else if (path.role() == erSupportMaterial) {
             speed = NOZZLE_CONFIG(support_speed);
-        } else if (path.role() == erSupportMaterialInterface) {
+        } else if (path.role() == erSupportMaterialInterface || path.role() == erSupportMaterialInterfaceSublayer) {
             speed = NOZZLE_CONFIG(support_interface_speed);
         } else {
             throw Slic3r::InvalidArgument("Invalid speed");
@@ -6964,7 +6996,8 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         ironing_fan_speed        = FILAMENT_CONFIG(ironing_fan_speed)
     ] {
         append_role_based_fan_marker(erSupportMaterialInterface, "_SUPP_INTERFACE"sv,
-                                     supp_interface_fan_speed >= 0 && path.role() == erSupportMaterialInterface);
+                                     supp_interface_fan_speed >= 0 &&
+                                     (path.role() == erSupportMaterialInterface || path.role() == erSupportMaterialInterfaceSublayer));
         append_role_based_fan_marker(erIroning, "_IRONING"sv,
                                      ironing_fan_speed >= 0 && path.role() == erIroning);
     };
@@ -7327,6 +7360,7 @@ std::string GCode::extrusion_role_to_string_for_parser(const ExtrusionRole & rol
         case erBrim: return "Brim";
         case erSupportMaterial: return "SupportMaterial";
         case erSupportMaterialInterface: return "SupportMaterialInterface";
+        case erSupportMaterialInterfaceSublayer: return "SupportMaterialInterfaceSublayer";
         case erSupportTransition: return "SupportTransition";
         case erWipeTower: return "WipeTower";
         case erCustom:

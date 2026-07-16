@@ -2403,7 +2403,7 @@ void GUI_App::init_app_config()
     SetAppName(SLIC3R_APP_KEY);
 //	SetAppName(SLIC3R_APP_KEY "-alpha");
 //  SetAppName(SLIC3R_APP_KEY "-beta");
-//	SetAppDisplayName(SLIC3R_APP_NAME);
+	SetAppDisplayName(SLIC3R_APP_NAME);
 
 	// Set the Slic3r data directory at the Slic3r XS module.
 	// Unix: ~/ .Slic3r
@@ -7459,10 +7459,33 @@ int GUI_App::GetSingleChoiceIndex(const wxString& message,
 #endif
 }
 
+static wxArrayString get_available_app_translations()
+{
+    wxArrayString translations = wxTranslations::Get()->GetAvailableTranslations(SLIC3R_APP_KEY);
+    if (translations.empty() && wxString(SLIC3R_APP_KEY) != "OrcaSlicer")
+        translations = wxTranslations::Get()->GetAvailableTranslations("OrcaSlicer");
+    return translations;
+}
+
+static wxString get_best_app_translation(wxLanguage fallback)
+{
+    wxString best_language = wxTranslations::Get()->GetBestTranslation(SLIC3R_APP_KEY, fallback);
+    if (best_language.empty() && wxString(SLIC3R_APP_KEY) != "OrcaSlicer")
+        best_language = wxTranslations::Get()->GetBestTranslation("OrcaSlicer", fallback);
+    return best_language;
+}
+
+static bool add_app_translation_catalog(wxLocale &locale)
+{
+    if (locale.AddCatalog(SLIC3R_APP_KEY))
+        return true;
+    return wxString(SLIC3R_APP_KEY) != "OrcaSlicer" && locale.AddCatalog("OrcaSlicer");
+}
+
 // select language from the list of installed languages
 bool GUI_App::select_language()
 {
-	wxArrayString translations = wxTranslations::Get()->GetAvailableTranslations(SLIC3R_APP_KEY);
+	wxArrayString translations = get_available_app_translations();
     std::vector<const wxLanguageInfo*> language_infos;
     language_infos.emplace_back(wxLocale::GetLanguageInfo(wxLANGUAGE_ENGLISH));
     for (size_t i = 0; i < translations.GetCount(); ++ i) {
@@ -7566,7 +7589,7 @@ bool GUI_App::load_language(wxString language, bool initial)
                     // There seems to be a support for that on Windows and OSX, while on Linuxes the code just returns wxLocale::GetSystemLanguage().
                     // The last parameter gets added to the list of detected dictionaries. This is a workaround
                     // for not having the English dictionary. Let's hope wxWidgets of various versions process this call the same way.
-                    wxString best_language = wxTranslations::Get()->GetBestTranslation(SLIC3R_APP_KEY, wxLANGUAGE_ENGLISH);
+                    wxString best_language = get_best_app_translation(wxLANGUAGE_ENGLISH);
                     if (!best_language.IsEmpty()) {
                         m_language_info_best = wxLocale::FindLanguageInfo(best_language);
                         BOOST_LOG_TRIVIAL(info) << boost::format("Best translation language detected (may be different from user locales): %1%") %
@@ -7735,7 +7758,7 @@ bool GUI_App::load_language(wxString language, bool initial)
     // Override language at the active wxTranslations class (which is stored in the active m_wxLocale)
     // to load possibly different dictionary, for example, load Czech dictionary for Slovak language.
     wxTranslations::Get()->SetLanguage(language_dict);
-    m_wxLocale->AddCatalog(SLIC3R_APP_KEY);
+    add_app_translation_catalog(*m_wxLocale);
     m_active_language_code = requested_language_code;
     m_imgui->set_language(into_u8(requested_language_code));
 
