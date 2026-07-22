@@ -3408,8 +3408,13 @@ void TabPrint::toggle_options()
         cb->SetValue(n);
     }
 
+    const auto optional_bool = [this](const char *key) {
+        const auto *option = m_config->option<ConfigOptionBool>(key);
+        return option != nullptr && option->value;
+    };
+
     const bool sublayer_available = m_config->opt_int("support_interface_top_layers") > 1;
-    const bool sublayer_enabled = sublayer_available && m_config->opt_bool("support_interface_sublayer_pattern");
+    const bool sublayer_enabled = sublayer_available && optional_bool("support_interface_sublayer_pattern");
     toggle_option("support_interface_sublayer_pattern", sublayer_available);
     toggle_option("support_interface_sublayer_start_layer", sublayer_enabled);
     toggle_option("support_interface_sublayer_end_layer", sublayer_enabled);
@@ -3431,11 +3436,11 @@ void TabPrint::toggle_options()
         (std::abs(brush_start->value.x() - brush_end->value.x()) > 1e-6 ||
          std::abs(brush_start->value.y() - brush_end->value.y()) > 1e-6);
     const bool supports_nozzle_wiping = brush_has_travel && brush_repetitions != nullptr && brush_repetitions->value > 0;
-    const bool low_temperature_interface_enabled = m_config->opt_bool("single_nozzle_low_temperature_interface");
+    const bool low_temperature_interface_enabled = optional_bool("single_nozzle_low_temperature_interface");
     const bool auxiliary_fan_cooling_enabled = low_temperature_interface_enabled && supports_auxiliary_fan_cooling;
     const bool nozzle_wiping_enabled =
         low_temperature_interface_enabled && supports_nozzle_wiping &&
-        m_config->opt_bool("support_interface_nozzle_wiping_on_temperature_change");
+        optional_bool("support_interface_nozzle_wiping_on_temperature_change");
     const bool temperature_drop_tower_available =
         low_temperature_interface_enabled && !nozzle_wiping_enabled &&
         printer_config.opt_enum<PrintSequence>("print_sequence") == PrintSequence::ByLayer;
@@ -3446,10 +3451,10 @@ void TabPrint::toggle_options()
     toggle_option("support_interface_temperature_drop_tower", temperature_drop_tower_available);
     toggle_option("support_interface_auxiliary_fan_speed",
                   auxiliary_fan_cooling_enabled &&
-                  m_config->opt_bool("support_interface_auxiliary_fan_cooling_on_temperature_change"));
+                  optional_bool("support_interface_auxiliary_fan_cooling_on_temperature_change"));
 
     if (m_enable_large_nozzle_override_editor)
-        m_enable_large_nozzle_override_editor(m_config->opt_bool("use_smaller_nozzles_in_crisp_corners"));
+        m_enable_large_nozzle_override_editor(optional_bool("use_smaller_nozzles_in_crisp_corners"));
 
     // BBL printers do not support cone wipe tower
     field = m_active_page->get_field("wipe_tower_wall_type");
