@@ -490,6 +490,57 @@ static void copy_dir(const boost::filesystem::path& from_dir, const boost::files
     }
 }
 
+namespace {
+
+void copy_user_presets_without_overwrite(
+    const boost::filesystem::path        &source,
+    const boost::filesystem::path        &destination,
+    PresetBundle::UserPresetImportResult &result)
+{
+    namespace fs = boost::filesystem;
+
+    if (!fs::exists(destination))
+        fs::create_directories(destination);
+
+    for (fs::directory_iterator it(source), end; it != end; ++it) {
+        const fs::path target = destination / it->path().filename();
+
+        try {
+            if (fs::is_symlink(it->path())) {
+                ++result.skipped;
+            } else if (fs::is_directory(it->path())) {
+                copy_user_presets_without_overwrite(it->path(), target, result);
+            } else if (fs::is_regular_file(it->path())) {
+                if (fs::exists(target)) {
+                    ++result.skipped;
+                } else {
+                    fs::create_directories(target.parent_path());
+                    fs::copy_file(it->path(), target);
+                    ++result.copied;
+                }
+            }
+        } catch (const fs::filesystem_error &error) {
+            ++result.failed;
+            BOOST_LOG_TRIVIAL(error) << "Failed to import user preset: " << error.what();
+        }
+    }
+}
+
+} // namespace
+
+PresetBundle::UserPresetImportResult PresetBundle::import_user_presets_from(const std::string &source_data_dir)
+{
+    namespace fs = boost::filesystem;
+
+    const fs::path source = fs::path(source_data_dir) / "user";
+    if (!fs::exists(source) || !fs::is_directory(source))
+        throw RuntimeError("The selected directory does not contain an OrcaSlicer user preset directory.");
+
+    UserPresetImportResult result;
+    copy_user_presets_without_overwrite(source, fs::path(Slic3r::data_dir()) / "user", result);
+    return result;
+}
+
 void PresetBundle::copy_files(const std::string& from)
 {
     boost::filesystem::path data_dir = boost::filesystem::path(Slic3r::data_dir());
@@ -3887,7 +3938,7 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
     out.apply(FullPrintConfig::defaults());
     out.apply(this->prints.get_edited_preset().config);
     // Add the default filament preset to have the "filament_preset_id" defined.
-	out.apply(this->filaments.default_preset().config);
+    out.apply(this->filaments.default_preset().config);
 	out.apply(this->printers.get_edited_preset().config);
     out.apply(this->project_config);
 

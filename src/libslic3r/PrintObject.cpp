@@ -457,8 +457,9 @@ void PrintObject::make_perimeters()
     // prerequisites
     this->slice();
 
-    if (! this->set_started(posPerimeters))
+    if (! this->set_started(posPerimeters)) {
         return;
+    }
 
     m_print->set_status(15, L("Generating walls"));
     BOOST_LOG_TRIVIAL(info) << "Generating walls..." << log_memory_info();
@@ -1396,7 +1397,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "crisp_corner_detail_toolhead"
             || opt_key == "crisp_corner_small_nozzle_wall_count"
             || opt_key == "crisp_corner_nozzle_wall_overlap"
-            || opt_key == "crisp_corner_interlace_small_nozzle_walls") {
+            || opt_key == "crisp_corner_interlace_small_nozzle_walls"
+            || opt_key == "crisp_corner_large_nozzle_override_regions") {
             steps.emplace_back(posPerimeters);
             steps.emplace_back(posSupportMaterial);
         } else if (opt_key == "bridge_flow" || opt_key == "internal_bridge_flow") {

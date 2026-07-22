@@ -700,6 +700,9 @@ public:
     std::string get_filament_type() const;
 };
 extern std::set<std::string> printer_extruder_options;
+
+// Returns the numeric mm default for a per-hotend line-width option.
+FloatOrPercent default_toolhead_line_width_for_nozzle(std::string_view key, double nozzle_diameter);
 extern std::set<std::string> print_options_with_variant;
 extern std::set<std::string> filament_options_with_variant;
 extern std::set<std::string> printer_options_with_variant_1;
@@ -982,6 +985,13 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionInt,                 support_interface_filament))
     ((ConfigOptionInt,                 support_interface_top_layers))
     ((ConfigOptionInt,                 support_interface_bottom_layers))
+    ((ConfigOptionBool,                single_nozzle_low_temperature_interface))
+    ((ConfigOptionBool,                support_interface_auxiliary_fan_cooling_on_temperature_change))
+    ((ConfigOptionBool,                support_interface_nozzle_wiping_on_temperature_change))
+    ((ConfigOptionBool,                support_interface_temperature_drop_tower))
+    ((ConfigOptionInt,                 support_interface_temperature))
+    ((ConfigOptionInt,                 support_interface_auxiliary_fan_speed))
+    ((ConfigOptionFloat,               support_interface_heating_time))
     // Spacing between interface lines (the hatching distance). Set zero to get a solid interface.
     ((ConfigOptionFloat,               support_interface_spacing))
     ((ConfigOptionFloatsNullable,      support_interface_speed))
@@ -1232,6 +1242,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionInt,                  crisp_corner_small_nozzle_wall_count))
     ((ConfigOptionPercent,              crisp_corner_nozzle_wall_overlap))
     ((ConfigOptionBool,                 crisp_corner_interlace_small_nozzle_walls))
+    ((ConfigOptionStrings,              crisp_corner_large_nozzle_override_regions))
     ((ConfigOptionFloat,                top_solid_infill_flow_ratio))
     ((ConfigOptionFloat,                bottom_solid_infill_flow_ratio))
     ((ConfigOptionFloatOrPercent,       infill_anchor))
@@ -1446,6 +1457,11 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionEnumsGenericNullable,nozzle_type))
     ((ConfigOptionInt,                 nozzle_hrc))
     ((ConfigOptionBool,                auxiliary_fan))
+    ((ConfigOptionPoint,               support_interface_cooling_position))
+    ((ConfigOptionPoint,               support_interface_brush_start))
+    ((ConfigOptionPoint,               support_interface_brush_end))
+    ((ConfigOptionInt,                 support_interface_brush_repetitions))
+    ((ConfigOptionFloat,               support_interface_brush_speed))
     ((ConfigOptionBool,                support_air_filtration))
     ((ConfigOptionEnum<PrinterStructure>,printer_structure))
     ((ConfigOptionBool,                support_chamber_temp_control))

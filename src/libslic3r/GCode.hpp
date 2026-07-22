@@ -499,6 +499,12 @@ private:
     std::string     extrude_perimeters(const Print& print, const std::vector<ObjectByExtruder::Island::Region>& by_region, bool is_first_layer, bool is_infill_first);
     std::string     extrude_infill(const Print& print, const std::vector<ObjectByExtruder::Island::Region>& by_region, bool ironing);
     std::string     extrude_support(const ExtrusionEntityCollection& support_fills, const ExtrusionRole support_extrusion_role);
+    bool            has_configured_low_temperature_nozzle_wiper() const;
+    bool            temperature_drop_tower_enabled() const;
+    bool            build_temperature_drop_tower_path(ExtrusionPath &path);
+    std::string     extrude_temperature_drop_tower(const ExtrusionPath &path, bool cooling_transition);
+    std::string     start_low_temperature_support_interface(ExtrusionRole role);
+    std::string     finish_low_temperature_support_interface();
 
     // BBS
     LiftType to_lift_type(ZHopType z_hop_types);
@@ -588,6 +594,10 @@ private:
     //double                              m_volumetric_speed;
     // Support for the extrusion role markers. Which marker is active?
     ExtrusionRole                       m_last_extrusion_role;
+    bool                                m_low_temperature_support_interface_active { false };
+    coordf_t                            m_temperature_drop_tower_last_print_z { -std::numeric_limits<coordf_t>::max() };
+    bool                                m_temperature_drop_tower_path_initialized { false };
+    std::vector<Vec2d>                  m_temperature_drop_tower_machine_path;
     // To ignore gapfill role for retract_lift_enforce
     ExtrusionRole                       m_last_notgapfill_extrusion_role;
     // Support for G-Code Processor

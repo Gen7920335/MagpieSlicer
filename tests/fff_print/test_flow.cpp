@@ -94,3 +94,92 @@ SCENARIO("Flow math for bridges", "[Flow]") {
         }
     }
 }
+
+TEST_CASE("Multi-nozzle wall planning does not mutate base wall semantics", "[Flow][MultiNozzleWalls]")
+{
+    FullPrintConfig config;
+    config.wall_loops.value = 3;
+    config.crisp_corner_small_nozzle_wall_count.value = 4;
+    config.crisp_corner_interlace_small_nozzle_walls.value = true;
+
+    SECTION("stored detail values cannot enable the feature") {
+        config.use_smaller_nozzles_in_crisp_corners.value = false;
+        CHECK_FALSE(detail_walls_enabled(config));
+        CHECK(detail_wall_count_for_layer(config, 0) == 0);
+        CHECK(detail_wall_count_for_layer(config, 1) == 0);
+        CHECK(total_wall_count_for_layer(config, 0) == 3);
+    }
+
+    SECTION("interlocking exchanges one boundary wall without changing the total") {
+        config.use_smaller_nozzles_in_crisp_corners.value = true;
+        CHECK(detail_wall_count_for_layer(config, 0) == 4);
+        CHECK(detail_wall_count_for_layer(config, 1) == 3);
+        CHECK(total_wall_count_for_layer(config, 1) == 7);
+        CHECK(total_wall_count_for_layer(config, 0) == 7);
+        CHECK(total_wall_count_for_layer(config, 0) - detail_wall_count_for_layer(config, 0) == 3);
+        CHECK(total_wall_count_for_layer(config, 1) - detail_wall_count_for_layer(config, 1) == 4);
+    }
+
+    SECTION("minimum values remain printable") {
+        config.use_smaller_nozzles_in_crisp_corners.value = true;
+        config.wall_loops.value = 0;
+        config.crisp_corner_small_nozzle_wall_count.value = 0;
+        config.crisp_corner_interlace_small_nozzle_walls.value = false;
+        CHECK(detail_wall_count_for_layer(config, 0) == 1);
+        CHECK(total_wall_count_for_layer(config, 0) == 3);
+    }
+}
+
+TEST_CASE("Detail tool selection uses actual nozzle diameters", "[Flow][MultiNozzleWalls]")
+{
+    FullPrintConfig config;
+    config.use_smaller_nozzles_in_crisp_corners.value = true;
+    config.nozzle_diameter.values = { 0.4, 0.2, 0.15 };
+    config.filament_colour.values = { "#FF0000", "#FF0000", "#0000FF" };
+
+    SECTION("same-colour smaller nozzle has priority over manual fallback") {
+        config.crisp_corner_detail_toolhead.value = 3;
+        CHECK(detail_external_perimeter_extruder_1based(config, config, 1) == 2);
+    }
+
+    SECTION("manual selection is used when no same-colour candidate exists") {
+        config.filament_colour.values = { "#FF0000", "#00FF00", "#0000FF" };
+        config.crisp_corner_detail_toolhead.value = 2;
+        CHECK(detail_external_perimeter_extruder_1based(config, config, 1) == 2);
+    }
+
+    SECTION("disabled feature always returns the base tool") {
+        config.use_smaller_nozzles_in_crisp_corners.value = false;
+        config.crisp_corner_small_nozzle_wall_count.value = 4;
+        CHECK(detail_external_perimeter_extruder_1based(config, config, 1) == 1);
+    }
+
+    SECTION("larger nozzles are never detail candidates even with a narrow line width") {
+        config.nozzle_diameter.values = { 0.4, 0.6 };
+        config.filament_colour.values = { "#FF0000", "#FF0000" };
+        config.toolhead_outer_wall_line_width.values = { FloatOrPercent(0., false), FloatOrPercent(0.1, false) };
+        config.crisp_corner_detail_toolhead.value = 2;
+        CHECK(detail_external_perimeter_extruder_1based(config, config, 1) == 1);
+    }
+
+    SECTION("base tool reverses when the selected base nozzle is larger") {
+        config.nozzle_diameter.values = { 0.4, 0.8, 0.2 };
+        config.filament_colour.values = { "#FF0000", "#FF0000", "#0000FF" };
+        config.crisp_corner_detail_toolhead.value = 0;
+        CHECK(detail_external_perimeter_extruder_1based(config, config, 2) == 1);
+    }
+}
+
+TEST_CASE("Unset toolhead widths preserve process widths", "[Flow][MultiNozzleWalls]")
+{
+    FullPrintConfig config;
+    const ConfigOptionFloatOrPercent process_width(0.42, false);
+    ConfigOptionFloatOrPercent resolved = toolhead_line_width_or(config, frExternalPerimeter, 1, false, process_width);
+    CHECK(resolved.value == 0.42);
+    CHECK_FALSE(resolved.percent);
+
+    config.toolhead_outer_wall_line_width.values = { FloatOrPercent(0.31, false) };
+    resolved = toolhead_line_width_or(config, frExternalPerimeter, 1, false, process_width);
+    CHECK(resolved.value == 0.31);
+    CHECK_FALSE(resolved.percent);
+}

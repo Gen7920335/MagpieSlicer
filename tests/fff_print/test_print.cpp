@@ -338,6 +338,21 @@ TEST_CASE("G-code lists the resolved extrusion-width settings", "[Print]")
     CHECK(with_first_layer.find("; first layer extrusion width") != std::string::npos);
 }
 
+TEST_CASE("Consecutive support exports keep independent G-code state", "[Print][Support][StateIsolation]")
+{
+    const std::string raft = slice({ cube(20) }, {
+        { "initial_layer_line_width", 0 }, { "enable_support", true }, { "raft_layers", 3 },
+    });
+    CHECK(raft.find("support material") != std::string::npos);
+
+    const std::string overhang = slice({ TestMesh::overhang }, {
+        { "layer_height", 0.4 }, { "initial_layer_print_height", 0.4 },
+        { "enable_support", true }, { "skirt_loops", 1 }, { "skirt_distance", 0 },
+        { "brim_type", "outer_only" }, { "brim_width", 5 },
+    });
+    CHECK(overhang.find("support material") != std::string::npos);
+}
+
 // Custom G-code templates substitute placeholders during export.
 TEST_CASE("Custom G-code placeholders are substituted", "[Print]")
 {

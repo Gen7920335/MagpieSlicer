@@ -3054,7 +3054,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
 
         auto used_filaments = print.get_slice_used_filaments(false);
         this->placeholder_parser().set("is_all_bbl_filament", std::all_of(used_filaments.begin(), used_filaments.end(), [&](auto idx) {
-            return m_config.filament_vendor.values[idx] == "Bambu Lab";
+            return m_config.filament_vendor.get_at(idx) == "Bambu Lab";
             }));
 
         //add during_print_exhaust_fan_speed
@@ -3069,7 +3069,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         this->placeholder_parser().set("outer_wall_volumetric_speed", new ConfigOptionFloat(outer_wall_volumetric_speed));
 
         auto first_layer_filaments = print.get_slice_used_filaments(true);
-        bool has_tpu_in_first_layer = std::any_of(first_layer_filaments.begin(), first_layer_filaments.end(), [&](unsigned int idx) { return m_config.filament_type.values[idx] == "TPU"; });
+        bool has_tpu_in_first_layer = std::any_of(first_layer_filaments.begin(), first_layer_filaments.end(), [&](unsigned int idx) { return m_config.filament_type.get_at(idx) == "TPU"; });
         this->placeholder_parser().set("has_tpu_in_first_layer", new ConfigOptionBool(has_tpu_in_first_layer));
 
         if (print.calib_params().mode == CalibMode::Calib_PA_Line) {
@@ -3967,7 +3967,7 @@ void GCode::print_machine_envelope(GCodeOutputStream &file, Print &print)
 
             double value = std::numeric_limits<double>::lowest();
             for (unsigned int extruder : used_extruders) {
-                value = std::max(value, v.values[extruder * stride]);
+                value = std::max(value, v.get_at(size_t(extruder) * stride));
             }
 
             assert(value > std::numeric_limits<double>::lowest());
@@ -4152,13 +4152,15 @@ inline std::vector<GCode::ObjectByExtruder::Island>& object_islands_by_extruder(
 
 static bool detail_path_needs_smaller_nozzle(const ExtrusionPath &path, double base_nozzle_diameter)
 {
-    if (path.role() != erExternalPerimeter && path.role() != erOverhangPerimeter)
-        return false;
     if (base_nozzle_diameter <= EPSILON || path.polyline.points.size() < 3)
         return false;
 
-    if (path.width > 0.f && double(path.width) < base_nozzle_diameter * 0.98)
+    const bool width_is_detail = path.width > 0.f && double(path.width) < base_nozzle_diameter * 0.98;
+    if (width_is_detail)
         return true;
+
+    if (path.role() != erExternalPerimeter && path.role() != erOverhangPerimeter)
+        return false;
 
     double accumulated_turn = 0.;
     double accumulated_len  = 0.;
@@ -4232,25 +4234,40 @@ static bool detail_entity_needs_smaller_nozzle(const ExtrusionEntity &entity, do
 
 static bool detail_collection_needs_smaller_nozzle(const ExtrusionEntityCollection &extrusions, const PrintConfig &config, const PrintRegionConfig &region_config)
 {
-    if (!region_config.use_smaller_nozzles_in_crisp_corners.value)
-        return false;
-    if (region_config.outer_wall_filament_id.value <= 0)
-        return false;
-
-    const size_t base_idx = size_t(region_config.outer_wall_filament_id.value - 1);
+    const unsigned int base_extruder = region_config.outer_wall_filament_id.value > 0 ?
+        region_config.outer_wall_filament_id.value : 1;
+    const size_t base_idx = size_t(base_extruder - 1);
     if (base_idx >= config.nozzle_diameter.values.size())
         return false;
 
     return detail_entity_needs_smaller_nozzle(extrusions, config.nozzle_diameter.get_at(base_idx));
 }
 
-static double detail_wall_width_for_region(const PrintConfig &config, const PrintRegionConfig &region_config, double layer_height)
+static unsigned int effective_outer_wall_filament_1based(const PrintRegionConfig &region_config)
 {
-    if (!region_config.use_smaller_nozzles_in_crisp_corners.value || region_config.outer_wall_filament_id.value <= 0)
-        return 0.;
+    return region_config.outer_wall_filament_id.value > 0 ? region_config.outer_wall_filament_id.value : 1;
+}
 
-    const unsigned int detail_extruder = detail_external_perimeter_extruder_1based(config, region_config, region_config.outer_wall_filament_id.value);
-    if (detail_extruder == 0 || detail_extruder == region_config.outer_wall_filament_id.value)
+static unsigned int effective_inner_wall_filament_1based(const PrintRegionConfig &region_config)
+{
+    if (region_config.inner_wall_filament_id.value > 0)
+        return region_config.inner_wall_filament_id.value;
+    return effective_outer_wall_filament_1based(region_config);
+}
+
+static unsigned int marked_detail_wall_extruder_1based(const PrintConfig &config, const PrintRegion &region)
+{
+    const PrintRegionConfig &region_config = region.config();
+    const unsigned int base_extruder = effective_outer_wall_filament_1based(region_config);
+    return detail_external_perimeter_extruder_1based(config, region_config, base_extruder);
+}
+
+static double detail_wall_width_for_region(const PrintConfig &config, const PrintRegion &region, double layer_height)
+{
+    const PrintRegionConfig &region_config = region.config();
+    const unsigned int base_extruder = effective_outer_wall_filament_1based(region_config);
+    const unsigned int detail_extruder = marked_detail_wall_extruder_1based(config, region);
+    if (detail_extruder == 0 || detail_extruder == base_extruder)
         return 0.;
 
     const size_t small_idx = size_t(detail_extruder - 1);
@@ -4292,8 +4309,43 @@ static bool entity_has_width_at_most(const ExtrusionEntity &entity, double width
 static bool entity_is_detail_wall(const ExtrusionEntity &entity, double detail_width)
 {
     const ExtrusionRole role = entity.role();
-    return role == erExternalPerimeter || role == erOverhangPerimeter ||
-           (role == erPerimeter && entity_has_width_at_most(entity, detail_width));
+    return (role == erExternalPerimeter || role == erOverhangPerimeter || role == erPerimeter || role == erMixed) &&
+        entity_has_width_at_most(entity, detail_width);
+}
+
+static bool entity_is_wall_for_detail_split(const ExtrusionEntity &entity)
+{
+    const ExtrusionRole role = entity.role();
+    return role == erExternalPerimeter || role == erOverhangPerimeter || role == erPerimeter || role == erMixed;
+}
+
+static int detail_wall_count_for_gcode_layer(const PrintRegion &region, size_t layer_id)
+{
+    return Slic3r::detail_wall_count_for_layer(region.config(), layer_id);
+}
+
+static bool entity_has_wall_inset_below(const ExtrusionEntity &entity, int inset_limit)
+{
+    if (inset_limit <= 0)
+        return false;
+    if (const auto *path = dynamic_cast<const ExtrusionPath*>(&entity))
+        return path->inset_idx >= 0 && path->inset_idx < inset_limit;
+    if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath*>(&entity))
+        return multipath->inset_idx >= 0 && multipath->inset_idx < inset_limit;
+    if (const auto *loop = dynamic_cast<const ExtrusionLoop*>(&entity))
+        return loop->inset_idx >= 0 && loop->inset_idx < inset_limit;
+    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection*>(&entity)) {
+        for (const ExtrusionEntity *child : collection->entities)
+            if (child != nullptr && entity_has_wall_inset_below(*child, inset_limit))
+                return true;
+    }
+    return false;
+}
+
+static bool entity_is_detail_wall_by_inset(const ExtrusionEntity &entity, int detail_wall_count)
+{
+    return entity_is_wall_for_detail_split(entity) &&
+        entity_has_wall_inset_below(entity, detail_wall_count);
 }
 
 std::vector<GCode::InstanceToPrint> GCode::sort_print_object_instances(
@@ -5206,18 +5258,22 @@ LayerResult GCode::process_layer(
                                                        int                              forced_extruder_id) {
                             // This extrusion is part of certain Region, which tells us which extruder should be used for it.
                             int correct_extruder_id = forced_extruder_id >= 0 ? forced_extruder_id : layer_tools.extruder(*current_extrusions, region);
+                            const unsigned int override_wall_hotend = entity_type == ObjectByExtruder::Island::Region::PERIMETERS ?
+                                large_nozzle_override_toolhead_1based(region.config(), layer.id(), print.config().nozzle_diameter.values.size()) : 0;
+                            if (override_wall_hotend > 0)
+                                correct_extruder_id = int(override_wall_hotend - 1);
                             const bool can_use_detail_nozzle =
                                 forced_extruder_id < 0 &&
+                                override_wall_hotend == 0 &&
                                 entity_type == ObjectByExtruder::Island::Region::PERIMETERS &&
                                 (current_extrusions->role() == erExternalPerimeter ||
                                  current_extrusions->role() == erOverhangPerimeter ||
                                  (current_extrusions->role() == erPerimeter &&
-                                  entity_is_detail_wall(*current_extrusions->entities.front(), detail_wall_width_for_region(print.config(), region.config(), layer.height))) ||
+                                  entity_is_detail_wall(*current_extrusions->entities.front(), detail_wall_width_for_region(print.config(), region, layer.height))) ||
                                  current_extrusions->role() == erMixed);
                             if (can_use_detail_nozzle &&
                                 detail_collection_needs_smaller_nozzle(*current_extrusions, print.config(), region.config())) {
-                                const unsigned int detail_extruder_id = detail_external_perimeter_extruder_1based(
-                                    print.config(), region.config(), region.config().outer_wall_filament_id.value);
+                                const unsigned int detail_extruder_id = marked_detail_wall_extruder_1based(print.config(), region);
                                 if (detail_extruder_id > 0)
                                     correct_extruder_id = int(detail_extruder_id - 1);
                             }
@@ -5267,33 +5323,40 @@ LayerResult GCode::process_layer(
                             }
                         };
 
-                        const unsigned int external_wall_filament =
-                            detail_external_perimeter_extruder_1based(print.config(), region.config(), region.config().outer_wall_filament_id.value);
+                        const unsigned int override_wall_hotend = large_nozzle_override_toolhead_1based(
+                            region.config(), layer.id(), print.config().nozzle_diameter.values.size());
+                        const unsigned int external_wall_filament = override_wall_hotend > 0 ?
+                            override_wall_hotend : marked_detail_wall_extruder_1based(print.config(), region);
+                        const unsigned int inner_wall_filament = override_wall_hotend > 0 ?
+                            override_wall_hotend : effective_inner_wall_filament_1based(region.config());
                         bool split_mixed_perimeters =
                             entity_type == ObjectByExtruder::Island::Region::PERIMETERS &&
-                            external_wall_filament != region.config().inner_wall_filament_id.value &&
-                            extrusions->role() == erMixed;
+                            external_wall_filament != inner_wall_filament &&
+                            (extrusions->role() == erMixed ||
+                             extrusions->role() == erPerimeter ||
+                             extrusions->role() == erExternalPerimeter ||
+                             extrusions->role() == erOverhangPerimeter);
 
                         if (split_mixed_perimeters) {
                             auto detail_perimeters = std::make_unique<ExtrusionEntityCollection>();
                             auto large_perimeters = std::make_unique<ExtrusionEntityCollection>();
-                            const double detail_wall_width = detail_wall_width_for_region(print.config(), region.config(), layer.height);
+                            const int detail_wall_count = detail_wall_count_for_gcode_layer(region, layer.id());
                             for (const ExtrusionEntity *entity : extrusions->entities) {
-                                if (entity_is_detail_wall(*entity, detail_wall_width))
+                                if (entity_is_detail_wall_by_inset(*entity, detail_wall_count))
                                     detail_perimeters->append(*entity);
-                                else if (entity->role() == erPerimeter)
+                                else if (entity_is_wall_for_detail_split(*entity))
                                     large_perimeters->append(*entity);
                             }
 
                             if (!detail_perimeters->entities.empty()) {
-                                const int detail_extruder_id = int(detail_external_perimeter_extruder_1based(
-                                    print.config(), region.config(), region.config().outer_wall_filament_id.value)) - 1;
+                                const int detail_extruder_id = int(marked_detail_wall_extruder_1based(print.config(), region)) - 1;
                                 split_perimeter_storage.emplace_back(std::move(detail_perimeters));
                                 process_extrusions(split_perimeter_storage.back().get(), nullptr, false, detail_extruder_id);
                             }
                             if (!large_perimeters->entities.empty()) {
+                                const int large_extruder_id = int(inner_wall_filament) - 1;
                                 split_perimeter_storage.emplace_back(std::move(large_perimeters));
-                                process_extrusions(split_perimeter_storage.back().get(), nullptr, false, -1);
+                                process_extrusions(split_perimeter_storage.back().get(), nullptr, false, large_extruder_id);
                             }
                         } else {
                             process_extrusions(extrusions, extrusions, true, -1);
@@ -5584,7 +5647,15 @@ LayerResult GCode::process_layer(
                     m_avoid_crossing_perimeters.use_external_mp_once();
                 m_last_obj_copy = this_object_copy;
                 this->set_origin(unscale(offset));
-                if (instance_to_print.object_by_extruder.support != nullptr) {
+                const bool has_instance_support = instance_to_print.object_by_extruder.support != nullptr;
+                const bool defer_support_for_low_temperature_interface =
+                    has_instance_support &&
+                    m_config.single_nozzle_low_temperature_interface.value &&
+                    m_config.support_interface_filament.value == 0;
+                const auto extrude_instance_support = [&]() {
+                    if (!has_instance_support)
+                        return;
+
                     m_layer = layers[instance_to_print.layer_id].support_layer;
                     m_object_layer_over_raft = false;
 
@@ -5626,11 +5697,17 @@ LayerResult GCode::process_layer(
                         if (support_extrusion_role == erMixed || support_extrusion_role == erSupportMaterialInterface || support_extrusion_role == erSupportMaterialInterfaceSublayer) {
                             gcode += this->extrude_support(*instance_to_print.object_by_extruder.support, erIroning);
                         }
+
+                        if (defer_support_for_low_temperature_interface)
+                            gcode += this->finish_low_temperature_support_interface();
                     }
 
                     m_layer = layer_to_print.layer();
                     m_object_layer_over_raft = object_layer_over_raft;
-                }
+                };
+
+                if (!defer_support_for_low_temperature_interface)
+                    extrude_instance_support();
                 //FIXME order islands?
                 // Sequential tool path ordering of multiple parts within the same object, aka. perimeter tracking (#5511)
                 for (ObjectByExtruder::Island &island : instance_to_print.object_by_extruder.islands) {
@@ -5670,6 +5747,9 @@ LayerResult GCode::process_layer(
                     gcode += this->extrude_infill(print,by_region_specific, true);
                 }
 
+                if (defer_support_for_low_temperature_interface)
+                    extrude_instance_support();
+
                 if (this->config().gcode_label_objects) {
                     gcode += std::string("; stop printing object ") +
                              instance_to_print.print_object.model_object()->name +
@@ -5703,6 +5783,13 @@ LayerResult GCode::process_layer(
             if (!iter->second.empty())
                 m_initial_layer_extruders.insert(iter->first);
         }
+    }
+
+    if (this->temperature_drop_tower_enabled() &&
+        std::abs(m_temperature_drop_tower_last_print_z - m_nominal_z) >= EPSILON) {
+        ExtrusionPath temperature_drop_tower_path;
+        if (this->build_temperature_drop_tower_path(temperature_drop_tower_path))
+            gcode += this->extrude_temperature_drop_tower(temperature_drop_tower_path, false);
     }
 
 #if 0
@@ -6385,7 +6472,18 @@ std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fill
     static constexpr const char* support_transition_label = "support transition";
     static constexpr const char* support_ironing_label    = "support ironing";
 
-    static const auto speed_for_path = [&](double length, ExtrusionRole role, double default_speed = -1.0) {
+    if (support_extrusion_role == erMixed &&
+        m_config.single_nozzle_low_temperature_interface.value &&
+        m_config.support_interface_filament.value == 0) {
+        std::string gcode;
+        gcode += extrude_support(support_fills, erSupportMaterial);
+        gcode += extrude_support(support_fills, erSupportTransition);
+        gcode += extrude_support(support_fills, erSupportMaterialInterfaceSublayer);
+        gcode += extrude_support(support_fills, erSupportMaterialInterface);
+        return gcode;
+    }
+
+    const auto speed_for_path = [this](double length, ExtrusionRole role, double default_speed = -1.0) {
         if (!is_support(role) || length > SMALL_PERIMETER_LENGTH(NOZZLE_CONFIG(small_support_perimeter_threshold)))
             return default_speed;
 
@@ -6409,7 +6507,14 @@ std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fill
         extrusions.reserve(support_fills.entities.size());
         for (ExtrusionEntity* ee : support_fills.entities) {
             const auto role = ee->role();
-            if ((role == support_extrusion_role) || (support_extrusion_role == erMixed && role != erIroning)) {
+            const bool mixed_collection_for_selected_role =
+                dynamic_cast<const ExtrusionEntityCollection*>(ee) != nullptr &&
+                role == erMixed &&
+                support_extrusion_role != erMixed &&
+                support_extrusion_role != erIroning;
+            if (role == support_extrusion_role ||
+                (support_extrusion_role == erMixed && role != erIroning) ||
+                mixed_collection_for_selected_role) {
                 extrusions.emplace_back(ee);
             }
         }
@@ -6591,9 +6696,298 @@ double GCode::calc_max_volumetric_speed(const double layer_height, const double 
     return res;
 }
 
+bool GCode::has_configured_low_temperature_nozzle_wiper() const
+{
+    if (!m_config.support_interface_nozzle_wiping_on_temperature_change.value)
+        return false;
+
+    const Vec2d brush_start = m_config.support_interface_brush_start.value;
+    const Vec2d brush_end = m_config.support_interface_brush_end.value;
+    return m_config.support_interface_brush_repetitions.value > 0 &&
+        brush_start.x() >= 0.0 && brush_start.y() >= 0.0 &&
+        brush_end.x() >= 0.0 && brush_end.y() >= 0.0 &&
+        std::isfinite(brush_start.x()) && std::isfinite(brush_start.y()) &&
+        std::isfinite(brush_end.x()) && std::isfinite(brush_end.y()) &&
+        (std::abs(brush_start.x() - brush_end.x()) > 1e-6 ||
+         std::abs(brush_start.y() - brush_end.y()) > 1e-6);
+}
+
+bool GCode::temperature_drop_tower_enabled() const
+{
+    return m_config.support_interface_temperature_drop_tower.value &&
+        m_config.single_nozzle_low_temperature_interface.value &&
+        m_config.support_interface_filament.value == 0 &&
+        m_config.print_sequence.value == PrintSequence::ByLayer &&
+        !this->has_configured_low_temperature_nozzle_wiper();
+}
+
+namespace {
+
+constexpr double temperature_drop_tower_size(double temperature_delta)
+{
+    constexpr double minimum_size = 50.0;
+    constexpr double maximum_size = 80.0;
+    constexpr double growth_threshold = 30.0;
+    return std::clamp(minimum_size + std::max(temperature_delta - growth_threshold, 0.0),
+                      minimum_size, maximum_size);
+}
+
+static_assert(temperature_drop_tower_size(0.0) == 50.0);
+static_assert(temperature_drop_tower_size(30.0) == 50.0);
+static_assert(temperature_drop_tower_size(50.0) == 70.0);
+static_assert(temperature_drop_tower_size(80.0) == 80.0);
+
+} // namespace
+
+bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
+{
+    if (!this->temperature_drop_tower_enabled() || m_layer == nullptr || m_writer.filament() == nullptr)
+        return false;
+
+    const unsigned int filament_id = m_writer.filament()->id();
+    const float nozzle_diameter = float(m_config.nozzle_diameter.get_at(filament_id));
+    const float layer_height = float(m_layer->height);
+    if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
+        return false;
+
+    const Flow flow(Flow::auto_extrusion_width(frPerimeter, nozzle_diameter), layer_height, nozzle_diameter);
+    if (!m_temperature_drop_tower_path_initialized) {
+        m_temperature_drop_tower_path_initialized = true;
+        const std::vector<Vec2d> &printable_area = m_config.printable_area.values;
+        if (printable_area.size() < 3)
+            return false;
+
+        double min_x = std::numeric_limits<double>::max();
+        double min_y = std::numeric_limits<double>::max();
+        double max_x = std::numeric_limits<double>::lowest();
+        double max_y = std::numeric_limits<double>::lowest();
+        Polygon printable_polygon;
+        printable_polygon.points.reserve(printable_area.size());
+        for (const Vec2d &point : printable_area) {
+            min_x = std::min(min_x, point.x());
+            min_y = std::min(min_y, point.y());
+            max_x = std::max(max_x, point.x());
+            max_y = std::max(max_y, point.y());
+            printable_polygon.points.emplace_back(Point::new_scale(point.x(), point.y()));
+        }
+
+        constexpr double margin = 3.0;
+        const int normal_temperature = std::max(m_config.nozzle_temperature.get_at(filament_id),
+                                                m_config.nozzle_temperature_initial_layer.get_at(filament_id));
+        const int interface_temperature = m_config.support_interface_temperature.value;
+        const double temperature_delta = std::max(normal_temperature - interface_temperature, 0);
+        const double requested_tower_size = temperature_drop_tower_size(temperature_delta);
+        const double tower_size = std::min(requested_tower_size,
+                                           std::min(max_x - min_x - 2.0 * margin,
+                                                    max_y - min_y - 2.0 * margin));
+        if (tower_size < 8.0)
+            return false;
+
+        const auto square_fits = [&printable_polygon, tower_size](double left, double rear) {
+            const std::array<Vec2d, 4> corners = {
+                Vec2d(left, rear), Vec2d(left + tower_size, rear),
+                Vec2d(left, rear - tower_size), Vec2d(left + tower_size, rear - tower_size)
+            };
+            return std::all_of(corners.begin(), corners.end(), [&printable_polygon](const Vec2d &corner) {
+                return printable_polygon.contains(Point::new_scale(corner.x(), corner.y()));
+            });
+        };
+
+        double tower_left = 0.0;
+        double tower_rear = 0.0;
+        bool position_found = false;
+        for (double rear = max_y - margin; !position_found && rear - tower_size >= min_y + margin; rear -= 1.0) {
+            for (double left = min_x + margin; left + tower_size <= max_x - margin; left += 1.0) {
+                if (square_fits(left, rear)) {
+                    tower_left = left;
+                    tower_rear = rear;
+                    position_found = true;
+                    break;
+                }
+            }
+        }
+        if (!position_found)
+            return false;
+
+        constexpr int line_count = 4;
+        const double spacing = std::max(double(nozzle_diameter), double(flow.spacing()));
+        m_temperature_drop_tower_machine_path.emplace_back(tower_left, tower_rear - tower_size);
+        for (int line = 0; line < line_count; ++line) {
+            const double vertical_x = tower_left + line * spacing;
+            const double horizontal_y = tower_rear - line * spacing;
+            if ((line & 1) == 0) {
+                m_temperature_drop_tower_machine_path.emplace_back(vertical_x, horizontal_y);
+                m_temperature_drop_tower_machine_path.emplace_back(tower_left + tower_size, horizontal_y);
+                if (line + 1 < line_count)
+                    m_temperature_drop_tower_machine_path.emplace_back(tower_left + tower_size, horizontal_y - spacing);
+            } else {
+                m_temperature_drop_tower_machine_path.emplace_back(vertical_x, horizontal_y);
+                m_temperature_drop_tower_machine_path.emplace_back(vertical_x, tower_rear - tower_size);
+                if (line + 1 < line_count)
+                    m_temperature_drop_tower_machine_path.emplace_back(vertical_x + spacing, tower_rear - tower_size);
+            }
+        }
+    }
+
+    if (m_temperature_drop_tower_machine_path.size() < 2)
+        return false;
+
+    Polyline polyline;
+    polyline.points.reserve(m_temperature_drop_tower_machine_path.size());
+    for (const Vec2d &point : m_temperature_drop_tower_machine_path)
+        polyline.points.emplace_back(this->gcode_to_point(point));
+    if ((m_layer_index & 1) != 0)
+        polyline.reverse();
+
+    path = ExtrusionPath(erWipeTower, flow.mm3_per_mm(), flow.width(), layer_height);
+    path.polyline = Polyline3(std::move(polyline));
+    return true;
+}
+
+std::string GCode::extrude_temperature_drop_tower(const ExtrusionPath &path, bool cooling_transition)
+{
+    std::string gcode = cooling_transition
+        ? "; low-temperature support interface temperature drop tower cooling pass\n"
+        : "; temperature drop tower layer\n";
+    gcode += this->_extrude(path, "temperature drop tower", cooling_transition ? 10.0 : 30.0);
+    m_temperature_drop_tower_last_print_z = m_nominal_z;
+    return gcode;
+}
+
+std::string GCode::start_low_temperature_support_interface(ExtrusionRole role)
+{
+    if (m_low_temperature_support_interface_active || m_writer.filament() == nullptr)
+        return {};
+
+    const unsigned int filament_id = m_writer.filament()->id();
+    const int normal_temperature = on_first_layer()
+        ? m_config.nozzle_temperature_initial_layer.get_at(filament_id)
+        : m_config.nozzle_temperature.get_at(filament_id);
+    const int interface_temperature = m_config.support_interface_temperature.value;
+    const bool temperature_changes = interface_temperature > 0 && interface_temperature != normal_temperature;
+
+    std::string gcode;
+    if (temperature_changes) {
+        gcode += "; low-temperature support interface begin\n";
+
+        ExtrusionPath temperature_drop_tower_path;
+        const bool tower_already_printed =
+            std::abs(m_temperature_drop_tower_last_print_z - m_nominal_z) < EPSILON;
+        const bool use_temperature_drop_tower =
+            !tower_already_printed && this->build_temperature_drop_tower_path(temperature_drop_tower_path);
+
+        bool auxiliary_fan_started = false;
+        const bool use_auxiliary_fan =
+            m_config.support_interface_auxiliary_fan_cooling_on_temperature_change.value &&
+            m_config.auxiliary_fan.value &&
+            m_config.support_interface_auxiliary_fan_speed.value > 0 &&
+            normal_temperature > interface_temperature &&
+            (use_temperature_drop_tower || m_last_pos_defined);
+        if (use_auxiliary_fan) {
+            bool ready_for_auxiliary_fan = use_temperature_drop_tower;
+            if (!use_temperature_drop_tower) {
+                Vec2d cooling_position = m_config.support_interface_cooling_position.value;
+                bool cooling_position_is_valid =
+                    cooling_position.x() >= 0.0 && cooling_position.y() >= 0.0 &&
+                    std::isfinite(cooling_position.x()) && std::isfinite(cooling_position.y());
+
+                if (!cooling_position_is_valid && !m_config.printable_area.values.empty()) {
+                    cooling_position = m_config.printable_area.values.front();
+                    for (const Vec2d &point : m_config.printable_area.values) {
+                        cooling_position.x() = std::min(cooling_position.x(), point.x());
+                        cooling_position.y() = std::max(cooling_position.y(), point.y());
+                    }
+                    cooling_position_is_valid =
+                        std::isfinite(cooling_position.x()) && std::isfinite(cooling_position.y());
+                }
+
+                if (cooling_position_is_valid) {
+                    gcode += this->travel_to(this->gcode_to_point(cooling_position), role,
+                                             "move to low-temperature interface cooling position");
+                    ready_for_auxiliary_fan = true;
+                }
+            }
+
+            if (ready_for_auxiliary_fan) {
+                gcode += "; low-temperature support interface auxiliary cooling\n";
+                gcode += m_writer.set_additional_fan(m_config.support_interface_auxiliary_fan_speed.value);
+                auxiliary_fan_started = true;
+            }
+        }
+
+        if (use_temperature_drop_tower) {
+            gcode += m_writer.set_temperature(interface_temperature, false, filament_id);
+            gcode += this->extrude_temperature_drop_tower(temperature_drop_tower_path, true);
+        }
+        gcode += m_writer.set_temperature(interface_temperature, true, filament_id);
+        if (auxiliary_fan_started)
+            gcode += m_writer.set_additional_fan(m_config.additional_cooling_fan_speed.get_at(filament_id));
+
+        if (this->has_configured_low_temperature_nozzle_wiper() && m_last_pos_defined) {
+            const Vec2d brush_start = m_config.support_interface_brush_start.value;
+            const Vec2d brush_end = m_config.support_interface_brush_end.value;
+            const int brush_repetitions = m_config.support_interface_brush_repetitions.value;
+            gcode += "; low-temperature support interface nozzle brushing\n";
+            gcode += m_writer.travel_to_xy(brush_start, "move to nozzle brush");
+            gcode += m_writer.set_speed(m_config.support_interface_brush_speed.value * 60.0, "set nozzle brush speed");
+            for (int repetition = 0; repetition < brush_repetitions; ++repetition) {
+                gcode += m_writer.extrude_to_xy(brush_end, 0.0, "brush nozzle", true);
+                gcode += m_writer.extrude_to_xy(brush_start, 0.0, "brush nozzle", true);
+            }
+            this->set_last_pos(this->gcode_to_point(brush_start));
+            m_wipe.reset_path();
+        }
+    }
+
+    m_low_temperature_support_interface_active = true;
+    return gcode;
+}
+
+std::string GCode::finish_low_temperature_support_interface()
+{
+    if (!m_low_temperature_support_interface_active || m_writer.filament() == nullptr)
+        return {};
+
+    const unsigned int filament_id = m_writer.filament()->id();
+    const int normal_temperature = on_first_layer()
+        ? m_config.nozzle_temperature_initial_layer.get_at(filament_id)
+        : m_config.nozzle_temperature.get_at(filament_id);
+    const int interface_temperature = m_config.support_interface_temperature.value;
+
+    std::string gcode;
+    if (normal_temperature > 0 && normal_temperature != interface_temperature) {
+        gcode += "; low-temperature support interface end\n";
+        gcode += m_writer.set_temperature(normal_temperature, false, filament_id);
+        if (m_config.support_interface_heating_time.value > 0.0)
+            gcode += "G4 S" + std::to_string(m_config.support_interface_heating_time.value) +
+                     " ; heat before next layer\n";
+    }
+
+    m_low_temperature_support_interface_active = false;
+    return gcode;
+}
+
 std::string GCode::_extrude(const ExtrusionPath &path, std::string description, double speed)
 {
     std::string gcode;
+
+    const bool use_low_temperature_interface =
+        m_config.single_nozzle_low_temperature_interface.value &&
+        m_config.support_interface_filament.value == 0 &&
+        m_writer.filament() != nullptr;
+    const bool low_temperature_interface_role =
+        path.role() == erSupportMaterialInterface ||
+        path.role() == erSupportMaterialInterfaceSublayer ||
+        path.role() == erIroning;
+    const bool entering_low_temperature_interface =
+        use_low_temperature_interface &&
+        low_temperature_interface_role &&
+        !m_low_temperature_support_interface_active;
+
+    if (entering_low_temperature_interface)
+        gcode += this->start_low_temperature_support_interface(path.role());
+    else if (use_low_temperature_interface && !low_temperature_interface_role && m_low_temperature_support_interface_active)
+        gcode += this->finish_low_temperature_support_interface();
 
     if (is_bridge(path.role()))
         description += " (bridge)";

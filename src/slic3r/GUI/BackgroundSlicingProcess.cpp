@@ -17,6 +17,7 @@
 
 // Print now includes tbb, and tbb includes Windows. This breaks compilation of wxWidgets if included before wx.
 #include "libslic3r/Print.hpp"
+#include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/SLAPrint.hpp"
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/GCode/PostProcessor.hpp"
@@ -27,6 +28,8 @@
 #include <cassert>
 #include <stdexcept>
 #include <cctype>
+#include <algorithm>
+#include <map>
 
 #include <boost/format/format_fwd.hpp>
 #include <boost/filesystem/operations.hpp>

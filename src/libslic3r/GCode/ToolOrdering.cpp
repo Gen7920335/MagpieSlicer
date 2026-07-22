@@ -39,8 +39,45 @@ constexpr double similar_color_threshold_de2000 = 20.0;
 
 static unsigned int detail_external_perimeter_filament_1based(const PrintConfig *print_config, const PrintRegion &region, unsigned int base_filament_id)
 {
-    return print_config == nullptr ? base_filament_id :
-        detail_external_perimeter_extruder_1based(*print_config, region.config(), base_filament_id);
+    if (base_filament_id == 0)
+        base_filament_id = 1;
+    if (print_config == nullptr)
+        return base_filament_id;
+
+    const PrintRegionConfig &region_config = region.config();
+    if (!detail_walls_enabled(region_config))
+        return base_filament_id;
+    return detail_external_perimeter_extruder_1based(*print_config, region_config, base_filament_id);
+}
+
+static size_t mapped_extruder_index_or_zero(const PrintConfig &config, unsigned int filament_id, size_t extruder_count)
+{
+    if (extruder_count == 0 || config.filament_map.values.empty())
+        return 0;
+    const int mapped_extruder_1based = config.filament_map.get_at(filament_id);
+    return mapped_extruder_1based > 0 && size_t(mapped_extruder_1based) <= extruder_count ?
+        size_t(mapped_extruder_1based - 1) : 0;
+}
+
+static FlushMatrix flush_matrix_for_nozzle(const PrintConfig &config, size_t nozzle_id, size_t nozzle_count,
+                                            size_t filament_count, bool use_configured_values = true)
+{
+    FlushMatrix matrix(filament_count, std::vector<float>(filament_count, config.prime_volume));
+    for (size_t filament_id = 0; filament_id < filament_count; ++filament_id)
+        matrix[filament_id][filament_id] = 0.f;
+
+    if (!use_configured_values || nozzle_count == 0 || nozzle_id >= nozzle_count || filament_count == 0)
+        return matrix;
+
+    const std::vector<float> flat_matrix(
+        cast<float>(get_flush_volumes_matrix(config.flush_volumes_matrix.values, nozzle_id, nozzle_count)));
+    const size_t expected_size = filament_count * filament_count;
+    if (flat_matrix.size() != expected_size)
+        return matrix;
+
+    for (size_t filament_id = 0; filament_id < filament_count; ++filament_id)
+        std::copy_n(flat_matrix.begin() + filament_id * filament_count, filament_count, matrix[filament_id].begin());
+    return matrix;
 }
 
 static std::set<int>get_filament_by_type(const std::vector<unsigned int>& used_filaments, const PrintConfig* print_config, const std::string& type)
@@ -89,9 +126,10 @@ bool check_filament_printable_after_group(const std::vector<unsigned int> &used_
 // Return a zero based extruder from the region, or extruder_override if overriden.
 unsigned int LayerTools::wall_extruder_id(const PrintRegion &region) const
 {
-	assert(region.config().outer_wall_filament_id.value > 0);
+    const unsigned int base_outer_wall_filament = region.config().outer_wall_filament_id.value > 0 ?
+        region.config().outer_wall_filament_id.value : 1;
 	const unsigned int outer_wall_filament = (this->extruder_override == 0) ?
-        detail_external_perimeter_filament_1based(this->print_config, region, region.config().outer_wall_filament_id.value) :
+        detail_external_perimeter_filament_1based(this->print_config, region, base_outer_wall_filament) :
         this->extruder_override;
 	return outer_wall_filament - 1;
 }
@@ -111,11 +149,14 @@ unsigned int LayerTools::internal_solid_filament_id(const PrintRegion &region) c
 // Returns a zero based extruder this eec should be printed with, according to PrintRegion config or extruder_override if overriden.
 unsigned int LayerTools::extruder(const ExtrusionEntityCollection &extrusions, const PrintRegion &region) const
 {
-	assert(region.config().outer_wall_filament_id.value > 0);
 	assert(region.config().sparse_infill_filament_id.value > 0);
 	assert(region.config().internal_solid_filament_id.value > 0);
 	assert(region.config().top_surface_filament_id.value > 0);
 	assert(region.config().bottom_surface_filament_id.value > 0);
+    const unsigned int base_outer_wall_filament = region.config().outer_wall_filament_id.value > 0 ?
+        region.config().outer_wall_filament_id.value : 1;
+    const unsigned int base_inner_wall_filament = region.config().inner_wall_filament_id.value > 0 ?
+        region.config().inner_wall_filament_id.value : base_outer_wall_filament;
 	// 1 based extruder ID.
     unsigned int extruder = 1;
     if (this->extruder_override == 0) {
@@ -134,9 +175,9 @@ unsigned int LayerTools::extruder(const ExtrusionEntityCollection &extrusions, c
         } else {
             const ExtrusionRole role = extrusions.role();
             if (role == erPerimeter)
-                extruder = region.config().inner_wall_filament_id.value;
+                extruder = base_inner_wall_filament;
             else
-                extruder = detail_external_perimeter_filament_1based(this->print_config, region, region.config().outer_wall_filament_id.value);
+                extruder = detail_external_perimeter_filament_1based(this->print_config, region, base_outer_wall_filament);
         }
     } else
         extruder = this->extruder_override;
@@ -148,7 +189,7 @@ static double calc_max_layer_height(const PrintConfig &config, double max_object
 {
     double max_layer_height = std::numeric_limits<double>::max();
     for (size_t i = 0; i < config.nozzle_diameter.values.size(); ++ i) {
-        double mlh = config.max_layer_height.values[i];
+        double mlh = config.max_layer_height.get_at(i);
         if (mlh == 0.)
             mlh = 0.75 * config.nozzle_diameter.values[i];
         max_layer_height = std::min(max_layer_height, mlh);
@@ -163,7 +204,7 @@ static FilamentChangeStats calc_filament_change_info_by_toolorder(const PrintCon
 {
     FilamentChangeStats ret;
     std::unordered_map<int, int> flush_volume_per_filament;
-    int max_extruder_id = *std::max_element(filament_map.begin(), filament_map.end());
+    int max_extruder_id = filament_map.empty() ? 0 : *std::max_element(filament_map.begin(), filament_map.end());
     assert(max_extruder_id >= 0);
     std::vector<unsigned int>last_filament_per_extruder(max_extruder_id + 1, -1);
 
@@ -171,11 +212,21 @@ static FilamentChangeStats calc_filament_change_info_by_toolorder(const PrintCon
     float total_filament_flush_weight = 0;
     for (const auto& ls : layer_sequences) {
         for (const auto& item : ls) {
+            if (item >= filament_map.size())
+                continue;
             int extruder_id = filament_map[item];
+            if (extruder_id < 0)
+                continue;
+            if (size_t(extruder_id) >= last_filament_per_extruder.size())
+                last_filament_per_extruder.resize(size_t(extruder_id) + 1, unsigned(-1));
             int last_filament = last_filament_per_extruder[extruder_id];
             if (last_filament != -1 && last_filament != item) {
-                int flush_volume = flush_matrix[extruder_id][last_filament][item];
-                flush_volume_per_filament[item] += flush_volume;
+                int flush_volume = 0;
+                if (size_t(extruder_id) < flush_matrix.size() &&
+                    size_t(last_filament) < flush_matrix[extruder_id].size() &&
+                    item < flush_matrix[extruder_id][last_filament].size())
+                    flush_volume = int(flush_matrix[extruder_id][last_filament][item]);
+                flush_volume_per_filament[int(item)] += flush_volume;
                 total_filament_change_count += 1;
             }
             last_filament_per_extruder[extruder_id] = item;
@@ -183,7 +234,7 @@ static FilamentChangeStats calc_filament_change_info_by_toolorder(const PrintCon
     }
 
     for (auto& fv : flush_volume_per_filament) {
-        float weight = config->filament_density.get_at(fv.first) * 0.001 * fv.second;
+        float weight = config->filament_density.get_at(size_t(std::max(0, fv.first))) * 0.001 * fv.second;
         total_filament_flush_weight += weight;
     }
 
@@ -551,8 +602,10 @@ std::vector<unsigned int> ToolOrdering::generate_first_layer_tool_order(const Pr
             return tool_order;
 
         for (auto layerm : target_layer->regions()) {
+            const unsigned int base_outer_wall_filament = layerm->region().config().outer_wall_filament_id.value > 0 ?
+                layerm->region().config().outer_wall_filament_id.value : 1;
             int extruder_id = int(detail_external_perimeter_filament_1based(&print.config(), layerm->region(),
-                layerm->region().config().outer_wall_filament_id.value));
+                base_outer_wall_filament));
 
             for (auto expoly : layerm->raw_slices) {
                 const double nozzle_diameter = print.config().nozzle_diameter.get_at(0);
@@ -616,8 +669,10 @@ std::vector<unsigned int> ToolOrdering::generate_first_layer_tool_order(const Pr
         return tool_order;
 
     for (auto layerm : target_layer->regions()) {
+        const unsigned int base_outer_wall_filament = layerm->region().config().outer_wall_filament_id.value > 0 ?
+            layerm->region().config().outer_wall_filament_id.value : 1;
         int extruder_id = int(detail_external_perimeter_filament_1based(&object.print()->config(), layerm->region(),
-            layerm->region().config().outer_wall_filament_id.value));
+            base_outer_wall_filament));
         for (auto expoly : layerm->raw_slices) {
             const double nozzle_diameter = object.print()->config().nozzle_diameter.get_at(0);
             const coordf_t line_width = object.config().get_abs_value("line_width", nozzle_diameter);
@@ -709,14 +764,21 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                 }
 
                 if (something_nonoverriddable){
+                    const unsigned int base_outer_wall_filament = region.config().outer_wall_filament_id.value > 0 ?
+                        region.config().outer_wall_filament_id.value : 1;
+                    const unsigned int base_inner_wall_filament = region.config().inner_wall_filament_id.value > 0 ?
+                        region.config().inner_wall_filament_id.value : base_outer_wall_filament;
+                    const unsigned int override_wall_hotend = m_print_config_ptr ?
+                        large_nozzle_override_toolhead_1based(region.config(), layer->id(), m_print_config_ptr->nozzle_diameter.values.size()) : 0;
                     const unsigned int outer_wall_filament = (extruder_override == 0) ?
-                        detail_external_perimeter_filament_1based(m_print_config_ptr, region, region.config().outer_wall_filament_id.value) :
+                        (override_wall_hotend > 0 ? override_wall_hotend :
+                         detail_external_perimeter_filament_1based(m_print_config_ptr, region, base_outer_wall_filament)) :
                         extruder_override;
                     layer_tools.extruders.emplace_back(outer_wall_filament);
                     if (extruder_override == 0 && region.config().wall_loops.value > 1)
-                        layer_tools.extruders.emplace_back(region.config().inner_wall_filament_id.value);
+                        layer_tools.extruders.emplace_back(override_wall_hotend > 0 ? override_wall_hotend : base_inner_wall_filament);
                     if (layerCount == 0) {
-                        firstLayerExtruders.emplace_back(outer_wall_filament);
+                        firstLayerExtruders.emplace_back(extruder_override == 0 ? base_outer_wall_filament : extruder_override);
                     }
                 }
 
@@ -790,20 +852,20 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
             else {
                 auto all_extruders     = object.print()->extruders();
                 auto get_next_extruder = [&](int current_extruder, const std::vector<unsigned int> &extruders) {
-                    std::vector<float> flush_matrix(
-                        cast<float>(get_flush_volumes_matrix(object.print()->config().flush_volumes_matrix.values, 0, object.print()->config().nozzle_diameter.values.size())));
-                    const unsigned int number_of_extruders = (unsigned int) (sqrt(flush_matrix.size()) + EPSILON);
-                    // Extract purging volumes for each extruder pair:
-                    std::vector<std::vector<float>> wipe_volumes;
-                    for (unsigned int i = 0; i < number_of_extruders; ++i)
-                        wipe_volumes.push_back(std::vector<float>(flush_matrix.begin() + i * number_of_extruders, flush_matrix.begin() + (i + 1) * number_of_extruders));
+                    const PrintConfig &print_config = object.print()->config();
+                    const size_t filament_count = print_config.filament_colour.values.size();
+                    const FlushMatrix wipe_volumes = flush_matrix_for_nozzle(
+                        print_config, 0, print_config.nozzle_diameter.values.size(), filament_count);
                     int   next_extruder = current_extruder;
                     float min_flush     = std::numeric_limits<float>::max();
                     for (auto extruder_id : extruders) {
-                        if (object.print()->config().filament_soluble.get_at(extruder_id) || extruder_id == current_extruder) continue;
-                        if (wipe_volumes[extruder_interface - 1][extruder_id] < min_flush) {
+                        const size_t interface_filament = size_t(extruder_interface - 1);
+                        if (interface_filament >= wipe_volumes.size() || extruder_id >= wipe_volumes[interface_filament].size())
+                            continue;
+                        if (print_config.filament_soluble.get_at(extruder_id) || extruder_id == current_extruder) continue;
+                        if (wipe_volumes[interface_filament][extruder_id] < min_flush) {
                             next_extruder = extruder_id;
-                            min_flush     = wipe_volumes[extruder_interface - 1][extruder_id];
+                            min_flush     = wipe_volumes[interface_filament][extruder_id];
                         }
                     }
                     return next_extruder;
@@ -979,7 +1041,7 @@ void ToolOrdering::cal_most_used_extruder(const PrintConfig &config)
         std::set<int> layer_extruder_count;
         //count once only
         for (unsigned int &filament : filaments) {
-            layer_extruder_count.insert(config.filament_map.values[filament] - 1);
+            layer_extruder_count.insert(int(mapped_extruder_index_or_zero(config, filament, extruder_count.size())));
         }
 
         //record
@@ -1024,9 +1086,10 @@ bool ToolOrdering::cal_non_support_filaments(const PrintConfig &config,
     bool has_non_support = has_non_support_filament(config);
     for (const LayerTools &layer_tool : m_layer_tools) {
         for (const unsigned int &filament : layer_tool.extruders) {
+            const size_t mapped_extruder = mapped_extruder_index_or_zero(config, filament, initial_filaments.size());
             //check first filament
-            if (!config.filament_map.values.empty() && initial_filaments[config.filament_map.values[filament] - 1] == -1) {
-                initial_filaments[config.filament_map.values[filament] - 1] = filament;
+            if (!config.filament_map.values.empty() && !initial_filaments.empty() && initial_filaments[mapped_extruder] == -1) {
+                initial_filaments[mapped_extruder] = filament;
                 find_first_filaments_count++;
             }
 
@@ -1042,8 +1105,8 @@ bool ToolOrdering::cal_non_support_filaments(const PrintConfig &config,
                 if (config.filament_map.values.empty())
                     return true;
 
-                if (initial_non_support_filaments[config.filament_map.values[filament] - 1] == -1) {
-                    initial_non_support_filaments[config.filament_map.values[filament] - 1] = filament;
+                if (!initial_non_support_filaments.empty() && initial_non_support_filaments[mapped_extruder] == -1) {
+                    initial_non_support_filaments[mapped_extruder] = filament;
                     find_count++;
                 }
 
@@ -1108,13 +1171,21 @@ float get_flush_volume(const std::vector<int> &filament_maps, const std::vector<
     nozzle_filaments.resize(nozzle_nums);
 
     for (unsigned int filament_id : extruders) {
-        nozzle_filaments[filament_maps[filament_id]].emplace_back(filament_id);
+        if (filament_id >= filament_maps.size())
+            continue;
+        const int nozzle_id = filament_maps[filament_id];
+        if (nozzle_id < 0 || size_t(nozzle_id) >= nozzle_nums)
+            continue;
+        nozzle_filaments[size_t(nozzle_id)].emplace_back(filament_id);
     }
 
     float flush_volume = 0;
-    for (size_t nozzle_id = 0; nozzle_id < nozzle_nums; ++nozzle_id) {
+    for (size_t nozzle_id = 0; nozzle_id < std::min(nozzle_nums, matrix.size()); ++nozzle_id) {
         for (size_t i = 0; i + 1 < nozzle_filaments[nozzle_id].size(); ++i) {
-            flush_volume += matrix[nozzle_id][nozzle_filaments[nozzle_id][i]][nozzle_filaments[nozzle_id][i+1]];
+            const size_t from_filament = nozzle_filaments[nozzle_id][i];
+            const size_t to_filament   = nozzle_filaments[nozzle_id][i + 1];
+            if (from_filament < matrix[nozzle_id].size() && to_filament < matrix[nozzle_id][from_filament].size())
+                flush_volume += matrix[nozzle_id][from_filament][to_filament];
         }
     }
 
@@ -1133,14 +1204,8 @@ std::vector<int> ToolOrdering::get_recommended_filament_maps(const std::vector<s
     // get flush matrix
     std::vector<FlushMatrix> nozzle_flush_mtx;
     size_t extruder_nums = print_config.nozzle_diameter.values.size();
-    for (size_t nozzle_id = 0; nozzle_id < extruder_nums; ++nozzle_id) {
-        std::vector<float>              flush_matrix(cast<float>(get_flush_volumes_matrix(print_config.flush_volumes_matrix.values, nozzle_id, extruder_nums)));
-        std::vector<std::vector<float>> wipe_volumes;
-        for (unsigned int i = 0; i < filament_nums; ++i)
-            wipe_volumes.push_back(std::vector<float>(flush_matrix.begin() + i * filament_nums, flush_matrix.begin() + (i + 1) * filament_nums));
-
-        nozzle_flush_mtx.emplace_back(wipe_volumes);
-    }
+    for (size_t nozzle_id = 0; nozzle_id < extruder_nums; ++nozzle_id)
+        nozzle_flush_mtx.emplace_back(flush_matrix_for_nozzle(print_config, nozzle_id, extruder_nums, filament_nums));
     auto flush_multiplies = print_config.flush_multiplier.values;
     flush_multiplies.resize(extruder_nums, 1);
     for (size_t nozzle_id = 0; nozzle_id < extruder_nums; ++nozzle_id) {
@@ -1261,24 +1326,15 @@ void ToolOrdering::reorder_extruders_for_minimum_flush_volume(bool reorder_first
 
     const unsigned int number_of_extruders = (unsigned int)(print_config->filament_colour.values.size() + EPSILON);
 
-    using FlushMatrix = std::vector<std::vector<float>>;
     size_t             nozzle_nums = print_config->nozzle_diameter.values.size();
     const auto wipe_tower_type = m_print->wipe_tower_type();
+    const bool use_configured_flush_matrix =
+        (print_config->purge_in_prime_tower && print_config->single_extruder_multi_material) || wipe_tower_type == WipeTowerType::Type1;
 
     std::vector<FlushMatrix> nozzle_flush_mtx;
-    for (size_t nozzle_id = 0; nozzle_id < nozzle_nums; ++nozzle_id) {
-        std::vector<float> flush_matrix(cast<float>(get_flush_volumes_matrix(print_config->flush_volumes_matrix.values, nozzle_id, nozzle_nums)));
-        std::vector<std::vector<float>> wipe_volumes;
-        if ((print_config->purge_in_prime_tower && print_config->single_extruder_multi_material) || wipe_tower_type == WipeTowerType::Type1) {
-            for (unsigned int i = 0; i < number_of_extruders; ++i)
-                wipe_volumes.push_back(std::vector<float>(flush_matrix.begin() + i * number_of_extruders, flush_matrix.begin() + (i + 1) * number_of_extruders));
-        } else {
-            // populate wipe_volumes with prime_volume
-            for (unsigned int i = 0; i < number_of_extruders; ++i)
-                wipe_volumes.push_back(std::vector<float>(number_of_extruders, print_config->prime_volume));
-        }
-        nozzle_flush_mtx.emplace_back(wipe_volumes);
-    }
+    for (size_t nozzle_id = 0; nozzle_id < nozzle_nums; ++nozzle_id)
+        nozzle_flush_mtx.emplace_back(flush_matrix_for_nozzle(
+            *print_config, nozzle_id, nozzle_nums, number_of_extruders, use_configured_flush_matrix));
 
     auto flush_multiplies = print_config->flush_multiplier.values;
     flush_multiplies.resize(nozzle_nums, 1);

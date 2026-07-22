@@ -14,11 +14,13 @@ namespace Slic3r::Arachne
 
 RedistributeBeadingStrategy::RedistributeBeadingStrategy(const coord_t      optimal_width_outer,
                                                          const double       minimum_variable_line_ratio,
+                                                         const coord_t      outer_inner_overlap,
                                                          BeadingStrategyPtr parent)
     : BeadingStrategy(*parent)
     , parent(std::move(parent))
     , optimal_width_outer(optimal_width_outer)
     , minimum_variable_line_ratio(minimum_variable_line_ratio)
+    , outer_inner_overlap(std::max<coord_t>(0, outer_inner_overlap))
 {
     name = "RedistributeBeadingStrategy";
 }
@@ -27,7 +29,8 @@ coord_t RedistributeBeadingStrategy::getOptimalThickness(coord_t bead_count) con
 {
     const coord_t inner_bead_count = std::max(static_cast<coord_t>(0), bead_count - 2);
     const coord_t outer_bead_count = bead_count - inner_bead_count;
-    return parent->getOptimalThickness(inner_bead_count) + optimal_width_outer * outer_bead_count;
+    const coord_t overlap = inner_bead_count > 0 ? outer_inner_overlap : 0;
+    return parent->getOptimalThickness(inner_bead_count) + optimal_width_outer * outer_bead_count - 2 * overlap;
 }
 
 coord_t RedistributeBeadingStrategy::getTransitionThickness(coord_t lower_bead_count) const
@@ -35,7 +38,7 @@ coord_t RedistributeBeadingStrategy::getTransitionThickness(coord_t lower_bead_c
     switch (lower_bead_count) {
     case 0: return minimum_variable_line_ratio * optimal_width_outer;
     case 1: return (1.0 + parent->getSplitMiddleThreshold()) * optimal_width_outer;
-    default: return parent->getTransitionThickness(lower_bead_count - 2) + 2 * optimal_width_outer;
+    default: return parent->getTransitionThickness(lower_bead_count - 2) + 2 * (optimal_width_outer - outer_inner_overlap);
     }
 }
 
@@ -45,7 +48,7 @@ coord_t RedistributeBeadingStrategy::getOptimalBeadCount(coord_t thickness) cons
         return 0;
     if (thickness <= 2 * optimal_width_outer)
         return thickness > (1.0 + parent->getSplitMiddleThreshold()) * optimal_width_outer ? 2 : 1;
-    return parent->getOptimalBeadCount(thickness - 2 * optimal_width_outer) + 2;
+    return parent->getOptimalBeadCount(thickness - 2 * optimal_width_outer + 2 * outer_inner_overlap) + 2;
 }
 
 coord_t RedistributeBeadingStrategy::getTransitioningLength(coord_t lower_bead_count) const
@@ -76,10 +79,12 @@ BeadingStrategy::Beading RedistributeBeadingStrategy::compute(coord_t thickness,
 
     // Compute the beadings of the inner walls, if any:
     const coord_t inner_bead_count = bead_count - 2;
-    const coord_t inner_thickness  = thickness - 2 * optimal_width_outer;
+    const coord_t applied_overlap  = inner_bead_count > 0 ? outer_inner_overlap : 0;
+    const coord_t inner_thickness  = thickness - 2 * optimal_width_outer + 2 * applied_overlap;
     if (inner_bead_count > 0 && inner_thickness > 0) {
         ret = parent->compute(inner_thickness, inner_bead_count);
-        for (auto &toolpath_location : ret.toolpath_locations) toolpath_location += optimal_width_outer;
+        for (auto &toolpath_location : ret.toolpath_locations)
+            toolpath_location += optimal_width_outer - applied_overlap;
     }
 
     // Insert the outer wall(s) around the previously computed inner wall(s), which may be empty:

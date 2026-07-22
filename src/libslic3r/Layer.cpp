@@ -144,6 +144,12 @@ bool Layer::is_perimeter_compatible(const Print& print, const PrintRegion& a, co
         return config.outer_wall_filament_id       == other_config.outer_wall_filament_id
 		&& config.inner_wall_filament_id       == other_config.inner_wall_filament_id
 		&& config.wall_loops                  == other_config.wall_loops
+		&& config.use_smaller_nozzles_in_crisp_corners == other_config.use_smaller_nozzles_in_crisp_corners
+		&& config.crisp_corner_detail_toolhead == other_config.crisp_corner_detail_toolhead
+		&& config.crisp_corner_small_nozzle_wall_count == other_config.crisp_corner_small_nozzle_wall_count
+		&& config.crisp_corner_nozzle_wall_overlap == other_config.crisp_corner_nozzle_wall_overlap
+		&& config.crisp_corner_interlace_small_nozzle_walls == other_config.crisp_corner_interlace_small_nozzle_walls
+		&& config.crisp_corner_large_nozzle_override_regions == other_config.crisp_corner_large_nozzle_override_regions
 		&& config.wall_sequence               == other_config.wall_sequence
 		&& config.is_infill_first             == other_config.is_infill_first
 		&& config.inner_wall_speed.get_at(print.get_extruder_id(config.outer_wall_filament_id)) == other_config.inner_wall_speed.get_at(print.get_extruder_id(config.outer_wall_filament_id))

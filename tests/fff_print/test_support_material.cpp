@@ -8,6 +8,82 @@
 using namespace Slic3r::Test;
 using namespace Slic3r;
 
+static std::string low_temperature_interface_gcode(bool auxiliary_fan_toggle, bool wiping_toggle,
+                                                    bool auxiliary_fan_supported = true, bool temperature_drop_tower = false)
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "enable_support", true },
+        { "support_interface_top_layers", 2 },
+        { "support_interface_filament", 0 },
+        { "single_nozzle_low_temperature_interface", true },
+        { "support_interface_temperature", 170 },
+        { "support_interface_auxiliary_fan_speed", 100 },
+        { "support_interface_heating_time", 0.0 },
+        { "support_interface_auxiliary_fan_cooling_on_temperature_change", auxiliary_fan_toggle },
+        { "support_interface_nozzle_wiping_on_temperature_change", wiping_toggle },
+        { "support_interface_temperature_drop_tower", temperature_drop_tower },
+        { "auxiliary_fan", auxiliary_fan_supported },
+        { "support_interface_brush_repetitions", 2 },
+        { "support_interface_brush_speed", 80.0 }
+    });
+    config.set_key_value("support_interface_brush_start", new ConfigOptionPoint(Vec2d(10.0, 10.0)));
+    config.set_key_value("support_interface_brush_end", new ConfigOptionPoint(Vec2d(20.0, 10.0)));
+    return slice({ TestMesh::overhang }, config);
+}
+
+TEST_CASE("Low temperature interface hardware actions follow their toggles", "[SupportMaterial][GCode]")
+{
+    constexpr std::string_view begin_marker = "low-temperature support interface begin";
+    constexpr std::string_view auxiliary_fan_marker = "low-temperature support interface auxiliary cooling";
+    constexpr std::string_view wiping_marker = "low-temperature support interface nozzle brushing";
+
+    SECTION("both actions disabled") {
+        const std::string gcode = low_temperature_interface_gcode(false, false);
+        REQUIRE(gcode.find(begin_marker) != std::string::npos);
+        CHECK(gcode.find(auxiliary_fan_marker) == std::string::npos);
+        CHECK(gcode.find(wiping_marker) == std::string::npos);
+    }
+
+    SECTION("only auxiliary fan cooling enabled") {
+        const std::string gcode = low_temperature_interface_gcode(true, false);
+        CHECK(gcode.find(auxiliary_fan_marker) != std::string::npos);
+        CHECK(gcode.find(wiping_marker) == std::string::npos);
+    }
+
+    SECTION("only nozzle wiping enabled") {
+        const std::string gcode = low_temperature_interface_gcode(false, true);
+        CHECK(gcode.find(auxiliary_fan_marker) == std::string::npos);
+        CHECK(gcode.find(wiping_marker) != std::string::npos);
+    }
+
+    SECTION("both actions enabled in cooling then wiping order") {
+        const std::string gcode = low_temperature_interface_gcode(true, true);
+        const size_t auxiliary_fan_position = gcode.find(auxiliary_fan_marker);
+        const size_t wiping_position = gcode.find(wiping_marker);
+        REQUIRE(auxiliary_fan_position != std::string::npos);
+        REQUIRE(wiping_position != std::string::npos);
+        CHECK(auxiliary_fan_position < wiping_position);
+    }
+
+    SECTION("unsupported auxiliary fan suppresses cooling even if enabled") {
+        const std::string gcode = low_temperature_interface_gcode(true, false, false);
+        CHECK(gcode.find(auxiliary_fan_marker) == std::string::npos);
+    }
+
+    SECTION("temperature drop tower is printed during cooling when wiping is disabled") {
+        const std::string gcode = low_temperature_interface_gcode(false, false, true, true);
+        const size_t begin_position = gcode.find(begin_marker);
+        const size_t tower_position = gcode.find("temperature drop tower cooling pass");
+        const size_t interface_position = gcode.find("support material interface");
+        REQUIRE(begin_position != std::string::npos);
+        REQUIRE(tower_position != std::string::npos);
+        REQUIRE(interface_position != std::string::npos);
+        CHECK(begin_position < tower_position);
+        CHECK(tower_position < interface_position);
+    }
+}
+
 TEST_CASE("Three raft layers are created", "[SupportMaterial]")
 {
 	Slic3r::Print print;

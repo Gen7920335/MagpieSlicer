@@ -6094,7 +6094,12 @@ void GCodeProcessor::update_slice_warnings()
     warning.params.clear();
     warning.level=1;
 
-    std::vector<int> nozzle_hrc_lists(m_result.nozzle_type.size(), 0);
+    size_t nozzle_count = m_result.nozzle_type.size();
+    for (int mapped_nozzle : m_filament_maps)
+        if (mapped_nozzle >= 0)
+            nozzle_count = std::max(nozzle_count, size_t(mapped_nozzle) + 1);
+
+    std::vector<int> nozzle_hrc_lists(nozzle_count, m_result.nozzle_hrc);
     // store the nozzle hrc of each extruder
     for (size_t idx = 0; idx < m_result.nozzle_type.size(); ++idx) {
         nozzle_hrc_lists[idx] = m_result.nozzle_hrc;
@@ -6108,8 +6113,12 @@ void GCodeProcessor::update_slice_warnings()
         if (used_filaments[idx] < m_result.required_nozzle_HRC.size())
             filament_hrc = m_result.required_nozzle_HRC[used_filaments[idx]];
 
+        if (used_filaments[idx] >= m_filament_maps.size())
+            continue;
         int filament_extruder_id = m_filament_maps[used_filaments[idx]];
-        int extruder_hrc = nozzle_hrc_lists[filament_extruder_id];
+        if (filament_extruder_id < 0 || size_t(filament_extruder_id) >= nozzle_hrc_lists.size())
+            continue;
+        int extruder_hrc = nozzle_hrc_lists[size_t(filament_extruder_id)];
 
         BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": Check HRC: filament:%1%, hrc=%2%, extruder:%3%, hrc:%4%") % used_filaments[idx] % filament_hrc % filament_extruder_id % extruder_hrc;
 

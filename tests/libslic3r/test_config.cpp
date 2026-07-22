@@ -9,6 +9,8 @@
 #include <cereal/types/vector.hpp> 
 #include <cereal/archives/binary.hpp>
 
+#include <array>
+
 using namespace Slic3r;
 
 SCENARIO("Generic config validation performs as expected.", "[Config]") {
@@ -30,6 +32,24 @@ SCENARIO("Generic config validation performs as expected.", "[Config]") {
         WHEN( "wall_loops is set to -10, an invalid value") {
             config.set("wall_loops", -10);
             THEN( "Validate returns error") {
+                REQUIRE_FALSE(config.validate().empty());
+            }
+        }
+
+        WHEN("bridge width is 100% with heterogeneous nozzles") {
+            config.set_num_extruders(2);
+            config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4, 0.15 }));
+            config.set_deserialize_strict("bridge_line_width", "100%");
+            THEN("global validation defers the selected-tool check to Print validation") {
+                REQUIRE(config.validate().empty());
+            }
+        }
+
+        WHEN("absolute bridge width exceeds every configured nozzle") {
+            config.set_num_extruders(2);
+            config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4, 0.15 }));
+            config.set_deserialize_strict("bridge_line_width", "0.5");
+            THEN("global validation rejects it") {
                 REQUIRE_FALSE(config.validate().empty());
             }
         }
@@ -361,6 +381,55 @@ SCENARIO("update_diff_values_to_child_config tolerates legacy machine-limit vect
             }
         }
     }
+}
+
+TEST_CASE("Per-hotend width vectors follow dynamic tool count", "[Config][MultiNozzle]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    const std::vector<double> nozzles { 0.15, 0.2, 0.25, 0.4, 0.5, 0.6, 0.8, 1.0 };
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats(nozzles));
+    config.set_num_extruders(unsigned(nozzles.size()));
+
+    static constexpr std::array<const char*, 9> width_keys {
+        "toolhead_line_width",
+        "toolhead_initial_layer_line_width",
+        "toolhead_outer_wall_line_width",
+        "toolhead_inner_wall_line_width",
+        "toolhead_top_surface_line_width",
+        "toolhead_sparse_infill_line_width",
+        "toolhead_internal_solid_infill_line_width",
+        "toolhead_support_line_width",
+        "toolhead_bridge_line_width"
+    };
+
+    for (const char *key : width_keys) {
+        const auto *widths = config.option<ConfigOptionFloatsOrPercents>(key);
+        REQUIRE(widths != nullptr);
+        REQUIRE(widths->values.size() == nozzles.size());
+        for (const FloatOrPercent &width : widths->values) {
+            CHECK_FALSE(width.percent);
+            CHECK(width.value > 0.);
+        }
+    }
+
+    const auto *outer = config.option<ConfigOptionFloatsOrPercents>("toolhead_outer_wall_line_width");
+    const auto *first = config.option<ConfigOptionFloatsOrPercents>("toolhead_initial_layer_line_width");
+    const auto *top = config.option<ConfigOptionFloatsOrPercents>("toolhead_top_surface_line_width");
+    REQUIRE_THAT(outer->values[5].value, Catch::Matchers::WithinAbs(0.675, 1e-9));
+    REQUIRE_THAT(first->values[5].value, Catch::Matchers::WithinAbs(0.84, 1e-9));
+    REQUIRE_THAT(top->values[5].value, Catch::Matchers::WithinAbs(0.6, 1e-9));
+
+    auto preserved = outer->values;
+    preserved[0] = FloatOrPercent(135., true);
+    config.set_key_value("toolhead_outer_wall_line_width", new ConfigOptionFloatsOrPercents(preserved));
+    config.set_num_extruders(4);
+    config.set_num_extruders(8);
+
+    outer = config.option<ConfigOptionFloatsOrPercents>("toolhead_outer_wall_line_width");
+    REQUIRE(outer->values.size() == 8);
+    CHECK(outer->values[0].percent);
+    CHECK(outer->values[0].value == 135.);
+    CHECK(outer->values[7].value > 0.);
 }
 
 // SCENARIO("DynamicPrintConfig JSON serialization", "[Config]") {

@@ -30,6 +30,8 @@ public:
     float   wall_transition_angle;
     float   wall_transition_filter_deviation;
     int     wall_distribution_count;
+    size_t  fixed_outer_wall_count = 1;
+    coord_t fixed_outer_wall_boundary_overlap = 0;
     bool    is_top_or_bottom_layer;
 
     coord_t wall_maximum_resolution = meshfix_maximum_resolution();

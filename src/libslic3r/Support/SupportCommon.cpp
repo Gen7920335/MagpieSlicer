@@ -1223,6 +1223,7 @@ static void modulate_extrusion_by_overlapping_layers(
         // Adjust the extrusion parameters for a reduced layer height and a non-bridging flow (nozzle_dmr = -1, does not matter).
         assert(this_layer.print_z > overlapping_layer.print_z);
         frag.height = float(this_layer.print_z - overlapping_layer.print_z);
+        frag.width = std::max(frag.width, Flow::rounded_rectangle_extrusion_width_from_spacing(EPSILON, frag.height));
         frag.mm3_per_mm = Flow(frag.width, frag.height, -1.f).mm3_per_mm();
 #ifdef SLIC3R_DEBUG
         svg.draw(frag.polylines, dbg_index_to_color(i_overlapping_layer), scale_(0.1));

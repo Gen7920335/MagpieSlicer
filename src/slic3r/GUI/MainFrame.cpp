@@ -1,4 +1,5 @@
 #include "MainFrame.hpp"
+#include <wx/dirdlg.h>
 
 #include <wx/panel.h>
 #include <wx/notebook.h>
@@ -2762,6 +2763,10 @@ void MainFrame::init_menubar_as_editor()
         append_menu_item(import_menu, wxID_ANY, _L("Import Configs") + dots /*+ "\t" + ctrl + "I"*/, _L("Load configs"),
             [this](wxCommandEvent&) { load_config_file(); }, "menu_import", nullptr,
             [this](){return true; }, this);
+        append_menu_item(import_menu, wxID_ANY, _L("Import OrcaSlicer User Presets") + dots,
+            _L("Import user presets without overwriting local presets"),
+            [this](wxCommandEvent&) { import_orcaslicer_user_presets(); }, "menu_import", nullptr,
+            [this](){return true; }, this);
 
         append_submenu(fileMenu, import_menu, wxID_ANY, _L("Import"), "");
 
@@ -3716,6 +3721,30 @@ void MainFrame::export_config()
         } catch (const std::exception &ex) {
             show_error(this, ex.what());
         }
+    }
+}
+
+void MainFrame::import_orcaslicer_user_presets()
+{
+    const boost::filesystem::path default_source = boost::filesystem::path(data_dir()).parent_path() / "OrcaSlicer";
+    wxDirDialog dialog(this,
+        _L("Select OrcaSlicer data directory"),
+        from_u8(default_source.string()),
+        wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
+
+    if (dialog.ShowModal() != wxID_OK)
+        return;
+
+    try {
+        const auto result = wxGetApp().preset_bundle->import_user_presets_from(into_u8(dialog.GetPath()));
+        const wxString message = wxString::Format(
+            _L("Imported %llu user preset files.\nSkipped %llu existing files.\nFailed to copy %llu files.\nRestart the slicer to load imported presets."),
+            static_cast<unsigned long long>(result.copied),
+            static_cast<unsigned long long>(result.skipped),
+            static_cast<unsigned long long>(result.failed));
+        wxMessageBox(message, _L("OrcaSlicer User Presets"), wxOK | wxICON_INFORMATION, this);
+    } catch (const std::exception &error) {
+        show_error(this, error.what());
     }
 }
 

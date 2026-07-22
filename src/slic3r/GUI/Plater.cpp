@@ -626,7 +626,6 @@ void Sidebar::priv::layout_printer(bool isBBL, bool isDual)
     if (vsizer_printer->GetItemCount() == 0) {
         wxBoxSizer *hsizer_printer = new wxBoxSizer(wxHORIZONTAL);
         hsizer_printer->Add(panel_printer_preset, 1, wxEXPAND, 0);
-        hsizer_printer->Add(panel_nozzle_dia , 0, wxLEFT, FromDIP(4));
         hsizer_printer->Add(panel_printer_bed, 0, wxLEFT, FromDIP(4));
         //hsizer_printer->Add(btn_sync_printer , 0, wxLEFT, FromDIP(4));
         vsizer_printer->AddSpacer(FromDIP(SidebarProps::ContentMarginV()));
@@ -662,6 +661,9 @@ void Sidebar::priv::layout_printer(bool isBBL, bool isDual)
     // Orca: we use preset_bundle.is_bbl_vendor() instead of isBBL to determine if the plate type combo box should be shown
     // ref: https://github.com/OrcaSlicer/OrcaSlicer/pull/11610#discussion_r2607411847
     panel_printer_bed->Show(preset_bundle.is_bbl_vendor() || cfg.opt_bool("support_multi_bed_types"));
+    // Hotend nozzle diameters are edited in the Toolhead / Material rows. Keep
+    // this stock panel alive for device-sync compatibility, but never display it.
+    panel_nozzle_dia->Hide();
 
     extruder_dual_sizer->Show(isDual);
 
@@ -672,10 +674,8 @@ void Sidebar::priv::layout_printer(bool isBBL, bool isDual)
         int extruder_count = 0;
         const bool has_flow_variant = cfg.support_different_extruders(extruder_count);
 
-        panel_nozzle_dia->Show(!has_flow_variant);
         extruder_single_sizer->Show(has_flow_variant);
     } else {
-        panel_nozzle_dia->Show(false);
         extruder_single_sizer->Show(false);
     }
 

@@ -405,7 +405,7 @@ void ObjectList::create_objects_ctrl()
     m_columns_width[colName] = 22;
     m_columns_width[colHeight] = 3;
     m_columns_width[colPrint] = 3;
-    m_columns_width[colFilament] = 5;
+    m_columns_width[colFilament] = 8;
     m_columns_width[colSupportPaint] = 3;
     m_columns_width[colSinking] = 3;
     m_columns_width[colColorPaint] = 3;
@@ -433,7 +433,8 @@ void ObjectList::create_objects_ctrl()
     AppendBitmapColumn(" ", colPrint, wxOSX ? wxDATAVIEW_CELL_EDITABLE : wxDATAVIEW_CELL_INERT, m_columns_width[colPrint]*em,
         wxALIGN_CENTER_HORIZONTAL, 0);
 
-    // column Extruder of the view control:
+    // Hotend assignment for objects and parts. The stored key remains "extruder"
+    // for project compatibility and tool-ordering integration.
     BitmapChoiceRenderer* bmp_choice_renderer = new BitmapChoiceRenderer();
     const auto get_filament_context_item = [this]() {
 #ifdef __WXOSX__
@@ -455,7 +456,7 @@ void ObjectList::create_objects_ctrl()
         return m_objects_model->GetVolumeType(item) == ModelVolumeType::PARAMETER_MODIFIER ||
                m_objects_model->GetItemType(item) == itLayer;
     });
-    AppendColumn(new wxDataViewColumn(_L("Fila."), bmp_choice_renderer,
+    AppendColumn(new wxDataViewColumn(_L("Hotend"), bmp_choice_renderer,
         colFilament, m_columns_width[colFilament] * em, wxALIGN_CENTER_HORIZONTAL, 0));
 
     // BBS
@@ -1154,7 +1155,7 @@ void ObjectList::update_filament_in_config(const wxDataViewItem& item)
 
     m_config = config;
 
-    take_snapshot("Change Filament");
+    take_snapshot("Change Hotend");
 
     const int extruder = m_objects_model->GetExtruderNumber(item);
     m_config->set_key_value("extruder", new ConfigOptionInt(extruder));
@@ -6582,7 +6583,7 @@ void ObjectList::set_extruder_for_selected_items(const int extruder)
     if (sels.empty())
         return;
 
-    take_snapshot("Change Filaments");
+    take_snapshot("Change Hotends");
 
     for (const wxDataViewItem& sel_item : sels)
     {

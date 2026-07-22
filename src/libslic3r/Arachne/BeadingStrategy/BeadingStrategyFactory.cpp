@@ -28,7 +28,9 @@ BeadingStrategyPtr BeadingStrategyFactory::makeStrategy(const coord_t preferred_
                                                         const coord_t max_bead_count,
                                                         const coord_t outer_wall_offset,
                                                         const int     inward_distributed_center_wall_count,
-                                                        const double  minimum_variable_line_ratio)
+                                                        const double  minimum_variable_line_ratio,
+                                                         const size_t  fixed_outer_wall_count,
+                                                         const coord_t fixed_outer_wall_boundary_overlap)
 {
     // Handle a special case when there is just one external perimeter.
     // Because big differences in bead width for inner and other perimeters cause issues with current beading strategies.
@@ -37,8 +39,15 @@ BeadingStrategyPtr BeadingStrategyFactory::makeStrategy(const coord_t preferred_
                                                                           wall_split_middle_threshold, wall_add_middle_threshold,
                                                                           inward_distributed_center_wall_count);
 
-    BOOST_LOG_TRIVIAL(trace) << "Applying the Redistribute meta-strategy with outer-wall width = " << preferred_bead_width_outer << ", inner-wall width = " << preferred_bead_width_inner << ".";
-    ret = std::make_unique<RedistributeBeadingStrategy>(preferred_bead_width_outer, minimum_variable_line_ratio, std::move(ret));
+    const size_t outer_shell_count = fixed_outer_wall_count == 0 ? 1 : fixed_outer_wall_count;
+    BOOST_LOG_TRIVIAL(trace) << "Applying " << outer_shell_count
+                             << " Redistribute meta-strategy shell(s) with outer-wall width = " << preferred_bead_width_outer
+                             << ", inner-wall width = " << preferred_bead_width_inner << ".";
+    for (size_t shell_idx = 0; shell_idx < outer_shell_count; ++shell_idx) {
+        const coord_t boundary_overlap = shell_idx == 0 ? fixed_outer_wall_boundary_overlap : 0;
+        ret = std::make_unique<RedistributeBeadingStrategy>(preferred_bead_width_outer, minimum_variable_line_ratio,
+                                                            boundary_overlap, std::move(ret));
+    }
 
     if (print_thin_walls) {
         BOOST_LOG_TRIVIAL(trace) << "Applying the Widening Beading meta-strategy with minimum input width " << min_feature_size << " and minimum output width " << min_bead_width << ".";

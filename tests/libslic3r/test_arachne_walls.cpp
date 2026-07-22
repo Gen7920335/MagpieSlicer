@@ -265,3 +265,41 @@ TEST_CASE("Arachne widening keeps two beads in transition band (#14376)", "[Arac
     for (const coord_t w : beading.bead_widths)
         CHECK(w <= inner_width);
 }
+
+TEST_CASE("Arachne preserves multiple fixed outer bead widths", "[Arachne][MultiNozzleWalls]")
+{
+    const coord_t detail_width = scaled<coord_t>(0.15);
+    const coord_t large_width  = scaled<coord_t>(0.43);
+    constexpr size_t detail_walls_per_side = 4;
+    constexpr coord_t large_beads = 4;
+    constexpr coord_t total_beads = coord_t(2 * detail_walls_per_side) + large_beads;
+    const coord_t boundary_overlap = scaled<coord_t>(0.02);
+    const coord_t thickness = coord_t(2 * detail_walls_per_side) * detail_width + large_beads * large_width - 2 * boundary_overlap;
+
+    auto strategy = BeadingStrategyFactory::makeStrategy(
+        detail_width, large_width, scaled<coord_t>(0.4), float(M_PI / 4.0), false,
+        0, 0, 0.5, 0.5, total_beads, 0, 2, 0.5, detail_walls_per_side, boundary_overlap);
+    const BeadingStrategy::Beading beading = strategy->compute(thickness, total_beads);
+
+    REQUIRE(beading.bead_widths.size() == size_t(total_beads + 1));
+    REQUIRE(beading.toolpath_locations.size() == size_t(total_beads + 1));
+    REQUIRE(std::count(beading.bead_widths.begin(), beading.bead_widths.end(), coord_t(0)) == 1);
+
+    std::vector<coord_t> printable_widths;
+    for (coord_t width : beading.bead_widths)
+        if (width > 0)
+            printable_widths.push_back(width);
+    REQUIRE(printable_widths.size() == size_t(total_beads));
+    for (size_t bead_idx = 0; bead_idx < printable_widths.size(); ++bead_idx) {
+        const bool detail_shell = bead_idx < detail_walls_per_side || bead_idx >= size_t(total_beads) - detail_walls_per_side;
+        CHECK(printable_widths[bead_idx] == (detail_shell ? detail_width : large_width));
+    }
+    for (size_t bead_idx = 1; bead_idx < beading.bead_widths.size(); ++bead_idx) {
+        coord_t expected_distance = (beading.bead_widths[bead_idx - 1] + beading.bead_widths[bead_idx]) / 2;
+        if (beading.bead_widths[bead_idx - 1] > 0 && beading.bead_widths[bead_idx] > 0 &&
+            beading.bead_widths[bead_idx - 1] != beading.bead_widths[bead_idx])
+            expected_distance -= boundary_overlap;
+        CHECK(beading.toolpath_locations[bead_idx] - beading.toolpath_locations[bead_idx - 1] == expected_distance);
+    }
+    CHECK(beading.left_over == -2 * boundary_overlap);
+}

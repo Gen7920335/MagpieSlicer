@@ -3252,7 +3252,7 @@ std::vector<std::set<int>> Print::get_physical_unprintable_filaments(const std::
         return physical_unprintables;
 
     auto get_unprintable_extruder_id = [&](unsigned int filament_idx) -> int {
-        int status = m_config.filament_printable.values[filament_idx];
+        int status = m_config.filament_printable.get_at(filament_idx);
         for (int i = 0; i < extruder_num; ++i) {
             if (!(status >> i & 1)) {
                 return i;
@@ -3310,9 +3310,10 @@ std::vector<Polygons> Print::get_extruder_unprintable_polygons() const
 
 size_t Print::get_extruder_id(unsigned int filament_id) const
 {
-    std::vector<int> filament_map = get_filament_maps();
-    if (filament_id < filament_map.size()) {
-        return filament_map[filament_id] - 1;
+    if (!m_config.filament_map.values.empty()) {
+        const int mapped_extruder_1based = m_config.filament_map.get_at(filament_id);
+        if (mapped_extruder_1based > 0 && size_t(mapped_extruder_1based) <= m_config.nozzle_diameter.size())
+            return size_t(mapped_extruder_1based - 1);
     }
     return 0;
 }

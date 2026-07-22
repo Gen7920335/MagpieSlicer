@@ -6,6 +6,11 @@
 #include "Exception.hpp"
 #include "ExtrusionEntity.hpp"
 
+#include <limits>
+#include <optional>
+#include <string>
+#include <string_view>
+
 namespace Slic3r {
 
 class PrintObject;
@@ -146,6 +151,19 @@ extern Flow support_transition_flow(const PrintObject *object); //BBS
 extern Flow support_material_1st_layer_flow(const PrintObject *object, float layer_height = 0.f);
 extern Flow support_material_interface_flow(const PrintObject *object, float layer_height = 0.f);
 extern ConfigOptionFloatOrPercent toolhead_line_width_or(const PrintConfig &print_config, FlowRole role, int extruder_id, bool first_layer, const ConfigOptionFloatOrPercent &fallback);
+struct LargeNozzleOverrideRegion {
+    size_t       first_layer { 0 };
+    size_t       last_layer { 0 };
+    unsigned int toolhead_1based { 0 };
+};
+
+extern std::optional<LargeNozzleOverrideRegion> parse_large_nozzle_override_region(const std::string &serialized);
+extern std::string serialize_large_nozzle_override_region(size_t first_layer, size_t last_layer, unsigned int toolhead_1based);
+extern unsigned int large_nozzle_override_toolhead_1based(const PrintRegionConfig &region_config, size_t layer_id, size_t toolhead_count);
+extern bool detail_walls_enabled(const PrintRegionConfig &region_config);
+extern bool detail_walls_enabled_for_layer(const PrintRegionConfig &region_config, size_t layer_id, size_t toolhead_count = std::numeric_limits<size_t>::max());
+extern int detail_wall_count_for_layer(const PrintRegionConfig &region_config, size_t layer_id, size_t toolhead_count = std::numeric_limits<size_t>::max());
+extern int total_wall_count_for_layer(const PrintRegionConfig &region_config, size_t layer_id, size_t toolhead_count = std::numeric_limits<size_t>::max());
 extern unsigned int detail_external_perimeter_extruder_1based(const PrintConfig &print_config, const PrintRegionConfig &region_config, unsigned int base_extruder_id);
 
 }

@@ -99,6 +99,26 @@ void LayerRegion::make_perimeters(const SurfaceCollection &slices, const LayerRe
         (this->layer()->id() >= size_t(region_config.bottom_shell_layers.value) &&
          this->layer()->print_z >= region_config.bottom_shell_thickness - EPSILON);
 
+    const unsigned int override_hotend = large_nozzle_override_toolhead_1based(
+        region_config, this->layer()->id(), print_config.nozzle_diameter.values.size());
+    Flow perimeter_flow = this->flow(frPerimeter);
+    Flow external_perimeter_flow = this->flow(frExternalPerimeter);
+    if (override_hotend > 0) {
+        const size_t hotend_idx = size_t(override_hotend - 1);
+        const float nozzle = float(print_config.nozzle_diameter.get_at(hotend_idx));
+        const bool first_layer = this->layer()->id() == 0;
+        perimeter_flow = Flow::new_from_config_width(
+            frPerimeter,
+            toolhead_line_width_or(print_config, frPerimeter, int(override_hotend), first_layer, region_config.inner_wall_line_width),
+            nozzle,
+            float(this->layer()->height));
+        external_perimeter_flow = Flow::new_from_config_width(
+            frExternalPerimeter,
+            toolhead_line_width_or(print_config, frExternalPerimeter, int(override_hotend), first_layer, region_config.outer_wall_line_width),
+            nozzle,
+            float(this->layer()->height));
+    }
+
     double model_rotation_rad = 0.0;
     if (region_config.align_infill_direction_to_model) {
         auto m = this->layer()->object()->trafo().matrix();
@@ -111,7 +131,7 @@ void LayerRegion::make_perimeters(const SurfaceCollection &slices, const LayerRe
         &compatible_regions,
         this->layer()->height,
         this->layer()->slice_z,
-        this->flow(frPerimeter),
+        perimeter_flow,
         &region_config,
         &this->layer()->object()->config(),
         &print_config,
@@ -137,10 +157,9 @@ void LayerRegion::make_perimeters(const SurfaceCollection &slices, const LayerRe
         g.upper_slices_same_region = &this->layer()->upper_layer->get_region(region_id)->slices;
 
     g.layer_id              = (int)this->layer()->id();
-    g.ext_perimeter_flow    = this->flow(frExternalPerimeter);
+    g.ext_perimeter_flow    = external_perimeter_flow;
     g.overhang_flow         = this->bridging_flow(frPerimeter, object_config.thick_bridges);
     g.solid_infill_flow     = this->flow(frSolidInfill);
-
     if (this->layer()->object()->config().wall_generator.value == PerimeterGeneratorType::Arachne && !spiral_mode)
         g.process_arachne();
     else

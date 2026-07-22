@@ -1,6 +1,7 @@
 #include "Flow.hpp"
 #include "I18N.hpp"
 #include "Print.hpp"
+#include <charconv>
 #include <cmath>
 #include <assert.h>
 #include <limits>
@@ -126,17 +127,106 @@ ConfigOptionFloatOrPercent toolhead_line_width_or(const PrintConfig &print_confi
     return fallback;
 }
 
+bool detail_walls_enabled(const PrintRegionConfig &region_config)
+{
+    return region_config.use_smaller_nozzles_in_crisp_corners.value;
+}
+
+static bool parse_positive_size(std::string_view text, size_t &value)
+{
+    if (text.empty())
+        return false;
+    size_t parsed = 0;
+    const char *begin = text.data();
+    const char *end = begin + text.size();
+    const auto result = std::from_chars(begin, end, parsed);
+    if (result.ec != std::errc() || result.ptr != end || parsed == 0)
+        return false;
+    value = parsed;
+    return true;
+}
+
+std::optional<LargeNozzleOverrideRegion> parse_large_nozzle_override_region(const std::string &serialized)
+{
+    const size_t first_separator = serialized.find(':');
+    const size_t second_separator = first_separator == std::string::npos ? std::string::npos : serialized.find(':', first_separator + 1);
+    if (first_separator == std::string::npos || second_separator == std::string::npos || serialized.find(':', second_separator + 1) != std::string::npos)
+        return std::nullopt;
+
+    size_t first_layer = 0;
+    size_t last_layer = 0;
+    size_t toolhead = 0;
+    const std::string_view value(serialized);
+    if (!parse_positive_size(value.substr(0, first_separator), first_layer) ||
+        !parse_positive_size(value.substr(first_separator + 1, second_separator - first_separator - 1), last_layer) ||
+        !parse_positive_size(value.substr(second_separator + 1), toolhead) ||
+        toolhead > std::numeric_limits<unsigned int>::max())
+        return std::nullopt;
+
+    if (first_layer > last_layer)
+        std::swap(first_layer, last_layer);
+    return LargeNozzleOverrideRegion { first_layer, last_layer, static_cast<unsigned int>(toolhead) };
+}
+
+std::string serialize_large_nozzle_override_region(size_t first_layer, size_t last_layer, unsigned int toolhead_1based)
+{
+    if (first_layer > last_layer)
+        std::swap(first_layer, last_layer);
+    return std::to_string(first_layer) + ':' + std::to_string(last_layer) + ':' + std::to_string(toolhead_1based);
+}
+
+unsigned int large_nozzle_override_toolhead_1based(const PrintRegionConfig &region_config, size_t layer_id, size_t toolhead_count)
+{
+    if (!detail_walls_enabled(region_config) || toolhead_count == 0 || layer_id == std::numeric_limits<size_t>::max())
+        return 0;
+
+    const size_t user_layer = layer_id + 1;
+    unsigned int selected_toolhead = 0;
+    for (const std::string &serialized : region_config.crisp_corner_large_nozzle_override_regions.values) {
+        const auto region = parse_large_nozzle_override_region(serialized);
+        if (region && region->toolhead_1based <= toolhead_count && user_layer >= region->first_layer && user_layer <= region->last_layer)
+            selected_toolhead = region->toolhead_1based;
+    }
+    return selected_toolhead;
+}
+
+bool detail_walls_enabled_for_layer(const PrintRegionConfig &region_config, size_t layer_id, size_t toolhead_count)
+{
+    return detail_walls_enabled(region_config) && large_nozzle_override_toolhead_1based(region_config, layer_id, toolhead_count) == 0;
+}
+
+int detail_wall_count_for_layer(const PrintRegionConfig &region_config, size_t layer_id, size_t toolhead_count)
+{
+    if (!detail_walls_enabled_for_layer(region_config, layer_id, toolhead_count))
+        return 0;
+
+    int count = std::max(1, region_config.crisp_corner_small_nozzle_wall_count.value);
+    if (region_config.crisp_corner_interlace_small_nozzle_walls.value && (layer_id % 2) == 1 && count > 1)
+        --count;
+    return count;
+}
+
+int total_wall_count_for_layer(const PrintRegionConfig &region_config, size_t layer_id, size_t toolhead_count)
+{
+    if (!detail_walls_enabled_for_layer(region_config, layer_id, toolhead_count))
+        return std::max(0, region_config.wall_loops.value);
+
+    constexpr int minimum_large_nozzle_walls = 2;
+    const int configured_detail_walls = std::max(1, region_config.crisp_corner_small_nozzle_wall_count.value);
+    return configured_detail_walls +
+           std::max(minimum_large_nozzle_walls, region_config.wall_loops.value);
+}
+
 unsigned int detail_external_perimeter_extruder_1based(const PrintConfig &print_config, const PrintRegionConfig &region_config, unsigned int base_extruder_id)
 {
-    if (!region_config.use_smaller_nozzles_in_crisp_corners.value || base_extruder_id == 0)
+    if (!detail_walls_enabled(region_config))
         return base_extruder_id;
 
     const size_t extruder_count = print_config.nozzle_diameter.values.size();
+    if (base_extruder_id == 0)
+        base_extruder_id = 1;
     const size_t base_idx       = size_t(base_extruder_id - 1);
     if (extruder_count == 0 || base_idx >= extruder_count)
-        return base_extruder_id;
-    if (print_config.extruder_type.values.size() < extruder_count ||
-        print_config.nozzle_volume_type.values.size() < extruder_count)
         return base_extruder_id;
 
     const double base_nozzle = print_config.nozzle_diameter.get_at(base_idx);
@@ -144,9 +234,10 @@ unsigned int detail_external_perimeter_extruder_1based(const PrintConfig &print_
         return base_extruder_id;
 
     auto is_smaller_candidate = [&](size_t idx) {
-        return idx < extruder_count && idx != base_idx &&
-               print_config.nozzle_diameter.get_at(idx) > EPSILON &&
-               print_config.nozzle_diameter.get_at(idx) < base_nozzle - EPSILON;
+        if (idx >= extruder_count || idx == base_idx)
+            return false;
+        const double candidate_nozzle = print_config.nozzle_diameter.get_at(idx);
+        return candidate_nozzle > EPSILON && candidate_nozzle < base_nozzle - EPSILON;
     };
 
     auto best_smaller = [&](bool require_same_colour) -> unsigned int {
@@ -260,7 +351,6 @@ Flow Flow::new_from_config_width(FlowRole role, const ConfigOptionFloatOrPercent
         // If user set a manual value, use it.
       w = float(width.get_abs_value(nozzle_diameter));
     }
-    
     return Flow(w, height, rounded_rectangle_extrusion_spacing(w, height), nozzle_diameter, false);
 }
 
@@ -343,7 +433,7 @@ double Flow::mm3_per_mm() const
         // Area of a circle with dmr of this->width.
         float((m_width * m_width) * 0.25 * PI) :
         // Rectangle with semicircles at the ends. ~ h (w - 0.215 h)
-        float(m_height * (m_width - m_height * (1. - 0.25 * PI)));
+    float(m_height * (m_width - m_height * (1. - 0.25 * PI)));
     //assert(res > 0.);
 	if (res <= 0.)
 		throw FlowErrorNegativeFlow();

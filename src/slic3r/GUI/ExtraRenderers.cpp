@@ -1,6 +1,7 @@
 #include "ExtraRenderers.hpp"
 #include "wxExtensions.hpp"
 #include "GUI.hpp"
+#include "GUI_App.hpp"
 #include "BitmapComboBox.hpp"
 #include "Plater.hpp"
 #include "Widgets/ComboBox.hpp"
@@ -316,8 +317,13 @@ wxWindow* BitmapChoiceRenderer::CreateEditorCtrl(wxWindow* parent, wxRect labelR
     if (has_default_extruder && has_default_extruder())
         c_editor->Append(_L("default"), *get_default_extruder_color_icon());
 
-    for (size_t i = 0; i < icons.size(); i++)
-        c_editor->Append(wxString::Format("%d", i+1), *icons[i]);
+    const auto *nozzle_diameters = Slic3r::GUI::wxGetApp().preset_bundle->printers.get_edited_preset().config.option<Slic3r::ConfigOptionFloats>("nozzle_diameter");
+    for (size_t i = 0; i < icons.size(); i++) {
+        wxString label = wxString::Format(_L("Hotend %d"), int(i + 1));
+        if (nozzle_diameters != nullptr && i < nozzle_diameters->size())
+            label += wxString::Format(" (%.2f mm)", nozzle_diameters->get_at(i));
+        c_editor->Append(label, *icons[i]);
+    }
 
     if (has_default_extruder && has_default_extruder())
         c_editor->SetSelection(atoi(data.GetText().c_str()));
@@ -362,7 +368,8 @@ bool BitmapChoiceRenderer::GetValueFromEditorCtrl(wxWindow* ctrl, wxVariant& val
    
     DataViewBitmapText bmpText;
 
-    bmpText.SetText(c->GetString(selection));
+    const bool includes_default = has_default_extruder && has_default_extruder();
+    bmpText.SetText(wxString::Format("%d", includes_default ? selection : selection + 1));
     bmpText.SetBitmap(c->GetItemBitmap(selection));
 
     value << bmpText;

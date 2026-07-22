@@ -1498,7 +1498,7 @@ void PrintConfigDef::init_fff_params()
     def = this->add("crisp_corner_small_nozzle_wall_count", coInt);
     def->label = L("Small nozzle wall count");
     def->category = L("Quality");
-    def->tooltip = L("Number of outer walls to print with the smaller nozzle. Set to 0 to let the slicer calculate it from the wall geometry.");
+    def->tooltip = L("Number of outer walls to print with the smaller nozzle. When enabled, zero is treated as one wall for compatibility with older profiles.");
     def->min = 0;
     def->max = 100;
     def->mode = comAdvanced;
@@ -1515,11 +1515,19 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionPercent(15));
 
     def = this->add("crisp_corner_interlace_small_nozzle_walls", coBool);
-    def->label = L("Interlace small nozzle walls");
+    def->label = L("Multi-nozzle interlocking layers");
     def->category = L("Quality");
-    def->tooltip = L("Alternate the number of small-nozzle walls between layers to overlap the small/large nozzle boundary and improve bonding.");
+    def->tooltip = L("Alternate the number of small-nozzle walls between layers so small- and large-nozzle walls overlap across layers and improve bonding.");
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionBool(true));
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("crisp_corner_large_nozzle_override_regions", coStrings);
+    def->label = L("Large nozzle override");
+    def->category = L("Quality");
+    def->tooltip = L("Inclusive layer ranges whose walls are printed with the selected hotend. Layer numbers start at 1. Overlapping ranges are allowed; the last matching region wins.");
+    def->gui_flags = "serialized";
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionStrings());
 
     def = this->add("only_one_wall_top", coBool);
     def->label = L("Only one wall on top surfaces");
@@ -2309,17 +2317,13 @@ void PrintConfigDef::init_fff_params()
 
     def = this->add("extruder", coInt);
     def->gui_type = ConfigOptionDef::GUIType::i_enum_open;
-    def->label = L("Extruder");
-    def->category = L("Extruders");
-    //def->tooltip = L("The extruder to use (unless more specific extruder settings are specified). "
-    //               "This value overrides perimeter and infill extruders, but not the support extruders.");
+    def->label = L("Hotend");
+    def->category = L("Hotend / Material");
+    def->tooltip = L("Selects the hotend used for this object or part. The nozzle diameter and line widths come from that hotend's Toolhead / Material settings. More specific feature assignments still take precedence.");
     def->min = 0;  // 0 = inherit defaults
     def->enum_labels.push_back(L("default"));  // override label for item 0
-    def->enum_labels.push_back("1");
-    def->enum_labels.push_back("2");
-    def->enum_labels.push_back("3");
-    def->enum_labels.push_back("4");
-    def->enum_labels.push_back("5");
+    for (int hotend = 1; hotend <= 16; ++hotend)
+        def->enum_labels.push_back((boost::format("Hotend %1%") % hotend).str());
     def->mode = comAdvanced;
 
     def = this->add("extruder_clearance_height_to_rod", coFloat);
@@ -3941,6 +3945,44 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Enable this option if machine has auxiliary part cooling fan. G-code command: M106 P2 S(0-255).");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("support_interface_cooling_position", coPoint);
+    def->label = L("Low temperature interface cooling position");
+    def->tooltip = L("Machine X/Y position for auxiliary-fan nozzle cooling. Negative values use the rear-left corner of the printable area.");
+    def->sidetext = L("mm");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionPoint(Vec2d(-1.0, -1.0)));
+
+    def = this->add("support_interface_brush_start", coPoint);
+    def->label = L("Nozzle brush start position");
+    def->tooltip = L("Machine X/Y position at one end of the nozzle brush.");
+    def->sidetext = L("mm");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionPoint(Vec2d(-1.0, -1.0)));
+
+    def = this->add("support_interface_brush_end", coPoint);
+    def->label = L("Nozzle brush end position");
+    def->tooltip = L("Machine X/Y position at the other end of the nozzle brush.");
+    def->sidetext = L("mm");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionPoint(Vec2d(-1.0, -1.0)));
+
+    def = this->add("support_interface_brush_repetitions", coInt);
+    def->label = L("Nozzle brush repetitions");
+    def->tooltip = L("Number of gentle round trips over the nozzle brush after cooling. Zero disables automatic brushing.");
+    def->min = 0;
+    def->max = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("support_interface_brush_speed", coFloat);
+    def->label = L("Nozzle brush speed");
+    def->tooltip = L("Travel speed used while wiping the nozzle on the brush.");
+    def->sidetext = L("mm/s");
+    def->min = 1;
+    def->max = 500;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(80.0));
 
     def = this->add("fan_speedup_time", coFloat);
 	// Label is set in Tab.cpp in the Line object.
@@ -6473,6 +6515,69 @@ void PrintConfigDef::init_fff_params()
     append(def->enum_labels, support_interface_top_layers->enum_labels);
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("single_nozzle_low_temperature_interface", coBool);
+    def->label = L("Low temperature support interface");
+    def->category = L("Support");
+    def->tooltip = L("Print support interfaces at a separate lower nozzle temperature on single-nozzle printers. "
+                     "The nozzle waits for the interface temperature before printing and restores the active filament temperature before other extrusion.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("support_interface_auxiliary_fan_cooling_on_temperature_change", coBool);
+    def->label = L("Use auxiliary fan during hotend temperature changes (air duct adapter required)");
+    def->category = L("Support");
+    def->tooltip = L("Use the auxiliary fan to cool the hotend while changing to the low support interface temperature. "
+                     "A suitable air duct adapter is required to direct airflow onto the nozzle.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("support_interface_nozzle_wiping_on_temperature_change", coBool);
+    def->label = L("Wipe nozzle after hotend temperature changes");
+    def->category = L("Support");
+    def->tooltip = L("Wipe the nozzle after changing the hotend temperature for a low temperature support interface.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("support_interface_temperature_drop_tower", coBool);
+    def->label = L("Use temperature drop tower");
+    def->category = L("Support");
+    def->tooltip = L("Build an L-shaped tower at the rear-left of the bed and print it slowly while lowering the nozzle temperature. "
+                     "This is used when nozzle wiping is unavailable or disabled and is not supported for print-by-object mode.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("support_interface_temperature", coInt);
+    def->label = L("Support interface temperature");
+    def->category = L("Support");
+    def->tooltip = L("Nozzle temperature used only while printing support interface paths in single-nozzle low temperature interface mode.");
+    def->sidetext = L("°C");
+    def->min = 1;
+    def->max = 350;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(170));
+
+    def = this->add("support_interface_auxiliary_fan_speed", coInt);
+    def->label = L("Auxiliary fan for nozzle cooling (air duct adapter required)");
+    def->category = L("Support");
+    def->tooltip = L("Auxiliary fan speed used to cool the nozzle before a low temperature support interface. "
+                     "A suitable air duct adapter is required to direct airflow onto the nozzle.");
+    def->sidetext = "%";
+    def->min = 0;
+    def->max = 100;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(100));
+
+    def = this->add("support_interface_heating_time", coFloat);
+    def->label = L("Interface exit heating time");
+    def->category = L("Support");
+    def->tooltip = L("Time to heat toward the normal filament temperature before model extrusion resumes. "
+                     "The printer does not wait for the full target temperature.");
+    def->sidetext = L("s");
+    def->min = 0;
+    def->max = 60;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(5.0));
 
     def = this->add("support_interface_spacing", coFloat);
     def->label = L("Top interface spacing");
@@ -9113,6 +9218,54 @@ static void extend_extruder_variant(DynamicPrintConfig& config, const unsigned i
     }
 }
 
+FloatOrPercent default_toolhead_line_width_for_nozzle(std::string_view key, double nozzle_diameter)
+{
+    const double rounded_nozzle = std::round(nozzle_diameter * 1000.) / 1000.;
+    const double rounded_default = std::round(nozzle_diameter * 1.125 * 1000.) / 1000.;
+    const double rounded_first_layer = std::round(nozzle_diameter * 1.4 * 1000.) / 1000.;
+
+    if (key == "toolhead_initial_layer_line_width")
+        return FloatOrPercent(rounded_first_layer, false);
+    if (key == "toolhead_top_surface_line_width" ||
+        key == "toolhead_support_line_width" ||
+        key == "toolhead_bridge_line_width")
+        return FloatOrPercent(rounded_nozzle, false);
+    return FloatOrPercent(rounded_default, false);
+}
+
+static void initialize_toolhead_line_widths(DynamicPrintConfig &config, unsigned int num_extruders)
+{
+    static constexpr std::array<std::string_view, 9> keys = {
+        "toolhead_line_width",
+        "toolhead_initial_layer_line_width",
+        "toolhead_outer_wall_line_width",
+        "toolhead_inner_wall_line_width",
+        "toolhead_top_surface_line_width",
+        "toolhead_sparse_infill_line_width",
+        "toolhead_internal_solid_infill_line_width",
+        "toolhead_support_line_width",
+        "toolhead_bridge_line_width"
+    };
+
+    const auto *nozzles = config.option<ConfigOptionFloats>("nozzle_diameter");
+    if (nozzles == nullptr || nozzles->values.empty())
+        return;
+
+    for (const std::string_view key : keys) {
+        auto *widths = config.option<ConfigOptionFloatsOrPercents>(std::string(key));
+        if (widths == nullptr)
+            continue;
+
+        widths->values.resize(num_extruders, FloatOrPercent(0., false));
+        for (size_t index = 0; index < num_extruders; ++index) {
+            if (widths->values[index].value > 0.)
+                continue;
+            const double nozzle = nozzles->values[std::min(index, nozzles->values.size() - 1)];
+            widths->values[index] = default_toolhead_line_width_for_nozzle(key, nozzle);
+        }
+    }
+}
+
 void DynamicPrintConfig::set_num_extruders(unsigned int num_extruders)
 {
     extend_extruder_variant(*this, num_extruders);
@@ -9130,6 +9283,7 @@ void DynamicPrintConfig::set_num_extruders(unsigned int num_extruders)
             static_cast<ConfigOptionVectorBase*>(opt)->resize(get_parameter_size(key, num_extruders), defaults.option(key));
         }
     }
+    initialize_toolhead_line_widths(*this, num_extruders);
 }
 
 // BBS
@@ -9922,6 +10076,8 @@ void DynamicPrintConfig::update_values_to_printer_extruders(DynamicPrintConfig& 
 {
     int extruder_count;
     bool different_extruder = printer_config.support_different_extruders(extruder_count);
+    if (!different_extruder)
+        return;
     if ((extruder_count > 1) || different_extruder)
     {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", Line %1%: different extruders processing")%__LINE__;
@@ -10096,6 +10252,8 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
     if ((extruder_count > 1) || different_extruder)
     {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", Line %1%:  extruder_count=%2%, different_extruder=%3%")%__LINE__ %extruder_count %different_extruder;
+        if (!different_extruder)
+            return;
         auto opt_filament_map = printer_config.option<ConfigOptionInts>("filament_map");
         if (!opt_filament_map) {
             BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: filament_map option not found, skipping")%__LINE__;
@@ -10119,8 +10277,18 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
 
         for (int f_index = 0; f_index < filament_count; f_index++)
         {
-            ExtruderType extruder_type = (ExtruderType)(opt_extruder_type->get_at(filament_maps[f_index] - 1));
-            NozzleVolumeType nozzle_volume_type = (NozzleVolumeType)(opt_nozzle_volume_type->get_at(filament_maps[f_index] - 1));
+            const int mapped_extruder = filament_maps[f_index];
+            if (mapped_extruder <= 0 ||
+                static_cast<size_t>(mapped_extruder - 1) >= opt_extruder_type->size() ||
+                static_cast<size_t>(mapped_extruder - 1) >= opt_nozzle_volume_type->size()) {
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(
+                    ", Line %1%: filament_map[%2%]=%3% out of range for extruder_type/nozzle_volume_type, using first variant")
+                    %__LINE__ %(f_index + 1) %mapped_extruder;
+                variant_index[f_index] = 0;
+                continue;
+            }
+            ExtruderType extruder_type = (ExtruderType)(opt_extruder_type->get_at(mapped_extruder - 1));
+            NozzleVolumeType nozzle_volume_type = (NozzleVolumeType)(opt_nozzle_volume_type->get_at(mapped_extruder - 1));
 
             //variant index
             variant_index[f_index] = get_index_for_extruder(f_index+1, id_name, extruder_type, nozzle_volume_type, variant_name);
@@ -10151,6 +10319,10 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
             const ConfigOptionDef *optdef  = config_def->get(key);
             if (!optdef) {
                 BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: can not find opt define for %2%")%__LINE__%key;
+                continue;
+            }
+            if (this->option(key) == nullptr) {
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% not found before variant remap, skipping")%__LINE__%key;
                 continue;
             }
 
@@ -10773,12 +10945,8 @@ std::map<std::string, std::string> validate(const FullPrintConfig &cfg, bool und
     // extrusion widths
     {
         double max_nozzle_diameter = 0.;
-        double min_nozzle_diameter = std::numeric_limits<double>::max();
         for (double dmr : cfg.nozzle_diameter.values)
-        {
             max_nozzle_diameter = std::max(max_nozzle_diameter, dmr);
-            min_nozzle_diameter = std::min(min_nozzle_diameter, dmr);
-        }
         const char *widths[] = {
             "outer_wall_line_width",
             "inner_wall_line_width",
@@ -10793,7 +10961,10 @@ std::map<std::string, std::string> validate(const FullPrintConfig &cfg, bool und
         for (size_t i = 0; i < sizeof(widths) / sizeof(widths[i]); ++ i) {
             std::string key(widths[i]);
             double abs_width = cfg.get_abs_value(key, max_nozzle_diameter);
-            double allowed_max = (key == "bridge_line_width") ? min_nozzle_diameter : MAX_LINE_WIDTH_MULTIPLIER * max_nozzle_diameter;
+            // The global config does not know which tool a region will use. Validate bridge
+            // width against the largest available nozzle here; Print::validate() checks it
+            // again against each region's actual bridge extruder.
+            double allowed_max = (key == "bridge_line_width") ? max_nozzle_diameter : MAX_LINE_WIDTH_MULTIPLIER * max_nozzle_diameter;
             if (abs_width > allowed_max) {
                 if (key == "bridge_line_width")
                     error_message.emplace(key, L("Bridge line width must not exceed nozzle diameter: ") + std::to_string(abs_width));

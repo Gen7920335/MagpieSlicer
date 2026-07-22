@@ -491,6 +491,8 @@ public:
 private:
 	ogStaticText*	m_recommended_thin_wall_thickness_description_line = nullptr;
 	ogStaticText*	m_top_bottom_shell_thickness_explanation = nullptr;
+    std::function<void()> m_refresh_large_nozzle_override_editor;
+    std::function<void(bool)> m_enable_large_nozzle_override_editor;
 };
 
 class TabPrintModel : public TabPrint
