@@ -3173,7 +3173,29 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
     const float max_height = 0.75f * static_cast<float>(cnv_size.get_height());
     const float child_height = 0.3333f * max_height;
     ImGui::SetNextWindowSizeConstraints({ 0.0f, 0.0f }, { -1.0f, max_height });
-    imgui.begin(std::string("Legend"), ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove);
+    const libvgcode::EViewType requested_view_type = m_viewer.get_view_type();
+    const bool nozzle_used_view = requested_view_type == libvgcode::EViewType::Tool;
+    const size_t nozzle_used_tool_count = m_viewer.get_used_extruders_count();
+    if (!nozzle_used_view) {
+        m_nozzle_used_legend_active = false;
+    } else if (!m_nozzle_used_legend_active ||
+               std::abs(m_nozzle_used_legend_scale - m_scale) > EPSILON ||
+               m_nozzle_used_legend_tool_count != nozzle_used_tool_count) {
+        m_nozzle_used_legend_size = { 0.0f, 0.0f };
+        m_nozzle_used_legend_candidate_size = { 0.0f, 0.0f };
+        m_nozzle_used_legend_scale = m_scale;
+        m_nozzle_used_legend_tool_count = nozzle_used_tool_count;
+        m_nozzle_used_legend_stable_frames = 0;
+        m_nozzle_used_legend_active = true;
+    }
+
+    const bool lock_nozzle_used_legend = nozzle_used_view && !m_fold && m_nozzle_used_legend_size[0] > 0.0f;
+    if (lock_nozzle_used_legend)
+        ImGui::SetNextWindowSize(ImVec2(m_nozzle_used_legend_size[0], m_nozzle_used_legend_size[1]), ImGuiCond_Always);
+    const ImGuiWindowFlags legend_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
+        (lock_nozzle_used_legend ? ImGuiWindowFlags_None : ImGuiWindowFlags_AlwaysAutoResize);
+    imgui.begin(std::string("Legend"), legend_flags);
 
     enum class EItemType : unsigned char
     {
@@ -3185,7 +3207,7 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
     };
 
     const PrintEstimatedStatistics::Mode& time_mode = m_print_statistics.modes[static_cast<size_t>(m_viewer.get_time_mode())];
-    const libvgcode::EViewType curr_view_type = m_viewer.get_view_type();
+    const libvgcode::EViewType curr_view_type = requested_view_type;
     const int curr_view_type_i = static_cast<int>(curr_view_type);
     const size_t current_time_mode = static_cast<size_t>(m_viewer.get_time_mode());
     const float total_estimated_time = time_mode.time > 0.0f ? time_mode.time : m_viewer.get_estimated_time();
@@ -4722,6 +4744,20 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
     ImGui::Dummy({ window_padding, window_padding });
     if (m_nozzle_nums > 1 && (m_viewer.get_view_type() == libvgcode::EViewType::Summary || m_viewer.get_view_type() == libvgcode::EViewType::ColorPrint)) // ORCA show only on summary and filament tab
         render_legend_color_arr_recommen(window_padding);
+
+    if (nozzle_used_view && !m_fold && m_nozzle_used_legend_size[0] <= 0.0f) {
+        const ImVec2 current_size = ImGui::GetWindowSize();
+        const bool candidate_matches =
+            std::abs(current_size.x - m_nozzle_used_legend_candidate_size[0]) <= 0.5f &&
+            std::abs(current_size.y - m_nozzle_used_legend_candidate_size[1]) <= 0.5f;
+        if (candidate_matches) {
+            if (++m_nozzle_used_legend_stable_frames >= 1)
+                m_nozzle_used_legend_size = { current_size.x, current_size.y };
+        } else {
+            m_nozzle_used_legend_candidate_size = { current_size.x, current_size.y };
+            m_nozzle_used_legend_stable_frames = 0;
+        }
+    }
 
     legend_height = ImGui::GetCurrentWindow()->Size.y;
     imgui.end();

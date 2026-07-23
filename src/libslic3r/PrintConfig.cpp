@@ -1480,7 +1480,7 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("crisp_corner_detail_toolhead", coInt);
-    def->gui_type = ConfigOptionDef::GUIType::i_enum_open;
+    def->gui_type = ConfigOptionDef::GUIType::select_open;
     def->label = L("Crisp corner toolhead");
     def->category = L("Quality");
     def->tooltip = L("Toolhead used when no same-colour smaller nozzle is found. Auto keeps the slicer's automatic selection.");
@@ -2228,6 +2228,18 @@ void PrintConfigDef::init_fff_params()
     def->nullable = true;
     def->set_default_value(new ConfigOptionFloatsNullable{60});
 
+    def = this->add("crisp_corner_small_nozzle_wall_speed", coFloatsOrPercents);
+    def->label = L("Small nozzle walls");
+    def->category = L("Speed");
+    def->tooltip = L("Speed override for walls assigned to the smaller nozzle by the crisp corner feature. "
+                     "A percentage is calculated from the normal speed of each wall role. Set to zero to inherit the normal wall speed.");
+    def->sidetext = L("mm/s or %");
+    def->ratio_over = "outer_wall_speed";
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->nullable = true;
+    def->set_default_value(new ConfigOptionFloatsOrPercentsNullable{FloatOrPercent(0, false)});
+
     def = this->add("small_perimeter_speed", coFloatsOrPercents);
     def->label = L("Small perimeters");
     def->category = L("Speed");
@@ -2316,7 +2328,7 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionEnum<WallDirection>(WallDirection::CounterClockwise));
 
     def = this->add("extruder", coInt);
-    def->gui_type = ConfigOptionDef::GUIType::i_enum_open;
+    def->gui_type = ConfigOptionDef::GUIType::select_open;
     def->label = L("Hotend");
     def->category = L("Hotend / Material");
     def->tooltip = L("Selects the hotend used for this object or part. The nozzle diameter and line widths come from that hotend's Toolhead / Material settings. More specific feature assignments still take precedence.");
@@ -8712,6 +8724,7 @@ std::set<std::string> print_options_with_variant = {
     "initial_layer_infill_speed",
     "outer_wall_speed",
     "inner_wall_speed",
+    "crisp_corner_small_nozzle_wall_speed",
     "small_perimeter_speed",  //coFloatsOrPercents
     "small_perimeter_threshold",
     "sparse_infill_speed",

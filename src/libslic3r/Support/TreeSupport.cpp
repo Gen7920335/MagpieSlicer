@@ -1506,11 +1506,6 @@ void TreeSupport::generate_toolpaths()
                 std::shared_ptr<Fill> filler_Roof1stLayer = std::shared_ptr<Fill>(Fill::new_from_type(ipRectilinear));
                 filler_interface->set_bounding_box(bbox_object);
                 filler_Roof1stLayer->set_bounding_box(bbox_object);
-                const auto triangle_interface_spacing = [&](coordf_t base_spacing) {
-                    // FillTriangles distributes density over three sweep directions. Interface
-                    // spacing should be interpreted per visible direction.
-                    return m_object_config->support_interface_pattern == smipTriangles ? base_spacing / 3. : base_spacing;
-                };
 
                 for (auto& area_group : ts_layer->area_groups) {
                     ExPolygon& poly = *area_group.area;
@@ -1562,12 +1557,18 @@ void TreeSupport::generate_toolpaths()
                         // floor_areas
                         bool interface_as_base = area_group.interface_as_base;
                         fill_params.density = bottom_interface_density;
-                        filler_interface->spacing = triangle_interface_spacing(interface_flow.spacing());
+                        filler_interface->spacing = interface_flow.spacing();
 
                         if (m_object_config->support_interface_pattern == smipGrid ||
                             m_object_config->support_interface_pattern == smipTriangles) {
                             filler_interface->angle = base_support_angle;
                             fill_params.dont_sort = true;
+                        }
+
+                        if (!interface_as_base && m_object_config->support_interface_pattern == smipTriangles) {
+                            fill_params.density_per_direction = true;
+                            fill_params.anchor_length = 0.f;
+                            fill_params.anchor_length_max = 0.f;
                         }
 
                         if (m_object_config->support_interface_pattern == smipRectilinearInterlaced) {
@@ -1586,12 +1587,18 @@ void TreeSupport::generate_toolpaths()
                         // roof_areas
                         bool interface_as_base = area_group.interface_as_base;
                         fill_params.density       = interface_density;
-                        filler_interface->spacing = triangle_interface_spacing(interface_flow.spacing());
+                        filler_interface->spacing = interface_flow.spacing();
 
                         if (m_object_config->support_interface_pattern == smipGrid ||
                             m_object_config->support_interface_pattern == smipTriangles) {
                             filler_interface->angle = base_support_angle;
                             fill_params.dont_sort = true;
+                        }
+
+                        if (!interface_as_base && m_object_config->support_interface_pattern == smipTriangles) {
+                            fill_params.density_per_direction = true;
+                            fill_params.anchor_length = 0.f;
+                            fill_params.anchor_length_max = 0.f;
                         }
 
                         if (m_object_config->support_interface_pattern == smipRectilinearInterlaced) {

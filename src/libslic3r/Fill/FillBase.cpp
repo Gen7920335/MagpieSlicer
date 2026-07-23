@@ -1829,6 +1829,184 @@ void Fill::chain_or_connect_infill(Polylines &&infill_ordered, const ExPolygon &
     }
 }
 
+// Adapted from CuraEngine's Infill::connectLines() (AGPL-3.0).
+// Scanline segments start as separate sets. Boundary crossings are paired in
+// contour order, but a pair is skipped when it would close an existing set.
+void Fill::connect_cura_support(
+    Polylines &&infill_ordered,
+    const std::vector<const Polygon*> &boundary_src,
+    const BoundingBox &bbox,
+    Polylines &polylines_out,
+    double spacing)
+{
+    if (infill_ordered.empty())
+        return;
+
+    BoundaryInfillGraph graph = create_boundary_infill_graph(infill_ordered, boundary_src, bbox, spacing);
+    const size_t line_count = infill_ordered.size();
+    const size_t endpoint_count = line_count * 2;
+
+    class DisjointSets
+    {
+    public:
+        explicit DisjointSets(size_t count) : parent(count), rank(count, 0)
+        {
+            std::iota(parent.begin(), parent.end(), 0);
+        }
+
+        size_t find(size_t value)
+        {
+            size_t root = value;
+            while (parent[root] != root)
+                root = parent[root];
+            while (parent[value] != value) {
+                const size_t next = parent[value];
+                parent[value] = root;
+                value = next;
+            }
+            return root;
+        }
+
+        bool unite(size_t left, size_t right)
+        {
+            left = find(left);
+            right = find(right);
+            if (left == right)
+                return false;
+            if (rank[left] < rank[right])
+                std::swap(left, right);
+            parent[right] = left;
+            if (rank[left] == rank[right])
+                ++rank[left];
+            return true;
+        }
+
+    private:
+        std::vector<size_t> parent;
+        std::vector<unsigned char> rank;
+    };
+
+    struct PathEdge
+    {
+        size_t   first;
+        size_t   second;
+        Polyline path;
+    };
+
+    DisjointSets sets(line_count);
+    std::vector<PathEdge> edges;
+    edges.reserve(line_count * 2);
+    std::vector<std::vector<size_t>> adjacency(endpoint_count);
+
+    auto add_edge = [&edges, &adjacency](size_t first, size_t second, Polyline path) {
+        const size_t edge_idx = edges.size();
+        edges.push_back({ first, second, std::move(path) });
+        adjacency[first].push_back(edge_idx);
+        adjacency[second].push_back(edge_idx);
+    };
+
+    for (size_t line_idx = 0; line_idx < line_count; ++line_idx)
+        add_edge(2 * line_idx, 2 * line_idx + 1, std::move(infill_ordered[line_idx]));
+
+    std::vector<std::vector<size_t>> crossings_by_contour(graph.boundary.size());
+    for (size_t endpoint_idx = 0; endpoint_idx < endpoint_count; ++endpoint_idx) {
+        const ContourIntersectionPoint &crossing = graph.map_infill_end_point_to_boundary[endpoint_idx];
+        if (crossing.contour_idx != boundary_idx_unconnected)
+            crossings_by_contour[crossing.contour_idx].push_back(endpoint_idx);
+    }
+
+    auto connector_path = [&graph](size_t first_endpoint, size_t second_endpoint) {
+        const ContourIntersectionPoint &first = graph.map_infill_end_point_to_boundary[first_endpoint];
+        const ContourIntersectionPoint &second = graph.map_infill_end_point_to_boundary[second_endpoint];
+        const Points &contour = graph.boundary[first.contour_idx];
+
+        Polyline connector;
+        connector.points.push_back(graph.point(first));
+        for (size_t idx = next_idx_modulo(first.point_idx, contour);
+             idx != second.point_idx;
+             idx = next_idx_modulo(idx, contour))
+            connector.points.push_back(contour[idx]);
+        connector.points.push_back(graph.point(second));
+        return connector;
+    };
+
+    for (std::vector<size_t> &crossings : crossings_by_contour) {
+        std::stable_sort(crossings.begin(), crossings.end(), [&graph](size_t left, size_t right) {
+            return graph.map_infill_end_point_to_boundary[left].param <
+                   graph.map_infill_end_point_to_boundary[right].param;
+        });
+
+        size_t previous = endpoint_count;
+        for (size_t crossing : crossings) {
+            if (previous == endpoint_count) {
+                previous = crossing;
+                continue;
+            }
+
+            const size_t previous_line = previous / 2;
+            const size_t crossing_line = crossing / 2;
+            if (sets.find(previous_line) == sets.find(crossing_line))
+                continue;
+
+            add_edge(previous, crossing, connector_path(previous, crossing));
+            sets.unite(previous_line, crossing_line);
+            previous = endpoint_count;
+        }
+    }
+
+    std::vector<bool> edge_used(edges.size(), false);
+    auto emit_path = [&edges, &adjacency, &edge_used, &polylines_out](size_t start) {
+        Polyline output;
+        size_t current = start;
+        for (;;) {
+            size_t edge_idx = edges.size();
+            for (size_t candidate : adjacency[current])
+                if (!edge_used[candidate]) {
+                    edge_idx = candidate;
+                    break;
+                }
+            if (edge_idx == edges.size())
+                break;
+
+            edge_used[edge_idx] = true;
+            PathEdge &edge = edges[edge_idx];
+            const bool forward = edge.first == current;
+            const Points &points = edge.path.points;
+            if (forward) {
+                output.points.insert(output.points.end(), points.begin() + (output.empty() ? 0 : 1), points.end());
+                current = edge.second;
+            } else {
+                for (auto it = points.rbegin() + (output.empty() ? 0 : 1); it != points.rend(); ++it)
+                    output.points.push_back(*it);
+                current = edge.first;
+            }
+        }
+        if (output.size() > 1)
+            polylines_out.push_back(std::move(output));
+    };
+
+    for (size_t endpoint_idx = 0; endpoint_idx < endpoint_count; ++endpoint_idx)
+        if (adjacency[endpoint_idx].size() == 1 && !edge_used[adjacency[endpoint_idx].front()])
+            emit_path(endpoint_idx);
+
+    for (size_t edge_idx = 0; edge_idx < edges.size(); ++edge_idx)
+        if (!edge_used[edge_idx])
+            emit_path(edges[edge_idx].first);
+}
+
+void Fill::connect_cura_support(
+    Polylines &&infill_ordered,
+    const Polygons &boundary_src,
+    const BoundingBox &bbox,
+    Polylines &polylines_out,
+    double spacing)
+{
+    auto polygons_src = reserve_vector<const Polygon*>(boundary_src.size());
+    for (const Polygon &polygon : boundary_src)
+        polygons_src.emplace_back(&polygon);
+    connect_cura_support(std::move(infill_ordered), polygons_src, bbox, polylines_out, spacing);
+}
+
 // Extend the infill lines along the perimeters, this is mainly useful for grid aligned support, where a perimeter line may be nearly
 // aligned with the infill lines.
 static inline void base_support_extend_infill_lines(Polylines &infill, BoundaryInfillGraph &graph, const double spacing, const FillParams &params)

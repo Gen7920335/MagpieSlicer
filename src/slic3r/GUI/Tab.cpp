@@ -18,6 +18,7 @@
 #include <wx/scrolwin.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
+#include <wx/weakref.h>
 
 #include <wx/bmpcbox.h>
 #include <wx/bmpbuttn.h>
@@ -1963,6 +1964,17 @@ void Tab::load_key_value(const std::string& opt_key, const boost::any& value, bo
     update();
 }
 
+void Tab::load_key_value(const std::string& opt_key, const std::vector<std::string>& values)
+{
+    ConfigOptionStrings *option = m_config->option<ConfigOptionStrings>(opt_key);
+    if (option == nullptr) {
+        wxLogError(format_wxstr("Internal error when changing string-list value for %1%", opt_key));
+        return;
+    }
+    option->values = values;
+    load_key_value(opt_key, boost::any(), true);
+}
+
 static wxString support_combo_value_for_config(const DynamicPrintConfig &config, bool is_fff)
 {
     const std::string support         = is_fff ? "enable_support"                 : "supports_enable";
@@ -2862,26 +2874,33 @@ void TabPrint::build()
         optgroup->append_single_option_line("crisp_corner_small_nozzle_wall_count", "quality_settings_precision#smaller-nozzles-crisp-corners");
         optgroup->append_single_option_line("crisp_corner_nozzle_wall_overlap", "quality_settings_precision#smaller-nozzles-crisp-corners");
         optgroup->append_single_option_line("crisp_corner_interlace_small_nozzle_walls", "quality_settings_precision#smaller-nozzles-crisp-corners");
+
+        optgroup = page->new_optgroup(L("Large nozzle override"), L"param_precision", 0, false, false);
         {
             Line override_line = { L("Large nozzle override"), L("Print all walls in each inclusive layer range with the selected hotend. Layer numbers start at 1; overlapping ranges are safe and the last matching row wins.") };
-            override_line.label_path = "quality_settings_precision#smaller-nozzles-crisp-corners";
             override_line.append_option(optgroup->get_option("crisp_corner_large_nozzle_override_regions"));
             override_line.widget = [this](wxWindow *parent) {
                 auto *editor = new LargeNozzleOverrideEditor(parent);
+                wxWeakRef<LargeNozzleOverrideEditor> weak_editor(editor);
                 auto *sizer = new wxBoxSizer(wxVERTICAL);
                 sizer->Add(editor, 1, wxEXPAND);
                 editor->set_on_change([this](const std::vector<std::string> &values) {
                     load_key_value("crisp_corner_large_nozzle_override_regions", values);
                 });
-                m_refresh_large_nozzle_override_editor = [this, editor]() {
+                m_refresh_large_nozzle_override_editor = [this, weak_editor]() {
+                    if (!weak_editor)
+                        return;
                     std::vector<double> nozzles;
                     const DynamicPrintConfig &printer_config = m_preset_bundle->printers.get_edited_preset().config;
                     if (const auto *option = printer_config.option<ConfigOptionFloats>("nozzle_diameter"))
                         nozzles = option->values;
                     const auto *regions = m_config->option<ConfigOptionStrings>("crisp_corner_large_nozzle_override_regions");
-                    editor->set_data(regions ? regions->values : std::vector<std::string>{}, nozzles);
+                    weak_editor->set_data(regions ? regions->values : std::vector<std::string>{}, nozzles);
                 };
-                m_enable_large_nozzle_override_editor = [editor](bool enabled) { editor->Enable(enabled); };
+                m_enable_large_nozzle_override_editor = [weak_editor](bool enabled) {
+                    if (weak_editor)
+                        weak_editor->Enable(enabled);
+                };
                 m_refresh_large_nozzle_override_editor();
                 return sizer;
             };
@@ -3039,6 +3058,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("slow_down_layers", "speed_settings_initial_layer_speed#number-of-slow-layers");
         optgroup = page->new_optgroup(L("Other layers speed"), L"param_speed", 15);
         optgroup->append_single_option_line("outer_wall_speed", "speed_settings_other_layers_speed#outer-wall", 0);
+        optgroup->append_single_option_line("crisp_corner_small_nozzle_wall_speed", "", 0);
         optgroup->append_single_option_line("inner_wall_speed", "speed_settings_other_layers_speed#inner-wall", 0);
         optgroup->append_single_option_line("small_perimeter_speed", "speed_settings_other_layers_speed#small-perimeters", 0);
         optgroup->append_single_option_line("small_perimeter_threshold", "speed_settings_other_layers_speed#small-perimeters-threshold", 0);
@@ -8687,11 +8707,12 @@ bool Page::set_value(const t_config_option_key &opt_key, const boost::any &value
 }
 
 // package Slic3r::GUI::Tab::Page;
-ConfigOptionsGroupShp Page::new_optgroup(const wxString &title, const wxString &icon, int noncommon_label_width /*= -1*/, bool is_extruder_og /* false */)
+ConfigOptionsGroupShp Page::new_optgroup(const wxString &title, const wxString &icon, int noncommon_label_width /*= -1*/,
+                                         bool is_extruder_og /* false */, bool use_custom_ctrl /* true */)
 {
     //! config_ have to be "right"
-    ConfigOptionsGroupShp optgroup  = is_extruder_og ? std::make_shared<ExtruderOptionsGroup>(m_parent, title, icon, m_config, true) // ORCA: add support for icons
-        : std::make_shared<ConfigOptionsGroup>(m_parent, title, icon, m_config, true);
+    ConfigOptionsGroupShp optgroup  = is_extruder_og ? std::make_shared<ExtruderOptionsGroup>(m_parent, title, icon, m_config, use_custom_ctrl) // ORCA: add support for icons
+        : std::make_shared<ConfigOptionsGroup>(m_parent, title, icon, m_config, use_custom_ctrl);
     optgroup->split_multi_line     = this->m_split_multi_line;
     optgroup->option_label_at_right = this->m_option_label_at_right;
     if (noncommon_label_width >= 0)

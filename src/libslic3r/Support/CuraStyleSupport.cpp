@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <boost/log/trivial.hpp>
 
 namespace Slic3r {
@@ -43,26 +44,102 @@ static coord_t cura_style_overhang_offset(const PrintObject &object, const Suppo
     return std::max<coord_t>(0, support_params.support_material_flow.scaled_width() / 2);
 }
 
-static std::vector<Polygons> compute_cura_style_full_overhangs(const PrintObject &object, const SupportParameters &support_params)
+struct CuraSupportAnnotations
 {
-    std::vector<Polygons> full_overhangs(object.layer_count(), Polygons{});
+    explicit CuraSupportAnnotations(const PrintObject &object)
+        : enforcers(object.slice_support_enforcers())
+        , blockers(object.slice_support_blockers())
+    {
+        enforcers.resize(object.layer_count());
+        blockers.resize(object.layer_count());
+        object.project_and_append_custom_facets(false, EnforcerBlockerType::ENFORCER, enforcers);
+        object.project_and_append_custom_facets(false, EnforcerBlockerType::BLOCKER, blockers);
 
+        for (Polygons &layer : enforcers)
+            if (!layer.empty())
+                layer = union_(layer);
+        for (Polygons &layer : blockers)
+            if (!layer.empty())
+                layer = offset(union_(layer), float(SCALED_EPSILON), SUPPORT_SURFACES_OFFSET_PARAMETERS);
+    }
+
+    std::vector<Polygons> enforcers;
+    std::vector<Polygons> blockers;
+};
+
+struct CuraOverhangs
+{
+    std::vector<Polygons> automatic;
+    std::vector<Polygons> enforced;
+
+    std::vector<Polygons> combined() const
+    {
+        std::vector<Polygons> result(automatic.size());
+        for (size_t layer_idx = 0; layer_idx < result.size(); ++layer_idx) {
+            if (automatic[layer_idx].empty())
+                result[layer_idx] = enforced[layer_idx];
+            else if (enforced[layer_idx].empty())
+                result[layer_idx] = automatic[layer_idx];
+            else
+                result[layer_idx] = union_(automatic[layer_idx], enforced[layer_idx]);
+        }
+        return result;
+    }
+};
+
+static CuraOverhangs compute_cura_style_full_overhangs(
+    const PrintObject            &object,
+    const SupportParameters      &support_params,
+    const CuraSupportAnnotations &annotations,
+    bool                          automatic_support)
+{
+    CuraOverhangs overhangs{
+        std::vector<Polygons>(object.layer_count()),
+        std::vector<Polygons>(object.layer_count())
+    };
+
+    // Translated from CuraEngine AreaSupport::computeBasicAndFullOverhang().
+    constexpr coordf_t smooth_height = 0.4;
     for (size_t layer_idx = 1; layer_idx < object.layer_count(); ++layer_idx) {
         Polygons current = layer_polygons(object, layer_idx);
         if (current.empty())
             continue;
 
-        const coord_t supported_offset = cura_style_overhang_offset(object, support_params, layer_idx);
-        Polygons supported_below = offset(layer_polygons(object, layer_idx - 1), float(supported_offset), SUPPORT_SURFACES_OFFSET_PARAMETERS);
-        Polygons basic_overhang  = diff(current, supported_below);
-        if (basic_overhang.empty())
-            continue;
+        const coord_t max_dist_from_lower_layer = cura_style_overhang_offset(object, support_params, layer_idx);
+        const size_t layers_below = std::max<size_t>(
+            1, size_t(std::llround(smooth_height / object.layers()[layer_idx]->height)));
 
-        const coord_t smooth_offset = supported_offset + scale_(0.1);
-        full_overhangs[layer_idx] = intersection(offset(basic_overhang, float(smooth_offset), SUPPORT_SURFACES_OFFSET_PARAMETERS), current);
+        Polygons outlines_below;
+        for (size_t layer_offset = 1; layer_offset <= layers_below && layer_offset <= layer_idx; ++layer_offset) {
+            Polygons lower = layer_polygons(object, layer_idx - layer_offset);
+            if (!lower.empty())
+                append(outlines_below, offset(
+                    lower, float(max_dist_from_lower_layer * coord_t(layer_offset)),
+                    SUPPORT_SURFACES_OFFSET_PARAMETERS));
+        }
+        if (!outlines_below.empty())
+            outlines_below = union_(outlines_below);
+
+        auto full_overhang = [&](Polygons basic) {
+            if (basic.empty())
+                return Polygons{};
+            if (!annotations.blockers[layer_idx].empty())
+                basic = diff(basic, annotations.blockers[layer_idx]);
+            if (basic.empty())
+                return Polygons{};
+            const coord_t extension = max_dist_from_lower_layer * coord_t(layers_below) + scale_(0.1);
+            return intersection(offset(basic, float(extension), SUPPORT_SURFACES_OFFSET_PARAMETERS), current);
+        };
+
+        if (automatic_support)
+            overhangs.automatic[layer_idx] = full_overhang(diff(current, outlines_below));
+
+        if (!annotations.enforcers[layer_idx].empty())
+            overhangs.enforced[layer_idx] = full_overhang(
+                intersection(current, annotations.enforcers[layer_idx]));
     }
 
-    return full_overhangs;
+    return overhangs;
 }
 
 static void remove_unprintable_support_parts(std::vector<Polygons> &support_by_layer, const SupportParameters &support_params)
@@ -92,7 +169,6 @@ static void keep_buildplate_connected_support(std::vector<Polygons> &support_by_
             continue;
         }
 
-        touching = offset(touching, float(support_params.support_material_flow.scaled_width()), SUPPORT_SURFACES_OFFSET_PARAMETERS);
         support_by_layer[layer_idx] = intersection(support_by_layer[layer_idx], touching);
         touching = support_by_layer[layer_idx];
     }
@@ -116,11 +192,88 @@ static Polygons close_interface_footprint(const Polygons &polygons, coord_t clos
     return closed.empty() ? Polygons{} : offset(closed, -float(close_distance), SUPPORT_SURFACES_OFFSET_PARAMETERS);
 }
 
-static std::vector<Polygons> propagate_cura_style_support(
-    const PrintObject               &object,
-    const SlicingParameters         &slicing_params,
-    const SupportParameters         &support_params,
-    const std::vector<Polygons>     &full_overhangs)
+// Translated from CuraEngine's stepwise support horizontal expansion. Growing
+// both the support and the remaining model space keeps expansion from folding
+// around model walls.
+static Polygons expand_support_away_from_model(
+    Polygons support,
+    Polygons model_outline,
+    coord_t expansion,
+    coord_t support_line_width)
+{
+    if (support.empty() || expansion <= 0)
+        return support;
+
+    const coord_t step = std::max<coord_t>(1, support_line_width / 2);
+    Polygons horizontal_expansion = support;
+    coord_t expanded = 0;
+    while (expanded < expansion) {
+        const coord_t amount = std::min(step, expansion - expanded);
+        horizontal_expansion = offset(horizontal_expansion, float(amount), SUPPORT_SURFACES_OFFSET_PARAMETERS);
+        if (!model_outline.empty()) {
+            model_outline = diff(model_outline, horizontal_expansion);
+            model_outline = offset(model_outline, float(amount), SUPPORT_SURFACES_OFFSET_PARAMETERS);
+            horizontal_expansion = diff(horizontal_expansion, model_outline);
+        }
+        expanded += amount;
+    }
+    return union_(support, horizontal_expansion);
+}
+
+static size_t closest_top_contact_layer(const PrintObject &object, size_t overhang_layer_idx, coordf_t gap)
+{
+    if (overhang_layer_idx == 0 || overhang_layer_idx >= object.layer_count())
+        return size_t(-1);
+
+    const coordf_t target_z = object.layers()[overhang_layer_idx]->bottom_z() - gap;
+    size_t best_idx = size_t(-1);
+    coordf_t best_distance = std::numeric_limits<coordf_t>::max();
+    for (size_t layer_idx = 0; layer_idx < overhang_layer_idx; ++layer_idx) {
+        const coordf_t distance = std::abs(object.layers()[layer_idx]->print_z - target_z);
+        if (distance < best_distance) {
+            best_idx = layer_idx;
+            best_distance = distance;
+        }
+    }
+    return best_idx;
+}
+
+static std::vector<size_t> make_top_contact_map(
+    const PrintObject &object,
+    const std::vector<Polygons> &overhangs,
+    coordf_t gap)
+{
+    std::vector<size_t> contact_for_overhang(overhangs.size(), size_t(-1));
+    for (size_t overhang_layer_idx = 1; overhang_layer_idx < overhangs.size(); ++overhang_layer_idx)
+        if (!overhangs[overhang_layer_idx].empty())
+            contact_for_overhang[overhang_layer_idx] = closest_top_contact_layer(object, overhang_layer_idx, gap);
+    return contact_for_overhang;
+}
+
+static std::vector<Polygons> seed_overhangs_at_contacts(
+    const std::vector<Polygons> &overhangs,
+    const std::vector<size_t>   &contact_for_overhang)
+{
+    std::vector<Polygons> seeds(overhangs.size());
+    for (size_t overhang_layer_idx = 1; overhang_layer_idx < overhangs.size(); ++overhang_layer_idx) {
+        const size_t contact_idx = contact_for_overhang[overhang_layer_idx];
+        if (contact_idx == size_t(-1) || overhangs[overhang_layer_idx].empty())
+            continue;
+        append(seeds[contact_idx], overhangs[overhang_layer_idx]);
+    }
+    for (Polygons &seed : seeds)
+        if (!seed.empty())
+            seed = union_(seed);
+    return seeds;
+}
+
+static std::vector<Polygons> propagate_cura_style_support_channel(
+    const PrintObject              &object,
+    const SupportParameters        &support_params,
+    const CuraSupportAnnotations   &annotations,
+    const std::vector<Polygons>    &overhangs,
+    coordf_t                        top_gap,
+    bool                            keep_buildplate_only)
 {
     const PrintObjectConfig &config = object.config();
     const size_t layer_count = object.layer_count();
@@ -129,19 +282,21 @@ static std::vector<Polygons> propagate_cura_style_support(
     if (layer_count < 2)
         return support_by_layer;
 
-    const double layer_height = std::max<double>(slicing_params.layer_height, EPSILON);
-    const size_t top_gap_layers = std::max<size_t>(1, size_t(std::ceil(slicing_params.gap_support_object / layer_height)));
+    const std::vector<size_t> contact_map = make_top_contact_map(object, overhangs, top_gap);
+    std::vector<Polygons> seeds = seed_overhangs_at_contacts(overhangs, contact_map);
     const coord_t support_expansion = scale_(config.support_expansion.value);
     const coord_t xy_gap = scale_(support_params.gap_xy);
     const coord_t half_min_feature = std::max<coord_t>(support_params.support_material_flow.scaled_width() / 2, scale_(0.05));
 
-    for (int layer_idx = int(layer_count) - 1 - int(top_gap_layers); layer_idx >= 0; --layer_idx) {
-        Polygons layer_this;
-        const size_t overhang_layer_idx = size_t(layer_idx) + top_gap_layers;
-        if (overhang_layer_idx < full_overhangs.size())
-            layer_this = full_overhangs[overhang_layer_idx];
+    for (int layer_idx = int(layer_count) - 1; layer_idx >= 0; --layer_idx) {
+        Polygons layer_this = std::move(seeds[size_t(layer_idx)]);
 
-        if (!layer_this.empty() && support_expansion != 0)
+        const Polygons model_on_layer = layer_polygons(object, size_t(layer_idx));
+        if (!layer_this.empty() && support_expansion > 0)
+            layer_this = expand_support_away_from_model(
+                std::move(layer_this), model_on_layer, support_expansion,
+                support_params.support_material_flow.scaled_width());
+        else if (!layer_this.empty() && support_expansion < 0)
             layer_this = offset(layer_this, float(support_expansion), SUPPORT_SURFACES_OFFSET_PARAMETERS);
 
         if (size_t(layer_idx + 1) < layer_count && !support_by_layer[layer_idx + 1].empty()) {
@@ -152,7 +307,8 @@ static std::vector<Polygons> propagate_cura_style_support(
         }
 
         if (!layer_this.empty()) {
-            const Polygons model_on_layer = layer_polygons(object, size_t(layer_idx));
+            if (!annotations.blockers[size_t(layer_idx)].empty())
+                layer_this = diff(layer_this, annotations.blockers[size_t(layer_idx)]);
             if (!model_on_layer.empty())
                 layer_this = diff(layer_this, model_on_layer);
         }
@@ -172,7 +328,7 @@ static std::vector<Polygons> propagate_cura_style_support(
         support = close_unprintable_parts(support, half_min_feature);
     }
 
-    if (config.support_on_build_plate_only.value)
+    if (keep_buildplate_only)
         keep_buildplate_connected_support(support_by_layer, support_params);
 
     for (size_t layer_idx = 1; layer_idx + 1 < layer_count; ++layer_idx) {
@@ -189,13 +345,55 @@ static std::vector<Polygons> propagate_cura_style_support(
     return support_by_layer;
 }
 
-struct InterfaceFootprints
+static std::vector<Polygons> propagate_cura_style_support(
+    const PrintObject             &object,
+    const SlicingParameters       &slicing_params,
+    const SupportParameters       &support_params,
+    const CuraSupportAnnotations  &annotations,
+    const CuraOverhangs           &overhangs)
+{
+    std::vector<Polygons> automatic = propagate_cura_style_support_channel(
+        object, support_params, annotations, overhangs.automatic, slicing_params.gap_support_object,
+        object.config().support_on_build_plate_only.value);
+    std::vector<Polygons> enforced = propagate_cura_style_support_channel(
+        object, support_params, annotations, overhangs.enforced, slicing_params.gap_support_object, false);
+
+    for (size_t layer_idx = 0; layer_idx < automatic.size(); ++layer_idx) {
+        if (automatic[layer_idx].empty())
+            automatic[layer_idx] = std::move(enforced[layer_idx]);
+        else if (!enforced[layer_idx].empty())
+            automatic[layer_idx] = union_(automatic[layer_idx], enforced[layer_idx]);
+    }
+    return automatic;
+}
+
+struct ContactFootprints
 {
     std::vector<Polygons> top_contacts;
-    std::vector<Polygons> top_interfaces;
+    std::vector<Polygons> bottom_contacts;
+    std::vector<size_t> top_object_layers;
+    std::vector<size_t> bottom_object_layers;
 };
 
-static InterfaceFootprints make_cura_style_interface_footprints(
+static size_t closest_bottom_contact_layer(const PrintObject &object, size_t object_layer_idx, coordf_t gap)
+{
+    if (object_layer_idx + 1 >= object.layer_count())
+        return size_t(-1);
+
+    const coordf_t target_bottom_z = object.layers()[object_layer_idx]->print_z + gap;
+    size_t best_idx = size_t(-1);
+    coordf_t best_distance = std::numeric_limits<coordf_t>::max();
+    for (size_t layer_idx = object_layer_idx + 1; layer_idx < object.layer_count(); ++layer_idx) {
+        const coordf_t distance = std::abs(object.layers()[layer_idx]->bottom_z() - target_bottom_z);
+        if (distance < best_distance) {
+            best_idx = layer_idx;
+            best_distance = distance;
+        }
+    }
+    return best_idx;
+}
+
+static ContactFootprints make_cura_style_contact_footprints(
     const PrintObject           &object,
     const SlicingParameters     &slicing_params,
     const SupportParameters     &support_params,
@@ -204,16 +402,17 @@ static InterfaceFootprints make_cura_style_interface_footprints(
 {
     const PrintObjectConfig &config = object.config();
     const size_t layer_count = object.layer_count();
-    InterfaceFootprints out{
+    ContactFootprints out{
         std::vector<Polygons>(layer_count, Polygons{}),
-        std::vector<Polygons>(layer_count, Polygons{})
+        std::vector<Polygons>(layer_count, Polygons{}),
+        std::vector<size_t>(layer_count, size_t(-1)),
+        std::vector<size_t>(layer_count, size_t(-1))
     };
 
-    if (layer_count < 2 || support_params.num_top_interface_layers == 0)
+    if (layer_count < 2)
         return out;
 
-    const double layer_height = std::max<double>(slicing_params.layer_height, EPSILON);
-    const size_t top_gap_layers = std::max<size_t>(1, size_t(std::ceil(slicing_params.gap_support_object / layer_height)));
+    const std::vector<size_t> top_contact_map = make_top_contact_map(object, full_overhangs, slicing_params.gap_support_object);
     const coord_t support_expansion = scale_(config.support_expansion.value);
     const coord_t xy_gap = scale_(support_params.gap_xy);
     double interface_margin_scaled = std::max<double>(
@@ -225,12 +424,14 @@ static InterfaceFootprints make_cura_style_interface_footprints(
     const coord_t interface_margin = coord_t(std::ceil(interface_margin_scaled));
     const coord_t close_distance = std::max<coord_t>(support_params.support_material_interface_flow.scaled_width() / 2, scale_(0.05));
 
-    for (size_t overhang_layer_idx = top_gap_layers; overhang_layer_idx < full_overhangs.size(); ++overhang_layer_idx) {
+    for (size_t overhang_layer_idx = 1; support_params.num_top_interface_layers > 0 && overhang_layer_idx < full_overhangs.size(); ++overhang_layer_idx) {
         Polygons overhang_seed = full_overhangs[overhang_layer_idx];
         if (overhang_seed.empty())
             continue;
 
-        const size_t contact_layer_idx = overhang_layer_idx - top_gap_layers;
+        const size_t contact_layer_idx = top_contact_map[overhang_layer_idx];
+        if (contact_layer_idx == size_t(-1))
+            continue;
         Polygons footprint = contact_layer_idx < support_body.size() ? support_body[contact_layer_idx] : Polygons{};
         if (footprint.empty())
             footprint = overhang_seed;
@@ -257,24 +458,48 @@ static InterfaceFootprints make_cura_style_interface_footprints(
             continue;
 
         append(out.top_contacts[contact_layer_idx], footprint);
+        if (out.top_object_layers[contact_layer_idx] == size_t(-1))
+            out.top_object_layers[contact_layer_idx] = overhang_layer_idx;
+    }
 
-        for (size_t depth = 1; depth <= support_params.num_top_interface_layers && contact_layer_idx >= depth; ++depth)
-            append(out.top_interfaces[contact_layer_idx - depth], footprint);
+    for (size_t object_layer_idx = 0; support_params.num_bottom_interface_layers > 0 && object_layer_idx + 1 < layer_count; ++object_layer_idx) {
+        Polygons object_top = layer_polygons(object, object_layer_idx);
+        const Polygons object_above = layer_polygons(object, object_layer_idx + 1);
+        if (!object_above.empty())
+            object_top = diff(object_top, offset(object_above, float(scale_(0.05)), SUPPORT_SURFACES_OFFSET_PARAMETERS));
+        if (object_top.empty())
+            continue;
+
+        const size_t contact_layer_idx = closest_bottom_contact_layer(object, object_layer_idx, slicing_params.gap_object_support);
+        if (contact_layer_idx == size_t(-1) || support_body[contact_layer_idx].empty())
+            continue;
+
+        Polygons footprint = intersection(
+            support_body[contact_layer_idx],
+            offset(object_top, float(interface_margin), SUPPORT_SURFACES_OFFSET_PARAMETERS));
+        footprint = close_interface_footprint(footprint, close_distance);
+        if (footprint.empty())
+            continue;
+
+        append(out.bottom_contacts[contact_layer_idx], footprint);
+        if (out.bottom_object_layers[contact_layer_idx] == size_t(-1))
+            out.bottom_object_layers[contact_layer_idx] = object_layer_idx;
     }
 
     for (Polygons &polys : out.top_contacts)
         if (!polys.empty())
             polys = union_(polys);
-    for (Polygons &polys : out.top_interfaces)
+    for (Polygons &polys : out.bottom_contacts)
         if (!polys.empty())
             polys = union_(polys);
 
     return out;
 }
 
-static SupportGeneratorLayersPtr make_layers_from_footprints(
+static SupportGeneratorLayersPtr make_contact_layers_from_footprints(
     const PrintObject             &object,
     const std::vector<Polygons>   &footprints,
+    const std::vector<size_t>     &object_layer_indices,
     SupporLayerType                layer_type,
     SupportGeneratorLayerStorage  &layer_storage)
 {
@@ -291,9 +516,11 @@ static SupportGeneratorLayersPtr make_layers_from_footprints(
         support_layer.height   = object_layer.height;
         support_layer.polygons = footprints[layer_idx];
         if (layer_type == SupporLayerType::TopContact) {
-            support_layer.idx_object_layer_above = std::min(layer_idx + 1, object.layer_count() - 1);
+            support_layer.idx_object_layer_above = object_layer_indices[layer_idx];
             support_layer.contact_polygons = std::make_unique<Polygons>(footprints[layer_idx]);
             support_layer.overhang_polygons = std::make_unique<Polygons>(footprints[layer_idx]);
+        } else {
+            support_layer.idx_object_layer_below = object_layer_indices[layer_idx];
         }
         layers.push_back(&support_layer);
     }
@@ -341,36 +568,61 @@ void CuraStyleSupportGenerator::generate(PrintObject &object)
     SupportParameters support_params(object);
     SupportGeneratorLayerStorage layer_storage;
 
-    std::vector<Polygons> full_overhangs = compute_cura_style_full_overhangs(object, support_params);
-    std::vector<Polygons> support_body   = propagate_cura_style_support(object, m_slicing_params, support_params, full_overhangs);
-    InterfaceFootprints interface_footprints = make_cura_style_interface_footprints(object, m_slicing_params, support_params, full_overhangs, support_body);
+    const CuraSupportAnnotations annotations(object);
+    const bool automatic_support = object.config().support_type.value == stNormalCuraAuto;
+    const CuraOverhangs overhangs = compute_cura_style_full_overhangs(object, support_params, annotations, automatic_support);
+    const std::vector<Polygons> full_overhangs = overhangs.combined();
+    std::vector<Polygons> support_body = propagate_cura_style_support(
+        object, m_slicing_params, support_params, annotations, overhangs);
+    ContactFootprints contact_footprints = make_cura_style_contact_footprints(
+        object, m_slicing_params, support_params, full_overhangs, support_body);
     std::vector<Polygons> non_base_support_by_layer(support_body.size(), Polygons{});
 
     for (size_t layer_idx = 0; layer_idx < support_body.size(); ++layer_idx) {
-        if (!interface_footprints.top_contacts[layer_idx].empty()) {
-            support_body[layer_idx] = support_body[layer_idx].empty() ? interface_footprints.top_contacts[layer_idx] : union_(support_body[layer_idx], interface_footprints.top_contacts[layer_idx]);
-            non_base_support_by_layer[layer_idx] = interface_footprints.top_contacts[layer_idx];
+        if (!contact_footprints.top_contacts[layer_idx].empty()) {
+            support_body[layer_idx] = support_body[layer_idx].empty() ?
+                contact_footprints.top_contacts[layer_idx] :
+                union_(support_body[layer_idx], contact_footprints.top_contacts[layer_idx]);
+            non_base_support_by_layer[layer_idx] = contact_footprints.top_contacts[layer_idx];
         }
-        if (!interface_footprints.top_interfaces[layer_idx].empty()) {
-            support_body[layer_idx] = support_body[layer_idx].empty() ? interface_footprints.top_interfaces[layer_idx] : union_(support_body[layer_idx], interface_footprints.top_interfaces[layer_idx]);
+        if (!contact_footprints.bottom_contacts[layer_idx].empty()) {
+            support_body[layer_idx] = support_body[layer_idx].empty() ?
+                contact_footprints.bottom_contacts[layer_idx] :
+                union_(support_body[layer_idx], contact_footprints.bottom_contacts[layer_idx]);
             non_base_support_by_layer[layer_idx] = non_base_support_by_layer[layer_idx].empty() ?
-                interface_footprints.top_interfaces[layer_idx] :
-                union_(non_base_support_by_layer[layer_idx], interface_footprints.top_interfaces[layer_idx]);
+                contact_footprints.bottom_contacts[layer_idx] :
+                union_(non_base_support_by_layer[layer_idx], contact_footprints.bottom_contacts[layer_idx]);
         }
     }
 
-    SupportGeneratorLayersPtr empty_layers;
-    SupportGeneratorLayersPtr top_contacts = make_layers_from_footprints(object, interface_footprints.top_contacts, SupporLayerType::TopContact, layer_storage);
-    SupportGeneratorLayersPtr interface_layers = make_layers_from_footprints(object, interface_footprints.top_interfaces, SupporLayerType::TopInterface, layer_storage);
+    SupportGeneratorLayersPtr top_contacts = make_contact_layers_from_footprints(
+        object, contact_footprints.top_contacts, contact_footprints.top_object_layers,
+        SupporLayerType::TopContact, layer_storage);
+    SupportGeneratorLayersPtr bottom_contacts = make_contact_layers_from_footprints(
+        object, contact_footprints.bottom_contacts, contact_footprints.bottom_object_layers,
+        SupporLayerType::BottomContact, layer_storage);
     SupportGeneratorLayersPtr base_layers = make_base_layers_from_support_body(object, support_body, non_base_support_by_layer, layer_storage);
-    if (base_layers.empty() && top_contacts.empty() && interface_layers.empty()) {
+    if (base_layers.empty() && top_contacts.empty() && bottom_contacts.empty()) {
         BOOST_LOG_TRIVIAL(info) << "Cura-style normal support generator - No supports generated";
         return;
     }
 
-    SupportGeneratorLayersPtr raft_layers = generate_raft_base(object, support_params, m_slicing_params, top_contacts, interface_layers, empty_layers, base_layers, layer_storage);
-    generate_support_layers(object, raft_layers, empty_layers, top_contacts, base_layers, interface_layers, empty_layers);
-    generate_support_toolpaths(object.support_layers(), object.config(), support_params, m_slicing_params, raft_layers, empty_layers, top_contacts, base_layers, interface_layers, empty_layers);
+    SupportGeneratorLayersPtr precomputed_top_interfaces;
+    SupportGeneratorLayersPtr precomputed_top_base_interfaces;
+    auto [interface_layers, base_interface_layers] = generate_interface_layers(
+        object.config(), support_params, bottom_contacts, top_contacts,
+        precomputed_top_interfaces, precomputed_top_base_interfaces, base_layers, layer_storage);
+
+    SupportGeneratorLayersPtr raft_layers = generate_raft_base(
+        object, support_params, m_slicing_params, top_contacts,
+        interface_layers, base_interface_layers, base_layers, layer_storage);
+    generate_support_layers(
+        object, raft_layers, bottom_contacts, top_contacts,
+        base_layers, interface_layers, base_interface_layers);
+    generate_support_toolpaths(
+        object.support_layers(), object.config(), support_params, m_slicing_params,
+        raft_layers, bottom_contacts, top_contacts, base_layers,
+        interface_layers, base_interface_layers);
 
     BOOST_LOG_TRIVIAL(info) << "Cura-style normal support generator - End";
 }

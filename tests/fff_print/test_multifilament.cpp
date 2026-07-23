@@ -32,6 +32,45 @@ static std::set<int> tools_for_role(const std::string& gcode, const std::string&
     return tools;
 }
 
+struct WallSpeedSamples {
+    std::vector<double> outer;
+    std::vector<double> inner;
+};
+
+static WallSpeedSamples wall_speeds_for_tool(const std::string &gcode, int requested_tool)
+{
+    WallSpeedSamples samples;
+    int current_tool = 0;
+    int layer_id = -1;
+    std::string role;
+    GCodeReader reader;
+    reader.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw());
+        const std::string cmd(line.cmd());
+        if (raw == ";LAYER_CHANGE") {
+            ++layer_id;
+        } else if (raw.rfind(";TYPE:", 0) == 0) {
+            role = raw.substr(6);
+        } else if (cmd.size() >= 2 && cmd[0] == 'T' && std::isdigit((unsigned char) cmd[1])) {
+            current_tool = std::stoi(cmd.substr(1));
+        } else if (layer_id > 2 && current_tool == requested_tool && line.extruding(self)) {
+            const double speed = line.new_F(self) / MM_PER_MIN;
+            if (role == "Outer wall")
+                samples.outer.push_back(speed);
+            else if (role == "Inner wall")
+                samples.inner.push_back(speed);
+        }
+    });
+    return samples;
+}
+
+static void check_wall_speeds(const std::vector<double> &samples, double expected)
+{
+    REQUIRE_FALSE(samples.empty());
+    for (double speed : samples)
+        CHECK(speed == Catch::Approx(expected).margin(0.02));
+}
+
 static DynamicPrintConfig multi_nozzle_wall_config(double first_nozzle, double second_nozzle, int base_tool,
                                                     const char *wall_generator, bool enabled)
 {
@@ -53,6 +92,10 @@ static DynamicPrintConfig multi_nozzle_wall_config(double first_nozzle, double s
     config.set_num_extruders(2);
     config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(false));
     config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ first_nozzle, second_nozzle });
+    config.set_key_value("toolhead_outer_wall_line_width", new ConfigOptionFloatsOrPercents{
+        FloatOrPercent(first_nozzle * 1.1, false), FloatOrPercent(second_nozzle * 1.1, false) });
+    config.set_key_value("toolhead_inner_wall_line_width", new ConfigOptionFloatsOrPercents{
+        FloatOrPercent(first_nozzle * 1.1, false), FloatOrPercent(second_nozzle * 1.1, false) });
     config.set_key_value("filament_colour", new ConfigOptionStrings{ "#FF0000", "#FF0000" });
     config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
     config.set_key_value("filament_map", new ConfigOptionInts{ 1, 2 });
@@ -80,6 +123,25 @@ static std::vector<int> perimeter_inset_indices(const LayerRegion &region)
     collect_perimeter_inset_indices(region.perimeters, indices);
     std::sort(indices.begin(), indices.end());
     return indices;
+}
+
+static void collect_perimeter_tool_hints(const ExtrusionEntity &entity, std::vector<ExtrusionToolHint> &hints)
+{
+    if (dynamic_cast<const ExtrusionLoop*>(&entity) != nullptr ||
+        dynamic_cast<const ExtrusionMultiPath*>(&entity) != nullptr) {
+        hints.push_back(entity.tool_hint);
+    } else if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection*>(&entity)) {
+        for (const ExtrusionEntity *child : collection->entities)
+            if (child != nullptr)
+                collect_perimeter_tool_hints(*child, hints);
+    }
+}
+
+static std::vector<ExtrusionToolHint> perimeter_tool_hints(const LayerRegion &region)
+{
+    std::vector<ExtrusionToolHint> hints;
+    collect_perimeter_tool_hints(region.perimeters, hints);
+    return hints;
 }
 
 // Tool index = filament id - 1; brim and skirt follow the wall filament.
@@ -157,6 +219,37 @@ TEST_CASE("Classic and Arachne route detail walls to a smaller nozzle", "[MultiF
     DYNAMIC_SECTION(wall_generator << " detail nozzle " << detail_nozzle) {
         const std::string output = slice({ cube(20) }, multi_nozzle_wall_config(0.4, detail_nozzle, 1, wall_generator, true));
         CHECK(tools_for_role(output, "perimeter") == std::set<int>{ 0, 1 });
+        CHECK(tools_for_role(output, "infill") == std::set<int>{ 0 });
+    }
+}
+
+TEST_CASE("Small nozzle wall speed overrides detail walls in generated G-code", "[MultiFilament][MultiNozzleWalls][Speed]")
+{
+    const char *wall_generator = GENERATE("classic", "arachne");
+    const auto [value, percent, expected_outer, expected_inner] = GENERATE(table<double, bool, double, double>({
+        {   0., false,  80., 120. },
+        {  20., false,  20.,  20. },
+        {  50., true,   40.,  60. },
+        { 300., false, 300., 300. },
+    }));
+    DYNAMIC_SECTION(wall_generator << " speed=" << value << (percent ? "%" : " mm/s")) {
+        DynamicPrintConfig config = multi_nozzle_wall_config(0.4, 0.15, 1, wall_generator, true);
+        config.set_key_value("outer_wall_speed", new ConfigOptionFloatsNullable{ 80., 80. });
+        config.set_key_value("inner_wall_speed", new ConfigOptionFloatsNullable{ 120., 120. });
+        config.set_key_value("crisp_corner_small_nozzle_wall_speed",
+                             new ConfigOptionFloatsOrPercentsNullable{
+                                 FloatOrPercent(value, percent), FloatOrPercent(value, percent) });
+        config.set_key_value("filament_max_volumetric_speed", new ConfigOptionFloats{ 100., 100. });
+        config.set_key_value("slow_down_for_layer_cooling", new ConfigOptionBools{ false, false });
+        config.set_deserialize_strict({
+            { "slow_down_layers", 1 },
+            { "only_one_wall_top", false },
+            { "only_one_wall_first_layer", false },
+        });
+
+        const WallSpeedSamples samples = wall_speeds_for_tool(slice({ cube(20) }, config), 1);
+        check_wall_speeds(samples.outer, expected_outer);
+        check_wall_speeds(samples.inner, expected_inner);
     }
 }
 
@@ -178,7 +271,7 @@ TEST_CASE("Adjacent layers preserve detail and large wall counts", "[MultiFilame
         config.set_deserialize_strict({
             { "layer_height",               0.1 },
             { "initial_layer_print_height", 0.1 },
-            { "wall_loops",                 3 },
+            { "wall_loops",                 6 },
             { "only_one_wall_top",          false },
             { "only_one_wall_first_layer",  false },
         });
@@ -197,15 +290,18 @@ TEST_CASE("Adjacent layers preserve detail and large wall counts", "[MultiFilame
         for (size_t layer_id : { size_t(10), size_t(11) }) {
             const LayerRegion &region = *object.layers()[layer_id]->regions().front();
             const std::vector<int> indices = perimeter_inset_indices(region);
+            const std::vector<ExtrusionToolHint> hints = perimeter_tool_hints(region);
             const int expected_detail_walls = layer_id % 2 == 0 ? 4 : 3;
-            const int expected_large_walls  = layer_id % 2 == 0 ? 3 : 4;
-            const int expected_total_walls  = 7;
+            const int expected_large_walls  = layer_id % 2 == 0 ? 6 : 7;
+            const int expected_total_walls  = 10;
             INFO("generator=" << wall_generator << " layer=" << layer_id);
             REQUIRE(indices.size() == size_t(expected_total_walls));
             for (int inset_idx = 0; inset_idx < expected_total_walls; ++inset_idx)
                 CHECK(std::count(indices.begin(), indices.end(), inset_idx) == 1);
             CHECK(std::count_if(indices.begin(), indices.end(), [expected_detail_walls](int idx) { return idx < expected_detail_walls; }) == expected_detail_walls);
             CHECK(std::count_if(indices.begin(), indices.end(), [expected_detail_walls](int idx) { return idx >= expected_detail_walls; }) == expected_large_walls);
+            CHECK(std::count(hints.begin(), hints.end(), ExtrusionToolHint::DetailWall) == expected_detail_walls);
+            CHECK(std::count(hints.begin(), hints.end(), ExtrusionToolHint::LargeWall) == expected_large_walls);
             CHECK_FALSE(region.fills.empty());
 
             ExPolygons fill_boundaries;

@@ -50,6 +50,17 @@ static unsigned int detail_external_perimeter_filament_1based(const PrintConfig 
     return detail_external_perimeter_extruder_1based(*print_config, region_config, base_filament_id);
 }
 
+static bool entity_has_tool_hint(const ExtrusionEntity &entity, ExtrusionToolHint hint)
+{
+    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection*>(&entity)) {
+        for (const ExtrusionEntity *child : collection->entities)
+            if (child != nullptr && entity_has_tool_hint(*child, hint))
+                return true;
+        return false;
+    }
+    return entity.tool_hint == hint;
+}
+
 static size_t mapped_extruder_index_or_zero(const PrintConfig &config, unsigned int filament_id, size_t extruder_count)
 {
     if (extruder_count == 0 || config.filament_map.values.empty())
@@ -770,13 +781,31 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                         region.config().inner_wall_filament_id.value : base_outer_wall_filament;
                     const unsigned int override_wall_hotend = m_print_config_ptr ?
                         large_nozzle_override_toolhead_1based(region.config(), layer->id(), m_print_config_ptr->nozzle_diameter.values.size()) : 0;
-                    const unsigned int outer_wall_filament = (extruder_override == 0) ?
-                        (override_wall_hotend > 0 ? override_wall_hotend :
-                         detail_external_perimeter_filament_1based(m_print_config_ptr, region, base_outer_wall_filament)) :
-                        extruder_override;
-                    layer_tools.extruders.emplace_back(outer_wall_filament);
-                    if (extruder_override == 0 && region.config().wall_loops.value > 1)
-                        layer_tools.extruders.emplace_back(override_wall_hotend > 0 ? override_wall_hotend : base_inner_wall_filament);
+                    bool has_detail_walls = false;
+                    bool has_large_walls = false;
+                    for (const ExtrusionEntity *entity : layerm->perimeters.entities) {
+                        if (entity == nullptr)
+                            continue;
+                        has_detail_walls = has_detail_walls || entity_has_tool_hint(*entity, ExtrusionToolHint::DetailWall);
+                        has_large_walls = has_large_walls || entity_has_tool_hint(*entity, ExtrusionToolHint::LargeWall);
+                    }
+
+                    if (extruder_override != 0) {
+                        layer_tools.extruders.emplace_back(extruder_override);
+                    } else if (override_wall_hotend > 0) {
+                        layer_tools.extruders.emplace_back(override_wall_hotend);
+                    } else if (has_detail_walls || has_large_walls) {
+                        if (has_detail_walls)
+                            layer_tools.extruders.emplace_back(detail_external_perimeter_filament_1based(
+                                m_print_config_ptr, region, base_outer_wall_filament));
+                        if (has_large_walls)
+                            layer_tools.extruders.emplace_back(base_inner_wall_filament);
+                    } else {
+                        layer_tools.extruders.emplace_back(detail_external_perimeter_filament_1based(
+                            m_print_config_ptr, region, base_outer_wall_filament));
+                        if (region.config().wall_loops.value > 1)
+                            layer_tools.extruders.emplace_back(base_inner_wall_filament);
+                    }
                     if (layerCount == 0) {
                         firstLayerExtruders.emplace_back(extruder_override == 0 ? base_outer_wall_filament : extruder_override);
                     }

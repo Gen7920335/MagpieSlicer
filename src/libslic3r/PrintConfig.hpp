@@ -1237,6 +1237,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatsNullable,           small_perimeter_threshold))
     ((ConfigOptionFloatsOrPercentsNullable, small_support_perimeter_speed))
     ((ConfigOptionFloatsNullable,           small_support_perimeter_threshold))
+    ((ConfigOptionFloatsOrPercentsNullable, crisp_corner_small_nozzle_wall_speed))
     ((ConfigOptionBool,                 use_smaller_nozzles_in_crisp_corners))
     ((ConfigOptionInt,                  crisp_corner_detail_toolhead))
     ((ConfigOptionInt,                  crisp_corner_small_nozzle_wall_count))

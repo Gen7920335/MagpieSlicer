@@ -2,6 +2,8 @@
 
 #include <numeric>
 #include <sstream>
+#include <array>
+#include <limits>
 
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Fill/Fill.hpp"
@@ -14,6 +16,77 @@
 #include "test_helpers.hpp"
 
 using namespace Slic3r;
+
+TEST_CASE("Triangle support-interface fill keeps three fixed directions", "[Fill][Support][Triangles]")
+{
+    Points square {
+        Point::new_scale(0., 0.), Point::new_scale(60., 0.),
+        Point::new_scale(60., 60.), Point::new_scale(0., 60.)
+    };
+    Surface surface(stInternal, ExPolygon(square));
+    std::unique_ptr<Fill> filler(Fill::new_from_type("triangles"));
+    filler->set_bounding_box(get_extents(surface.expolygon.contour));
+    filler->angle = float(-M_PI_2);
+    filler->spacing = 0.4;
+
+    for (const float density : { 0.1f, 0.25f, 0.5f, 1.f }) {
+        FillParams params;
+        params.density = density;
+        params.dont_adjust = true;
+        params.density_per_direction = true;
+        params.anchor_length = 0.f;
+        params.anchor_length_max = 0.f;
+
+        const Polylines paths = filler->fill_surface(&surface, params);
+        REQUIRE_FALSE(paths.empty());
+
+        std::array<size_t, 3> direction_counts { 0, 0, 0 };
+        std::array<std::vector<double>, 3> offsets;
+        // Rectilinear sweeps are generated vertically, so a zero pattern angle
+        // produces the three undirected line families at 30, 90 and 150 degrees.
+        const std::array<double, 3> expected_angles { M_PI / 6., M_PI / 2., 5. * M_PI / 6. };
+
+        for (const Polyline &path : paths) {
+            REQUIRE(path.points.size() >= 2);
+            const Vec2d delta = (path.last_point() - path.first_point()).cast<double>();
+            double angle = std::atan2(delta.y(), delta.x());
+            if (angle < 0.)
+                angle += M_PI;
+            if (angle >= M_PI)
+                angle -= M_PI;
+
+            size_t direction = 0;
+            double best_error = std::numeric_limits<double>::max();
+            for (size_t idx = 0; idx < expected_angles.size(); ++idx) {
+                const double error = std::abs(angle - expected_angles[idx]);
+                if (error < best_error) {
+                    best_error = error;
+                    direction = idx;
+                }
+            }
+            REQUIRE(best_error < 1e-5);
+            ++direction_counts[direction];
+
+            const Vec2d midpoint = 0.5 * (path.first_point().cast<double>() + path.last_point().cast<double>());
+            const double normal_x = -std::sin(expected_angles[direction]);
+            const double normal_y =  std::cos(expected_angles[direction]);
+            offsets[direction].push_back(unscale_(midpoint.x() * normal_x + midpoint.y() * normal_y));
+        }
+
+        const double expected_pitch = filler->spacing / density;
+        for (size_t direction = 0; direction < direction_counts.size(); ++direction) {
+            CHECK(direction_counts[direction] > 2);
+            auto &values = offsets[direction];
+            std::sort(values.begin(), values.end());
+            values.erase(std::unique(values.begin(), values.end(), [](double lhs, double rhs) {
+                return std::abs(lhs - rhs) < 0.01;
+            }), values.end());
+            REQUIRE(values.size() > 2);
+            for (size_t idx = 1; idx < values.size(); ++idx)
+                CHECK(values[idx] - values[idx - 1] == Catch::Approx(expected_pitch).margin(0.002));
+        }
+    }
+}
 
 bool test_if_solid_surface_filled(const ExPolygon& expolygon, double flow_spacing, double angle = 0, double density = 1.0);
 

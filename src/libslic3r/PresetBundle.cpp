@@ -57,6 +57,29 @@ static std::vector<std::string> s_project_options {
     "filament_map"
 };
 
+// These preset-owned values are copied into project_config only when a project
+// is loaded. Keeping them out of the default project config prevents their
+// defaults from masking the currently selected printer and process presets.
+static const std::vector<std::string> s_project_preset_override_options {
+    "nozzle_diameter",
+    "toolhead_line_width",
+    "toolhead_initial_layer_line_width",
+    "toolhead_outer_wall_line_width",
+    "toolhead_inner_wall_line_width",
+    "toolhead_top_surface_line_width",
+    "toolhead_sparse_infill_line_width",
+    "toolhead_internal_solid_infill_line_width",
+    "toolhead_support_line_width",
+    "toolhead_bridge_line_width",
+    "use_smaller_nozzles_in_crisp_corners",
+    "crisp_corner_detail_toolhead",
+    "crisp_corner_small_nozzle_wall_count",
+    "crisp_corner_small_nozzle_wall_speed",
+    "crisp_corner_nozzle_wall_overlap",
+    "crisp_corner_interlace_small_nozzle_walls",
+    "crisp_corner_large_nozzle_override_regions"
+};
+
 //Orca: add custom as default
 const char *PresetBundle::ORCA_DEFAULT_BUNDLE = "Custom";
 const char *PresetBundle::ORCA_DEFAULT_PRINTER_MODEL = "MyKlipper 0.4 nozzle";
@@ -81,6 +104,8 @@ DynamicPrintConfig PresetBundle::construct_full_config(
     out.apply(printer_config);
     out.apply(print_config);
     out.apply(project_config);
+    if (const auto *nozzles = out.option<ConfigOptionFloats>("nozzle_diameter"); nozzles != nullptr && !nozzles->values.empty())
+        out.set_num_extruders(unsigned(nozzles->values.size()));
     out.apply(in_filament_presets[0].config);
 
     size_t num_filaments = in_filament_presets.size();
@@ -3941,6 +3966,8 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
     out.apply(this->filaments.default_preset().config);
 	out.apply(this->printers.get_edited_preset().config);
     out.apply(this->project_config);
+    if (const auto *nozzles = out.option<ConfigOptionFloats>("nozzle_diameter"); nozzles != nullptr && !nozzles->values.empty())
+        out.set_num_extruders(unsigned(nozzles->values.size()));
 
     // BBS
     size_t  num_filaments = this->filament_presets.size();
@@ -4614,6 +4641,7 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
 
         // 4) Load the project config values (the per extruder wipe matrix etc).
         this->project_config.apply_only(config, s_project_options);
+        this->project_config.apply_only(config, s_project_preset_override_options, true);
 
         break;
     }

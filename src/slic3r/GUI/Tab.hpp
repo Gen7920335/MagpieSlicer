@@ -104,7 +104,8 @@ public:
     Line *      get_line(const t_config_option_key &opt_key, int opt_index = -1);
 	bool		set_value(const t_config_option_key& opt_key, const boost::any& value);
 	// BBS. Add is_extruder_og parameter.
-	ConfigOptionsGroupShp	new_optgroup(const wxString& title, const wxString& icon = wxEmptyString, int noncommon_label_width = -1, bool is_extruder_og = false);
+	ConfigOptionsGroupShp	new_optgroup(const wxString& title, const wxString& icon = wxEmptyString, int noncommon_label_width = -1,
+                                      bool is_extruder_og = false, bool use_custom_ctrl = true);
 	const ConfigOptionsGroupShp	get_optgroup(const wxString& title) const;
 
 	bool		set_item_colour(const wxColour *clr) {
@@ -454,6 +455,7 @@ protected:
 	wxSizer*		compatible_widget_create(wxWindow* parent, PresetDependencies &deps);
 	void 			compatible_widget_reload(PresetDependencies &deps);
 	void			load_key_value(const std::string& opt_key, const boost::any& value, bool saved_value = false);
+	void			load_key_value(const std::string& opt_key, const std::vector<std::string>& values);
 
 	//BBS: GUI refactor
 	// return true if cancelled

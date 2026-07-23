@@ -4262,90 +4262,32 @@ static unsigned int marked_detail_wall_extruder_1based(const PrintConfig &config
     return detail_external_perimeter_extruder_1based(config, region_config, base_extruder);
 }
 
-static double detail_wall_width_for_region(const PrintConfig &config, const PrintRegion &region, double layer_height)
+static bool entity_has_tool_hint(const ExtrusionEntity &entity, ExtrusionToolHint hint)
 {
-    const PrintRegionConfig &region_config = region.config();
-    const unsigned int base_extruder = effective_outer_wall_filament_1based(region_config);
-    const unsigned int detail_extruder = marked_detail_wall_extruder_1based(config, region);
-    if (detail_extruder == 0 || detail_extruder == base_extruder)
-        return 0.;
-
-    const size_t small_idx = size_t(detail_extruder - 1);
-    if (small_idx >= config.nozzle_diameter.values.size())
-        return 0.;
-
-    const Flow small_flow = Flow::new_from_config_width(frExternalPerimeter,
-        toolhead_line_width_or(config, frExternalPerimeter, int(detail_extruder), false, region_config.outer_wall_line_width),
-        float(config.nozzle_diameter.get_at(small_idx)), float(layer_height));
-    return small_flow.width();
-}
-
-static bool entity_has_width_at_most(const ExtrusionEntity &entity, double width)
-{
-    if (width <= EPSILON)
-        return false;
-    if (const auto *path = dynamic_cast<const ExtrusionPath*>(&entity))
-        return path->width > 0.f && path->width <= width + 0.01;
-    if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath*>(&entity)) {
-        for (const ExtrusionPath &path : multipath->paths)
-            if (path.width > 0.f && path.width <= width + 0.01)
-                return true;
-        return false;
-    }
-    if (const auto *loop = dynamic_cast<const ExtrusionLoop*>(&entity)) {
-        for (const ExtrusionPath &path : loop->paths)
-            if (path.width > 0.f && path.width <= width + 0.01)
-                return true;
-        return false;
-    }
     if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection*>(&entity)) {
         for (const ExtrusionEntity *child : collection->entities)
-            if (child != nullptr && entity_has_width_at_most(*child, width))
+            if (child != nullptr && entity_has_tool_hint(*child, hint))
                 return true;
-    }
-    return false;
-}
-
-static bool entity_is_detail_wall(const ExtrusionEntity &entity, double detail_width)
-{
-    const ExtrusionRole role = entity.role();
-    return (role == erExternalPerimeter || role == erOverhangPerimeter || role == erPerimeter || role == erMixed) &&
-        entity_has_width_at_most(entity, detail_width);
-}
-
-static bool entity_is_wall_for_detail_split(const ExtrusionEntity &entity)
-{
-    const ExtrusionRole role = entity.role();
-    return role == erExternalPerimeter || role == erOverhangPerimeter || role == erPerimeter || role == erMixed;
-}
-
-static int detail_wall_count_for_gcode_layer(const PrintRegion &region, size_t layer_id)
-{
-    return Slic3r::detail_wall_count_for_layer(region.config(), layer_id);
-}
-
-static bool entity_has_wall_inset_below(const ExtrusionEntity &entity, int inset_limit)
-{
-    if (inset_limit <= 0)
         return false;
-    if (const auto *path = dynamic_cast<const ExtrusionPath*>(&entity))
-        return path->inset_idx >= 0 && path->inset_idx < inset_limit;
-    if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath*>(&entity))
-        return multipath->inset_idx >= 0 && multipath->inset_idx < inset_limit;
-    if (const auto *loop = dynamic_cast<const ExtrusionLoop*>(&entity))
-        return loop->inset_idx >= 0 && loop->inset_idx < inset_limit;
+    }
+    return entity.tool_hint == hint;
+}
+
+static void partition_wall_entities_by_hint(const ExtrusionEntity &entity,
+                                            ExtrusionEntityCollection &detail,
+                                            ExtrusionEntityCollection &large)
+{
     if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection*>(&entity)) {
         for (const ExtrusionEntity *child : collection->entities)
-            if (child != nullptr && entity_has_wall_inset_below(*child, inset_limit))
-                return true;
+            if (child != nullptr)
+                partition_wall_entities_by_hint(*child, detail, large);
+        return;
     }
-    return false;
-}
 
-static bool entity_is_detail_wall_by_inset(const ExtrusionEntity &entity, int detail_wall_count)
-{
-    return entity_is_wall_for_detail_split(entity) &&
-        entity_has_wall_inset_below(entity, detail_wall_count);
+    if (entity.tool_hint == ExtrusionToolHint::DetailWall)
+        detail.append(entity);
+    else
+        large.append(entity);
 }
 
 std::vector<GCode::InstanceToPrint> GCode::sort_print_object_instances(
@@ -5262,22 +5204,6 @@ LayerResult GCode::process_layer(
                                 large_nozzle_override_toolhead_1based(region.config(), layer.id(), print.config().nozzle_diameter.values.size()) : 0;
                             if (override_wall_hotend > 0)
                                 correct_extruder_id = int(override_wall_hotend - 1);
-                            const bool can_use_detail_nozzle =
-                                forced_extruder_id < 0 &&
-                                override_wall_hotend == 0 &&
-                                entity_type == ObjectByExtruder::Island::Region::PERIMETERS &&
-                                (current_extrusions->role() == erExternalPerimeter ||
-                                 current_extrusions->role() == erOverhangPerimeter ||
-                                 (current_extrusions->role() == erPerimeter &&
-                                  entity_is_detail_wall(*current_extrusions->entities.front(), detail_wall_width_for_region(print.config(), region, layer.height))) ||
-                                 current_extrusions->role() == erMixed);
-                            if (can_use_detail_nozzle &&
-                                detail_collection_needs_smaller_nozzle(*current_extrusions, print.config(), region.config())) {
-                                const unsigned int detail_extruder_id = marked_detail_wall_extruder_1based(print.config(), region);
-                                if (detail_extruder_id > 0)
-                                    correct_extruder_id = int(detail_extruder_id - 1);
-                            }
-
                             const WipingExtrusions::ExtruderPerCopy *entity_overrides = nullptr;
                             if (! layer_tools.has_extruder(correct_extruder_id)) {
                                 // this entity is not overridden, but its extruder is not in layer_tools - we'll print it
@@ -5332,6 +5258,8 @@ LayerResult GCode::process_layer(
                         bool split_mixed_perimeters =
                             entity_type == ObjectByExtruder::Island::Region::PERIMETERS &&
                             external_wall_filament != inner_wall_filament &&
+                            (entity_has_tool_hint(*extrusions, ExtrusionToolHint::DetailWall) ||
+                             entity_has_tool_hint(*extrusions, ExtrusionToolHint::LargeWall)) &&
                             (extrusions->role() == erMixed ||
                              extrusions->role() == erPerimeter ||
                              extrusions->role() == erExternalPerimeter ||
@@ -5340,12 +5268,9 @@ LayerResult GCode::process_layer(
                         if (split_mixed_perimeters) {
                             auto detail_perimeters = std::make_unique<ExtrusionEntityCollection>();
                             auto large_perimeters = std::make_unique<ExtrusionEntityCollection>();
-                            const int detail_wall_count = detail_wall_count_for_gcode_layer(region, layer.id());
                             for (const ExtrusionEntity *entity : extrusions->entities) {
-                                if (entity_is_detail_wall_by_inset(*entity, detail_wall_count))
-                                    detail_perimeters->append(*entity);
-                                else if (entity_is_wall_for_detail_split(*entity))
-                                    large_perimeters->append(*entity);
+                                if (entity != nullptr)
+                                    partition_wall_entities_by_hint(*entity, *detail_perimeters, *large_perimeters);
                             }
 
                             if (!detail_perimeters->entities.empty()) {
@@ -6205,7 +6130,7 @@ std::string GCode::extrude_loop(const ExtrusionLoop&        loop_ref,
     
     if (!enable_seam_slope) {
         for (const ExtrusionPath& path : paths) {
-            gcode += this->_extrude(path, description, speed_for_path(path));
+            gcode += this->_extrude(path, description, speed_for_path(path), loop.tool_hint);
             // Orca: Adaptive PA - dont adapt PA after the first multipath extrusion is completed
             // as we have already set the PA value to the average flow over the totality of the path
             // in the first extrude move
@@ -6242,7 +6167,7 @@ std::string GCode::extrude_loop(const ExtrusionLoop&        loop_ref,
 
         // Then extrude it
         for (const ExtrusionPath* path : new_loop.get_all_paths()) {
-            gcode += this->_extrude(*path, description, speed_for_path(*path));
+            gcode += this->_extrude(*path, description, speed_for_path(*path), loop.tool_hint);
             // Orca: Adaptive PA - dont adapt PA after the first pultipath extrusion is completed
             // as we have already set the PA value to the average flow over the totality of the path
             // in the first extrude move
@@ -6347,7 +6272,7 @@ std::string GCode::extrude_multi_path(const ExtrusionMultiPath& multipath, const
     // Orca: end of multipath average mm3_per_mm value calculation
 
     for (const ExtrusionPath &path : multipath.paths){
-        gcode += this->_extrude(path, description, speed);
+        gcode += this->_extrude(path, description, speed, multipath.tool_hint);
         // Orca: Adaptive PA - dont adapt PA after the first pultipath extrusion is completed
         // as we have already set the PA value to the average flow over the totality of the path
         // in the first extrude move.
@@ -6395,7 +6320,7 @@ std::string GCode::extrude_path(const ExtrusionPath& path, const std::string& de
     m_multi_flow_segment_path_pa_set = false;
     m_multi_flow_segment_path_average_mm3_per_mm = 0;
     //    description += ExtrusionEntity::role_to_string(path.role());
-    std::string gcode = this->_extrude(path, description, speed);
+    std::string gcode = this->_extrude(path, description, speed, path.tool_hint);
     if (m_wipe.enable && FILAMENT_CONFIG(wipe)) {
         m_wipe.path = path.polyline.to_polyline();
         if (is_tree(this->config().support_type) && is_support(path.role())) {
@@ -6967,9 +6892,11 @@ std::string GCode::finish_low_temperature_support_interface()
     return gcode;
 }
 
-std::string GCode::_extrude(const ExtrusionPath &path, std::string description, double speed)
+std::string GCode::_extrude(const ExtrusionPath &path, std::string description, double speed, ExtrusionToolHint tool_hint)
 {
     std::string gcode;
+    if (tool_hint == ExtrusionToolHint::Auto)
+        tool_hint = path.tool_hint;
 
     const bool use_low_temperature_interface =
         m_config.single_nozzle_low_temperature_interface.value &&
@@ -7201,6 +7128,13 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
     if (speed == 0)
         speed = filament_max_volumetric_speed / _mm3_per_mm;
+
+    if (tool_hint == ExtrusionToolHint::DetailWall &&
+        (path.role() == erPerimeter || path.role() == erExternalPerimeter)) {
+        const auto &small_nozzle_speed = NOZZLE_CONFIG(crisp_corner_small_nozzle_wall_speed);
+        if (small_nozzle_speed.value > 0)
+            speed = small_nozzle_speed.get_abs_value(speed);
+    }
     
     const auto _layer = layer_id();
     if (this->on_first_layer() || object_layer_over_raft()) {

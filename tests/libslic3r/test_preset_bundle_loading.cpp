@@ -464,3 +464,36 @@ TEST_CASE("Profile validator flags dangling and renamed preset references", "[Pr
     }
 }
 
+TEST_CASE("Multi-nozzle project settings override presets in the reconstructed full config", "[Preset][Project][MultiNozzle]")
+{
+    PresetBundle bundle;
+    bundle.filament_presets = { bundle.filaments.get_selected_preset_name() };
+    DynamicPrintConfig &project = bundle.project_config;
+
+    REQUIRE_FALSE(project.has("nozzle_diameter"));
+    REQUIRE_FALSE(project.has("toolhead_outer_wall_line_width"));
+    REQUIRE_FALSE(project.has("crisp_corner_large_nozzle_override_regions"));
+
+    DynamicPrintConfig &printer = bundle.printers.get_edited_preset().config;
+    printer.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4, 0.15 }));
+    printer.option<ConfigOptionFloatsOrPercents>("toolhead_outer_wall_line_width", true)->values = {
+        FloatOrPercent(0.42, false), FloatOrPercent(0.16, false)
+    };
+    DynamicPrintConfig &process = bundle.prints.get_edited_preset().config;
+    process.set_key_value("use_smaller_nozzles_in_crisp_corners", new ConfigOptionBool(true));
+    process.set_key_value("crisp_corner_small_nozzle_wall_count", new ConfigOptionInt(4));
+    process.set_key_value("crisp_corner_small_nozzle_wall_speed",
+                          new ConfigOptionFloatsOrPercentsNullable({ FloatOrPercent(35, false) }));
+    process.set_key_value("crisp_corner_large_nozzle_override_regions",
+                          new ConfigOptionStrings({ "5:12:1", "10:20:2" }));
+
+    const DynamicPrintConfig full = bundle.full_config();
+    CHECK(full.option<ConfigOptionFloats>("nozzle_diameter")->values == std::vector<double>{ 0.4, 0.15 });
+    CHECK(full.option<ConfigOptionBool>("use_smaller_nozzles_in_crisp_corners")->value);
+    CHECK(full.option<ConfigOptionInt>("crisp_corner_small_nozzle_wall_count")->value == 4);
+    CHECK(full.option<ConfigOptionFloatsOrPercentsNullable>("crisp_corner_small_nozzle_wall_speed")->values ==
+          std::vector<FloatOrPercent>{ FloatOrPercent(35, false) });
+    CHECK(full.option<ConfigOptionStrings>("crisp_corner_large_nozzle_override_regions")->values ==
+          std::vector<std::string>{ "5:12:1", "10:20:2" });
+}
+

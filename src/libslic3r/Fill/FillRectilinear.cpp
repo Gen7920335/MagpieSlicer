@@ -2996,8 +2996,9 @@ static inline void remove_overlapped(Polylines& polylines, coord_t line_width){
 bool FillRectilinear::fill_surface_by_multilines(const Surface *surface, FillParams params, const std::initializer_list<SweepParams> &sweep_params, Polylines &polylines_out)
 {
     assert(sweep_params.size() >= 1);
-    assert(!params.full_infill());
-    params.density /= double(sweep_params.size());
+    assert(params.density_per_direction || !params.full_infill());
+    if (!params.density_per_direction)
+        params.density /= double(sweep_params.size());
     assert(params.density > 0.0001f && params.density <= 1.f);
 
     ExPolygonWithOffset poly_with_offset_base(surface->expolygon, 0, float(scale_(this->overlap + 0.5 * params.multiline * this->spacing)));//increase offset to crop infill lines when using multiline infill
@@ -3620,7 +3621,10 @@ Polylines FillSupportBase::fill_surface(const Surface *surface, const FillParams
         // Create infill lines, keep them vertical.
         make_fill_lines(poly_with_offset, rotate_vector.second.rotated(- rotate_vector.first), 0, 0, line_spacing, 0, fill_lines);
         // Both the poly_with_offset and polylines_out are rotated, so the infill lines are strictly vertical.
-        connect_base_support(std::move(fill_lines), poly_with_offset.polygons_outer, poly_with_offset.bounding_box_outer(), polylines_out, this->spacing, params);
+        if (params.cura_style_support_zigzag)
+            connect_cura_support(std::move(fill_lines), poly_with_offset.polygons_outer, poly_with_offset.bounding_box_outer(), polylines_out, this->spacing);
+        else
+            connect_base_support(std::move(fill_lines), poly_with_offset.polygons_outer, poly_with_offset.bounding_box_outer(), polylines_out, this->spacing, params);
         // Rotate back by rotate_vector.first
         const double cos_a = cos(rotate_vector.first);
         const double sin_a = sin(rotate_vector.first);

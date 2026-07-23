@@ -55,6 +55,14 @@ struct FillParams
     float       density 		{ 0.f };
     int   multiline{1};
 
+    // Interpret density independently for every sweep of a multi-direction pattern.
+    // Support interfaces use this so their configured line spacing is preserved in
+    // each visible direction without changing the physical extrusion width.
+    bool        density_per_direction { false };
+
+    // Use CuraEngine's connected scanline strategy for sparse normal support.
+    bool        cura_style_support_zigzag { false };
+
     // Length of an infill anchor along the perimeter.
     // 1000mm is roughly the maximum length line that fits into a 32bit coord_t.
     float       anchor_length       { 1000.f };
@@ -220,6 +228,8 @@ public:
     static void connect_infill(Polylines &&infill_ordered, const ExPolygon &boundary, Polylines &polylines_out, const double spacing, const FillParams &params);
     static void connect_infill(Polylines &&infill_ordered, const Polygons &boundary, const BoundingBox& bbox, Polylines &polylines_out, const double spacing, const FillParams &params);
     static void connect_infill(Polylines &&infill_ordered, const std::vector<const Polygon*> &boundary, const BoundingBox &bbox, Polylines &polylines_out, double spacing, const FillParams &params);
+    static void connect_cura_support(Polylines &&infill_ordered, const std::vector<const Polygon*> &boundary, const BoundingBox &bbox, Polylines &polylines_out, double spacing);
+    static void connect_cura_support(Polylines &&infill_ordered, const Polygons &boundary, const BoundingBox &bbox, Polylines &polylines_out, double spacing);
 
     static void chain_or_connect_infill(Polylines &&infill_ordered, const ExPolygon &boundary, Polylines &polylines_out, const double spacing, const FillParams &params);
 

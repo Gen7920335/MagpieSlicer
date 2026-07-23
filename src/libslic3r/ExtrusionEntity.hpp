@@ -16,6 +16,12 @@ using ExPolygons = std::vector<ExPolygon>;
 class ExtrusionEntityCollection;
 class Extruder;
 
+enum class ExtrusionToolHint : uint8_t {
+    Auto,
+    DetailWall,
+    LargeWall
+};
+
 // Each ExtrusionRole value identifies a distinct set of { extruder, speed }
 enum ExtrusionRole : uint8_t {
     erNone,
@@ -154,6 +160,8 @@ public:
     
     // Orca: Used for inner/outer/inner mode - classic perimeter generator
     int inset_idx = -1;
+    // Explicit routing for mixed-nozzle walls. Auto preserves stock Orca routing.
+    ExtrusionToolHint tool_hint = ExtrusionToolHint::Auto;
 
     static std::string role_to_string(ExtrusionRole role);
     static ExtrusionRole string_to_role(const std::string_view role);
@@ -391,19 +399,21 @@ public:
     ExtrusionPaths paths;
 
     ExtrusionMultiPath() {}
-    ExtrusionMultiPath(const ExtrusionMultiPath &rhs) : paths(rhs.paths), m_can_reverse(rhs.m_can_reverse) {}
-    ExtrusionMultiPath(ExtrusionMultiPath &&rhs) : paths(std::move(rhs.paths)), m_can_reverse(rhs.m_can_reverse) {}
+    ExtrusionMultiPath(const ExtrusionMultiPath &rhs) : ExtrusionEntity(rhs), paths(rhs.paths), m_can_reverse(rhs.m_can_reverse) {}
+    ExtrusionMultiPath(ExtrusionMultiPath &&rhs) : ExtrusionEntity(std::move(rhs)), paths(std::move(rhs.paths)), m_can_reverse(rhs.m_can_reverse) {}
     ExtrusionMultiPath(const ExtrusionPaths &paths) : paths(paths) {}
     ExtrusionMultiPath(const ExtrusionPath &path) {this->paths.push_back(path); m_can_reverse = path.can_reverse(); }
 
     ExtrusionMultiPath &operator=(const ExtrusionMultiPath &rhs)
     {
+        ExtrusionEntity::operator=(rhs);
         this->paths   = rhs.paths;
         m_can_reverse = rhs.m_can_reverse;
         return *this;
     }
     ExtrusionMultiPath &operator=(ExtrusionMultiPath &&rhs)
     {
+        ExtrusionEntity::operator=(std::move(rhs));
         this->paths   = std::move(rhs.paths);
         m_can_reverse = rhs.m_can_reverse;
         return *this;

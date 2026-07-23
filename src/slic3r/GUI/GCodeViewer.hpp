@@ -233,6 +233,12 @@ private:
     bool m_legend_enabled{ true };
 
     float m_legend_height;
+    std::array<float, 2> m_nozzle_used_legend_size { 0.0f, 0.0f };
+    std::array<float, 2> m_nozzle_used_legend_candidate_size { 0.0f, 0.0f };
+    float                m_nozzle_used_legend_scale { 0.0f };
+    size_t               m_nozzle_used_legend_tool_count { 0 };
+    unsigned int         m_nozzle_used_legend_stable_frames { 0 };
+    bool                 m_nozzle_used_legend_active { false };
     PrintEstimatedStatistics m_print_statistics;
     std::array<float, 2> m_detected_point_sizes = { 0.0f, 0.0f };
     GCodeProcessorResult::SettingsIds m_settings_ids;

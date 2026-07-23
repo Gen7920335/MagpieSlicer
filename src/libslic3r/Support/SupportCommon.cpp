@@ -315,8 +315,14 @@ SupportGeneratorLayersPtr generate_raft_base(
     }
 
     // How much to inflate the support columns to be stable. This also applies to the 1st layer, if no raft layers are to be printed.
-    const float inflate_factor_fine      = float(scale_((slicing_params.raft_layers() > 1) ? 0.5 : EPSILON));
-    const float inflate_factor_1st_layer = std::max(0.f, float(scale_(object.config().raft_first_layer_expansion)) - inflate_factor_fine);
+    const float inflate_factor_fine = float(scale_((slicing_params.raft_layers() > 1) ? 0.5 : EPSILON));
+    // A Cura-style support column keeps one XY path from the bed to its roof.
+    // Expanding only its first layer creates a second, wider zigzag in top projection.
+    const bool  align_cura_column_to_bed = slicing_params.raft_layers() <= 1 &&
+                                           is_normal_cura(object.config().support_type.value);
+    const float first_layer_expansion    = align_cura_column_to_bed ? 0.f :
+                                           float(scale_(object.config().raft_first_layer_expansion));
+    const float inflate_factor_1st_layer = std::max(0.f, first_layer_expansion - inflate_factor_fine);
     SupportGeneratorLayer       *contacts         = top_contacts         .empty() ? nullptr : top_contacts         .front();
     SupportGeneratorLayer       *interfaces       = interface_layers     .empty() ? nullptr : interface_layers     .front();
     SupportGeneratorLayer       *base_interfaces  = base_interface_layers.empty() ? nullptr : base_interface_layers.front();
@@ -742,7 +748,8 @@ void fill_expolygons_with_sheath_generate_paths(
     const Flow              &flow,
     const SupportParameters& support_params,
     bool                     with_sheath,
-    bool                     no_sort)
+    bool                     no_sort,
+    bool                     cura_style_support_zigzag)
 {
     if (polygons.empty())
         return;
@@ -754,13 +761,18 @@ void fill_expolygons_with_sheath_generate_paths(
         }
     }
     else {
-        fill_expolygons_generate_paths(dst, closing_ex(polygons, float(SCALED_EPSILON)), filler, density, role, flow);
+        FillParams fill_params;
+        fill_params.density                    = density;
+        fill_params.dont_adjust                = true;
+        fill_params.cura_style_support_zigzag = cura_style_support_zigzag;
+        fill_expolygons_generate_paths(dst, closing_ex(polygons, float(SCALED_EPSILON)), filler, fill_params, density, role, flow);
         return;
     }
 
     FillParams fill_params;
-    fill_params.density     = density;
-    fill_params.dont_adjust = true;
+    fill_params.density                    = density;
+    fill_params.dont_adjust                = true;
+    fill_params.cura_style_support_zigzag = cura_style_support_zigzag;
 
     const double spacing = flow.scaled_spacing();
     // Clip the sheath path to avoid the extruder to get exactly on the first point of the loop.
@@ -1842,17 +1854,12 @@ void generate_support_toolpaths(
                         fill_params.density          = float(density);
                         fill_params.dont_adjust      = true;
                         fill_params.multiline        = 1;
+                        fill_params.density_per_direction = true;
                         fill_params.anchor_length    = 0.f;
                         fill_params.anchor_length_max = 0.f;
-                        // FillTriangles splits density across three sweep directions. Reduce the
-                        // pattern spacing instead of overdriving density, so the configured
-                        // support interface spacing applies to each visible direction.
-                        const coordf_t original_spacing = filler->spacing;
-                        filler->spacing = original_spacing / 3.;
                         fill_expolygons_generate_paths(
                             layer_ex.extrusions, std::move(regions), filler, fill_params,
                             float(density), role, interface_flow);
-                        filler->spacing = original_spacing;
                     } else {
                         fill_expolygons_generate_paths(
                             layer_ex.extrusions, std::move(regions), filler, float(density),
@@ -1903,18 +1910,24 @@ void generate_support_toolpaths(
                 bool  no_sort = false;
                 bool  done    = false;
                 if (base_layer.layer->bottom_z < EPSILON) {
-                    // Base flange (the 1st layer).
-                    filler = filler_first_layer;
-                    filler->angle = Geometry::deg2rad(float(config.support_angle.value + 90.));
-                    density = float(config.raft_first_layer_density.value * 0.01);
                     flow = support_params.first_layer_flow;
-                    // use the proper spacing for first layer as we don't need to align
-                    // its pattern to the other layers
-                    //FIXME When paralellizing, each thread shall have its own copy of the fillers.
-                    filler->spacing = flow.spacing();
-                    filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / density));
-                    sheath  = true;
-                    no_sort = true;
+                    if (is_normal_cura(config.support_type.value)) {
+                        // Keep Cura-style support lines vertically aligned from the bed upward.
+                        // The first-layer flow changes, but its line centers, spacing and direction do not.
+                        filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / density));
+                    } else {
+                        // Base flange (the 1st layer).
+                        filler = filler_first_layer;
+                        filler->angle = Geometry::deg2rad(float(config.support_angle.value + 90.));
+                        density = float(config.raft_first_layer_density.value * 0.01);
+                        // use the proper spacing for first layer as we don't need to align
+                        // its pattern to the other layers
+                        //FIXME When paralellizing, each thread shall have its own copy of the fillers.
+                        filler->spacing = flow.spacing();
+                        filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / density));
+                        sheath  = true;
+                        no_sort = true;
+                    }
                 } else if (support_params.support_style == SupportMaterialStyle::smsTreeOrganic &&
                            (config.support_base_pattern == smpNone || config.support_base_pattern == smpDefault)) {
                     // Orca: A special case for the hollow Organic supports
@@ -1935,7 +1948,7 @@ void generate_support_toolpaths(
                         filler, density,
                         // Extrusion parameters
                         ExtrusionRole::erSupportMaterial, flow,
-                        support_params, sheath, no_sort);
+                        support_params, sheath, no_sort, is_normal_cura(config.support_type.value));
             }
 
             // Merge base_interface_layers to base_layers to avoid unneccessary retractions
