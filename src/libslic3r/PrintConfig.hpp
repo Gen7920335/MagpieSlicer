@@ -703,6 +703,7 @@ extern std::set<std::string> printer_extruder_options;
 
 // Returns the numeric mm default for a per-hotend line-width option.
 FloatOrPercent default_toolhead_line_width_for_nozzle(std::string_view key, double nozzle_diameter);
+void set_toolhead_nozzle_diameter(DynamicPrintConfig &config, size_t toolhead_index, double nozzle_diameter);
 extern std::set<std::string> print_options_with_variant;
 extern std::set<std::string> filament_options_with_variant;
 extern std::set<std::string> printer_options_with_variant_1;

@@ -95,6 +95,18 @@ SCENARIO("Flow math for bridges", "[Flow]") {
     }
 }
 
+TEST_CASE("Support interface density and spacing conversion", "[Flow][SupportInterface]")
+{
+    REQUIRE(support_interface_density_from_spacing(0.4, 0.0) == Catch::Approx(1.0));
+    REQUIRE(support_interface_density_from_spacing(0.4, 0.4) == Catch::Approx(0.5));
+    REQUIRE(support_interface_density_from_spacing(0.4, -1.0) == Catch::Approx(1.0));
+
+    for (const double density : {0.01, 0.25, 0.5, 1.0}) {
+        const double spacing = support_interface_spacing_from_density(0.4, density);
+        REQUIRE(support_interface_density_from_spacing(0.4, spacing) == Catch::Approx(density));
+    }
+}
+
 TEST_CASE("Multi-nozzle wall planning does not mutate base wall semantics", "[Flow][MultiNozzleWalls]")
 {
     FullPrintConfig config;
@@ -167,6 +179,16 @@ TEST_CASE("Detail tool selection uses actual nozzle diameters", "[Flow][MultiNoz
         config.filament_colour.values = { "#FF0000", "#FF0000", "#0000FF" };
         config.crisp_corner_detail_toolhead.value = 0;
         CHECK(detail_external_perimeter_extruder_1based(config, config, 2) == 1);
+    }
+
+    SECTION("four independent hotends use the smallest valid nozzle for each base tool") {
+        config.nozzle_diameter.values = { 0.4, 0.15, 0.6, 0.8 };
+        config.filament_colour.values = { "#110000", "#001100", "#000011", "#111100" };
+        config.crisp_corner_detail_toolhead.value = 0;
+        CHECK(detail_external_perimeter_extruder_1based(config, config, 1) == 2);
+        CHECK(detail_external_perimeter_extruder_1based(config, config, 2) == 2);
+        CHECK(detail_external_perimeter_extruder_1based(config, config, 3) == 2);
+        CHECK(detail_external_perimeter_extruder_1based(config, config, 4) == 2);
     }
 }
 

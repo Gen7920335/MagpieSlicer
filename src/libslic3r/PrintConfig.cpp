@@ -9246,6 +9246,35 @@ FloatOrPercent default_toolhead_line_width_for_nozzle(std::string_view key, doub
     return FloatOrPercent(rounded_default, false);
 }
 
+void set_toolhead_nozzle_diameter(DynamicPrintConfig &config, size_t toolhead_index, double nozzle_diameter)
+{
+    const size_t required_toolheads = toolhead_index + 1;
+    auto *nozzles = config.option<ConfigOptionFloats>("nozzle_diameter", true);
+    if (nozzles->values.size() < required_toolheads)
+        config.set_num_extruders(unsigned(required_toolheads));
+
+    nozzles = config.option<ConfigOptionFloats>("nozzle_diameter", true);
+    nozzles->values[toolhead_index] = nozzle_diameter;
+
+    static constexpr std::array<std::string_view, 9> keys = {
+        "toolhead_line_width",
+        "toolhead_initial_layer_line_width",
+        "toolhead_outer_wall_line_width",
+        "toolhead_inner_wall_line_width",
+        "toolhead_top_surface_line_width",
+        "toolhead_sparse_infill_line_width",
+        "toolhead_internal_solid_infill_line_width",
+        "toolhead_support_line_width",
+        "toolhead_bridge_line_width"
+    };
+    for (const std::string_view key : keys) {
+        auto *widths = config.option<ConfigOptionFloatsOrPercents>(std::string(key), true);
+        if (widths->values.size() < required_toolheads)
+            widths->values.resize(required_toolheads, FloatOrPercent(0., false));
+        widths->values[toolhead_index] = default_toolhead_line_width_for_nozzle(key, nozzle_diameter);
+    }
+}
+
 static void initialize_toolhead_line_widths(DynamicPrintConfig &config, unsigned int num_extruders)
 {
     static constexpr std::array<std::string_view, 9> keys = {

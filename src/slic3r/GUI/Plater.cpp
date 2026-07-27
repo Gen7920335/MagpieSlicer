@@ -953,39 +953,6 @@ static int toolhead_nozzle_selection_for(double diameter)
     return best;
 }
 
-static void set_float_or_percent_vector_at(DynamicPrintConfig &config, const DynamicPrintConfig &current, const char *key, size_t index, const FloatOrPercent &value)
-{
-    std::vector<FloatOrPercent> values;
-    if (const auto *opt = current.option<ConfigOptionFloatsOrPercents>(key))
-        values = opt->values;
-    if (values.size() <= index)
-        values.resize(index + 1, FloatOrPercent(0., false));
-    values[index] = value;
-    config.set_key_value(key, new ConfigOptionFloatsOrPercents(values));
-}
-
-static double rounded_toolhead_width(double value)
-{
-    return std::round(value * 1000.) / 1000.;
-}
-
-static void set_toolhead_width_defaults_for_nozzle(DynamicPrintConfig &config, const DynamicPrintConfig &current, size_t index, double nozzle_diameter)
-{
-    const FloatOrPercent default_width(rounded_toolhead_width(nozzle_diameter * 1.125), false);
-    const FloatOrPercent first_layer_width(rounded_toolhead_width(nozzle_diameter * 1.4), false);
-    const FloatOrPercent nozzle_width(rounded_toolhead_width(nozzle_diameter), false);
-
-    set_float_or_percent_vector_at(config, current, "toolhead_line_width", index, default_width);
-    set_float_or_percent_vector_at(config, current, "toolhead_initial_layer_line_width", index, first_layer_width);
-    set_float_or_percent_vector_at(config, current, "toolhead_outer_wall_line_width", index, default_width);
-    set_float_or_percent_vector_at(config, current, "toolhead_inner_wall_line_width", index, default_width);
-    set_float_or_percent_vector_at(config, current, "toolhead_top_surface_line_width", index, nozzle_width);
-    set_float_or_percent_vector_at(config, current, "toolhead_sparse_infill_line_width", index, default_width);
-    set_float_or_percent_vector_at(config, current, "toolhead_internal_solid_infill_line_width", index, default_width);
-    set_float_or_percent_vector_at(config, current, "toolhead_support_line_width", index, nozzle_width);
-    set_float_or_percent_vector_at(config, current, "toolhead_bridge_line_width", index, nozzle_width);
-}
-
 class AMSCountPopupWindow : public PopupWindow
 {
 public:
@@ -2495,11 +2462,13 @@ void Sidebar::init_filament_combo(PlaterPresetComboBox **combo, const int filame
         const double nozzle_diameter = s_toolhead_nozzle_choices[size_t(selection)];
         nozzle_values[size_t(filament_idx)] = nozzle_diameter;
 
-        DynamicPrintConfig new_config;
-        new_config.set_key_value("nozzle_diameter", new ConfigOptionFloats(nozzle_values));
-        set_toolhead_width_defaults_for_nozzle(new_config, current_config, size_t(filament_idx), nozzle_diameter);
+        DynamicPrintConfig new_config = current_config;
+        set_toolhead_nozzle_diameter(new_config, size_t(filament_idx), nozzle_diameter);
 
         wxGetApp().get_tab(Preset::TYPE_PRINTER)->load_config(new_config);
+        sync_toolhead_nozzle_combos(new_config);
+        if (auto *filament_tab = dynamic_cast<TabFilament *>(wxGetApp().get_tab(Preset::TYPE_FILAMENT)))
+            filament_tab->set_hotend_index(size_t(filament_idx));
         wxGetApp().plater()->on_config_change(preset_bundle.full_config());
         wxGetApp().plater()->update();
     });
@@ -2558,6 +2527,24 @@ void Sidebar::init_filament_combo(PlaterPresetComboBox **combo, const int filame
     if (side == 0 && filament_idx > 0) {
         sizer_filaments = this->p->sizer_filaments->GetItem(1)->GetSizer();
         sizer_filaments->AddStretchSpacer(1);
+    }
+}
+
+void Sidebar::sync_toolhead_nozzle_combos(const DynamicPrintConfig &printer_config)
+{
+    const auto *nozzles = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
+    if (nozzles == nullptr || nozzles->values.empty())
+        return;
+
+    for (size_t index = 0; index < p->combos_toolhead_nozzle.size(); ++index) {
+        wxComboBox *combo = p->combos_toolhead_nozzle[index];
+        if (combo == nullptr)
+            continue;
+
+        const double diameter = nozzles->values[std::min(index, nozzles->values.size() - 1)];
+        const int selection = toolhead_nozzle_selection_for(diameter);
+        if (combo->GetSelection() != selection)
+            combo->SetSelection(selection);
     }
 }
 
@@ -2711,6 +2698,7 @@ void Sidebar::update_all_preset_comboboxes()
     // Orca:: show device tab based on vendor type
     p_mainframe->show_device(preset_bundle.use_bbl_device_tab());
     p_mainframe->m_tabpanel->SetSelection(p_mainframe->m_tabpanel->GetSelection());
+    sync_toolhead_nozzle_combos(preset_bundle.printers.get_edited_preset().config);
 }
 
 void Sidebar::update_presets(Preset::Type preset_type)

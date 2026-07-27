@@ -2,6 +2,7 @@
 
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/ExtrusionEntity.hpp"
+#include "libslic3r/Flow.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Layer.hpp"
 
@@ -142,6 +143,81 @@ static std::vector<ExtrusionToolHint> perimeter_tool_hints(const LayerRegion &re
     std::vector<ExtrusionToolHint> hints;
     collect_perimeter_tool_hints(region.perimeters, hints);
     return hints;
+}
+
+TEST_CASE("Toolhead nozzle diameter is the single source for per-hotend width defaults", "[MultiFilament][Config]")
+{
+    DynamicPrintConfig config;
+    config.apply(FullPrintConfig::defaults());
+    config.set_num_extruders(4);
+
+    const std::array<double, 4> diameters { 0.15, 0.20, 0.60, 0.80 };
+    for (size_t index = 0; index < diameters.size(); ++index)
+        set_toolhead_nozzle_diameter(config, index, diameters[index]);
+
+    const auto &nozzles = config.option<ConfigOptionFloats>("nozzle_diameter")->values;
+    REQUIRE(nozzles.size() == diameters.size());
+    for (size_t index = 0; index < diameters.size(); ++index) {
+        CHECK(nozzles[index] == Catch::Approx(diameters[index]));
+        CHECK(config.option<ConfigOptionFloatsOrPercents>("toolhead_outer_wall_line_width")->values[index] ==
+              default_toolhead_line_width_for_nozzle("toolhead_outer_wall_line_width", diameters[index]));
+        CHECK(config.option<ConfigOptionFloatsOrPercents>("toolhead_top_surface_line_width")->values[index] ==
+              default_toolhead_line_width_for_nozzle("toolhead_top_surface_line_width", diameters[index]));
+    }
+
+    const std::array<double, 4> edited_diameters { 0.20, 0.40, 0.80, 1.00 };
+    for (size_t edited_index = 0; edited_index < edited_diameters.size(); ++edited_index) {
+        const std::vector<double> before = config.option<ConfigOptionFloats>("nozzle_diameter")->values;
+        set_toolhead_nozzle_diameter(config, edited_index, edited_diameters[edited_index]);
+
+        const auto &after = config.option<ConfigOptionFloats>("nozzle_diameter")->values;
+        REQUIRE(after.size() == diameters.size());
+        for (size_t index = 0; index < after.size(); ++index)
+            CHECK(after[index] == Catch::Approx(index == edited_index ? edited_diameters[index] : before[index]));
+        CHECK(config.option<ConfigOptionFloatsOrPercents>("toolhead_outer_wall_line_width")->values[edited_index] ==
+              default_toolhead_line_width_for_nozzle("toolhead_outer_wall_line_width", edited_diameters[edited_index]));
+    }
+
+    const FloatOrPercent untouched(0.37, false);
+    config.option<ConfigOptionFloatsOrPercents>("toolhead_inner_wall_line_width")->values[0] = untouched;
+    set_toolhead_nozzle_diameter(config, 3, 1.0);
+    CHECK(config.option<ConfigOptionFloatsOrPercents>("toolhead_inner_wall_line_width")->values[0] == untouched);
+    CHECK(config.option<ConfigOptionFloats>("nozzle_diameter")->values[3] == Catch::Approx(1.0));
+}
+
+TEST_CASE("Small-nozzle layer controls honor disabled mode, wall counts, and large-tool overrides", "[MultiFilament][Config]")
+{
+    FullPrintConfig config;
+    config.use_smaller_nozzles_in_crisp_corners.value = true;
+    config.crisp_corner_interlace_small_nozzle_walls.value = true;
+    config.crisp_corner_large_nozzle_override_regions.values = {
+        "1:20:1",
+        "5:10:2",
+        "12:11:2",
+        "invalid"
+    };
+
+    CHECK(large_nozzle_override_toolhead_1based(config, 0, 2) == 1);
+    CHECK(large_nozzle_override_toolhead_1based(config, 4, 2) == 2);
+    CHECK(large_nozzle_override_toolhead_1based(config, 10, 2) == 2);
+    CHECK(large_nozzle_override_toolhead_1based(config, 19, 2) == 1);
+    CHECK(large_nozzle_override_toolhead_1based(config, 20, 2) == 0);
+
+    config.crisp_corner_large_nozzle_override_regions.values.clear();
+    for (const int count : { 1, 3, 5, 8 }) {
+        config.crisp_corner_small_nozzle_wall_count.value = count;
+        CHECK(detail_wall_count_for_layer(config, 0, 2) == count);
+        CHECK(detail_wall_count_for_layer(config, 1, 2) == std::max(1, count - 1));
+    }
+
+    config.use_smaller_nozzles_in_crisp_corners.value = false;
+    config.crisp_corner_small_nozzle_wall_count.value = 8;
+    CHECK(detail_wall_count_for_layer(config, 0, 2) == 0);
+    config.crisp_corner_large_nozzle_override_regions.values = { "1:20:2" };
+    CHECK(large_nozzle_override_toolhead_1based(config, 0, 2) == 2);
+    CHECK(large_nozzle_override_toolhead_1based(config, 19, 2) == 2);
+    CHECK(large_nozzle_override_toolhead_1based(config, 20, 2) == 0);
+    CHECK(large_nozzle_override_toolhead_1based(config, 0, 1) == 0);
 }
 
 // Tool index = filament id - 1; brim and skirt follow the wall filament.
@@ -318,6 +394,49 @@ TEST_CASE("Adjacent layers preserve detail and large wall counts", "[MultiFilame
 
         CHECK(fill_sizes[0] == fill_sizes[1]);
         CHECK(fill_areas[0] == Catch::Approx(fill_areas[1]).epsilon(1e-9));
+    }
+}
+
+TEST_CASE("Arachne preserves one detail wall on adjacent non-interlocking layers", "[MultiFilament][MultiNozzleWalls][Arachne]")
+{
+    const auto [detail_nozzle, large_wall_count] = GENERATE(table<double, int>({
+        { 0.15, 1 },
+        { 0.15, 3 },
+        { 0.20, 1 },
+        { 0.20, 3 },
+    }));
+    DYNAMIC_SECTION("detail nozzle " << detail_nozzle << " large walls " << large_wall_count) {
+        DynamicPrintConfig config = multi_nozzle_wall_config(0.4, detail_nozzle, 1, "arachne", true);
+        config.set_deserialize_strict({
+            { "layer_height",                               0.1 },
+            { "initial_layer_print_height",                 0.1 },
+            { "wall_loops",                                 large_wall_count },
+            { "crisp_corner_small_nozzle_wall_count",       1 },
+            { "crisp_corner_interlace_small_nozzle_walls",  false },
+            { "only_one_wall_top",                          false },
+            { "only_one_wall_first_layer",                  false },
+        });
+        config.set_key_value("toolhead_outer_wall_line_width", new ConfigOptionFloatsOrPercents{
+            FloatOrPercent(0.63, false), FloatOrPercent(detail_nozzle * 1.54, false) });
+        config.set_key_value("toolhead_inner_wall_line_width", new ConfigOptionFloatsOrPercents{
+            FloatOrPercent(0.63, false), FloatOrPercent(detail_nozzle * 1.54, false) });
+
+        Print print;
+        Model model;
+        REQUIRE_NOTHROW(init_print({ cube(20) }, print, model, config));
+        REQUIRE_NOTHROW(print.process());
+        REQUIRE(print.objects().size() == 1);
+        const PrintObject &object = *print.objects().front();
+        REQUIRE(object.layers().size() > 12);
+
+        const int expected_large_walls = std::max(2, large_wall_count);
+        for (size_t layer_id : { size_t(10), size_t(11) }) {
+            const LayerRegion &region = *object.layers()[layer_id]->regions().front();
+            const std::vector<ExtrusionToolHint> hints = perimeter_tool_hints(region);
+            INFO("detail nozzle=" << detail_nozzle << " large walls=" << large_wall_count << " layer=" << layer_id);
+            CHECK(std::count(hints.begin(), hints.end(), ExtrusionToolHint::DetailWall) == 1);
+            CHECK(std::count(hints.begin(), hints.end(), ExtrusionToolHint::LargeWall) == expected_large_walls);
+        }
     }
 }
 

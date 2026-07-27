@@ -1,6 +1,8 @@
 
 option(SLIC3R_ENC_CHECK "Verify encoding of source files" 1)
 
+add_executable(small-nozzle-gcode-verifier small_nozzle_gcode_verifier.cpp)
+
 if (IS_CROSS_COMPILE)
     # Force disable due to cross compilation. This fact is already printed on cli for users
     set(SLIC3R_ENC_CHECK OFF CACHE BOOL "" FORCE)

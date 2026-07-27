@@ -177,7 +177,7 @@ std::string serialize_large_nozzle_override_region(size_t first_layer, size_t la
 
 unsigned int large_nozzle_override_toolhead_1based(const PrintRegionConfig &region_config, size_t layer_id, size_t toolhead_count)
 {
-    if (!detail_walls_enabled(region_config) || toolhead_count == 0 || layer_id == std::numeric_limits<size_t>::max())
+    if (toolhead_count == 0 || layer_id == std::numeric_limits<size_t>::max())
         return 0;
 
     const size_t user_layer = layer_id + 1;
@@ -438,6 +438,24 @@ double Flow::mm3_per_mm() const
 	if (res <= 0.)
 		throw FlowErrorNegativeFlow();
     return res;
+}
+
+double support_interface_density_from_spacing(double extrusion_spacing, double interface_spacing)
+{
+    if (extrusion_spacing <= 0.)
+        return 1.;
+
+    const double gap = std::max(0., interface_spacing);
+    return std::clamp(extrusion_spacing / (extrusion_spacing + gap), 0., 1.);
+}
+
+double support_interface_spacing_from_density(double extrusion_spacing, double density)
+{
+    if (extrusion_spacing <= 0.)
+        return 0.;
+
+    const double clamped_density = std::clamp(density, 0.01, 1.);
+    return std::max(0., extrusion_spacing * (1. / clamped_density - 1.));
 }
 
 Flow support_material_flow(const PrintObject *object, float layer_height)

@@ -495,6 +495,8 @@ private:
 	ogStaticText*	m_top_bottom_shell_thickness_explanation = nullptr;
     std::function<void()> m_refresh_large_nozzle_override_editor;
     std::function<void(bool)> m_enable_large_nozzle_override_editor;
+    std::function<void()> m_refresh_interface_density_spacing_editor;
+    std::function<void(bool)> m_enable_interface_density_spacing_editor;
 };
 
 class TabPrintModel : public TabPrint
@@ -594,8 +596,12 @@ private:
     void            add_filament_overrides_page();
     void            update_filament_overrides_page(const DynamicPrintConfig* printers_config);
 	void 			update_volumetric_flow_preset_hints();
+    void            sync_hotend_config_from_printer();
 
     std::map<std::string, ::CheckBox*> m_overrides_options;
+    DynamicPrintConfig                 m_hotend_config;
+    ConfigOptionsGroupShp              m_hotend_optgroup;
+    size_t                             m_hotend_index {0};
 
 public:
 	//BBS: GUI refactor
@@ -610,6 +616,7 @@ public:
 	void		update() override;
     void        init_options_list() override;
     void        clear_pages() override;
+    void        set_hotend_index(size_t hotend_index);
 	bool 		supports_printer_technology(const PrinterTechnology tech) const override { return tech == ptFFF; }
 
     const std::string&	get_custom_gcode(const t_config_option_key& opt_key) override;

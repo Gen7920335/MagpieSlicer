@@ -464,7 +464,7 @@ TEST_CASE("Profile validator flags dangling and renamed preset references", "[Pr
     }
 }
 
-TEST_CASE("Multi-nozzle project settings override presets in the reconstructed full config", "[Preset][Project][MultiNozzle]")
+TEST_CASE("Multi-nozzle settings remain owned by printer and process presets", "[Preset][Project][MultiNozzle]")
 {
     PresetBundle bundle;
     bundle.filament_presets = { bundle.filaments.get_selected_preset_name() };
@@ -486,6 +486,16 @@ TEST_CASE("Multi-nozzle project settings override presets in the reconstructed f
                           new ConfigOptionFloatsOrPercentsNullable({ FloatOrPercent(35, false) }));
     process.set_key_value("crisp_corner_large_nozzle_override_regions",
                           new ConfigOptionStrings({ "5:12:1", "10:20:2" }));
+
+    // Legacy projects may contain copies of preset-owned values. They must not
+    // override the currently selected and saved printer/process presets.
+    project.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.8 }));
+    project.set_key_value("toolhead_outer_wall_line_width",
+                          new ConfigOptionFloatsOrPercents({ FloatOrPercent(0.9, false) }));
+    project.set_key_value("use_smaller_nozzles_in_crisp_corners", new ConfigOptionBool(false));
+    project.set_key_value("crisp_corner_small_nozzle_wall_count", new ConfigOptionInt(1));
+    project.set_key_value("crisp_corner_large_nozzle_override_regions",
+                          new ConfigOptionStrings({ "1:999:1" }));
 
     const DynamicPrintConfig full = bundle.full_config();
     CHECK(full.option<ConfigOptionFloats>("nozzle_diameter")->values == std::vector<double>{ 0.4, 0.15 });

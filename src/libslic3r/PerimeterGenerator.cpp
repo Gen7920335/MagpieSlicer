@@ -153,7 +153,10 @@ static bool surface_requires_detail_nozzle(const PerimeterGenerator &perimeter_g
     // radii. The 5 um floor rejects mesh faceting that is below printable XY
     // resolution while still selecting every materially sharper corner.
     constexpr double min_corner_improvement = 0.005;
+    bool has_concave_material_boundary = false;
     for (const ExPolygon &expolygon : target) {
+        if (!expolygon.holes.empty())
+            has_concave_material_boundary = true;
         const Polygon &contour = expolygon.contour;
         if (contour.points.size() < 3)
             continue;
@@ -170,8 +173,12 @@ static bool surface_requires_detail_nozzle(const PerimeterGenerator &perimeter_g
             const double out_length = std::hypot(out_x, out_y);
             if (in_length <= 0.0 || out_length <= 0.0)
                 continue;
-            if (orientation * (in_x * out_y - in_y * out_x) <= 0.0)
+
+            if (orientation * (in_x * out_y - in_y * out_x) <= 0.0) {
+                has_concave_material_boundary = true;
                 continue;
+            }
+
             const double turn_cos = std::clamp((in_x * out_x + in_y * out_y) / (in_length * out_length), -1.0, 1.0);
             const double half_cos = std::sqrt(std::max(0.0, 0.5 * (1.0 + turn_cos)));
             if (half_cos <= EPSILON)
@@ -181,6 +188,13 @@ static bool surface_requires_detail_nozzle(const PerimeterGenerator &perimeter_g
                 return true;
         }
     }
+
+    // The generic swept-area comparison also reports the rounded clearance at
+    // concave 90-degree corners and holes as recovered detail. Those regions
+    // are already reachable by the large bead and must not switch the entire
+    // connected wall loop to the detail tool.
+    if (has_concave_material_boundary)
+        return false;
 
     const auto nozzle_swept_area = [&target](double diameter) {
         const float radius = float(scale_(0.5 * diameter));

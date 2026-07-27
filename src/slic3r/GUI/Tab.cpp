@@ -228,42 +228,120 @@ private:
     bool                                     m_loading { false };
 };
 
+class InterfaceDensitySpacingEditor final : public wxPanel
+{
+public:
+    using ChangeCallback = std::function<void(double)>;
+
+    explicit InterfaceDensitySpacingEditor(wxWindow *parent) : wxPanel(parent)
+    {
+        auto *sizer = new wxBoxSizer(wxHORIZONTAL);
+
+        sizer->Add(new wxStaticText(this, wxID_ANY, _L("Density")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+        m_density = new wxSpinCtrlDouble(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(92, -1),
+                                         wxSP_ARROW_KEYS, 1., 100., 100., 1.);
+        m_density->SetDigits(1);
+        sizer->Add(m_density, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 3);
+        sizer->Add(new wxStaticText(this, wxID_ANY, "%"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
+
+        sizer->Add(new wxStaticText(this, wxID_ANY, _L("Spacing")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+        m_spacing = new wxSpinCtrlDouble(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(100, -1),
+                                         wxSP_ARROW_KEYS, 0., 1000., 0., 0.01);
+        m_spacing->SetDigits(3);
+        sizer->Add(m_spacing, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 3);
+        sizer->Add(new wxStaticText(this, wxID_ANY, "mm"), 0, wxALIGN_CENTER_VERTICAL);
+        SetSizer(sizer);
+
+        m_density->Bind(wxEVT_SPINCTRLDOUBLE, [this](wxSpinDoubleEvent &) { on_density_changed(); });
+        m_density->Bind(wxEVT_TEXT, [this](wxCommandEvent &) { on_density_changed(); });
+        m_spacing->Bind(wxEVT_SPINCTRLDOUBLE, [this](wxSpinDoubleEvent &) { on_spacing_changed(); });
+        m_spacing->Bind(wxEVT_TEXT, [this](wxCommandEvent &) { on_spacing_changed(); });
+    }
+
+    void set_on_change(ChangeCallback callback) { m_on_change = std::move(callback); }
+
+    void set_data(double extrusion_spacing, double interface_spacing, bool density_available)
+    {
+        m_loading = true;
+        m_extrusion_spacing = extrusion_spacing;
+        m_density_available = density_available;
+        m_spacing->SetValue(std::max(0., interface_spacing));
+        if (density_available && extrusion_spacing > 0.)
+            m_density->SetValue(100. * support_interface_density_from_spacing(extrusion_spacing, interface_spacing));
+        else
+            m_density->SetValue(100.);
+        m_density->Enable(IsEnabled() && density_available);
+        m_density->SetToolTip(density_available
+            ? _L("Interface line density. Triangle density is calculated per line direction.")
+            : _L("Interface density is unavailable because the interface flow could not be calculated."));
+        m_loading = false;
+    }
+
+    void set_editor_enabled(bool enabled)
+    {
+        Enable(enabled);
+        m_spacing->Enable(enabled);
+        m_density->Enable(enabled && m_density_available);
+    }
+
+private:
+    void on_density_changed()
+    {
+        if (m_loading || !m_density->IsEnabled())
+            return;
+        const double spacing = support_interface_spacing_from_density(m_extrusion_spacing, m_density->GetValue() / 100.);
+        m_loading = true;
+        m_spacing->SetValue(spacing);
+        m_loading = false;
+        emit_change(spacing);
+    }
+
+    void on_spacing_changed()
+    {
+        if (m_loading || !m_spacing->IsEnabled())
+            return;
+        const double spacing = std::max(0., m_spacing->GetValue());
+        if (m_density_available && m_extrusion_spacing > 0.) {
+            m_loading = true;
+            m_density->SetValue(100. * support_interface_density_from_spacing(m_extrusion_spacing, spacing));
+            m_loading = false;
+        }
+        emit_change(spacing);
+    }
+
+    void emit_change(double spacing)
+    {
+        if (m_on_change)
+            m_on_change(spacing);
+    }
+
+    wxSpinCtrlDouble *m_density { nullptr };
+    wxSpinCtrlDouble *m_spacing { nullptr };
+    ChangeCallback    m_on_change;
+    double            m_extrusion_spacing { 0. };
+    bool              m_density_available { true };
+    bool              m_loading { false };
+};
+
 namespace
 {
+static constexpr std::array<const char*, 9> s_toolhead_width_keys = {
+    "toolhead_line_width",
+    "toolhead_initial_layer_line_width",
+    "toolhead_outer_wall_line_width",
+    "toolhead_inner_wall_line_width",
+    "toolhead_top_surface_line_width",
+    "toolhead_sparse_infill_line_width",
+    "toolhead_internal_solid_infill_line_width",
+    "toolhead_support_line_width",
+    "toolhead_bridge_line_width"
+};
+
 int mode_to_selection(ConfigOptionMode mode)
 {
     return mode == comExpert ? 2 :
            mode == comAdvanced ? 1 :
            0;
-}
-
-static void set_float_or_percent_vector_at(DynamicPrintConfig &config, const DynamicPrintConfig &current, const char *key, size_t index, const FloatOrPercent &value)
-{
-    std::vector<FloatOrPercent> values;
-    if (const auto *opt = current.option<ConfigOptionFloatsOrPercents>(key))
-        values = opt->values;
-    if (values.size() <= index)
-        values.resize(index + 1, FloatOrPercent(0., false));
-    values[index] = value;
-    config.set_key_value(key, new ConfigOptionFloatsOrPercents(values));
-}
-
-static void set_toolhead_width_defaults_for_nozzle(DynamicPrintConfig &config, const DynamicPrintConfig &current, size_t index, double nozzle_diameter)
-{
-    static const std::array<const char*, 9> keys = {
-        "toolhead_line_width",
-        "toolhead_initial_layer_line_width",
-        "toolhead_outer_wall_line_width",
-        "toolhead_inner_wall_line_width",
-        "toolhead_top_surface_line_width",
-        "toolhead_sparse_infill_line_width",
-        "toolhead_internal_solid_infill_line_width",
-        "toolhead_support_line_width",
-        "toolhead_bridge_line_width"
-    };
-    for (const char *key : keys)
-        set_float_or_percent_vector_at(config, current, key, index,
-            default_toolhead_line_width_for_nozzle(key, nozzle_diameter));
 }
 
 static void normalize_toolhead_width_mm(DynamicPrintConfig &config, const DynamicPrintConfig &current, const std::string &key, size_t index, double nozzle_diameter)
@@ -286,19 +364,51 @@ static void normalize_toolhead_width_mm(DynamicPrintConfig &config, const Dynami
 
 static void normalize_toolhead_widths_mm(DynamicPrintConfig &config, const DynamicPrintConfig &current, size_t index, double nozzle_diameter)
 {
-    static const std::array<const char*, 9> keys = {
-        "toolhead_line_width",
-        "toolhead_initial_layer_line_width",
-        "toolhead_outer_wall_line_width",
-        "toolhead_inner_wall_line_width",
-        "toolhead_top_surface_line_width",
-        "toolhead_sparse_infill_line_width",
-        "toolhead_internal_solid_infill_line_width",
-        "toolhead_support_line_width",
-        "toolhead_bridge_line_width"
-    };
-    for (const char *key : keys)
+    for (const char *key : s_toolhead_width_keys)
         normalize_toolhead_width_mm(config, current, key, index, nozzle_diameter);
+}
+
+static double toolhead_nozzle_diameter_at(const DynamicPrintConfig &config, size_t index)
+{
+    const auto *nozzles = config.option<ConfigOptionFloats>("nozzle_diameter");
+    if (nozzles == nullptr || nozzles->values.empty())
+        return 0.4;
+    return nozzles->values[std::min(index, nozzles->values.size() - 1)];
+}
+
+static DynamicPrintConfig make_hotend_config(const DynamicPrintConfig &printer_config, size_t index)
+{
+    DynamicPrintConfig hotend_config;
+    const double nozzle_diameter = toolhead_nozzle_diameter_at(printer_config, index);
+    hotend_config.set_key_value("nozzle_diameter", new ConfigOptionFloats({nozzle_diameter}));
+
+    for (const char *key : s_toolhead_width_keys) {
+        FloatOrPercent value = default_toolhead_line_width_for_nozzle(key, nozzle_diameter);
+        if (const auto *widths = printer_config.option<ConfigOptionFloatsOrPercents>(key);
+            widths != nullptr && !widths->values.empty()) {
+            value = widths->values[std::min(index, widths->values.size() - 1)];
+            if (value.percent)
+                value = FloatOrPercent(std::round(value.get_abs_value(nozzle_diameter) * 1000.) / 1000., false);
+            if (value.value <= 0.)
+                value = default_toolhead_line_width_for_nozzle(key, nozzle_diameter);
+        }
+        hotend_config.set_key_value(key, new ConfigOptionFloatsOrPercents({value}));
+    }
+
+    return hotend_config;
+}
+
+static void set_toolhead_width_at(DynamicPrintConfig &config, const DynamicPrintConfig &current,
+                                  const std::string &key, size_t index, const FloatOrPercent &value)
+{
+    std::vector<FloatOrPercent> values;
+    if (const auto *widths = current.option<ConfigOptionFloatsOrPercents>(key))
+        values = widths->values;
+    if (values.size() <= index)
+        values.resize(index + 1, default_toolhead_line_width_for_nozzle(
+            key, toolhead_nozzle_diameter_at(current, index)));
+    values[index] = value;
+    config.set_key_value(key, new ConfigOptionFloatsOrPercents(values));
 }
 }
 
@@ -1966,7 +2076,7 @@ void Tab::load_key_value(const std::string& opt_key, const boost::any& value, bo
 
 void Tab::load_key_value(const std::string& opt_key, const std::vector<std::string>& values)
 {
-    ConfigOptionStrings *option = m_config->option<ConfigOptionStrings>(opt_key);
+    ConfigOptionStrings *option = m_config->option<ConfigOptionStrings>(opt_key, true);
     if (option == nullptr) {
         wxLogError(format_wxstr("Internal error when changing string-list value for %1%", opt_key));
         return;
@@ -3148,11 +3258,8 @@ void TabPrint::build()
 
         optgroup = page->new_optgroup(L("Low-temperature support interface"), L"param_support");
         optgroup->append_single_option_line("single_nozzle_low_temperature_interface");
-        optgroup->append_single_option_line("support_interface_auxiliary_fan_cooling_on_temperature_change");
-        optgroup->append_single_option_line("support_interface_nozzle_wiping_on_temperature_change");
         optgroup->append_single_option_line("support_interface_temperature_drop_tower");
         optgroup->append_single_option_line("support_interface_temperature");
-        optgroup->append_single_option_line("support_interface_auxiliary_fan_speed");
         optgroup->append_single_option_line("support_interface_heating_time");
 
         optgroup = page->new_optgroup(L("Support ironing"), L"param_ironing");
@@ -3189,7 +3296,65 @@ void TabPrint::build()
         optgroup->append_single_option_line("support_interface_sublayer_pattern_type", "support_settings_advanced#interface-pattern");
         optgroup->append_single_option_line("support_interface_sublayer_angle", "support_settings_advanced#interface-pattern");
         optgroup->append_single_option_line("support_interface_sublayer_temperature", "support_settings_advanced#interface-pattern");
-        optgroup->append_single_option_line("support_interface_spacing", "support_settings_advanced#interface-spacing");
+        {
+            Line density_spacing_line = {
+                L("Interface density / spacing"),
+                L("Interface density and line spacing are two views of the same setting. Changing either value updates the other. Triangle density is calculated per line direction.")
+            };
+            density_spacing_line.append_option(optgroup->get_option("support_interface_spacing"));
+            density_spacing_line.widget = [this](wxWindow *parent) {
+                auto *editor = new InterfaceDensitySpacingEditor(parent);
+                wxWeakRef<InterfaceDensitySpacingEditor> weak_editor(editor);
+                auto *sizer = new wxBoxSizer(wxVERTICAL);
+                sizer->Add(editor, 1, wxEXPAND);
+
+                editor->set_on_change([this](double spacing) {
+                    load_key_value("support_interface_spacing", spacing);
+                });
+
+                m_refresh_interface_density_spacing_editor = [this, weak_editor]() {
+                    if (!weak_editor)
+                        return;
+
+                    DynamicPrintConfig full_config = m_preset_bundle->full_config();
+                    PrintConfig print_config;
+                    PrintObjectConfig object_config;
+                    print_config.apply(full_config, true);
+                    object_config.apply(full_config, true);
+
+                    // "Default" (0) uses the first hotend for support geometry,
+                    // matching support_material_interface_flow().
+                    const int configured_interface_hotend = object_config.support_interface_filament.value;
+                    const int interface_hotend = configured_interface_hotend > 0 ? configured_interface_hotend : 1;
+                    bool density_available = !print_config.nozzle_diameter.values.empty();
+
+                    double extrusion_spacing = 0.;
+                    try {
+                        ConfigOptionFloatOrPercent fallback =
+                            object_config.support_line_width.value > 0. ? object_config.support_line_width : object_config.line_width;
+                        const ConfigOptionFloatOrPercent width = toolhead_line_width_or(
+                            print_config, frSupportMaterialInterface, interface_hotend, false, fallback);
+                        const double nozzle = print_config.nozzle_diameter.get_at(interface_hotend - 1);
+                        extrusion_spacing = Flow::new_from_config_width(
+                            frSupportMaterialInterface, width, float(nozzle), float(object_config.layer_height.value)).spacing();
+                    } catch (...) {
+                        density_available = false;
+                    }
+
+                    weak_editor->set_data(
+                        extrusion_spacing,
+                        object_config.support_interface_spacing.value,
+                        density_available);
+                };
+                m_enable_interface_density_spacing_editor = [weak_editor](bool enabled) {
+                    if (weak_editor)
+                        weak_editor->set_editor_enabled(enabled);
+                };
+                m_refresh_interface_density_spacing_editor();
+                return sizer;
+            };
+            optgroup->append_line(density_spacing_line);
+        }
         optgroup->append_single_option_line("support_bottom_interface_spacing", "support_settings_advanced#interface-spacing");
         optgroup->append_single_option_line("support_expansion", "support_settings_advanced#normal-support-expansion");
         //optgroup->append_single_option_line("support_interface_loop_pattern", "support_settings_advanced");
@@ -3376,6 +3541,8 @@ void TabPrint::reload_config()
     Tab::reload_config();
     if (m_refresh_large_nozzle_override_editor)
         m_refresh_large_nozzle_override_editor();
+    if (m_refresh_interface_density_spacing_editor)
+        m_refresh_interface_density_spacing_editor();
 }
 
 void TabPrint::update_description_lines()
@@ -3406,6 +3573,18 @@ void TabPrint::toggle_options()
     }
 
     m_config_manipulation.toggle_print_fff_options(m_config, int(intptr_t(m_extruder_switch->GetClientData())), m_type < Preset::TYPE_COUNT);
+    if (m_enable_interface_density_spacing_editor) {
+        const bool have_raft = m_config->opt_int("raft_layers") > 0;
+        const bool have_support_material = m_config->opt_bool("enable_support") || have_raft;
+        const bool have_support_interface =
+            m_config->opt_int("support_interface_top_layers") > 0 ||
+            m_config->opt_int("support_interface_bottom_layers") > 0;
+        const bool can_ironing_support =
+            have_raft || (have_support_material && m_config->opt_int("support_interface_top_layers") > 0);
+        const bool has_support_ironing = can_ironing_support && m_config->opt_bool("support_ironing");
+        m_enable_interface_density_spacing_editor(
+            have_support_material && have_support_interface && !has_support_ironing);
+    }
 
     Field *field = m_active_page->get_field("support_style");
     auto   support_type = m_config->opt_enum<SupportType>("support_type");
@@ -3474,7 +3653,8 @@ void TabPrint::toggle_options()
                   optional_bool("support_interface_auxiliary_fan_cooling_on_temperature_change"));
 
     if (m_enable_large_nozzle_override_editor)
-        m_enable_large_nozzle_override_editor(optional_bool("use_smaller_nozzles_in_crisp_corners"));
+        m_enable_large_nozzle_override_editor(
+            printer_config.option<ConfigOptionFloats>("nozzle_diameter")->values.size() > 1);
 
     // BBL printers do not support cone wipe tower
     field = m_active_page->get_field("wipe_tower_wall_type");
@@ -3521,6 +3701,8 @@ void TabPrint::update()
     m_config_manipulation.update_print_fff_config(m_config, m_type < Preset::TYPE_COUNT, m_type == Preset::TYPE_PLATE);
     if (m_refresh_large_nozzle_override_editor)
         m_refresh_large_nozzle_override_editor();
+    if (m_refresh_interface_density_spacing_editor)
+        m_refresh_interface_density_spacing_editor();
 
     update_description_lines();
     //BBS: GUI refactor
@@ -3545,6 +3727,8 @@ void TabPrint::clear_pages()
 {
     m_refresh_large_nozzle_override_editor = {};
     m_enable_large_nozzle_override_editor = {};
+    m_refresh_interface_density_spacing_editor = {};
+    m_enable_interface_density_spacing_editor = {};
     Tab::clear_pages();
 
     m_recommended_thin_wall_thickness_description_line = nullptr;
@@ -4518,81 +4702,58 @@ void TabFilament::build()
     m_presets = &m_preset_bundle->filaments;
     load_initial_data();
 
-    int hotend_idx = 0;
     if (m_presets_choice != nullptr)
-        hotend_idx = std::max(0, m_presets_choice->get_filament_idx());
+        m_hotend_index = size_t(std::max(0, m_presets_choice->get_filament_idx()));
+    sync_hotend_config_from_printer();
 
     auto hotend_page = add_options_page(L("Hotend"), "custom-gcode_extruder");
-        {
-            const DynamicPrintConfig &current_printer_config = m_preset_bundle->printers.get_edited_preset().config;
-            double nozzle_diameter = 0.4;
-            if (const auto *nozzle_opt = current_printer_config.option<ConfigOptionFloats>("nozzle_diameter")) {
-                if (!nozzle_opt->values.empty())
-                    nozzle_diameter = nozzle_opt->values[std::min<size_t>(size_t(hotend_idx), nozzle_opt->values.size() - 1)];
-            }
+        m_hotend_optgroup = hotend_page->new_optgroup(L("Hotend"), L"param_line_width", -1, true);
+        m_hotend_optgroup->set_config(&m_hotend_config);
+        m_hotend_optgroup->append_single_option_line("nozzle_diameter", "printer_extruder_basic_information#nozzle-diameter", 0);
+        m_hotend_optgroup->append_single_option_line("toolhead_line_width", "printer_extruder_toolhead_line_width", 0);
+        m_hotend_optgroup->append_single_option_line("toolhead_initial_layer_line_width", "printer_extruder_toolhead_line_width#first-layer", 0);
+        m_hotend_optgroup->append_single_option_line("toolhead_outer_wall_line_width", "printer_extruder_toolhead_line_width#outer-wall", 0);
+        m_hotend_optgroup->append_single_option_line("toolhead_inner_wall_line_width", "printer_extruder_toolhead_line_width#inner-wall", 0);
+        m_hotend_optgroup->append_single_option_line("toolhead_top_surface_line_width", "printer_extruder_toolhead_line_width#top-surface", 0);
+        m_hotend_optgroup->append_single_option_line("toolhead_sparse_infill_line_width", "printer_extruder_toolhead_line_width#sparse-infill", 0);
+        m_hotend_optgroup->append_single_option_line("toolhead_internal_solid_infill_line_width", "printer_extruder_toolhead_line_width#internal-solid-infill", 0);
+        m_hotend_optgroup->append_single_option_line("toolhead_support_line_width", "printer_extruder_toolhead_line_width#support", 0);
+        m_hotend_optgroup->append_single_option_line("toolhead_bridge_line_width", "printer_extruder_toolhead_line_width#bridge", 0);
 
-            DynamicPrintConfig normalized_hotend_config;
-            normalize_toolhead_widths_mm(normalized_hotend_config, current_printer_config, size_t(hotend_idx), nozzle_diameter);
-            if (Tab *printer_tab = wxGetApp().get_tab(Preset::TYPE_PRINTER))
-                printer_tab->load_config(normalized_hotend_config);
-        }
-
-        DynamicPrintConfig &printer_config = m_preset_bundle->printers.get_edited_preset().config;
-        auto hotend_optgroup = hotend_page->new_optgroup(L("Hotend"), L"param_line_width", -1, true);
-        hotend_optgroup->set_config(&printer_config);
-        hotend_optgroup->append_single_option_line("nozzle_diameter", "printer_extruder_basic_information#nozzle-diameter", hotend_idx);
-        hotend_optgroup->append_single_option_line("toolhead_line_width", "printer_extruder_toolhead_line_width", hotend_idx);
-        hotend_optgroup->append_single_option_line("toolhead_initial_layer_line_width", "printer_extruder_toolhead_line_width#first-layer", hotend_idx);
-        hotend_optgroup->append_single_option_line("toolhead_outer_wall_line_width", "printer_extruder_toolhead_line_width#outer-wall", hotend_idx);
-        hotend_optgroup->append_single_option_line("toolhead_inner_wall_line_width", "printer_extruder_toolhead_line_width#inner-wall", hotend_idx);
-        hotend_optgroup->append_single_option_line("toolhead_top_surface_line_width", "printer_extruder_toolhead_line_width#top-surface", hotend_idx);
-        hotend_optgroup->append_single_option_line("toolhead_sparse_infill_line_width", "printer_extruder_toolhead_line_width#sparse-infill", hotend_idx);
-        hotend_optgroup->append_single_option_line("toolhead_internal_solid_infill_line_width", "printer_extruder_toolhead_line_width#internal-solid-infill", hotend_idx);
-        hotend_optgroup->append_single_option_line("toolhead_support_line_width", "printer_extruder_toolhead_line_width#support", hotend_idx);
-        hotend_optgroup->append_single_option_line("toolhead_bridge_line_width", "printer_extruder_toolhead_line_width#bridge", hotend_idx);
-
-        hotend_optgroup->m_get_initial_config = [this]() {
-            return m_preset_bundle->printers.get_selected_preset().config;
+        m_hotend_optgroup->m_get_initial_config = [this]() {
+            return make_hotend_config(m_preset_bundle->printers.get_selected_preset().config, m_hotend_index);
         };
-        hotend_optgroup->m_get_sys_config = [this]() {
+        m_hotend_optgroup->m_get_sys_config = [this]() {
             const Preset *parent = m_preset_bundle->printers.get_selected_preset_parent();
-            return parent != nullptr ? parent->config : DynamicPrintConfig();
+            return parent != nullptr ? make_hotend_config(parent->config, m_hotend_index) : DynamicPrintConfig();
         };
-        hotend_optgroup->have_sys_config = [this]() {
+        m_hotend_optgroup->have_sys_config = [this]() {
             return m_preset_bundle->printers.get_selected_preset_parent() != nullptr;
         };
-        hotend_optgroup->m_on_change = [this, hotend_idx](t_config_option_key opt_id, boost::any value) {
+        m_hotend_optgroup->m_on_change = [this](t_config_option_key opt_id, boost::any value) {
             const std::string short_key = opt_id.substr(0, opt_id.find('#'));
             DynamicPrintConfig &current_config = m_preset_bundle->printers.get_edited_preset().config;
-            double nozzle_diameter = 0.4;
-            if (const auto *nozzle_opt = current_config.option<ConfigOptionFloats>("nozzle_diameter")) {
-                if (!nozzle_opt->values.empty())
-                    nozzle_diameter = nozzle_opt->values[std::min<size_t>(size_t(hotend_idx), nozzle_opt->values.size() - 1)];
-            }
+            DynamicPrintConfig new_conf = current_config;
 
             if (short_key == "nozzle_diameter") {
-                std::vector<double> nozzle_diameters;
-                if (const auto *nozzle_opt = current_config.option<ConfigOptionFloats>("nozzle_diameter"))
-                    nozzle_diameters = nozzle_opt->values;
-                if (nozzle_diameters.empty())
-                    nozzle_diameters.push_back(0.4);
-                if (nozzle_diameters.size() <= size_t(hotend_idx))
-                    nozzle_diameters.resize(size_t(hotend_idx) + 1, nozzle_diameters.back());
-
-                DynamicPrintConfig new_conf;
-                new_conf.set_key_value("nozzle_diameter", new ConfigOptionFloats(nozzle_diameters));
-                set_toolhead_width_defaults_for_nozzle(new_conf, current_config, size_t(hotend_idx), nozzle_diameters[size_t(hotend_idx)]);
-                wxGetApp().get_tab(Preset::TYPE_PRINTER)->load_config(new_conf);
+                const double nozzle_diameter = m_hotend_config.option<ConfigOptionFloats>(
+                    "nozzle_diameter")->values.front();
+                set_toolhead_nozzle_diameter(new_conf, m_hotend_index, nozzle_diameter);
             } else if (boost::algorithm::starts_with(short_key, "toolhead_")) {
-                DynamicPrintConfig normalized_conf;
-                normalize_toolhead_widths_mm(normalized_conf, current_config, size_t(hotend_idx), nozzle_diameter);
-                wxGetApp().get_tab(Preset::TYPE_PRINTER)->load_config(normalized_conf);
+                const FloatOrPercent width = m_hotend_config.option<ConfigOptionFloatsOrPercents>(
+                    short_key)->values.front();
+                set_toolhead_width_at(new_conf, current_config, short_key, m_hotend_index, width);
             }
 
             if (Tab *printer_tab = wxGetApp().get_tab(Preset::TYPE_PRINTER)) {
+                printer_tab->load_config(new_conf);
                 printer_tab->update_dirty();
                 printer_tab->on_value_change(short_key, value);
             }
+            wxGetApp().sidebar().sync_toolhead_nozzle_combos(new_conf);
+            sync_hotend_config_from_printer();
+            if (m_hotend_optgroup)
+                m_hotend_optgroup->reload_config();
             wxGetApp().plater()->on_config_change(m_preset_bundle->full_config());
             wxGetApp().plater()->update();
         };
@@ -4961,10 +5122,38 @@ void TabFilament::reload_config()
 {
     this->compatible_widget_reload(m_compatible_printers);
     this->compatible_widget_reload(m_compatible_prints);
+    sync_hotend_config_from_printer();
     Tab::reload_config();
 
     // Recompute derived override UI from the newly loaded config
     update_filament_overrides_page(&m_preset_bundle->printers.get_edited_preset().config);
+}
+
+void TabFilament::sync_hotend_config_from_printer()
+{
+    const DynamicPrintConfig &printer_config = m_preset_bundle->printers.get_edited_preset().config;
+    const auto *nozzles = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
+    const size_t hotend_count = nozzles == nullptr ? 1 : std::max<size_t>(1, nozzles->values.size());
+    m_hotend_index = std::min(m_hotend_index, hotend_count - 1);
+    m_hotend_config = make_hotend_config(printer_config, m_hotend_index);
+}
+
+void TabFilament::set_hotend_index(size_t hotend_index)
+{
+    const DynamicPrintConfig &printer_config = m_preset_bundle->printers.get_edited_preset().config;
+    const auto *nozzles = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
+    const size_t hotend_count = nozzles == nullptr ? 1 : std::max<size_t>(1, nozzles->values.size());
+    m_hotend_index = std::min(hotend_index, hotend_count - 1);
+
+    const double nozzle_diameter = toolhead_nozzle_diameter_at(printer_config, m_hotend_index);
+    DynamicPrintConfig normalized_config;
+    normalize_toolhead_widths_mm(normalized_config, printer_config, m_hotend_index, nozzle_diameter);
+    if (Tab *printer_tab = wxGetApp().get_tab(Preset::TYPE_PRINTER))
+        printer_tab->load_config(normalized_config);
+
+    sync_hotend_config_from_printer();
+    if (m_hotend_optgroup)
+        m_hotend_optgroup->reload_config();
 }
 
 //void TabFilament::update_volumetric_flow_preset_hints()
@@ -5344,11 +5533,6 @@ void TabPrinter::build_fff()
         optgroup->append_single_option_line("nozzle_type", "printer_basic_information_accessory#nozzle-type");
         optgroup->append_single_option_line("nozzle_hrc", "printer_basic_information_accessory#nozzle-hrc");
         optgroup->append_single_option_line("auxiliary_fan", "printer_basic_information_accessory#auxiliary-part-cooling-fan");
-        optgroup->append_single_option_line("support_interface_cooling_position");
-        optgroup->append_single_option_line("support_interface_brush_start");
-        optgroup->append_single_option_line("support_interface_brush_end");
-        optgroup->append_single_option_line("support_interface_brush_repetitions");
-        optgroup->append_single_option_line("support_interface_brush_speed");
         optgroup->append_single_option_line("support_chamber_temp_control", "printer_basic_information_accessory#support-controlling-chamber-temperature");
         optgroup->append_single_option_line("support_air_filtration", "printer_basic_information_accessory#support-air-filtration");
 
@@ -5899,10 +6083,14 @@ if (is_marlin_flavor)
                         }
                     }
 
-                    new_conf.set_key_value("nozzle_diameter", new ConfigOptionFloats(nozzle_diameters));
+                    const auto &old_nozzles = m_config->option<ConfigOptionFloats>("nozzle_diameter")->values;
                     for (size_t i = 0; i < nozzle_diameters.size(); ++i)
-                        set_toolhead_width_defaults_for_nozzle(new_conf, *m_config, i, nozzle_diameters[i]);
+                        if (i >= old_nozzles.size() || std::abs(nozzle_diameters[i] - old_nozzles[i]) > EPSILON)
+                            set_toolhead_nozzle_diameter(new_conf, i, nozzle_diameters[i]);
                     load_config(new_conf);
+                    wxGetApp().sidebar().sync_toolhead_nozzle_combos(new_conf);
+                    if (auto *filament_tab = dynamic_cast<TabFilament *>(wxGetApp().get_tab(Preset::TYPE_FILAMENT)))
+                        filament_tab->reload_config();
                 }
                 update_dirty();
                 on_value_change(opt_key, value);
