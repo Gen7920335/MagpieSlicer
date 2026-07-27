@@ -356,7 +356,8 @@ public:
 	void		compare_preset();
 	void		transfer_options(const std::string&name_from, const std::string&name_to, std::vector<std::string> options);
 	//BBS: add project embedded preset relate logic
-	void        save_preset(std::string name = std::string(), bool detach = false, bool save_to_project = false, bool from_input = false, std::string input_name = "");
+	virtual void save_preset(std::string name = std::string(), bool detach = false, bool save_to_project = false, bool from_input = false, std::string input_name = "");
+    bool        save_dirty_preset();
 	//void		save_preset(std::string name = std::string(), bool detach = false);
 
 	void		delete_preset();
@@ -610,6 +611,7 @@ public:
 	~TabFilament() {}
 
 	void		build() override;
+	void        save_preset(std::string name = std::string(), bool detach = false, bool save_to_project = false, bool from_input = false, std::string input_name = "") override;
 	void		reload_config() override;
 	void		update_description_lines() override;
 	void		toggle_options() override;

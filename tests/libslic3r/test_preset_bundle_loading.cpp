@@ -1,5 +1,7 @@
 #include <catch2/catch_all.hpp>
 
+#include <algorithm>
+#include <array>
 #include <boost/filesystem.hpp>
 
 #include "libslic3r/PresetBundle.hpp"
@@ -77,6 +79,92 @@ struct RenameTestCollection : public PresetCollection
     {}
     using PresetCollection::update_map_system_profile_renamed;
 };
+
+template<class Option>
+Option &required_option(DynamicPrintConfig &config, const std::string &key)
+{
+    CAPTURE(key);
+    Option *option = config.option<Option>(key);
+    REQUIRE(option != nullptr);
+    return *option;
+}
+
+void check_effective_option(const ConfigOption &expected,
+                            const ConfigOption &actual,
+                            const ConfigOption &parent)
+{
+    if (!actual.is_vector() || !actual.nullable()) {
+        CHECK(actual.serialize() == expected.serialize());
+        return;
+    }
+
+    const auto &expected_vector = static_cast<const ConfigOptionVectorBase &>(expected);
+    const auto &actual_vector   = static_cast<const ConfigOptionVectorBase &>(actual);
+    const auto &parent_vector   = static_cast<const ConfigOptionVectorBase &>(parent);
+    const std::vector<std::string> expected_values = expected_vector.vserialize();
+    const std::vector<std::string> actual_values   = actual_vector.vserialize();
+    const std::vector<std::string> parent_values   = parent_vector.vserialize();
+
+    REQUIRE(actual_values.size() == expected_values.size());
+    REQUIRE(!parent_values.empty());
+    for (size_t index = 0; index < expected_values.size(); ++index) {
+        const std::string &effective = actual_vector.is_nil(index) ?
+            parent_values[std::min(index, parent_values.size() - 1)] :
+            actual_values[index];
+        CHECK(effective == expected_values[index]);
+    }
+}
+
+void check_json_roundtrip(const DynamicPrintConfig &config,
+                          const DynamicPrintConfig &defaults,
+                          PresetCollection &collection,
+                          Preset::Type type,
+                          const std::vector<std::string> &keys,
+                          const fs::path &path)
+{
+    const std::vector<std::string> dirty = config.diff(defaults);
+    for (const std::string &key : keys) {
+        CAPTURE(key);
+        REQUIRE(config.has(key));
+    }
+
+    DynamicPrintConfig parent = defaults;
+    Preset             preset(type, "Roundtrip");
+    preset.file   = path.string();
+    preset.config = config;
+    preset.save(&parent);
+
+    DynamicPrintConfig                  loaded;
+    std::map<std::string, std::string> metadata;
+    std::string                         reason;
+    const ConfigSubstitutions substitutions = loaded.load_from_json(
+        path.string(), ForwardCompatibilitySubstitutionRule::Disable, metadata, reason);
+
+    CHECK(reason.empty());
+    CHECK(substitutions.empty());
+    for (const std::string &key : keys) {
+        CAPTURE(key);
+        const ConfigOption *expected = config.option(key);
+        const ConfigOption *actual   = loaded.option(key);
+        REQUIRE(expected != nullptr);
+        const bool should_be_stored = std::find(dirty.begin(), dirty.end(), key) != dirty.end();
+        CHECK((actual != nullptr) == should_be_stored);
+    }
+
+    DynamicPrintConfig validated = loaded;
+    CHECK(Preset::remove_invalid_keys(validated, defaults).empty());
+    Preset &reloaded = collection.load_preset(path.string(), "Roundtrip reloaded", validated, false);
+    for (const std::string &key : keys) {
+        CAPTURE(key);
+        const ConfigOption *expected = config.option(key);
+        const ConfigOption *actual   = reloaded.config.option(key);
+        const ConfigOption *parent   = defaults.option(key);
+        REQUIRE(expected != nullptr);
+        REQUIRE(actual != nullptr);
+        REQUIRE(parent != nullptr);
+        check_effective_option(*expected, *actual, *parent);
+    }
+}
 
 } // namespace
 
@@ -505,5 +593,162 @@ TEST_CASE("Multi-nozzle settings remain owned by printer and process presets", "
           std::vector<FloatOrPercent>{ FloatOrPercent(35, false) });
     CHECK(full.option<ConfigOptionStrings>("crisp_corner_large_nozzle_override_regions")->values ==
           std::vector<std::string>{ "5:12:1", "10:20:2" });
+}
+
+TEST_CASE("Custom printer settings survive JSON save and reload", "[Preset][Roundtrip][CustomSettings]")
+{
+    const size_t level = GENERATE(0u, 1u, 2u, 3u);
+    DYNAMIC_SECTION("boundary level " << level) {
+    TempPresetDir temp_dir;
+    PresetBundle  bundle;
+
+    const DynamicPrintConfig defaults = bundle.printers.default_preset().config;
+    DynamicPrintConfig       printer  = defaults;
+
+    const std::array<std::array<double, 4>, 4> nozzle_sets = {{
+        {{ 0.15, 0.20, 0.40, 0.60 }},
+        {{ 0.20, 0.40, 0.60, 0.80 }},
+        {{ 0.40, 0.60, 0.80, 1.00 }},
+        {{ 1.00, 0.80, 0.60, 0.40 }}
+    }};
+    required_option<ConfigOptionFloats>(printer, "nozzle_diameter").values =
+        std::vector<double>(nozzle_sets[level].begin(), nozzle_sets[level].end());
+
+    const std::array<const char *, 9> width_keys = {
+        "toolhead_line_width",
+        "toolhead_initial_layer_line_width",
+        "toolhead_outer_wall_line_width",
+        "toolhead_inner_wall_line_width",
+        "toolhead_top_surface_line_width",
+        "toolhead_sparse_infill_line_width",
+        "toolhead_internal_solid_infill_line_width",
+        "toolhead_support_line_width",
+        "toolhead_bridge_line_width"
+    };
+    std::vector<std::string> keys = { "nozzle_diameter" };
+    for (size_t index = 0; index < width_keys.size(); ++index) {
+        std::vector<FloatOrPercent> widths;
+        widths.reserve(nozzle_sets[level].size());
+        for (size_t tool = 0; tool < nozzle_sets[level].size(); ++tool) {
+            const double width = level == 0 ? 0.0 :
+                                 level == 3 ? 10.0 :
+                                 nozzle_sets[level][tool] * (1.0 + 0.05 * double(index + level));
+            widths.emplace_back(width, false);
+        }
+        required_option<ConfigOptionFloatsOrPercents>(printer, width_keys[index]).values = std::move(widths);
+        keys.emplace_back(width_keys[index]);
+    }
+
+    const std::array<Vec2d, 4> cooling_positions = {
+        Vec2d(-1.0, -1.0), Vec2d(0.0, 0.0), Vec2d(4.0, 268.0), Vec2d(500.0, 500.0)
+    };
+    const std::array<Vec2d, 4> brush_starts = {
+        Vec2d(-1.0, -1.0), Vec2d(0.0, 0.0), Vec2d(15.0, 270.0), Vec2d(500.0, 499.0)
+    };
+    const std::array<Vec2d, 4> brush_ends = {
+        Vec2d(-1.0, -1.0), Vec2d(1.0, 0.0), Vec2d(45.0, 270.0), Vec2d(500.0, 500.0)
+    };
+    required_option<ConfigOptionPoint>(printer, "support_interface_cooling_position").value = cooling_positions[level];
+    required_option<ConfigOptionPoint>(printer, "support_interface_brush_start").value = brush_starts[level];
+    required_option<ConfigOptionPoint>(printer, "support_interface_brush_end").value = brush_ends[level];
+    required_option<ConfigOptionInt>(printer, "support_interface_brush_repetitions").value =
+        std::array<int, 4>{ 0, 1, 5, 10 }[level];
+    required_option<ConfigOptionFloat>(printer, "support_interface_brush_speed").value =
+        std::array<double, 4>{ 1.0, 80.0, 250.0, 500.0 }[level];
+    keys.insert(keys.end(), {
+        "support_interface_cooling_position",
+        "support_interface_brush_start",
+        "support_interface_brush_end",
+        "support_interface_brush_repetitions",
+        "support_interface_brush_speed"
+    });
+
+    check_json_roundtrip(printer, defaults, bundle.printers, Preset::TYPE_PRINTER, keys,
+                         temp_dir.path / "printer.json");
+    }
+}
+
+TEST_CASE("Custom process settings survive JSON save and reload", "[Preset][Roundtrip][CustomSettings]")
+{
+    const size_t level = GENERATE(0u, 1u, 2u, 3u);
+    DYNAMIC_SECTION("boundary level " << level) {
+    TempPresetDir temp_dir;
+    PresetBundle  bundle;
+
+    const DynamicPrintConfig defaults = bundle.prints.default_preset().config;
+    DynamicPrintConfig       process  = defaults;
+
+    const bool enabled = level != 0;
+    required_option<ConfigOptionBool>(process, "use_smaller_nozzles_in_crisp_corners").value = enabled;
+    required_option<ConfigOptionInt>(process, "crisp_corner_detail_toolhead").value =
+        std::array<int, 4>{ 0, 1, 8, 16 }[level];
+    required_option<ConfigOptionInt>(process, "crisp_corner_small_nozzle_wall_count").value =
+        std::array<int, 4>{ 0, 1, 50, 100 }[level];
+    required_option<ConfigOptionPercent>(process, "crisp_corner_nozzle_wall_overlap").value =
+        std::array<double, 4>{ 0.0, 15.0, 40.0, 80.0 }[level];
+    required_option<ConfigOptionBool>(process, "crisp_corner_interlace_small_nozzle_walls").value = enabled;
+    const std::array<std::vector<std::string>, 4> override_regions = {{
+        {}, { "1:1:1" }, { "1:20:1", "18:44:3" }, { "1:999999:16", "1:999999:1" }
+    }};
+    required_option<ConfigOptionStrings>(process, "crisp_corner_large_nozzle_override_regions").values =
+        override_regions[level];
+    const std::array<FloatOrPercent, 4> detail_speeds = {
+        FloatOrPercent(0, false), FloatOrPercent(10, false),
+        FloatOrPercent(50, true), FloatOrPercent(500, false)
+    };
+    required_option<ConfigOptionFloatsOrPercentsNullable>(process, "crisp_corner_small_nozzle_wall_speed").values =
+        std::vector<FloatOrPercent>(4, detail_speeds[level]);
+
+    required_option<ConfigOptionBool>(process, "single_nozzle_low_temperature_interface").value = enabled;
+    required_option<ConfigOptionBool>(process, "support_interface_auxiliary_fan_cooling_on_temperature_change").value = enabled;
+    required_option<ConfigOptionBool>(process, "support_interface_nozzle_wiping_on_temperature_change").value = enabled;
+    required_option<ConfigOptionBool>(process, "support_interface_temperature_drop_tower").value = enabled;
+    required_option<ConfigOptionInt>(process, "support_interface_temperature").value =
+        std::array<int, 4>{ 1, 120, 220, 350 }[level];
+    required_option<ConfigOptionInt>(process, "support_interface_auxiliary_fan_speed").value =
+        std::array<int, 4>{ 0, 25, 50, 100 }[level];
+    required_option<ConfigOptionFloat>(process, "support_interface_heating_time").value =
+        std::array<double, 4>{ 0.0, 5.0, 30.0, 60.0 }[level];
+    required_option<ConfigOptionBool>(process, "support_interface_sublayer_pattern").value = enabled;
+    required_option<ConfigOptionInt>(process, "support_interface_sublayer_start_layer").value =
+        std::array<int, 4>{ 2, 3, 8, 100 }[level];
+    required_option<ConfigOptionInt>(process, "support_interface_sublayer_end_layer").value =
+        std::array<int, 4>{ 2, 5, 16, 100 }[level];
+    const std::array<SupportMaterialInterfacePattern, 4> patterns = {
+        smipAuto, smipRectilinear, smipGrid, smipTriangles
+    };
+    required_option<ConfigOptionEnum<SupportMaterialInterfacePattern>>(
+        process, "support_interface_sublayer_pattern_type").value = patterns[level];
+    required_option<ConfigOptionFloat>(process, "support_interface_sublayer_angle").value =
+        std::array<double, 4>{ 0.0, 30.0, 90.0, 180.0 }[level];
+    required_option<ConfigOptionInt>(process, "support_interface_sublayer_temperature").value =
+        std::array<int, 4>{ 0, 120, 220, 300 }[level];
+
+    const std::vector<std::string> keys = {
+        "use_smaller_nozzles_in_crisp_corners",
+        "crisp_corner_detail_toolhead",
+        "crisp_corner_small_nozzle_wall_count",
+        "crisp_corner_nozzle_wall_overlap",
+        "crisp_corner_interlace_small_nozzle_walls",
+        "crisp_corner_large_nozzle_override_regions",
+        "crisp_corner_small_nozzle_wall_speed",
+        "single_nozzle_low_temperature_interface",
+        "support_interface_auxiliary_fan_cooling_on_temperature_change",
+        "support_interface_nozzle_wiping_on_temperature_change",
+        "support_interface_temperature_drop_tower",
+        "support_interface_temperature",
+        "support_interface_auxiliary_fan_speed",
+        "support_interface_heating_time",
+        "support_interface_sublayer_pattern",
+        "support_interface_sublayer_start_layer",
+        "support_interface_sublayer_end_layer",
+        "support_interface_sublayer_pattern_type",
+        "support_interface_sublayer_angle",
+        "support_interface_sublayer_temperature"
+    };
+
+    check_json_roundtrip(process, defaults, bundle.prints, Preset::TYPE_PRINT, keys,
+                         temp_dir.path / "process.json");
+    }
 }
 

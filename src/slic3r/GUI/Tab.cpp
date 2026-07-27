@@ -5156,6 +5156,28 @@ void TabFilament::set_hotend_index(size_t hotend_index)
         m_hotend_optgroup->reload_config();
 }
 
+bool Tab::save_dirty_preset()
+{
+    if (!current_preset_is_dirty())
+        return true;
+
+    save_preset();
+    return !current_preset_is_dirty();
+}
+
+void TabFilament::save_preset(std::string name, bool detach, bool save_to_project, bool from_input, std::string input_name)
+{
+    // Hotend controls are displayed here but belong to the printer preset.
+    // Persist that owner first so saving the material cannot silently discard them.
+    if (Tab *printer_tab = wxGetApp().get_tab(Preset::TYPE_PRINTER);
+        printer_tab != nullptr && !printer_tab->save_dirty_preset())
+        return;
+
+    const bool explicit_save = !name.empty() || detach || save_to_project || from_input || !input_name.empty();
+    if (current_preset_is_dirty() || explicit_save)
+        Tab::save_preset(std::move(name), detach, save_to_project, from_input, std::move(input_name));
+}
+
 //void TabFilament::update_volumetric_flow_preset_hints()
 //{
 //    wxString text;
