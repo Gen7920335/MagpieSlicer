@@ -1,164 +1,163 @@
 # Magpie Slicer
 
-Magpie Slicer is an experimental OrcaSlicer fork focused on mixed-nozzle
-printing and support-generation controls.
+**한국어** | [English](README_EN.md)
 
-- Application name: **Magpie Slicer**
-- Current version: **2.5.0 (modified)**
-- Installer package name: **OrcaSlicer(name pending)**
-- Platform: **Windows x64**
-- Upstream: [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer)
+Magpie Slicer는 서로 다른 구경의 노즐을 함께 사용하는 출력과 서포트 생성
+기능을 확장한 OrcaSlicer 기반 실험용 포크입니다.
 
-> This project is under active development. Verify generated G-code and machine
-> behavior before using it on production hardware.
+- 프로그램 이름: **Magpie Slicer**
+- 현재 버전: **2.5.0 (modified)**
+- 설치 패키지 이름: **OrcaSlicer(name pending)**
+- 지원 플랫폼: **Windows x64**
+- 원본 프로젝트: [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer)
 
-## Main Features
+> 이 프로젝트는 개발 중입니다. 실제 장비에서 출력하기 전에 생성된 G-code와
+> 장비 동작을 반드시 확인하십시오.
 
-### Mixed-nozzle wall printing
+## 주요 기능
 
-Multiple hotends may use different nozzle diameters in one print.
+### 멀티 노즐 벽 출력
 
-- Per-hotend nozzle diameter and line-width settings
-- Automatic smaller-nozzle detection
-- Small-nozzle wall count
-- Classic and Arachne wall-generator support
-- Small/large-nozzle wall overlap
-- Optional alternating-layer interlocking
-- Small-nozzle wall speed override
-- Layer-range large-nozzle override with selectable hotend
-- Project and printer-preset persistence
-- `Nozzle used` preview mode with a separate color for each nozzle
+한 출력물에서 서로 다른 노즐 구경을 사용하는 여러 핫엔드를 함께 사용할 수
+있습니다.
 
-The smaller nozzle is selected only when the larger nozzle cannot completely
-cover a connected wall loop. The selected loop remains on one nozzle to avoid
-visible seams and weak mixed-width sections.
+- 핫엔드별 노즐 구경 및 선폭 설정
+- 소구경 노즐 자동 판별
+- 소구경 벽 수 설정
+- Classic 및 Arachne 벽 생성기 지원
+- 소구경/대구경 벽 겹침 설정
+- 레이어 교대식 인터락킹
+- 소구경 벽 속도 오버라이드
+- 지정 레이어 범위의 대구경 핫엔드 오버라이드
+- 프린터 프리셋 및 프로젝트 설정 저장
+- 노즐마다 별도 색상을 사용하는 `Nozzle used` 미리보기
 
-### Cura-style normal support
+대구경 노즐이 연결된 벽 루프를 완전히 채울 수 없는 경우에만 소구경 노즐을
+선택합니다. 외관 심과 강도 저하를 방지하기 위해 선택된 루프 전체는 같은
+노즐로 출력합니다.
 
-Magpie Slicer adds Cura-style normal-support choices while retaining the
-original Orca/Prusa and tree-support paths.
+### Cura 스타일 일반 서포트
+
+기존 Orca/Prusa 스타일 및 트리 서포트를 유지하면서 Cura 스타일 일반 서포트
+선택지를 추가했습니다.
 
 - `Normal (Cura style) auto`
 - `Normal (Cura style)`
-- Cura-style support-region handling
-- Continuous ZigZag support paths
-- 70-degree and 90-degree threshold-angle handling
+- Cura 스타일 서포트 영역 처리
+- 연속된 ZigZag 서포트 경로
+- 임계각 70도 및 90도 처리
 
-### Triangle support interface
+### 삼각형 서포트 인터페이스
 
-The support-interface pattern list includes `Triangles`.
+서포트 인터페이스 패턴에 `Triangles`를 추가했습니다.
 
-- Three fixed line directions
-- 120-degree directional spacing
-- Zero-spacing dense interface support
-- Consistent behavior for Prusa, Cura-style, and tree support
-- Smoothed interface underside
+- 고정된 세 방향의 선
+- 방향별 120도 간격
+- 간격 0의 고밀도 인터페이스
+- Prusa, Cura 스타일 및 트리 서포트 지원
+- 인터페이스 아랫면 스무딩
 
-### Interface sublayers
+### 인터페이스 서브레이어
 
-Selected interface layers may use a separate pattern.
+지정한 인터페이스 레이어 범위에 별도 패턴을 적용할 수 있습니다.
 
-- Enable/disable toggle
-- Start and end interface-layer range
-- Pattern type
-- Pattern angle
-- Interface temperature
-- Contact-side interface is counted as layer 1
-- End values are clamped to the available interface-layer count
-- Automatically disabled when the interface has one layer or less
+- 기능 켜기/끄기
+- 시작 및 종료 인터페이스 레이어
+- 패턴 종류
+- 패턴 각도
+- 인터페이스 온도
+- 모델 접촉면을 1번 레이어로 계산
+- 종료값이 총 인터페이스 수를 넘으면 자동 제한
+- 인터페이스가 1겹 이하면 자동 비활성화
 
-### Low-temperature support interface
+### 저온 서포트 인터페이스
 
-Single-nozzle printing may use a separate support-interface temperature.
+싱글 노즐 출력에서도 서포트 인터페이스 온도를 별도로 지정할 수 있습니다.
 
-- Interface extrusion temperature
-- Interface-exit heating time
-- Auxiliary-fan cooling toggle and speed
-- Nozzle-wiping toggle
-- Temperature-drop tower
-- Hardware-dependent options remain disabled when the selected printer does
-  not provide the required coordinates or hardware capability
+- 인터페이스 출력 온도
+- 인터페이스 종료 후 재가열 시간
+- AUX 팬 냉각 토글 및 속도
+- 노즐 와이핑 토글
+- 온도 드롭 타워
+- 필요한 하드웨어나 좌표가 없는 프린터에서는 관련 설정 비활성화
 
-The temperature-drop tower uses a rear-left bed location when available. Its
-path length starts at 50 mm for a temperature difference up to 30 C, increases
-by 1 mm per additional degree, and is capped at 80 mm. The final 10 mm uses a
-reduced speed when additional cooling time is needed.
+온도 드롭 타워는 가능한 경우 베드 좌측 후방에 생성됩니다. 온도 차이가
+30도 이하면 경로 길이는 50 mm이며, 이후 1도마다 1 mm씩 증가하고 최대
+80 mm로 제한됩니다. 추가 냉각 시간이 필요하면 마지막 10 mm를 감속합니다.
 
-### Tree-support wall count
+### 트리 서포트 벽 수
 
-Tree Slim and Organic support wall count may be selected from 0 through 10.
+Tree Slim 및 Organic 서포트의 벽 수를 0~10 범위에서 설정할 수 있습니다.
 
-### LESIC calibration
+### LESIC 캘리브레이션
 
-The calibration menu includes `LESIC`, a cylindrical calibration model that
-adapts to the selected bed and nozzle.
+캘리브레이션 메뉴에 선택한 베드와 노즐에 맞춰 생성되는 원통형 `LESIC`
+모델을 추가했습니다.
 
-- Temperature range and step
-- Layers per temperature
-- Minimum and maximum volumetric speed
-- Bed-aware diameter and placement
-- Perimeter labels, tick marks, and internal brim
+- 시작/종료 온도와 온도 간격
+- 온도당 레이어 수
+- 최소/최대 체적 속도
+- 베드 크기에 맞춘 지름과 중앙 배치
+- 원주 라벨, 눈금 및 내부 브림
 
-## Verification Status
+## 검증 현황
 
-The current Release build was tested on 2026-07-28.
+현재 Release 빌드는 2026-07-28에 검증했습니다.
 
-| Area | Result |
+| 검증 영역 | 결과 |
 | --- | --- |
-| `libslic3r` unit tests | 50,042 assertions, 138 cases passed |
-| `fff_print` unit tests | 35,058 assertions, 85 cases passed |
-| Support type, angle, triangle, and sublayer matrix | 9/9 passed |
-| Interface thickness, spacing, pattern, and nozzle matrix | 13/13 passed |
-| Tree Slim and Organic wall count, 0.4/0.15 mm | 44/44 passed |
-| Mixed-nozzle OrcaCube, Classic | 25/25 passed |
-| Mixed-nozzle OrcaCube, Arachne | 25/25 passed |
-| Small-nozzle speed override | 8/8 passed |
-| Low-temperature interface and drop tower | 4,330 assertions, 9 cases passed |
+| `libslic3r` 단위 테스트 | 50,042 assertions, 138 cases 통과 |
+| `fff_print` 단위 테스트 | 35,058 assertions, 85 cases 통과 |
+| 서포트 종류, 임계각, 삼각형 및 서브레이어 | 9/9 통과 |
+| 인터페이스 두께, 간격, 패턴 및 노즐 | 13/13 통과 |
+| 0.4/0.15 mm Tree Slim 및 Organic 벽 수 | 44/44 통과 |
+| 멀티 노즐 OrcaCube, Classic | 25/25 통과 |
+| 멀티 노즐 OrcaCube, Arachne | 25/25 통과 |
+| 소구경 노즐 속도 오버라이드 | 8/8 통과 |
+| 저온 인터페이스 및 온도 드롭 타워 | 4,330 assertions, 9 cases 통과 |
 
-The long 66-case complex-geometry matrix was stopped at the per-step time
-limit after its first 10 cases passed. Equivalent setting and routing paths
-were completed with the 50-case OrcaCube matrix.
+복잡 형상 66개 매트릭스는 처음 10개 케이스가 통과한 뒤 단계별 시간 제한으로
+중단했습니다. 동일한 설정 및 툴 경로는 OrcaCube 50개 매트릭스로 검증을
+완료했습니다.
 
-Physical-printer validation remains the user's responsibility.
+실제 프린터에서의 최종 검증 책임은 사용자에게 있습니다.
 
-## Building on Windows
+## Windows 빌드
 
-Requirements are the same as the upstream OrcaSlicer Windows build.
+필요한 개발 환경은 원본 OrcaSlicer의 Windows 빌드 환경과 같습니다.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build_cura_port.ps1
 ```
 
-The Release executable is generated at:
+Release 실행 파일 경로:
 
 ```text
 build/src/Release/orca-slicer.exe
 ```
 
-To build the NSIS installer:
+NSIS 설치 프로그램 빌드:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build_installer.ps1
 ```
 
-## Repository Layout
+## 저장소 구성
 
-- `src/`: application and slicing-engine source
-- `tests/`: unit and regression tests
-- `scripts/`: build, slicing, geometry, and regression-verification scripts
-- `resources/`: profiles, translations, icons, and calibration assets
+- `src/`: 프로그램 및 슬라이싱 엔진 소스
+- `tests/`: 단위 테스트와 회귀 테스트
+- `scripts/`: 빌드, 슬라이싱 및 검증 스크립트
+- `resources/`: 프로파일, 번역, 아이콘 및 캘리브레이션 리소스
 
-Generated builds, local sandboxes, backups, and verification output are not
-tracked.
+빌드 결과물, 로컬 샌드박스, 백업 및 검증 출력은 저장소에 포함하지 않습니다.
 
-## Project Status
+## 프로젝트 상태
 
-This repository is experimental and is not an official OrcaSlicer release.
-Compatibility with every printer profile and firmware is not guaranteed.
+이 저장소는 실험용이며 공식 OrcaSlicer 릴리스가 아닙니다. 모든 프린터
+프로파일 및 펌웨어와의 호환성을 보장하지 않습니다.
 
-## License and Attribution
+## 라이선스 및 출처
 
-Magpie Slicer is based on
-[OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer). Upstream copyright,
-third-party notices, and license requirements remain applicable. See
-[LICENSE.txt](LICENSE.txt).
+Magpie Slicer는 [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer)를
+기반으로 합니다. 원본 프로젝트의 저작권, 제3자 고지 및 라이선스 조건이
+그대로 적용됩니다. 자세한 내용은 [LICENSE.txt](LICENSE.txt)를 확인하십시오.
