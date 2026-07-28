@@ -444,20 +444,21 @@ std::string Preset::remove_suffix_modified(const std::string &name)
 void Preset::normalize(DynamicPrintConfig &config)
 {
     size_t n = 1;
+    auto *nozzle_diameter = dynamic_cast<const ConfigOptionFloats*>(config.option("nozzle_diameter"));
+    if (nozzle_diameter != nullptr)
+        config.set_num_extruders(unsigned(std::max<size_t>(1, nozzle_diameter->values.size())));
+
     if (config.option("single_extruder_multi_material") == nullptr || config.opt_bool("single_extruder_multi_material")) {
         // BBS
         auto* filament_diameter = dynamic_cast<const ConfigOptionFloats*>(config.option("filament_diameter"));
         if (filament_diameter != nullptr) {
-            n = filament_diameter->values.size();
+            n = std::max<size_t>(1, filament_diameter->values.size());
             // Loaded the FFF Printer settings. Verify, that all extruder dependent values have enough values.
             config.set_num_filaments((unsigned int) n);
         }
     } else {
-        auto* nozzle_diameter = dynamic_cast<const ConfigOptionFloats*>(config.option("nozzle_diameter"));
         if (nozzle_diameter != nullptr) {
-            n = nozzle_diameter->values.size();
-            // Loaded the FFF Printer settings. Verify, that all extruder dependent values have enough values.
-            config.set_num_extruders((unsigned int) n);
+            n = std::max<size_t>(1, nozzle_diameter->values.size());
         }
     }
 

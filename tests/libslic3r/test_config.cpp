@@ -1,5 +1,6 @@
 #include <catch2/catch_all.hpp>
 
+#include "libslic3r/Preset.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/PrintConfigConstants.hpp"
 #include "libslic3r/LocalesUtils.hpp"
@@ -430,6 +431,54 @@ TEST_CASE("Per-hotend width vectors follow dynamic tool count", "[Config][MultiN
     CHECK(outer->values[0].percent);
     CHECK(outer->values[0].value == 135.);
     CHECK(outer->values[7].value > 0.);
+}
+
+TEST_CASE("Legacy printer vectors are normalized to the nozzle count", "[Config][MultiNozzle][Legacy]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.option<ConfigOptionFloats>("nozzle_diameter")->values = { 0.4, 0.2, 0.6, 0.8 };
+    config.set_key_value("extruder_variant_list", new ConfigOptionStrings());
+    config.set_key_value("printer_extruder_id", new ConfigOptionInts({ 1 }));
+    config.set_key_value("printer_extruder_variant", new ConfigOptionStrings({ "Direct Drive Standard" }));
+    config.option<ConfigOptionFloatsOrPercents>("toolhead_line_width")->values = {
+        FloatOrPercent(0.45, false)
+    };
+
+    REQUIRE_NOTHROW(config.set_num_extruders(4));
+    CHECK(config.option<ConfigOptionFloats>("nozzle_diameter")->values.size() == 4);
+    CHECK(config.option<ConfigOptionStrings>("extruder_variant_list")->values.size() == 4);
+    CHECK(config.option<ConfigOptionInts>("printer_extruder_id")->values.size() == 4);
+    CHECK(config.option<ConfigOptionStrings>("printer_extruder_variant")->values.size() == 4);
+    CHECK(config.option<ConfigOptionFloatsOrPercents>("toolhead_line_width")->values.size() == 4);
+
+    config.option<ConfigOptionFloats>("nozzle_diameter")->values.clear();
+    REQUIRE_NOTHROW(Preset::normalize(config));
+    CHECK(config.option<ConfigOptionFloats>("nozzle_diameter")->values.size() == 1);
+    CHECK(config.option<ConfigOptionStrings>("extruder_variant_list")->values.size() == 1);
+    CHECK(config.option<ConfigOptionFloatsOrPercents>("toolhead_line_width")->values.size() == 1);
+}
+
+TEST_CASE("Legacy Elegoo printer Z offset edits survive profile normalization", "[Config][Legacy][Elegoo]")
+{
+    for (const double z_offset : std::array<double, 4>{ -2.0, -0.3, 0.0, 2.0 }) {
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.option<ConfigOptionFloats>("nozzle_diameter")->values = { 0.4 };
+        config.set_key_value("extruder_variant_list", new ConfigOptionStrings());
+        config.set_key_value("printer_extruder_id", new ConfigOptionInts());
+        config.set_key_value("printer_extruder_variant", new ConfigOptionStrings());
+        config.option<ConfigOptionFloatsOrPercents>("toolhead_line_width")->values.clear();
+        config.option<ConfigOptionFloat>("z_offset")->value = z_offset;
+
+        DYNAMIC_SECTION("Z offset " << z_offset) {
+            REQUIRE_NOTHROW(Preset::normalize(config));
+            CHECK(config.option<ConfigOptionFloat>("z_offset")->value == Catch::Approx(z_offset));
+            CHECK(config.option<ConfigOptionFloats>("nozzle_diameter")->values.size() == 1);
+            CHECK(config.option<ConfigOptionStrings>("extruder_variant_list")->values.size() == 1);
+            CHECK(config.option<ConfigOptionInts>("printer_extruder_id")->values.size() == 1);
+            CHECK(config.option<ConfigOptionStrings>("printer_extruder_variant")->values.size() == 1);
+            CHECK(config.option<ConfigOptionFloatsOrPercents>("toolhead_line_width")->values.size() == 1);
+        }
+    }
 }
 
 // SCENARIO("DynamicPrintConfig JSON serialization", "[Config]") {

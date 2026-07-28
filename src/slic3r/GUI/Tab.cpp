@@ -4738,12 +4738,20 @@ void TabFilament::build()
             DynamicPrintConfig new_conf = current_config;
 
             if (short_key == "nozzle_diameter") {
-                const double nozzle_diameter = m_hotend_config.option<ConfigOptionFloats>(
-                    "nozzle_diameter")->values.front();
+                const auto *nozzles = m_hotend_config.option<ConfigOptionFloats>("nozzle_diameter");
+                if (nozzles == nullptr || nozzles->values.empty()) {
+                    BOOST_LOG_TRIVIAL(error) << "Ignoring hotend nozzle update with no nozzle diameter value";
+                    return;
+                }
+                const double nozzle_diameter = nozzles->values.front();
                 set_toolhead_nozzle_diameter(new_conf, m_hotend_index, nozzle_diameter);
             } else if (boost::algorithm::starts_with(short_key, "toolhead_")) {
-                const FloatOrPercent width = m_hotend_config.option<ConfigOptionFloatsOrPercents>(
-                    short_key)->values.front();
+                const auto *widths = m_hotend_config.option<ConfigOptionFloatsOrPercents>(short_key);
+                if (widths == nullptr || widths->values.empty()) {
+                    BOOST_LOG_TRIVIAL(error) << "Ignoring hotend width update with no value for " << short_key;
+                    return;
+                }
+                const FloatOrPercent width = widths->values.front();
                 set_toolhead_width_at(new_conf, current_config, short_key, m_hotend_index, width);
             }
 
