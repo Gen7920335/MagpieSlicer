@@ -3647,9 +3647,10 @@ void TabPrint::toggle_options()
     const bool nozzle_wiping_enabled =
         low_temperature_interface_enabled && supports_nozzle_wiping &&
         optional_bool("support_interface_nozzle_wiping_on_temperature_change");
+    const auto *print_sequence = m_config->option<ConfigOptionEnum<PrintSequence>>("print_sequence");
     const bool temperature_drop_tower_available =
         low_temperature_interface_enabled && !nozzle_wiping_enabled &&
-        printer_config.opt_enum<PrintSequence>("print_sequence") == PrintSequence::ByLayer;
+        print_sequence != nullptr && print_sequence->value == PrintSequence::ByLayer;
 
     toggle_option("support_interface_auxiliary_fan_cooling_on_temperature_change", auxiliary_fan_cooling_enabled);
     toggle_option("support_interface_nozzle_wiping_on_temperature_change",
@@ -3659,9 +3660,10 @@ void TabPrint::toggle_options()
                   auxiliary_fan_cooling_enabled &&
                   optional_bool("support_interface_auxiliary_fan_cooling_on_temperature_change"));
 
-    if (m_enable_large_nozzle_override_editor)
-        m_enable_large_nozzle_override_editor(
-            printer_config.option<ConfigOptionFloats>("nozzle_diameter")->values.size() > 1);
+    if (m_enable_large_nozzle_override_editor) {
+        const auto *nozzle_diameters = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
+        m_enable_large_nozzle_override_editor(nozzle_diameters != nullptr && nozzle_diameters->values.size() > 1);
+    }
 
     // BBL printers do not support cone wipe tower
     field = m_active_page->get_field("wipe_tower_wall_type");

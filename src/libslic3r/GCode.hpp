@@ -505,6 +505,7 @@ private:
     bool            temperature_drop_tower_enabled() const;
     bool            build_temperature_drop_tower_path(ExtrusionPath &path);
     std::string     extrude_temperature_drop_tower(const ExtrusionPath &path, bool cooling_transition);
+    int             low_temperature_support_interface_temperature(ExtrusionRole role) const;
     std::string     start_low_temperature_support_interface(ExtrusionRole role);
     std::string     finish_low_temperature_support_interface();
 
@@ -596,7 +597,9 @@ private:
     //double                              m_volumetric_speed;
     // Support for the extrusion role markers. Which marker is active?
     ExtrusionRole                       m_last_extrusion_role;
+    size_t                              m_support_extrusion_context_depth { 0 };
     bool                                m_low_temperature_support_interface_active { false };
+    int                                 m_low_temperature_support_interface_target_temperature { 0 };
     coordf_t                            m_temperature_drop_tower_last_print_z { -std::numeric_limits<coordf_t>::max() };
     bool                                m_temperature_drop_tower_path_initialized { false };
     std::vector<Vec2d>                  m_temperature_drop_tower_machine_path;

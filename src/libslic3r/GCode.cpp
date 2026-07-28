@@ -7604,6 +7604,9 @@ std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fill
     static constexpr const char* support_transition_label = "support transition";
     static constexpr const char* support_ironing_label    = "support ironing";
 
+    ++m_support_extrusion_context_depth;
+    ScopeGuard support_context_guard([this]() { --m_support_extrusion_context_depth; });
+
     if (support_extrusion_role == erMixed &&
         m_config.single_nozzle_low_temperature_interface.value &&
         m_config.support_interface_filament.value == 0) {
@@ -7658,11 +7661,16 @@ std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fill
             chain_and_reorder_extrusion_entities(extrusions, m_last_pos.to_point());
 
         const int sublayer_temperature = m_config.support_interface_sublayer_temperature.value;
+        const bool low_temperature_controls_interface =
+            m_config.single_nozzle_low_temperature_interface.value &&
+            m_config.support_interface_filament.value == 0;
         const auto normal_temperature_for_current_extruder = [this]() {
+            if (m_writer.filament() == nullptr)
+                return 0;
             const unsigned int extruder_id = m_writer.filament()->id();
-            return this->on_first_layer() ?
-                m_config.nozzle_temperature_initial_layer.get_at(extruder_id) :
-                m_config.nozzle_temperature.get_at(extruder_id);
+            const ConfigOptionInts &temperatures = this->on_first_layer() ?
+                m_config.nozzle_temperature_initial_layer : m_config.nozzle_temperature;
+            return temperatures.values.empty() ? 0 : temperatures.get_at(extruder_id);
         };
         bool sublayer_temperature_active = false;
         const auto set_sublayer_temperature = [&]() {
@@ -7694,10 +7702,12 @@ std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fill
             const ExtrusionLoop* loop = dynamic_cast<const ExtrusionLoop*>(ee);
             const ExtrusionEntityCollection* collection = dynamic_cast<const ExtrusionEntityCollection*>(ee);
 
-            if (role == erSupportMaterialInterfaceSublayer)
-                set_sublayer_temperature();
-            else
-                restore_normal_temperature();
+            if (!low_temperature_controls_interface) {
+                if (role == erSupportMaterialInterfaceSublayer)
+                    set_sublayer_temperature();
+                else
+                    restore_normal_temperature();
+            }
 
             if (path) {
                 gcode += extrude_path(*path, label, speed_for_path(path->length(), role));
@@ -7715,7 +7725,8 @@ std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fill
                 throw Slic3r::InvalidArgument("Unknown extrusion type");
             }
         }
-        restore_normal_temperature();
+        if (!low_temperature_controls_interface)
+            restore_normal_temperature();
     }
     return gcode;
 }
@@ -7891,6 +7902,10 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
         return false;
 
     const unsigned int filament_id = m_writer.filament()->id();
+    if (m_config.nozzle_diameter.values.empty() ||
+        m_config.nozzle_temperature.values.empty() ||
+        m_config.nozzle_temperature_initial_layer.values.empty())
+        return false;
     const float nozzle_diameter = float(m_config.nozzle_diameter.get_at(filament_id));
     const float layer_height = float(m_layer->height);
     if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
@@ -8047,16 +8062,26 @@ std::string GCode::extrude_temperature_drop_tower(const ExtrusionPath &path, boo
     return gcode;
 }
 
+int GCode::low_temperature_support_interface_temperature(ExtrusionRole role) const
+{
+    if (role == erSupportMaterialInterfaceSublayer &&
+        m_config.support_interface_sublayer_temperature.value > 0)
+        return m_config.support_interface_sublayer_temperature.value;
+    return m_config.support_interface_temperature.value;
+}
+
 std::string GCode::start_low_temperature_support_interface(ExtrusionRole role)
 {
     if (m_low_temperature_support_interface_active || m_writer.filament() == nullptr)
         return {};
 
     const unsigned int filament_id = m_writer.filament()->id();
-    const int normal_temperature = on_first_layer()
-        ? m_config.nozzle_temperature_initial_layer.get_at(filament_id)
-        : m_config.nozzle_temperature.get_at(filament_id);
-    const int interface_temperature = m_config.support_interface_temperature.value;
+    const ConfigOptionInts &normal_temperatures = on_first_layer()
+        ? m_config.nozzle_temperature_initial_layer : m_config.nozzle_temperature;
+    if (normal_temperatures.values.empty())
+        return {};
+    const int normal_temperature = normal_temperatures.get_at(filament_id);
+    const int interface_temperature = low_temperature_support_interface_temperature(role);
     const bool temperature_changes = interface_temperature > 0 && interface_temperature != normal_temperature;
 
     std::string gcode;
@@ -8076,6 +8101,7 @@ std::string GCode::start_low_temperature_support_interface(ExtrusionRole role)
             m_config.support_interface_auxiliary_fan_cooling_on_temperature_change.value &&
             m_config.auxiliary_fan.value &&
             m_config.support_interface_auxiliary_fan_speed.value > 0 &&
+            !m_config.additional_cooling_fan_speed.values.empty() &&
             normal_temperature > interface_temperature &&
             (use_temperature_drop_tower || m_last_pos_defined);
         if (use_auxiliary_fan) {
@@ -8136,6 +8162,7 @@ std::string GCode::start_low_temperature_support_interface(ExtrusionRole role)
     }
 
     m_low_temperature_support_interface_active = true;
+    m_low_temperature_support_interface_target_temperature = interface_temperature;
     return gcode;
 }
 
@@ -8160,6 +8187,7 @@ std::string GCode::finish_low_temperature_support_interface()
     }
 
     m_low_temperature_support_interface_active = false;
+    m_low_temperature_support_interface_target_temperature = 0;
     return gcode;
 }
 
@@ -8176,7 +8204,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     const bool low_temperature_interface_role =
         path.role() == erSupportMaterialInterface ||
         path.role() == erSupportMaterialInterfaceSublayer ||
-        path.role() == erIroning;
+        (path.role() == erIroning && m_support_extrusion_context_depth > 0);
     const bool entering_low_temperature_interface =
         use_low_temperature_interface &&
         low_temperature_interface_role &&
@@ -8184,6 +8212,15 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
     if (entering_low_temperature_interface)
         gcode += this->start_low_temperature_support_interface(path.role());
+    else if (use_low_temperature_interface && low_temperature_interface_role &&
+             m_low_temperature_support_interface_active && m_writer.filament() != nullptr) {
+        const int target_temperature = low_temperature_support_interface_temperature(path.role());
+        if (target_temperature > 0 &&
+            target_temperature != m_low_temperature_support_interface_target_temperature) {
+            gcode += m_writer.set_temperature(target_temperature, false, m_writer.filament()->id());
+            m_low_temperature_support_interface_target_temperature = target_temperature;
+        }
+    }
     else if (use_low_temperature_interface && !low_temperature_interface_role && m_low_temperature_support_interface_active)
         gcode += this->finish_low_temperature_support_interface();
 
