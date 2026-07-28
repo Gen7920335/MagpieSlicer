@@ -3612,7 +3612,9 @@ void TabPrint::toggle_options()
         return option != nullptr && option->value;
     };
 
-    const bool sublayer_available = m_config->opt_int("support_interface_top_layers") > 1;
+    const bool sublayer_available =
+        m_config->opt_int("support_interface_top_layers") > 1 ||
+        m_config->opt_int("support_interface_bottom_layers") > 1;
     const bool sublayer_enabled = sublayer_available && optional_bool("support_interface_sublayer_pattern");
     toggle_option("support_interface_sublayer_pattern", sublayer_available);
     toggle_option("support_interface_sublayer_start_layer", sublayer_enabled);

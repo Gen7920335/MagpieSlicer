@@ -80,7 +80,7 @@ struct TreeSupportMeshGroupSettings {
         this->support_roof_pattern      = config.support_interface_pattern;
         this->support_pattern           = config.support_base_pattern;
         this->support_line_spacing      = scaled<coord_t>(config.support_base_pattern_spacing.value);
-        this->support_wall_count        = std::max(1, config.tree_support_wall_count.value);  // at least 1 wall for organic tree support
+        this->support_wall_count        = std::clamp(config.tree_support_wall_count.value, 1, 10);  // at least 1 wall for organic tree support
         this->support_roof_line_distance = scaled<coord_t>(config.support_interface_spacing.value) + this->support_roof_line_width;
         this->support_tree_branch_distance = scaled<coord_t>(config.tree_support_branch_distance_organic.value);
         this->support_tree_angle          = std::clamp<double>(config.tree_support_branch_angle_organic * M_PI / 180., 0., 0.5 * M_PI - EPSILON);

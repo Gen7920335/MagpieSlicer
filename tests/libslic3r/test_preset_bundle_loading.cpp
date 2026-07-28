@@ -6,6 +6,7 @@
 
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/AppConfig.hpp"
+#include "libslic3r/Utils.hpp"
 
 using namespace Slic3r;
 
@@ -26,6 +27,20 @@ struct TempPresetDir {
     {
         boost::system::error_code ec;
         fs::remove_all(path, ec);
+    }
+};
+
+struct ScopedDataDir {
+    std::string previous;
+
+    explicit ScopedDataDir(const fs::path &path) : previous(data_dir())
+    {
+        set_data_dir(path.string());
+    }
+
+    ~ScopedDataDir()
+    {
+        set_data_dir(previous);
     }
 };
 
@@ -113,6 +128,44 @@ void check_effective_option(const ConfigOption &expected,
             actual_values[index];
         CHECK(effective == expected_values[index]);
     }
+}
+
+TEST_CASE("User preset import is recursive and never overwrites local files", "[Preset][Import]")
+{
+    TempPresetDir source;
+    TempPresetDir destination;
+
+    const fs::path source_user      = source.path / PRESET_USER_DIR;
+    const fs::path destination_user = destination.path / PRESET_USER_DIR;
+    const fs::path nested_file      = fs::path("default") / "process" / "Imported.json";
+    const fs::path collision_file   = fs::path("default") / "printer" / "Existing.json";
+
+    fs::create_directories((source_user / nested_file).parent_path());
+    fs::create_directories((source_user / collision_file).parent_path());
+    fs::create_directories((destination_user / collision_file).parent_path());
+    save_string_file((source_user / nested_file).string(), "imported");
+    save_string_file((source_user / collision_file).string(), "source");
+    save_string_file((destination_user / collision_file).string(), "destination");
+
+    ScopedDataDir scoped_data_dir(destination.path);
+    PresetBundle bundle;
+    const auto first = bundle.import_user_presets_from(source.path.string());
+
+    CHECK(first.copied == 1);
+    CHECK(first.skipped == 1);
+    CHECK(first.failed == 0);
+    std::string imported_contents;
+    std::string existing_contents;
+    load_string_file(destination_user / nested_file, imported_contents);
+    load_string_file(destination_user / collision_file, existing_contents);
+    CHECK(imported_contents == "imported");
+    CHECK(existing_contents == "destination");
+
+    const auto second = bundle.import_user_presets_from(source.path.string());
+
+    CHECK(second.copied == 0);
+    CHECK(second.skipped == 2);
+    CHECK(second.failed == 0);
 }
 
 void check_json_roundtrip(const DynamicPrintConfig &config,

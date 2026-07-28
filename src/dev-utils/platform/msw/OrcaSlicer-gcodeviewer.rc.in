@@ -1,6 +1,6 @@
 1 VERSIONINFO
-FILEVERSION @SLIC3R_VERSION@
-PRODUCTVERSION @SLIC3R_VERSION@
+FILEVERSION @SLIC3R_FILE_VERSION@
+PRODUCTVERSION @SLIC3R_FILE_VERSION@
 {
  BLOCK "StringFileInfo"
  {
@@ -8,9 +8,9 @@ PRODUCTVERSION @SLIC3R_VERSION@
   {
    VALUE "CompanyName", "SoftFever"
    VALUE "FileDescription", "@SLIC3R_APP_NAME@ G-code Viewer"
-   VALUE "FileVersion", "@SLIC3R_BUILD_ID@"
+   VALUE "FileVersion", "@SLIC3R_DISPLAY_VERSION@"
    VALUE "ProductName", "@SLIC3R_APP_NAME@ G-code Viewer"
-   VALUE "ProductVersion", "@SLIC3R_BUILD_ID@"
+   VALUE "ProductVersion", "@SLIC3R_DISPLAY_VERSION@"
    VALUE "InternalName", "@SLIC3R_APP_NAME@ G-code Viewer"
    VALUE "LegalCopyright", ""
    VALUE "OriginalFilename", "bambu-gcodeviewer.exe"

@@ -127,6 +127,7 @@ struct SupportParameters {
         }
 
         SupportMaterialPattern  support_pattern = object_config.support_base_pattern;
+        this->tree_support_wall_count = size_t(std::clamp(object_config.tree_support_wall_count.value, 0, 10));
         this->with_sheath = object_config.tree_support_wall_count > 0;
         this->base_fill_pattern =
             support_pattern == smpHoneycomb ? ipHoneycomb :
@@ -184,7 +185,8 @@ struct SupportParameters {
 
         independent_layer_height = print_config.independent_support_layer_height;
 
-        // force double walls everywhere if wall count is larger than 1        
+        // Preserve the automatic double-wall threshold for wall count 0.
+        // Explicit multi-wall counts are handled directly by the path generator.
         tree_branch_diameter_double_wall_area_scaled = object_config.tree_support_wall_count.value > 1  ? 0.1 :
                                                        object_config.tree_support_wall_count.value == 0 ? 0.25 * sqr(scaled<double>(5.0)) * M_PI :
                                                                                                           std::numeric_limits<double>::max();
@@ -275,6 +277,8 @@ struct SupportParameters {
     InfillPattern 			contact_fill_pattern;
     // Shall the sparse (base) layers be printed with a single perimeter line (sheath) for robustness?
     bool                    with_sheath;
+    // Explicit tree branch perimeter count. Zero keeps automatic one/two-wall behavior.
+    size_t                  tree_support_wall_count = 0;
     // Branches of organic supports with area larger than this threshold will be extruded with double lines.
     double                  tree_branch_diameter_double_wall_area_scaled = 0.25 * sqr(scaled<double>(5.0)) * M_PI;;
 

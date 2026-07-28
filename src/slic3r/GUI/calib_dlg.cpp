@@ -634,6 +634,120 @@ void MaxVolumetricSpeed_Test_Dlg::on_dpi_changed(const wxRect& suggested_rect) {
 
 }
 
+// LESIC_Calibration_Dlg
+//
+
+LESIC_Calibration_Dlg::LESIC_Calibration_Dlg(wxWindow* parent, wxWindowID id, Plater* plater)
+    : DPIDialog(parent, id, _L("LESIC"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE), m_plater(plater)
+{
+    SetBackgroundColour(*wxWHITE);
+    SetForegroundColour(wxColour("#363636"));
+    SetFont(Label::Body_14);
+
+    wxBoxSizer* v_sizer = new wxBoxSizer(wxVERTICAL);
+    SetSizer(v_sizer);
+
+    wxString temp_start_str = _L("Start temperature: ");
+    wxString temp_end_str = _L("End temperature: ");
+    wxString temp_step_str = _L("Temperature step: ");
+    wxString layers_str = _L("Layers per temperature: ");
+    wxString mvs_start_str = _L("Start MVS: ");
+    wxString mvs_end_str = _L("End MVS: ");
+    int text_max = GetTextMax(this, std::vector<wxString>{
+        temp_start_str, temp_end_str, temp_step_str, layers_str, mvs_start_str, mvs_end_str
+    });
+
+    auto st_size = wxSize(text_max, -1);
+    auto ti_size = FromDIP(wxSize(120, -1));
+
+    LabeledStaticBox* stb = new LabeledStaticBox(this, _L("Settings"));
+    wxStaticBoxSizer* settings_sizer = new wxStaticBoxSizer(stb, wxVERTICAL);
+    settings_sizer->AddSpacer(FromDIP(5));
+
+    auto add_row = [&](const wxString& label, TextInput*& input, const wxString& value, const wxString& unit) {
+        auto row = new wxBoxSizer(wxHORIZONTAL);
+        auto text = new wxStaticText(this, wxID_ANY, label, wxDefaultPosition, st_size, wxALIGN_LEFT);
+        input = new TextInput(this, value, unit, "", wxDefaultPosition, ti_size);
+        input->GetTextCtrl()->SetValidator(wxTextValidator(wxFILTER_NUMERIC));
+        row->Add(text, 0, wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(2));
+        row->Add(input, 0, wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(2));
+        settings_sizer->Add(row, 0, wxLEFT, FromDIP(3));
+    };
+
+    add_row(temp_start_str, m_tiTempStart, "210", _L("C"));
+    add_row(temp_end_str, m_tiTempEnd, "165", _L("C"));
+    add_row(temp_step_str, m_tiTempStep, "1", _L("C"));
+    add_row(layers_str, m_tiLayersPerTemp, "10", _L("layers"));
+    add_row(mvs_start_str, m_tiMvsStart, "8", _L("mm3/s"));
+    add_row(mvs_end_str, m_tiMvsEnd, "24", _L("mm3/s"));
+
+    v_sizer->Add(settings_sizer, 0, wxTOP | wxRIGHT | wxLEFT | wxEXPAND, FromDIP(10));
+    v_sizer->AddSpacer(FromDIP(5));
+
+    auto dlg_btns = new DialogButtons(this, {"OK"});
+    auto bottom_sizer = new wxBoxSizer(wxHORIZONTAL);
+    bottom_sizer->AddStretchSpacer();
+    bottom_sizer->Add(dlg_btns, 0, wxEXPAND);
+    v_sizer->Add(bottom_sizer, 0, wxEXPAND);
+
+    dlg_btns->GetOK()->Bind(wxEVT_BUTTON, &LESIC_Calibration_Dlg::on_start, this);
+
+    wxGetApp().UpdateDlgDarkUI(this);
+
+    Layout();
+    Fit();
+    v_sizer->SetSizeHints(this);
+}
+
+LESIC_Calibration_Dlg::~LESIC_Calibration_Dlg() {}
+
+void LESIC_Calibration_Dlg::on_start(wxCommandEvent& event)
+{
+    bool read_double = false;
+    double temp_start = 0.0;
+    double temp_end = 0.0;
+    double temp_step = 0.0;
+    double mvs_start = 0.0;
+    double mvs_end = 0.0;
+    unsigned long layers_per_temp = 0;
+
+    read_double = m_tiTempStart->GetTextCtrl()->GetValue().ToDouble(&temp_start);
+    read_double = read_double && m_tiTempEnd->GetTextCtrl()->GetValue().ToDouble(&temp_end);
+    read_double = read_double && m_tiTempStep->GetTextCtrl()->GetValue().ToDouble(&temp_step);
+    read_double = read_double && m_tiMvsStart->GetTextCtrl()->GetValue().ToDouble(&mvs_start);
+    read_double = read_double && m_tiMvsEnd->GetTextCtrl()->GetValue().ToDouble(&mvs_end);
+    read_double = read_double && m_tiLayersPerTemp->GetTextCtrl()->GetValue().ToULong(&layers_per_temp);
+
+    if (!read_double ||
+        temp_start <= 0.0 || temp_end <= 0.0 ||
+        temp_step <= 0.0 || std::abs(temp_start - temp_end) < temp_step ||
+        layers_per_temp == 0 ||
+        mvs_start <= 0.0 || mvs_end <= mvs_start) {
+        MessageDialog msg_dlg(nullptr,
+            _L("Please input valid values:\nTemperature step > 0\nStart and end temperatures must differ by at least one step\nLayers per temperature > 0\nEnd MVS > Start MVS > 0"),
+            wxEmptyString, wxICON_WARNING | wxOK);
+        msg_dlg.ShowModal();
+        return;
+    }
+
+    m_params.start = temp_start;
+    m_params.end = temp_end;
+    m_params.step = temp_step;
+    m_params.mvs_start = mvs_start;
+    m_params.mvs_end = mvs_end;
+    m_params.lesic_layers_per_temp = static_cast<int>(layers_per_temp);
+    m_params.print_numbers = true;
+    m_params.mode = CalibMode::Calib_LESIC;
+    m_plater->calib_lesic(m_params);
+    EndModal(wxID_OK);
+}
+
+void LESIC_Calibration_Dlg::on_dpi_changed(const wxRect& suggested_rect)
+{
+    this->Refresh();
+    Fit();
+}
+
 
 // VFA_Test_Dlg
 //

@@ -1598,12 +1598,6 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                         // Orca: use organic as default
                         object->config().support_style == smsDefault) {
 
-                        // Orca: check the support wall count and the base pattern
-                        if (object->config().tree_support_wall_count > 1 &&
-                            object->config().support_base_pattern != SupportMaterialPattern::smpNone &&
-                            object->config().support_base_pattern != SupportMaterialPattern::smpDefault)
-                            warn(L("For Organic supports, two walls are supported only with the Hollow/Default base pattern."), "support_base_pattern");
-
                         // Orca: check if the Lightning base pattern selected
                         if (object->config().support_base_pattern == SupportMaterialPattern::smpLightning)
                             warn(L("The Lightning base pattern is not supported by this support type; Rectilinear will be used instead."), "support_base_pattern");

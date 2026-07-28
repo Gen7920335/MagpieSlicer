@@ -39,6 +39,7 @@ namespace Slic3r {
 
 // Forward declarations.
 class GCode;
+struct Calib_Params;
 
 namespace CustomGCode{ struct Item; }
 struct PrintInstance;
@@ -369,6 +370,7 @@ private:
         const size_t                     single_object_idx = size_t(-1),
         // BBS
         const bool                       prime_extruder = false);
+    std::string emit_lesic_ring_annotations(const Calib_Params &params);
     // Process all layers of all objects (non-sequential mode) with a parallel pipeline:
     // Generate G-code, run the filters (vase mode, cooling buffer), run the G-code analyser
     // and export G-code into file.

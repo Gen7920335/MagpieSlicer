@@ -3347,6 +3347,15 @@ void MainFrame::init_menubar_as_editor()
         }, "", nullptr,
         [this]() {return m_plater->is_view3D_shown();; }, this);
 
+    // LESIC
+    append_menu_item(m_topbar->GetCalibMenu(), wxID_ANY, _L("LESIC"), _L("Low-temperature support interface calibration"),
+        [this](wxCommandEvent&) {
+            if (!m_lesic_calib_dlg)
+                m_lesic_calib_dlg = new LESIC_Calibration_Dlg((wxWindow*)this, wxID_ANY, m_plater);
+            m_lesic_calib_dlg->ShowModal();
+        }, "", nullptr,
+        [this]() {return m_plater->is_view3D_shown();; }, this);
+
     // Pressure Advance
     append_menu_item(m_topbar->GetCalibMenu(), wxID_ANY, _L("Pressure advance"), _L("Pressure advance"),
         [this](wxCommandEvent&) {
@@ -3456,6 +3465,15 @@ void MainFrame::init_menubar_as_editor()
             if (!m_vol_test_dlg)
                 m_vol_test_dlg = new MaxVolumetricSpeed_Test_Dlg((wxWindow*)this, wxID_ANY, m_plater);
             m_vol_test_dlg->ShowModal();
+        }, "", nullptr,
+        [this]() {return m_plater->is_view3D_shown();; }, this);
+
+    // LESIC
+    append_menu_item(calib_menu, wxID_ANY, _L("LESIC"), _L("Low-temperature support interface calibration"),
+        [this](wxCommandEvent&) {
+            if (!m_lesic_calib_dlg)
+                m_lesic_calib_dlg = new LESIC_Calibration_Dlg((wxWindow*)this, wxID_ANY, m_plater);
+            m_lesic_calib_dlg->ShowModal();
         }, "", nullptr,
         [this]() {return m_plater->is_view3D_shown();; }, this);
 

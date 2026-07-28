@@ -337,6 +337,7 @@ public:
     void calib_flowrate(bool is_linear, int pass, InfillPattern pattern = ipArchimedeanChords);
     void calib_temp(const Calib_Params& params);
     void calib_max_vol_speed(const Calib_Params& params);
+    void calib_lesic(const Calib_Params& params);
     void calib_retraction(const Calib_Params& params);
     void calib_VFA(const Calib_Params& params);
     void calib_input_shaping_freq(const Calib_Params& params);

@@ -1361,7 +1361,7 @@ void TreeSupport::generate_toolpaths()
     coordf_t support_extrusion_width = m_support_params.support_extrusion_width;
     coordf_t nozzle_diameter = m_print_config->nozzle_diameter.get_at(object_config.support_filament - 1);
     coordf_t layer_height = object_config.layer_height.value;
-    const size_t wall_count = object_config.tree_support_wall_count.value;
+    const size_t wall_count = size_t(std::clamp(object_config.tree_support_wall_count.value, 0, 10));
 
     // Check if set to zero, use default if so.
     if (support_extrusion_width <= 0.0)
@@ -1503,18 +1503,23 @@ void TreeSupport::generate_toolpaths()
                 ts_layer->support_fills.no_sort = false;
                 // ORCA: per-layer Fill instances to avoid shared-state races during interlaced interfaces.
                 std::shared_ptr<Fill> filler_interface = std::shared_ptr<Fill>(Fill::new_from_type(m_support_params.contact_fill_pattern));
+                std::shared_ptr<Fill> filler_sublayer = std::shared_ptr<Fill>(Fill::new_from_type(
+                    interface_pattern_to_fill_pattern(object_config.support_interface_sublayer_pattern_type.value, m_support_params)));
                 std::shared_ptr<Fill> filler_Roof1stLayer = std::shared_ptr<Fill>(Fill::new_from_type(ipRectilinear));
                 filler_interface->set_bounding_box(bbox_object);
+                filler_sublayer->set_bounding_box(bbox_object);
                 filler_Roof1stLayer->set_bounding_box(bbox_object);
 
                 for (auto& area_group : ts_layer->area_groups) {
                     ExPolygon& poly = *area_group.area;
                     ExPolygons polys;
                     FillParams fill_params;
-                    // ORCA: reset interface Fill state per area group to keep angles deterministic.
-                    filler_interface->fixed_angle = false;
-                    filler_interface->layer_id = size_t(-1);
-                    filler_interface->angle = base_support_angle + M_PI_2; // default interface angle is perpendicular to support angle
+                    // ORCA: reset both interface Fill instances per area group to keep angles deterministic.
+                    for (Fill *filler : { filler_interface.get(), filler_sublayer.get() }) {
+                        filler->fixed_angle = false;
+                        filler->layer_id = size_t(-1);
+                        filler->angle = base_support_angle + M_PI_2;
+                    }
                     if (area_group.type != SupportLayer::BaseType) {
                         // interface
                         if (layer_id == 0) {
@@ -1556,61 +1561,97 @@ void TreeSupport::generate_toolpaths()
                     } else if (area_group.type == SupportLayer::FloorType) {
                         // floor_areas
                         bool interface_as_base = area_group.interface_as_base;
+                        const int interface_total = int(m_support_params.num_bottom_interface_layers);
+                        const int interface_number = area_group.interface_id + 1;
+                        const bool use_sublayer_pattern =
+                            !interface_as_base &&
+                            support_interface_sublayer_selected(
+                                object_config.support_interface_sublayer_pattern.value,
+                                object_config.support_interface_sublayer_start_layer.value,
+                                object_config.support_interface_sublayer_end_layer.value,
+                                interface_number,
+                                interface_total);
+                        Fill *interface_filler = use_sublayer_pattern ? filler_sublayer.get() : filler_interface.get();
+                        const SupportMaterialInterfacePattern effective_interface_pattern =
+                            use_sublayer_pattern ? object_config.support_interface_sublayer_pattern_type.value :
+                                                   object_config.support_interface_pattern.value;
                         fill_params.density = bottom_interface_density;
-                        filler_interface->spacing = interface_flow.spacing();
+                        interface_filler->spacing = interface_flow.spacing();
+                        interface_filler->angle = use_sublayer_pattern ?
+                            Geometry::deg2rad(object_config.support_interface_sublayer_angle.value) :
+                            base_support_angle + M_PI_2;
 
-                        if (m_object_config->support_interface_pattern == smipGrid ||
-                            m_object_config->support_interface_pattern == smipTriangles) {
-                            filler_interface->angle = base_support_angle;
+                        if (!use_sublayer_pattern &&
+                            (effective_interface_pattern == smipGrid || effective_interface_pattern == smipTriangles)) {
+                            interface_filler->angle = base_support_angle;
                             fill_params.dont_sort = true;
                         }
 
-                        if (!interface_as_base && m_object_config->support_interface_pattern == smipTriangles) {
+                        if (!interface_as_base && effective_interface_pattern == smipTriangles) {
                             fill_params.density_per_direction = true;
                             fill_params.anchor_length = 0.f;
                             fill_params.anchor_length_max = 0.f;
                         }
 
-                        if (m_object_config->support_interface_pattern == smipRectilinearInterlaced) {
+                        if (!use_sublayer_pattern && effective_interface_pattern == smipRectilinearInterlaced) {
                             // ORCA: explicit 0/90 alternation for rectilinear interlaced interfaces.
-                            filler_interface->fixed_angle = true;
-                            filler_interface->angle = base_support_angle + ((area_group.interface_id & 1) * M_PI_2);
+                            interface_filler->fixed_angle = true;
+                            interface_filler->angle = base_support_angle + ((area_group.interface_id & 1) * M_PI_2);
                             fill_params.dont_sort = true;
                         }
 
 
                         Flow interface_base_flow = interface_as_base ? support_flow : interface_flow;
-                        ExtrusionRole interface_role = interface_as_base ? erSupportMaterial : erSupportMaterialInterface;
+                        ExtrusionRole interface_role = interface_as_base ? erSupportMaterial :
+                            (use_sublayer_pattern ? erSupportMaterialInterfaceSublayer : erSupportMaterialInterface);
                         fill_expolygons_generate_paths(ts_layer->support_fills.entities, polys,
-                            filler_interface.get(), fill_params, interface_role, interface_base_flow);
+                            interface_filler, fill_params, interface_role, interface_base_flow);
                     } else if (area_group.type == SupportLayer::RoofType) {
                         // roof_areas
                         bool interface_as_base = area_group.interface_as_base;
+                        const int interface_total = int(m_support_params.num_top_interface_layers);
+                        const int interface_number = area_group.interface_id + 1;
+                        const bool use_sublayer_pattern =
+                            !interface_as_base &&
+                            support_interface_sublayer_selected(
+                                object_config.support_interface_sublayer_pattern.value,
+                                object_config.support_interface_sublayer_start_layer.value,
+                                object_config.support_interface_sublayer_end_layer.value,
+                                interface_number,
+                                interface_total);
+                        Fill *interface_filler = use_sublayer_pattern ? filler_sublayer.get() : filler_interface.get();
+                        const SupportMaterialInterfacePattern effective_interface_pattern =
+                            use_sublayer_pattern ? object_config.support_interface_sublayer_pattern_type.value :
+                                                   object_config.support_interface_pattern.value;
                         fill_params.density       = interface_density;
-                        filler_interface->spacing = interface_flow.spacing();
+                        interface_filler->spacing = interface_flow.spacing();
+                        interface_filler->angle = use_sublayer_pattern ?
+                            Geometry::deg2rad(object_config.support_interface_sublayer_angle.value) :
+                            base_support_angle + M_PI_2;
 
-                        if (m_object_config->support_interface_pattern == smipGrid ||
-                            m_object_config->support_interface_pattern == smipTriangles) {
-                            filler_interface->angle = base_support_angle;
+                        if (!use_sublayer_pattern &&
+                            (effective_interface_pattern == smipGrid || effective_interface_pattern == smipTriangles)) {
+                            interface_filler->angle = base_support_angle;
                             fill_params.dont_sort = true;
                         }
 
-                        if (!interface_as_base && m_object_config->support_interface_pattern == smipTriangles) {
+                        if (!interface_as_base && effective_interface_pattern == smipTriangles) {
                             fill_params.density_per_direction = true;
                             fill_params.anchor_length = 0.f;
                             fill_params.anchor_length_max = 0.f;
                         }
 
-                        if (m_object_config->support_interface_pattern == smipRectilinearInterlaced) {
+                        if (!use_sublayer_pattern && effective_interface_pattern == smipRectilinearInterlaced) {
                             // ORCA: explicit 0/90 alternation for rectilinear interlaced interfaces.
-                            filler_interface->fixed_angle = true;
-                            filler_interface->angle = base_support_angle + ((area_group.interface_id & 1) * M_PI_2);
+                            interface_filler->fixed_angle = true;
+                            interface_filler->angle = base_support_angle + ((area_group.interface_id & 1) * M_PI_2);
                             fill_params.dont_sort = true;
                         }
 
                         Flow interface_base_flow = interface_as_base ? support_flow : interface_flow;
-                        ExtrusionRole interface_role = interface_as_base ? erSupportMaterial : erSupportMaterialInterface;
-                        fill_expolygons_generate_paths(ts_layer->support_fills.entities, polys, filler_interface.get(), fill_params, interface_role,
+                        ExtrusionRole interface_role = interface_as_base ? erSupportMaterial :
+                            (use_sublayer_pattern ? erSupportMaterialInterfaceSublayer : erSupportMaterialInterface);
+                        fill_expolygons_generate_paths(ts_layer->support_fills.entities, polys, interface_filler, fill_params, interface_role,
                                                        interface_base_flow);
                     }
                     else {
@@ -2424,7 +2465,6 @@ void TreeSupport::draw_circles()
         });
         // ORCA: normalize interface_id sequencing to follow printed interface layers only.
         const int top_base_layers = int(m_support_params.num_top_base_interface_layers);
-        const bool interlaced = m_object_config->support_interface_pattern == smipRectilinearInterlaced;
         int roof_interface_id = 0;
         int floor_interface_id = 0;
         bool has_roof_interface;
@@ -2440,13 +2480,11 @@ void TreeSupport::draw_circles()
 
             for (auto &area_group : ts_layer->area_groups) {
                 if (area_group.type == SupportLayer::RoofType || area_group.type == SupportLayer::Roof1stLayer) {
-                    if (interlaced)
-                        area_group.interface_id = roof_interface_id;
+                    area_group.interface_id = roof_interface_id;
                     area_group.interface_as_base = top_base_layers > 0 && roof_interface_id < top_base_layers;
                     has_roof_interface = true;
                 } else if (area_group.type == SupportLayer::FloorType) {
-                    if (interlaced)
-                        area_group.interface_id = floor_interface_id;
+                    area_group.interface_id = floor_interface_id;
                     has_floor_interface = true;
                 }
             }
@@ -2456,6 +2494,17 @@ void TreeSupport::draw_circles()
 
             if (has_floor_interface)
                 ++floor_interface_id;
+        }
+
+        // Convert roof IDs from build order to contact-first numbering. Floor
+        // IDs already start at the model-contact surface.
+        for (size_t layer_nr = 0; layer_nr < m_ts_data->layer_heights.size(); ++layer_nr) {
+            SupportLayer *ts_layer = m_object->get_support_layer(layer_nr + m_raft_layers);
+            if (ts_layer == nullptr)
+                continue;
+            for (auto &area_group : ts_layer->area_groups)
+                if (area_group.type == SupportLayer::RoofType || area_group.type == SupportLayer::Roof1stLayer)
+                    area_group.interface_id = roof_interface_id - 1 - area_group.interface_id;
         }
 
         if (with_lightning_infill)
@@ -2672,9 +2721,13 @@ void TreeSupport::drop_nodes()
     const coordf_t support_extrusion_width = m_support_params.support_extrusion_width;
     const coordf_t layer_height = config.layer_height.value;
     const double angle = config.tree_support_branch_angle.value * M_PI / 180.;
-    const int wall_count = std::max(1, config.tree_support_wall_count.value);
+    // Wall counts above two increase branch thickness only. Keep the legacy
+    // one/two-wall movement behavior so a high count cannot distort the tree.
+    const int branch_movement_wall_factor = std::clamp(config.tree_support_wall_count.value, 1, 2);
     double tan_angle = tan(angle); // when nodes are thick, they can move further. this is the max angle
-    const coordf_t max_move_distance = (angle < M_PI / 2) ? (coordf_t)(tan_angle * layer_height)*wall_count : std::numeric_limits<coordf_t>::max();
+    const coordf_t max_move_distance = (angle < M_PI / 2) ?
+        coordf_t(tan_angle * layer_height) * branch_movement_wall_factor :
+        std::numeric_limits<coordf_t>::max();
     const double max_move_distance2 = max_move_distance * max_move_distance;
     const size_t tip_layers = base_radius / layer_height; //The number of layers to be shrinking the circle to create a tip. This produces a 45 degree angle.
     const coordf_t radius_sample_resolution = m_ts_data->m_radius_sample_resolution;
@@ -2683,7 +2736,7 @@ void TreeSupport::drop_nodes()
     SupportNode::diameter_angle_scale_factor = diameter_angle_scale_factor;
     float        DO_NOT_MOVER_UNDER_MM       = is_slim ? 0 : 5;                     // do not move contact points under 5mm
 
-    auto get_max_move_dist = [this, &config, tan_angle, wall_count, support_extrusion_width](const SupportNode *node, int power = 1) {
+    auto get_max_move_dist = [this, &config, tan_angle, support_extrusion_width](const SupportNode *node, int power = 1) {
         if (node->max_move_dist == 0) {
             node->radius        = get_radius(node);
             node->max_move_dist = std::min(tan_angle * node->height, support_extrusion_width);

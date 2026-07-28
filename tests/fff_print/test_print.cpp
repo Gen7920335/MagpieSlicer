@@ -406,6 +406,56 @@ TEST_CASE("export_gcode writes G-code without a result pointer", "[Print][export
     REQUIRE_FALSE(gcode.empty());
 }
 
+TEST_CASE("LESIC calibration slices a cylinder and emits calibration G-code", "[Print][LESIC][GCode]")
+{
+    Calib_Params params;
+    params.mode = CalibMode::Calib_LESIC;
+    params.start = 210.0;
+    params.end = 205.0;
+    params.step = 2.0;
+    params.mvs_start = 8.0;
+    params.mvs_end = 24.0;
+    params.lesic_layers_per_temp = 1;
+
+    const LesicCalibrationLayout layout =
+        make_lesic_calibration_layout(120.0, 120.0, 0.4, params);
+    params.lesic_circle_diameter = layout.circle_diameter;
+    params.lesic_line_width = layout.line_width;
+    params.lesic_layer_height = layout.layer_height;
+    params.lesic_small_bed = layout.small_bed;
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("layer_height", new ConfigOptionFloat(layout.layer_height));
+    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(layout.layer_height));
+    config.set_key_value("outer_wall_line_width", new ConfigOptionFloatOrPercent(layout.line_width, false));
+    config.set_key_value("wall_loops", new ConfigOptionInt(1));
+    config.set_key_value("top_shell_layers", new ConfigOptionInt(0));
+    config.set_key_value("bottom_shell_layers", new ConfigOptionInt(0));
+    config.set_key_value("sparse_infill_density", new ConfigOptionPercent(0));
+    config.set_key_value("spiral_mode", new ConfigOptionBool(true));
+
+    TriangleMesh cylinder(its_make_cylinder(
+        layout.circle_diameter * 0.5, layout.model_height, PI / 180.0));
+    Print print;
+    Model model;
+    init_print({cylinder}, print, model, config);
+
+    const Vec3d center = model.objects.front()->bounding_box_exact().center();
+    params.lesic_center_x = center.x();
+    params.lesic_center_y = center.y();
+    print.set_calib_params(params);
+
+    const std::string output = gcode(print);
+    CHECK(output.find("; LESIC: TEMP:210") != std::string::npos);
+    CHECK(output.find("; LESIC: TEMP:205") != std::string::npos);
+    CHECK(output.find("; lesic_ring_mvs_values=8,10,15,20,24") != std::string::npos);
+    CHECK(output.find("; lesic_inner_brim_lines=5") != std::string::npos);
+    CHECK(output.find("; lesic_bottom_label_height=") != std::string::npos);
+    CHECK(output.find("; lesic_annotation_segments=") != std::string::npos);
+    CHECK(output.find("LESIC annotation speed") != std::string::npos);
+    CHECK(output.find("\nG1 ") != std::string::npos);
+}
+
 TEST_CASE("Sequential printing follows model order", "[Print]")
 {
     // Two objects of different heights, taller one added first. Orca prints

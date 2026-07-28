@@ -66,6 +66,7 @@
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/SLAPrint.hpp"
+#include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "slic3r/Utils/CrealityPrint.hpp"
@@ -13458,6 +13459,111 @@ void Plater::calib_max_vol_speed(const Calib_Params& params)
     new_params.end   = params.end / mm3_per_mm;
     new_params.start = params.start / mm3_per_mm;
     new_params.step  = params.step / mm3_per_mm;
+
+    p->background_process.fff_print()->set_calib_params(new_params);
+}
+
+void Plater::calib_lesic(const Calib_Params& params)
+{
+    Calib_Params new_params = params;
+    const auto calib_name = wxString::Format(L"LESIC");
+    new_project(false, false, calib_name);
+    wxGetApp().mainframe->select_tab(size_t(MainFrame::tp3DEditor));
+    if (params.mode != CalibMode::Calib_LESIC)
+        return;
+
+    auto print_config = &wxGetApp().preset_bundle->prints.get_edited_preset().config;
+    auto filament_config = &wxGetApp().preset_bundle->filaments.get_edited_preset().config;
+    auto printer_config = &wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    auto bed_shape = printer_config->option<ConfigOptionPoints>("printable_area")->values;
+    BoundingBoxf bed_ext = get_extents(bed_shape);
+
+    const ConfigOptionFloats* nozzle_diameter_config = printer_config->option<ConfigOptionFloats>("nozzle_diameter");
+    assert(nozzle_diameter_config->values.size() > 0);
+    double nozzle_diameter = nozzle_diameter_config->values[0];
+    if (nozzle_diameter <= 0.0)
+        nozzle_diameter = 0.4;
+
+    const LesicCalibrationLayout lesic_layout = make_lesic_calibration_layout(
+        bed_ext.size().x(), bed_ext.size().y(), nozzle_diameter, params);
+    const double line_width = lesic_layout.line_width;
+    const double layer_height = lesic_layout.layer_height;
+    const double desired_height = lesic_layout.model_height;
+    const double circle_diameter = lesic_layout.circle_diameter;
+    TriangleMesh cylinder_mesh(its_make_cylinder(circle_diameter * 0.5, desired_height, PI / 180.0));
+    sidebar().obj_list()->load_mesh_object(cylinder_mesh, wxString("LESIC"), true);
+    if (model().objects.empty())
+        return;
+
+    const size_t obj_idx = model().objects.size() - 1;
+    auto obj = model().objects[obj_idx];
+    obj->name = "LESIC";
+    model().center_instances_around_point(bed_ext.center());
+    obj->ensure_on_bed();
+    auto& obj_cfg = obj->config;
+    new_params.lesic_center_x = bed_ext.center().x();
+    new_params.lesic_center_y = bed_ext.center().y();
+    new_params.lesic_circle_diameter = circle_diameter;
+    new_params.lesic_line_width = line_width;
+    new_params.lesic_layer_height = layer_height;
+    new_params.lesic_small_bed = lesic_layout.small_bed;
+
+    auto max_lh = printer_config->option<ConfigOptionFloats>("max_layer_height");
+    for (size_t i = 0; i < max_lh->values.size(); ++i) {
+        if (max_lh->values[i] < layer_height)
+            max_lh->values[i] = layer_height;
+    }
+
+    const double filament_max_volumetric_speed = filament_config->option<ConfigOptionFloats>("filament_max_volumetric_speed")->get_at(0);
+    set_config_values<double, ConfigOptionFloats>(filament_config, "filament_max_volumetric_speed", std::max(filament_max_volumetric_speed, params.mvs_end * 1.25));
+    set_config_values<int, ConfigOptionInts>(filament_config, "nozzle_temperature_initial_layer", static_cast<int>(std::lround(params.start)));
+    set_config_values<int, ConfigOptionInts>(filament_config, "nozzle_temperature", static_cast<int>(std::lround(params.start)));
+    filament_config->set_key_value("slow_down_layer_time", new ConfigOptionFloats{0.0});
+    filament_config->set_key_value("slow_down_min_speed", new ConfigOptionFloats{0.0});
+    filament_config->set_key_value("slow_down_for_layer_cooling", new ConfigOptionBools{false});
+
+    printer_config->set_key_value("resonance_avoidance", new ConfigOptionBool{false});
+    print_config->set_key_value("timelapse_type", new ConfigOptionEnum<TimelapseType>(tlTraditional));
+    print_config->set_key_value("enable_wrapping_detection", new ConfigOptionBool(false));
+    print_config->set_key_value("spiral_mode", new ConfigOptionBool(true));
+    print_config->set_key_value("spiral_mode_smooth", new ConfigOptionBool(false));
+    print_config->set_key_value("max_volumetric_extrusion_rate_slope", new ConfigOptionFloat(0));
+    print_config->set_key_value("initial_layer_print_height", new ConfigOptionFloat(layer_height));
+    print_config->set_key_value("layer_height", new ConfigOptionFloat(layer_height));
+    print_config->set_key_value("wall_loops", new ConfigOptionInt(1));
+    print_config->set_key_value("top_shell_layers", new ConfigOptionInt(0));
+    print_config->set_key_value("top_shell_thickness", new ConfigOptionFloat(0));
+    print_config->set_key_value("bottom_shell_layers", new ConfigOptionInt(0));
+    print_config->set_key_value("bottom_shell_thickness", new ConfigOptionFloat(0));
+    print_config->set_key_value("sparse_infill_density", new ConfigOptionPercent(0));
+    print_config->set_key_value("detect_thin_wall", new ConfigOptionBool(false));
+    print_config->set_key_value("outer_wall_line_width", new ConfigOptionFloatOrPercent(line_width, false));
+    set_config_values<bool, ConfigOptionBoolsNullable>(print_config, "enable_overhang_speed", false);
+
+    obj_cfg.set_key_value("layer_height", new ConfigOptionFloat(layer_height));
+    obj_cfg.set_key_value("outer_wall_line_width", new ConfigOptionFloatOrPercent(line_width, false));
+    obj_cfg.set_key_value("wall_loops", new ConfigOptionInt(1));
+    obj_cfg.set_key_value("alternate_extra_wall", new ConfigOptionBool(false));
+    obj_cfg.set_key_value("top_shell_layers", new ConfigOptionInt(0));
+    obj_cfg.set_key_value("top_shell_thickness", new ConfigOptionFloat(0));
+    obj_cfg.set_key_value("bottom_shell_layers", new ConfigOptionInt(0));
+    obj_cfg.set_key_value("bottom_shell_thickness", new ConfigOptionFloat(0));
+    obj_cfg.set_key_value("sparse_infill_density", new ConfigOptionPercent(0));
+    print_config->set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btNoBrim));
+    print_config->set_key_value("brim_width", new ConfigOptionFloat(0.0));
+    print_config->set_key_value("brim_object_gap", new ConfigOptionFloat(0.0));
+    obj_cfg.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btNoBrim));
+    obj_cfg.set_key_value("brim_width", new ConfigOptionFloat(0.0));
+    obj_cfg.set_key_value("brim_object_gap", new ConfigOptionFloat(0.0));
+    obj_cfg.set_key_value("precise_z_height", new ConfigOptionBool(false));
+
+    changed_objects({obj_idx});
+    wxGetApp().get_tab(Preset::TYPE_PRINT)->update_dirty();
+    wxGetApp().get_tab(Preset::TYPE_FILAMENT)->update_dirty();
+    wxGetApp().get_tab(Preset::TYPE_PRINTER)->update_dirty();
+    wxGetApp().get_tab(Preset::TYPE_PRINT)->reload_config();
+    wxGetApp().get_tab(Preset::TYPE_FILAMENT)->reload_config();
+    wxGetApp().get_tab(Preset::TYPE_PRINTER)->reload_config();
 
     p->background_process.fff_print()->set_calib_params(new_params);
 }

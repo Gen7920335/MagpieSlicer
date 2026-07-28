@@ -1,4 +1,6 @@
 #pragma once
+#include <algorithm>
+#include <cmath>
 #include <string>
 #define calib_pressure_advance_dd
 
@@ -26,7 +28,8 @@ enum class CalibMode : int {
     Calib_Retraction_tower,
     Calib_Input_shaping_freq,
     Calib_Input_shaping_damp,
-    Calib_Cornering
+    Calib_Cornering,
+    Calib_LESIC
 };
 
 enum class CalibState { Start = 0, Preset, Calibration, CoarseSave, FineCalibration, Save, Finish };
@@ -35,7 +38,18 @@ struct Calib_Params
 {
     Calib_Params() : mode(CalibMode::Calib_None){};
     int extruder_id = 0;
-    double    start, end, step;
+    double    start = 0.0;
+    double    end = 0.0;
+    double    step = 0.0;
+    double    mvs_start = 8.0;
+    double    mvs_end = 24.0;
+    int       lesic_layers_per_temp = 10;
+    double    lesic_center_x = 0.0;
+    double    lesic_center_y = 0.0;
+    double    lesic_circle_diameter = 0.0;
+    double    lesic_line_width = 0.0;
+    double    lesic_layer_height = 0.0;
+    bool      lesic_small_bed = false;
     bool      print_numbers;
     double freqStartX, freqEndX, freqStartY, freqEndY;
     int test_model;
@@ -45,6 +59,52 @@ struct Calib_Params
 
     CalibMode mode;
 };
+
+struct LesicCalibrationLayout
+{
+    double circle_diameter = 0.0;
+    double line_width = 0.0;
+    double layer_height = 0.0;
+    double model_height = 0.0;
+    int    temperature_bands = 0;
+    bool   small_bed = false;
+};
+
+inline int lesic_temperature_band_count(double start, double end, double step)
+{
+    const double positive_step = std::abs(step);
+    const double span = std::abs(start - end);
+    if (positive_step <= 0.0 || span < positive_step)
+        return 0;
+
+    return static_cast<int>(std::ceil(span / positive_step - 1e-9)) + 1;
+}
+
+inline double lesic_temperature_for_band(double start, double end, double step, int band)
+{
+    const double offset = std::max(0, band) * std::abs(step);
+    return start >= end ? std::max(end, start - offset) : std::min(end, start + offset);
+}
+
+inline LesicCalibrationLayout make_lesic_calibration_layout(
+    double bed_width,
+    double bed_depth,
+    double nozzle_diameter,
+    const Calib_Params &params)
+{
+    LesicCalibrationLayout layout;
+    const double minimum_bed_size = std::max(1.0, std::min(bed_width, bed_depth));
+    const double valid_nozzle = nozzle_diameter > 0.0 ? nozzle_diameter : 0.4;
+
+    layout.circle_diameter = std::max(1.0, minimum_bed_size - 20.0);
+    layout.line_width = valid_nozzle * 1.2;
+    layout.layer_height = valid_nozzle * 0.6;
+    layout.temperature_bands = lesic_temperature_band_count(params.start, params.end, params.step);
+    layout.model_height =
+        layout.layer_height * std::max(1, params.lesic_layers_per_temp) * layout.temperature_bands;
+    layout.small_bed = minimum_bed_size < 200.0;
+    return layout;
+}
 
 enum FlowRatioCalibrationType {
     COMPLETE_CALIBRATION = 0,

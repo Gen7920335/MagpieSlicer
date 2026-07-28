@@ -26,10 +26,17 @@ TEST_CASE("Triangle support-interface fill keeps three fixed directions", "[Fill
     Surface surface(stInternal, ExPolygon(square));
     std::unique_ptr<Fill> filler(Fill::new_from_type("triangles"));
     filler->set_bounding_box(get_extents(surface.expolygon.contour));
-    filler->angle = float(-M_PI_2);
     filler->spacing = 0.4;
 
-    for (const float density : { 0.1f, 0.25f, 0.5f, 1.f }) {
+    const auto normalize_undirected_angle = [](double angle) {
+        angle = std::fmod(angle, M_PI);
+        return angle < 0. ? angle + M_PI : angle;
+    };
+
+    for (const double pattern_angle : { -M_PI_2, -0.37, 0., 0.64, M_PI_2, 3.12 }) {
+      filler->angle = float(pattern_angle);
+      for (const float density : { 0.02f, 0.1f, 0.25f, 0.5f, 1.f }) {
+        CAPTURE(pattern_angle, density);
         FillParams params;
         params.density = density;
         params.dont_adjust = true;
@@ -42,35 +49,38 @@ TEST_CASE("Triangle support-interface fill keeps three fixed directions", "[Fill
 
         std::array<size_t, 3> direction_counts { 0, 0, 0 };
         std::array<std::vector<double>, 3> offsets;
-        // Rectilinear sweeps are generated vertically, so a zero pattern angle
-        // produces the three undirected line families at 30, 90 and 150 degrees.
-        const std::array<double, 3> expected_angles { M_PI / 6., M_PI / 2., 5. * M_PI / 6. };
+        const std::array<double, 3> expected_angles {
+            normalize_undirected_angle(pattern_angle),
+            normalize_undirected_angle(pattern_angle + M_PI / 3.),
+            normalize_undirected_angle(pattern_angle + 2. * M_PI / 3.)
+        };
 
         for (const Polyline &path : paths) {
             REQUIRE(path.points.size() >= 2);
-            const Vec2d delta = (path.last_point() - path.first_point()).cast<double>();
-            double angle = std::atan2(delta.y(), delta.x());
-            if (angle < 0.)
-                angle += M_PI;
-            if (angle >= M_PI)
-                angle -= M_PI;
+            for (size_t point_idx = 1; point_idx < path.points.size(); ++point_idx) {
+                const Point &from = path.points[point_idx - 1];
+                const Point &to   = path.points[point_idx];
+                const Vec2d delta = (to - from).cast<double>();
+                const double angle = normalize_undirected_angle(std::atan2(delta.y(), delta.x()));
 
-            size_t direction = 0;
-            double best_error = std::numeric_limits<double>::max();
-            for (size_t idx = 0; idx < expected_angles.size(); ++idx) {
-                const double error = std::abs(angle - expected_angles[idx]);
-                if (error < best_error) {
-                    best_error = error;
-                    direction = idx;
+                size_t direction = 0;
+                double best_error = std::numeric_limits<double>::max();
+                for (size_t idx = 0; idx < expected_angles.size(); ++idx) {
+                    const double direct_error = std::abs(angle - expected_angles[idx]);
+                    const double error = std::min(direct_error, M_PI - direct_error);
+                    if (error < best_error) {
+                        best_error = error;
+                        direction = idx;
+                    }
                 }
-            }
-            REQUIRE(best_error < 1e-5);
-            ++direction_counts[direction];
+                REQUIRE(best_error < 1e-5);
+                ++direction_counts[direction];
 
-            const Vec2d midpoint = 0.5 * (path.first_point().cast<double>() + path.last_point().cast<double>());
-            const double normal_x = -std::sin(expected_angles[direction]);
-            const double normal_y =  std::cos(expected_angles[direction]);
-            offsets[direction].push_back(unscale_(midpoint.x() * normal_x + midpoint.y() * normal_y));
+                const Vec2d midpoint = 0.5 * (from.cast<double>() + to.cast<double>());
+                const double normal_x = -std::sin(expected_angles[direction]);
+                const double normal_y =  std::cos(expected_angles[direction]);
+                offsets[direction].push_back(unscale_(midpoint.x() * normal_x + midpoint.y() * normal_y));
+            }
         }
 
         const double expected_pitch = filler->spacing / density;
@@ -85,6 +95,7 @@ TEST_CASE("Triangle support-interface fill keeps three fixed directions", "[Fill
             for (size_t idx = 1; idx < values.size(); ++idx)
                 CHECK(values[idx] - values[idx - 1] == Catch::Approx(expected_pitch).margin(0.002));
         }
+      }
     }
 }
 

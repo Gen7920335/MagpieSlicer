@@ -12,6 +12,26 @@ namespace Slic3r {
 class PrintObject;
 class SupportLayer;
 
+InfillPattern interface_pattern_to_fill_pattern(
+    SupportMaterialInterfacePattern pattern,
+    const SupportParameters         &support_params);
+
+// Interface layers are numbered from the model-contact surface, where the
+// contact layer is 1. A sublayer range can therefore only start at layer 2.
+bool support_interface_sublayer_selected(
+    bool enabled, int start_layer, int end_layer, int interface_number, int interface_total);
+
+// Keep each contact-derived XY footprint through its full top-interface stack.
+// Expansion is limited to printable support plus a small bridgeable tolerance.
+void stabilize_top_interface_footprints(
+    SupportGeneratorLayersPtr          &intermediate_layers,
+    SupportGeneratorLayersPtr          &interface_layers,
+    SupportGeneratorLayersPtr          &base_interface_layers,
+    const std::vector<Polygons>         &interface_targets,
+    const std::vector<Polygons>         &base_interface_targets,
+    coord_t                              support_tolerance,
+    SupportGeneratorLayerStorage       &layer_storage);
+
 // Turn some of the base layers into base interface layers.
 // For soluble interfaces with non-soluble bases, print maximum two first interface layers with the base
 // extruder to improve adhesion of the soluble filament to the base.

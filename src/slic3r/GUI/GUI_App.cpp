@@ -2918,6 +2918,43 @@ bool GUI_App::on_init_inner()
     // supplied as argument to --datadir; in that case we should still run the wizard
     preset_bundle->setup_directories();
 
+    // Keep the branded build isolated while carrying user-created presets over from
+    // stock OrcaSlicer once. Existing files always win, so this is safe to retry.
+    if (is_editor() && std::string(SLIC3R_APP_KEY) != "OrcaSlicer" &&
+        app_config->get("orcaslicer_user_presets_import_version") != "1") {
+        namespace fs = boost::filesystem;
+
+        const fs::path current_data_dir = fs::path(data_dir());
+        std::vector<fs::path> source_candidates {
+            current_data_dir.parent_path() / "OrcaSlicer",
+            fs::path(wxStandardPaths::Get().GetUserConfigDir().ToUTF8().data()) / "OrcaSlicer"
+        };
+
+        for (const fs::path &source_data_dir : source_candidates) {
+            if (source_data_dir == current_data_dir ||
+                !fs::is_directory(source_data_dir / PRESET_USER_DIR))
+                continue;
+
+            try {
+                const auto result = preset_bundle->import_user_presets_from(source_data_dir.string());
+                BOOST_LOG_TRIVIAL(info)
+                    << "Automatic OrcaSlicer user preset import from " << source_data_dir
+                    << ": copied=" << result.copied
+                    << ", skipped=" << result.skipped
+                    << ", failed=" << result.failed;
+
+                if (result.failed == 0) {
+                    app_config->set("orcaslicer_user_presets_import_version", "1");
+                    app_config->save();
+                }
+            } catch (const std::exception &error) {
+                BOOST_LOG_TRIVIAL(error)
+                    << "Automatic OrcaSlicer user preset import failed: " << error.what();
+            }
+            break;
+        }
+    }
+
 
     if (m_init_app_config_from_older)
         copy_older_config();
@@ -6042,7 +6079,7 @@ std::string GUI_App::format_display_version()
 {
     if (!version_display.empty()) return version_display;
 
-    version_display = SoftFever_VERSION;
+    version_display = SLIC3R_DISPLAY_VERSION;
     return version_display;
 }
 

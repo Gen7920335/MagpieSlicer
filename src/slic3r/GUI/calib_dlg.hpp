@@ -86,6 +86,26 @@ protected:
     Plater* m_plater;
 };
 
+class LESIC_Calibration_Dlg : public DPIDialog
+{
+public:
+    LESIC_Calibration_Dlg(wxWindow* parent, wxWindowID id, Plater* plater);
+    ~LESIC_Calibration_Dlg();
+    void on_dpi_changed(const wxRect& suggested_rect) override;
+
+protected:
+    virtual void on_start(wxCommandEvent& event);
+    Calib_Params m_params;
+
+    TextInput* m_tiTempStart;
+    TextInput* m_tiTempEnd;
+    TextInput* m_tiTempStep;
+    TextInput* m_tiLayersPerTemp;
+    TextInput* m_tiMvsStart;
+    TextInput* m_tiMvsEnd;
+    Plater* m_plater;
+};
+
 class VFA_Test_Dlg : public DPIDialog {
 public:
     VFA_Test_Dlg(wxWindow* parent, wxWindowID id, Plater* plater);
