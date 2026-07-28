@@ -3296,6 +3296,20 @@ void TabPrint::build()
         optgroup->append_single_option_line("support_interface_sublayer_pattern_type", "support_settings_advanced#interface-pattern");
         optgroup->append_single_option_line("support_interface_sublayer_angle", "support_settings_advanced#interface-pattern");
         optgroup->append_single_option_line("support_interface_sublayer_temperature", "support_settings_advanced#interface-pattern");
+        optgroup->append_single_option_line("support_bottom_interface_spacing", "support_settings_advanced#interface-spacing");
+        optgroup->append_single_option_line("support_expansion", "support_settings_advanced#normal-support-expansion");
+        //optgroup->append_single_option_line("support_interface_loop_pattern", "support_settings_advanced");
+
+        optgroup->append_single_option_line("support_object_xy_distance", "support_settings_advanced#supportobject-xy-distance");
+        optgroup->append_single_option_line("support_object_first_layer_gap", "support_settings_advanced#supportobject-first-layer-gap");
+        optgroup->append_single_option_line("bridge_no_support", "support_settings_advanced#dont-support-bridges");
+        optgroup->append_single_option_line("max_bridge_length", "support_settings_advanced");
+        optgroup->append_single_option_line("independent_support_layer_height", "support_settings_advanced#independent-support-layer-height");
+
+        // Custom wx controls must not be hosted by OG_CustomCtrl's virtual row painter.
+        // Keeping this editor in a native group gives its child windows normal ownership
+        // and avoids invalid field access when the row enters the scrolled viewport.
+        optgroup = page->new_optgroup(L("Interface density / spacing"), L"param_advanced", 0, false, false);
         {
             Line density_spacing_line = {
                 L("Interface density / spacing"),
@@ -3355,15 +3369,6 @@ void TabPrint::build()
             };
             optgroup->append_line(density_spacing_line);
         }
-        optgroup->append_single_option_line("support_bottom_interface_spacing", "support_settings_advanced#interface-spacing");
-        optgroup->append_single_option_line("support_expansion", "support_settings_advanced#normal-support-expansion");
-        //optgroup->append_single_option_line("support_interface_loop_pattern", "support_settings_advanced");
-
-        optgroup->append_single_option_line("support_object_xy_distance", "support_settings_advanced#supportobject-xy-distance");
-        optgroup->append_single_option_line("support_object_first_layer_gap", "support_settings_advanced#supportobject-first-layer-gap");
-        optgroup->append_single_option_line("bridge_no_support", "support_settings_advanced#dont-support-bridges");
-        optgroup->append_single_option_line("max_bridge_length", "support_settings_advanced");
-        optgroup->append_single_option_line("independent_support_layer_height", "support_settings_advanced#independent-support-layer-height");
 
         optgroup = page->new_optgroup(L("Tree supports"), L"param_support_tree");
         optgroup->append_single_option_line("tree_support_tip_diameter", "support_settings_tree#tip-diameter");
