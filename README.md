@@ -1,4 +1,12 @@
+<div align="center">
+
+<picture>
+  <img alt="Magpie Slicer logo" src="resources/images/MagpieSlicer.png" width="15%" height="15%">
+</picture>
+
 # Magpie Slicer
+
+</div>
 
 **한국어** | [English](README_EN.md)
 
@@ -7,7 +15,7 @@ Magpie Slicer는 서로 다른 구경의 노즐을 함께 사용하는 출력과
 
 - 프로그램 이름: **Magpie Slicer**
 - 현재 버전: **2.5.0 (modified)**
-- 설치 패키지 이름: **OrcaSlicer(name pending)**
+- 설치 패키지 이름: **MagpieSlicer_Windows_Installer**
 - 지원 플랫폼: **Windows x64**
 - 원본 프로젝트: [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer)
 
