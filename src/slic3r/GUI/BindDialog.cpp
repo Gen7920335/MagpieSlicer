@@ -112,7 +112,7 @@ PingCodeBindDialog::PingCodeBindDialog(Plater* plater /*= nullptr*/)
         m_text_input_single_code[i] = new TextInput(request_bind_panel, wxEmptyString, "", "", wxDefaultPosition, wxSize(FromDIP(38), FromDIP(38)), wxTE_PROCESS_ENTER | wxTE_CENTER);
         wxTextAttr textAttr;
         textAttr.SetAlignment(wxTEXT_ALIGNMENT_CENTER);
-        textAttr.SetTextColour(wxColour(34, 139, 34));
+        textAttr.SetTextColour(wxColour(57, 143, 244));
         m_text_input_single_code[i]->GetTextCtrl()->SetDefaultStyle(textAttr);
         m_text_input_single_code[i]->SetFont(Label::Body_16);
         m_text_input_single_code[i]->GetTextCtrl()->SetMaxLength(1);

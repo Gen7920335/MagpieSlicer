@@ -365,7 +365,7 @@ private:
         gc->DrawRectangle(0, half_h, size.x, FromDIP(3));
 
         if (m_selected) {
-            gc->SetPen(wxPen(wxColour("#00AE42"), FromDIP(2)));
+            gc->SetPen(wxPen(wxColour("#398FF4"), FromDIP(2)));
             gc->SetBrush(*wxTRANSPARENT_BRUSH);
             gc->DrawRoundedRectangle(0, 0, size.x - FromDIP(1), size.y - FromDIP(1), FromDIP(3));
         } else if (m_color.GetLuminance() > 0.95 || m_slot_color.GetLuminance() > 0.95) {

@@ -9,7 +9,7 @@
   --text: #e6ebf0;
   --row-hover: #2b3340;
   --row-selected: #244945;
-  --row-selected-outline: #00bfa5;
+    --row-selected-outline: #398FF4;
 
   --footer-bg: #20262d;
   --btn-bg: #2a313a;
@@ -29,7 +29,7 @@
 
 body
 {
-	background-color:#2D2D31; /* ORCA match background color */
+	background-color:#292E38; /* ORCA match background color */
 	color: #efeff0;
 }
 
@@ -38,26 +38,26 @@ body
 }
 
 .ZScrol::-webkit-scrollbar-track {/*滚动条里面轨道*/
-        background: #161817;
+        background: #171D26;
 }
 
 #Title div
 {
-	color: #009688;
+	color: #398FF4;
 }
 
 .search>input[type=text]{
-	background-color:#2D2D31;
+	background-color:#292E38;
 }
 
 /*---Checkboxes ORCA---*/
 input[type=checkbox]{
-	background-color:#2D2D31;
-	border-color:#4A4A51;
+	background-color:#292E38;
+	border-color:#46515F;
 }
 
 input[type=checkbox]:checked{
-	background-color:#009688;
+	background-color:#398FF4;
 }
 
 /*-------Text------*/
@@ -75,19 +75,19 @@ input[type=checkbox]:checked{
 /*---Policy---*/
 .TextArea1
 {
-	background-color: #4A4A51;
+	background-color: #46515F;
 	color: #BEBEC0;
 }
 
 /*----Region---*/
 .RegionItem:hover
 {
-	background-color:#4C4C55;
+	background-color:#485463;
 }
 
 .RegionSelected:hover
 {
-	background-color:#009688;
+	background-color:#398FF4;
 	color: #fff;	
 }
 

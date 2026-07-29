@@ -10,10 +10,10 @@
 
 @media (prefers-color-scheme: dark) {
     :root {
-        --cbr-border-color: #4a4a51;
+        --cbr-border-color: #46515F;
         --cbr-header-bg: #2f2f34;
-        --cbr-panel-bg: #2d2d31;
-        --cbr-input-bg: #2d2d31;
+        --cbr-panel-bg: #292E38;
+        --cbr-input-bg: #292E38;
         --cbr-input-focus-bg: #3b3b41;
         --cbr-label-color: #b9b9bc;
         --cbr-icon-color: #b9b9bc;

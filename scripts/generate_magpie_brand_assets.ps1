@@ -327,8 +327,8 @@ $pngAssets = @{
     'MagpieSlicer-mac_128px.png' = @($rounded, 128, 128)
     'MagpieSlicer_192px_transparent.png' = @($symbol, 192, 192)
     'MagpieSlicer_192px_grayscale.png' = @($grayscale, 192, 192)
-    'MagpieSlicerTitle.png' = @($circle, 154, 154)
-    'MagpieSlicer_154_title.png' = @($circle, 184, 184)
+    'MagpieSlicerTitle.png' = @($rounded, 154, 154)
+    'MagpieSlicer_154_title.png' = @($rounded, 184, 184)
 }
 foreach ($name in $pngAssets.Keys) {
     $asset = $pngAssets[$name]
@@ -337,10 +337,10 @@ foreach ($name in $pngAssets.Keys) {
 
 Save-Png $rounded (Join-Path $webImageDirectory 'logo.png') 154 154
 Save-Png $symbol (Join-Path $webImageDirectory 'logo2.png') 339 406
-Save-Ico $rounded (Join-Path $imageDirectory 'MagpieSlicer.ico') @(16, 24, 32, 48, 64, 128, 256)
-Save-Ico $circle (Join-Path $imageDirectory 'MagpieSlicerTitle.ico') @(16, 24, 32, 48, 64, 128, 256)
+Save-Ico $symbol (Join-Path $imageDirectory 'MagpieSlicer.ico') @(16, 24, 32, 48, 64, 128, 256)
+Save-Ico $rounded (Join-Path $imageDirectory 'MagpieSlicerTitle.ico') @(16, 24, 32, 48, 64, 128, 256)
 Save-Ico $rounded (Join-Path $imageDirectory 'MagpieSlicer-mac_256px.ico') @(32, 64, 128, 256)
-Save-Ico $rounded (Join-Path $imageDirectory 'MagpieSlicer-gcodeviewer.ico') @(16, 24, 32, 48, 64, 128, 256)
+Save-Ico $symbol (Join-Path $imageDirectory 'MagpieSlicer-gcodeviewer.ico') @(16, 24, 32, 48, 64, 128, 256)
 Save-Icns $rounded (Join-Path $imageDirectory 'MagpieSlicer.icns')
 Save-Icns $rounded (Join-Path $root 'resources\MagpieSlicer.icns')
 
@@ -350,15 +350,15 @@ Save-EmbeddedSvg $circle (Join-Path $imageDirectory 'MagpieSlicer_gradient_circl
 Save-EmbeddedSvg $symbol (Join-Path $imageDirectory 'MagpieSlicer_gradient_narrow.svg') 814.987 1023.9927
 Save-EmbeddedSvg $grayscale (Join-Path $imageDirectory 'MagpieSlicer_gray.svg') 1024 1024
 
-$aboutLight = New-Wordmark $rounded 560 125 $false
-$aboutDark = New-Wordmark $rounded 560 125 $true
+$aboutLight = New-Wordmark $symbol 560 125 $false
+$aboutDark = New-Wordmark $symbol 560 125 $true
 Save-EmbeddedSvg $aboutLight (Join-Path $imageDirectory 'MagpieSlicer_about.svg') 560 125
 Save-EmbeddedSvg $aboutDark (Join-Path $imageDirectory 'MagpieSlicer_about_dark.svg') 560 125
 $aboutLight.Dispose()
 $aboutDark.Dispose()
 
-$horizontalLight = New-Wordmark $rounded 214 80 $false
-$horizontalDark = New-Wordmark $rounded 214 80 $true
+$horizontalLight = New-Wordmark $symbol 214 80 $false
+$horizontalDark = New-Wordmark $symbol 214 80 $true
 Save-EmbeddedSvg $horizontalLight (Join-Path $imageDirectory 'MagpieSlicer_horizontal_light.svg') 214 80
 Save-EmbeddedSvg $horizontalDark (Join-Path $imageDirectory 'MagpieSlicer_horizontal_dark.svg') 214 80
 $horizontalLight.Dispose()

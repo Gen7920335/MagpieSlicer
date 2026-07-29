@@ -305,7 +305,7 @@ public:
         m_bg_color = StateColor::darkModeColorFor(wxColour("#FFFFFF"));
         m_fg_color = StateColor::darkModeColorFor(wxColour("#6B6A6A"));
         m_progress_bg_color = StateColor::darkModeColorFor(wxColour("#DFDFDF"));
-        m_progress_fg_color = StateColor::darkModeColorFor(wxColour("#009688"));
+        m_progress_fg_color = StateColor::darkModeColorFor(wxColour("#398FF4"));
         m_progress_h = FromDIP(6);
         bool dark_mode = m_fg_color != wxColour("#6B6A6A");
         wxSize sz  = m_window->GetClientSize();
@@ -3799,7 +3799,7 @@ bool GUI_App::dark_mode()
 
 const wxColour GUI_App::get_label_default_clr_system()
 {
-    return dark_mode() ? wxColour(115, 220, 103) : wxColour(26, 132, 57);
+    return dark_mode() ? wxColour(90, 168, 255) : wxColour(51, 121, 201);
 }
 
 const wxColour GUI_App::get_label_default_clr_modified()
@@ -3816,7 +3816,7 @@ void GUI_App::init_label_colours()
 #if defined(_WIN32) || defined(__linux__) || defined(__APPLE__)
     m_color_label_default           = is_dark_mode ? wxColour(250, 250, 250) : m_color_label_sys; // wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
     m_color_highlight_label_default = is_dark_mode ? wxColour(230, 230, 230): wxSystemSettings::GetColour(/*wxSYS_COLOUR_HIGHLIGHTTEXT*/wxSYS_COLOUR_WINDOWTEXT);
-    m_color_highlight_default       = is_dark_mode ? wxColour("#36363B") : wxColour("#F1F1F1"); // ORCA row highlighting
+    m_color_highlight_default       = is_dark_mode ? wxColour("#343B47") : wxColour("#F1F1F1"); // ORCA row highlighting
     m_color_hovered_btn_label       = is_dark_mode ? wxColour(255, 255, 254) : wxColour(0,0,0);
     m_color_default_btn_label       = is_dark_mode ? wxColour(255, 255, 254): wxColour(0,0,0);
     m_color_selected_btn_bg         = is_dark_mode ? wxColour(84, 84, 91)   : wxColour(206, 206, 206);
@@ -3932,7 +3932,7 @@ void GUI_App::UpdateDarkUI(wxWindow* window, bool highlited/* = false*/, bool ju
         auto orig_col = window->GetBackgroundColour();
         auto bg_col = StateColor::darkModeColorFor(orig_col);
         // there are cases where the background color of an item is bright, specifically:
-        // * the background color of a button: #009688  -- 73
+        // * the background color of a button: #398FF4  -- 73
         if (bg_col != orig_col) {
             window->SetBackgroundColour(bg_col);
         }

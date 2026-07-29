@@ -931,7 +931,7 @@ SyncAmsInfoDialog::SyncAmsInfoDialog(wxWindow *parent, SyncInfo &info) :
 
         m_advace_setting_sizer         = new wxBoxSizer(wxHORIZONTAL);
         m_more_setting_tips    = new wxStaticText(m_scrolledWindow, wxID_ANY, _L("Advanced settings"));
-        m_more_setting_tips->SetForegroundColour(wxColour(0, 137, 123));
+        m_more_setting_tips->SetForegroundColour(wxColour(39, 98, 166));
         m_more_setting_tips->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent &e) {
             m_expand_more_settings = !m_expand_more_settings;
             update_more_setting(true,true);
@@ -1017,7 +1017,7 @@ SyncAmsInfoDialog::SyncAmsInfoDialog(wxWindow *parent, SyncInfo &info) :
         /* m_checkbox = new wxCheckBox(this, wxID_ANY, _L("Don't show again"), wxDefaultPosition, wxDefaultSize, 0);
          bSizer_button->Add(m_checkbox, 0, wxALIGN_LEFT);*/
         bSizer_button->AddStretchSpacer(1);
-        StateColor btn_bg_green(std::pair<wxColour, int>(wxColour(0, 137, 123), StateColor::Pressed), std::pair<wxColour, int>(wxColour(38, 166, 154), StateColor::Hovered),
+        StateColor btn_bg_green(std::pair<wxColour, int>(wxColour(39, 98, 166), StateColor::Pressed), std::pair<wxColour, int>(wxColour(90, 168, 255), StateColor::Hovered),
                                 std::pair<wxColour, int>(AMS_CONTROL_BRAND_COLOUR, StateColor::Normal));
         m_button_ok = new Button(m_show_page,  _L("Synchronize now"));
         m_button_ok->SetBackgroundColor(btn_bg_green);
@@ -1989,7 +1989,7 @@ void SyncAmsInfoDialog::Enable_Auto_Refill(bool enable)
 {
     if (!m_ams_backup_tip) { return; }
     if (enable) {
-        m_ams_backup_tip->SetForegroundColour(wxColour("#009688"));
+        m_ams_backup_tip->SetForegroundColour(wxColour("#398FF4"));
     } else {
         m_ams_backup_tip->SetForegroundColour(wxColour(0x90, 0x90, 0x90));
     }

@@ -15,7 +15,7 @@
 wxDEFINE_EVENT(wxCUSTOMEVT_TABBOOK_SEL_CHANGED, wxCommandEvent);
 
 const static wxColour TAB_BUTTON_BG  = wxColour("#FEFFFF");
-const static wxColour TAB_BUTTON_SEL = wxColour("#BFE1DE"); // ORCA
+const static wxColour TAB_BUTTON_SEL = wxColour("#D7E9FD"); // ORCA
 
 static const wxFont& TAB_BUTTON_FONT     = Label::Body_14;
 static const wxFont& TAB_BUTTON_FONT_SEL = Label::Head_14;
