@@ -3277,6 +3277,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("tree_support_wall_count", "support_settings_advanced#support-wall-loops");
         optgroup->append_single_option_line("support_base_pattern", "support_settings_advanced#base-pattern");
         optgroup->append_single_option_line("support_base_pattern_spacing", "support_settings_advanced#base-pattern-spacing");
+        optgroup->append_single_option_line("cura_solid_support_raft", "support_settings_advanced#base-pattern-spacing");
         optgroup->append_single_option_line("support_angle", "support_settings_advanced#pattern-angle");
         optgroup->append_single_option_line("support_interface_top_layers", "support_settings_advanced#interface-layers");
         optgroup->append_single_option_line("support_interface_bottom_layers", "support_settings_advanced#interface-layers");

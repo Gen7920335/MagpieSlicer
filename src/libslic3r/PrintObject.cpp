@@ -1248,6 +1248,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "support_object_xy_distance"
             || opt_key == "support_object_first_layer_gap"
             || opt_key == "support_base_pattern_spacing"
+            || opt_key == "cura_solid_support_raft"
             || opt_key == "support_expansion"
             || opt_key == "independent_support_layer_height" // Orca
             || opt_key == "support_threshold_angle"

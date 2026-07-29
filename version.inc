@@ -3,6 +3,7 @@
 
 set(SLIC3R_APP_NAME "Magpie Slicer" CACHE STRING "Application display name" FORCE)
 set(SLIC3R_APP_KEY "MagpieSlicer" CACHE STRING "Application key for config/data isolation" FORCE)
+set(SLIC3R_GCODE_GENERATOR_NAME "OrcaSlicer" CACHE STRING "Machine-compatible G-code producer name" FORCE)
 set(SLIC3R_APP_CMD "magpie-slicer" CACHE STRING "Application command/executable name" FORCE)
 set(SLIC3R_APP_BUNDLE_ID "com.magpieslicer.MagpieSlicer" CACHE STRING "Application bundle identifier" FORCE)
 set(SLIC3R_PACKAGE_NAME "Magpie Slicer" CACHE STRING "Installed package display name" FORCE)

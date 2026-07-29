@@ -1004,6 +1004,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionEnum<SupportMaterialInterfacePattern>, support_interface_sublayer_pattern_type))
     ((ConfigOptionFloat,               support_interface_sublayer_angle))
     ((ConfigOptionInt,                 support_interface_sublayer_temperature))
+    ((ConfigOptionBool,                cura_solid_support_raft))
     // Spacing between support material lines (the hatching distance).
     ((ConfigOptionFloat,               support_base_pattern_spacing))
     ((ConfigOptionFloat,               support_expansion))

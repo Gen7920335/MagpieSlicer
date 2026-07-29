@@ -6733,6 +6733,14 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(0));
 
+    def = this->add("cura_solid_support_raft", coBool);
+    def->label = L("Cura-style solid support raft");
+    def->category = L("Support");
+    def->tooltip = L("Fill the bed-contact first layer of normal Cura-style support at 100% density. "
+                     "The support footprint is not expanded, and other support types are not affected.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("support_base_pattern_spacing", coFloat);
     def->label = L("Base pattern spacing");
     def->category = L("Support");

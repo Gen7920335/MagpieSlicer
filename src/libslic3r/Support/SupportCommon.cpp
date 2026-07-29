@@ -1655,7 +1655,9 @@ void generate_support_toolpaths(
                 // Base flange.
                 filler->angle = support_params.raft_angle_1st_layer;
                 filler->spacing = support_params.first_layer_flow.spacing();
-                density       = float(config.raft_first_layer_density.value * 0.01);
+                density = config.cura_solid_support_raft.value && is_normal_cura(config.support_type.value) ?
+                              1.f :
+                              float(config.raft_first_layer_density.value * 0.01);
             } else if (support_layer_id >= slicing_params.base_raft_layers) {
                 filler->angle = support_params.raft_interface_angle(support_layer.interface_id());
                 // We don't use $base_flow->spacing because we need a constant spacing
@@ -2023,7 +2025,8 @@ void generate_support_toolpaths(
                 bool  done    = false;
                 if (base_layer.layer->bottom_z < EPSILON) {
                     flow = support_params.first_layer_flow;
-                    if (is_normal_cura(config.support_type.value)) {
+                    const bool cura_style = is_normal_cura(config.support_type.value);
+                    if (cura_style && !config.cura_solid_support_raft.value) {
                         // Keep Cura-style support lines vertically aligned from the bed upward.
                         // The first-layer flow changes, but its line centers, spacing and direction do not.
                         filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / density));
@@ -2031,7 +2034,7 @@ void generate_support_toolpaths(
                         // Base flange (the 1st layer).
                         filler = filler_first_layer;
                         filler->angle = Geometry::deg2rad(float(config.support_angle.value + 90.));
-                        density = float(config.raft_first_layer_density.value * 0.01);
+                        density = cura_style ? 1.f : float(config.raft_first_layer_density.value * 0.01);
                         // use the proper spacing for first layer as we don't need to align
                         // its pattern to the other layers
                         //FIXME When paralellizing, each thread shall have its own copy of the fillers.

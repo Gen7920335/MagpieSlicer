@@ -63,7 +63,7 @@ static SettingsFactory::Bundle FREQ_SETTINGS_BUNDLE_FFF =
     { L("Support")     , { "enable_support", "support_type", "support_threshold_angle", "support_threshold_overlap",
                                     "support_base_pattern", "support_on_build_plate_only","support_critical_regions_only",
                                     "support_remove_small_overhang",
-                                    "support_base_pattern_spacing", "support_expansion"}},
+                                    "support_base_pattern_spacing", "cura_solid_support_raft", "support_expansion"}},
     //BBS
     { L("Flush options")         , { "flush_into_infill", "flush_into_objects", "flush_into_support"} }
 };
@@ -90,9 +90,9 @@ std::map<std::string, std::vector<SimpleSettingData>>  SettingsFactory::OBJECT_C
                     {"support_filament", "",11},{"support_interface_filament", "",12},{"support_expansion", "",13},{"support_style", "",14},
                     {"tree_support_brim_width", "",15}, {"tree_support_branch_angle", "",16},{"tree_support_branch_angle_organic","",17}, {"tree_support_wall_count", "",18},{"tree_support_branch_diameter_angle", "",19},//tree support
                     {"support_bottom_z_distance", "",20},{"support_top_z_distance", "",21},{"support_base_pattern", "",22},{"support_base_pattern_spacing", "",23},
-                    {"support_interface_top_layers", "",24},{"support_interface_bottom_layers", "",25},{"support_interface_spacing", "",26},{"support_bottom_interface_spacing", "",27},
-                    {"support_object_xy_distance", "",28}, {"bridge_no_support", "",29},{"max_bridge_length", "",30},{"support_critical_regions_only", "",31},{"support_remove_small_overhang","",32},
-                    {"support_object_first_layer_gap","",33}
+                    {"cura_solid_support_raft", "",24},{"support_interface_top_layers", "",25},{"support_interface_bottom_layers", "",26},{"support_interface_spacing", "",27},{"support_bottom_interface_spacing", "",28},
+                    {"support_object_xy_distance", "",29}, {"bridge_no_support", "",30},{"max_bridge_length", "",31},{"support_critical_regions_only", "",32},{"support_remove_small_overhang","",33},
+                    {"support_object_first_layer_gap","",34}
                     }},
     { L("Speed"), {{"support_speed", "",12}, {"support_interface_speed", "",13}
                   }}
