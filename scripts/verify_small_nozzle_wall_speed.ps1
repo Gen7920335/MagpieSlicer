@@ -12,7 +12,7 @@ $Invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
 if ([string]::IsNullOrWhiteSpace($SlicerPath)) {
-    $SlicerPath = Join-Path $RepoRoot 'build\src\Release\orca-slicer-trinterface.exe'
+    $SlicerPath = Join-Path $RepoRoot 'build\src\Release\magpie-slicer.exe'
 }
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $RepoRoot 'build\verification\small-nozzle-wall-speed'
@@ -36,7 +36,7 @@ foreach ($path in @($SlicerPath, $ModelPath, $MachineTemplate, $ProcessTemplate)
 function Find-FilamentProfile([string] $name) {
     $roots = @(
         (Join-Path $RepoRoot 'resources\profiles'),
-        (Join-Path $env:APPDATA 'OrcaSlicerTrInterface\system')
+        (Join-Path $env:APPDATA 'MagpieSlicer\system')
     )
     foreach ($root in $roots) {
         if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }

@@ -1410,7 +1410,7 @@ int CLI::run(int argc, char **argv)
         //BBS: remove GCodeViewer as separate APP logic
         //params.start_as_gcodeviewer = start_as_gcodeviewer;
 
-        BOOST_LOG_TRIVIAL(info) << "begin to launch OrcaSlicer GUI soon";
+        BOOST_LOG_TRIVIAL(info) << "begin to launch Magpie Slicer GUI soon";
         return Slic3r::GUI::GUI_Run(params);
 #else // SLIC3R_GUI
         // No GUI support. Just print out a help.
@@ -1434,7 +1434,7 @@ int CLI::run(int argc, char **argv)
     }
 
     global_begin_time = (long long)Slic3r::Utils::get_current_time_utc();
-    BOOST_LOG_TRIVIAL(warning) << boost::format("cli mode, Current OrcaSlicer Version %1%")%SoftFever_VERSION;
+    BOOST_LOG_TRIVIAL(warning) << boost::format("cli mode, Current Magpie Slicer Version %1%")%SoftFever_VERSION;
 
     //BBS: add plate data related logic
     PlateDataPtrs plate_data_src;
@@ -7142,13 +7142,13 @@ bool CLI::setup(int argc, char **argv)
     // We hope that if a DLL is being injected into a OrcaSlicer process, it happens at the very start of the application,
     // thus we shall detect them now.
     if (BlacklistedLibraryCheck::get_instance().perform_check()) {
-        std::wstring text = L"Following DLLs have been injected into the OrcaSlicer process:\n\n";
+        std::wstring text = L"Following DLLs have been injected into the Magpie Slicer process:\n\n";
         text += BlacklistedLibraryCheck::get_instance().get_blacklisted_string();
         text += L"\n\n"
-                L"OrcaSlicer is known to not run correctly with these DLLs injected. "
+                L"Magpie Slicer is known to not run correctly with these DLLs injected. "
                 L"We suggest stopping or uninstalling these services if you experience "
-                L"crashes or unexpected behaviour while using OrcaSlicer.\n"
-                L"For example, ASUS Sonic Studio injects a Nahimic driver, which makes OrcaSlicer "
+                L"crashes or unexpected behaviour while using Magpie Slicer.\n"
+                L"For example, ASUS Sonic Studio injects a Nahimic driver, which makes Magpie Slicer "
                 L"to crash on a secondary monitor";
         MessageBoxW(NULL, text.c_str(), L"Warning"/*L"Incopatible library found"*/, MB_OK);
     }

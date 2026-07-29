@@ -20,7 +20,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 Import-Module (Join-Path $PSScriptRoot 'lib\SmallNozzleVerifier.psm1') -Force
 
 if ([string]::IsNullOrWhiteSpace($SlicerPath)) {
-    $SlicerPath = Join-Path $RepoRoot 'build\src\Release\orca-slicer-trinterface.exe'
+    $SlicerPath = Join-Path $RepoRoot 'build\src\Release\magpie-slicer.exe'
 }
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $RepoRoot $(if ($Mode -eq 'Bunny') { 'build\verification\small-nozzle-bunny' } else { 'build\verification\small-nozzle-geometry' })
@@ -354,7 +354,7 @@ function New-PairwiseCases {
 }
 
 function Find-FilamentProfile([string] $Name) {
-    foreach ($root in @((Join-Path $RepoRoot 'resources\profiles'), (Join-Path $env:APPDATA 'OrcaSlicerTrInterface\system'))) {
+    foreach ($root in @((Join-Path $RepoRoot 'resources\profiles'), (Join-Path $env:APPDATA 'MagpieSlicer\system'))) {
         if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
         $match = Get-ChildItem -LiteralPath $root -Recurse -File -Filter "$Name.json" -ErrorAction SilentlyContinue |
             Select-Object -First 1

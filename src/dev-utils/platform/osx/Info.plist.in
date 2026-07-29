@@ -5,15 +5,15 @@
   <key>CFBundleExecutable</key>
   <string>@SLIC3R_APP_KEY@</string>
   <key>CFBundleGetInfoString</key>
-  <string>@SLIC3R_APP_NAME@ Copyright(C) 2026 OrcaSlicer Pte Ltd All Rights Reserved</string>
+  <string>@SLIC3R_APP_NAME@</string>
   <key>CFBundleIconFile</key>
-  <string>images/OrcaSlicer.icns</string>
+  <string>images/MagpieSlicer.icns</string>
   <key>CFBundleName</key>
   <string>@SLIC3R_APP_KEY@</string>
   <key>CFBundleShortVersionString</key>
   <string>@SLIC3R_APP_NAME@ @SLIC3R_BUILD_ID@</string>
   <key>CFBundleIdentifier</key>
-  <string>com.orcaslicer.OrcaSlicer</string>
+  <string>@SLIC3R_APP_BUNDLE_ID@</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundlePackageType</key>
@@ -28,9 +28,10 @@
   <array>
     <dict>
       <key>CFBundleURLName</key>
-      <string>orcasliceropen url</string>
+      <string>magpieslicer url</string>
       <key>CFBundleURLSchemes</key>
       <array>
+        <string>magpieslicer</string>
         <string>orcasliceropen</string>
         <string>orcaslicer</string>
       </array>
@@ -62,7 +63,7 @@
         <string>OBJ</string>
       </array>
       <key>CFBundleTypeIconFile</key>
-      <string>images/OrcaSlicer.icns</string>
+      <string>images/MagpieSlicer.icns</string>
       <key>CFBundleTypeName</key>
       <string>STL</string>
       <key>CFBundleTypeRole</key>
@@ -79,7 +80,7 @@
         <string>AMF</string>
       </array>
       <key>CFBundleTypeIconFile</key>
-      <string>images/OrcaSlicer.icns</string>
+      <string>images/MagpieSlicer.icns</string>
       <key>CFBundleTypeName</key>
       <string>AMF</string>
       <key>CFBundleTypeRole</key>
@@ -96,7 +97,7 @@
         <string>3MF</string>
       </array>
       <key>CFBundleTypeIconFile</key>
-      <string>images/OrcaSlicer.icns</string>
+      <string>images/MagpieSlicer.icns</string>
       <key>CFBundleTypeName</key>
       <string>3MF</string>
       <key>CFBundleTypeRole</key>

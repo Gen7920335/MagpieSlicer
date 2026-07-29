@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($SlicerPath)) {
-    $SlicerPath = Join-Path $RepoRoot 'build\src\Release\orca-slicer-trinterface.exe'
+    $SlicerPath = Join-Path $RepoRoot 'build\src\Release\magpie-slicer.exe'
 }
 
 $modelPath = Join-Path $RepoRoot 'resources\handy_models\OrcaCube_v2.drc'

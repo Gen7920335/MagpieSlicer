@@ -1,7 +1,7 @@
 param(
     [string] $BuildRoot,
     [string] $OutputRoot,
-    [string] $PackageName = 'OrcaSlicer-Integrated-MultiNozzle',
+    [string] $PackageName = 'MagpieSlicer',
     [int] $SmokeTimeoutSeconds = 180
 )
 
@@ -13,8 +13,8 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) { $OutputRoot = Join-Path $BuildR
 $BuildRoot = [IO.Path]::GetFullPath($BuildRoot)
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
 $releaseRoot = Join-Path $BuildRoot 'src\Release'
-$sourceLauncher = Join-Path $releaseRoot 'orca-slicer-trinterface.exe'
-$sourceDll = Join-Path $releaseRoot 'OrcaSlicer.dll'
+$sourceLauncher = Join-Path $releaseRoot 'magpie-slicer.exe'
+$sourceDll = Join-Path $releaseRoot 'MagpieSlicer.dll'
 $verifyScript = Join-Path $PSScriptRoot 'verify_multinozzle_orcacube.ps1'
 foreach ($requiredPath in @($sourceLauncher, $sourceDll, $verifyScript)) {
     if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) { throw "Required file not found: $requiredPath" }
@@ -36,8 +36,8 @@ foreach ($developmentDirectory in @('include', 'lib')) {
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
 }
 
-$stageLauncher = Join-Path $stageRoot 'orca-slicer-trinterface.exe'
-$stageDll = Join-Path $stageRoot 'OrcaSlicer.dll'
+$stageLauncher = Join-Path $stageRoot 'magpie-slicer.exe'
+$stageDll = Join-Path $stageRoot 'MagpieSlicer.dll'
 $stageResources = Join-Path $stageRoot 'resources'
 foreach ($requiredPath in @($stageLauncher, $stageDll, $stageResources)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Portable staging file not found: $requiredPath" }
@@ -45,7 +45,7 @@ foreach ($requiredPath in @($stageLauncher, $stageDll, $stageResources)) {
 
 $sourceHash = (Get-FileHash -LiteralPath $sourceDll -Algorithm SHA256).Hash
 $stageHash = (Get-FileHash -LiteralPath $stageDll -Algorithm SHA256).Hash
-if ($sourceHash -ne $stageHash) { throw 'Staged OrcaSlicer.dll does not match the Release build' }
+if ($sourceHash -ne $stageHash) { throw 'Staged MagpieSlicer.dll does not match the Release build' }
 $resourceCount = @(Get-ChildItem -LiteralPath $stageResources -Recurse -File).Count
 if ($resourceCount -lt 100) { throw "Portable resources are incomplete: $resourceCount files" }
 
@@ -64,7 +64,7 @@ $buildInfo = [ordered]@{
     created_utc = (Get-Date).ToUniversalTime().ToString('o')
     branch = [string] $branch
     commit = [string] $commit
-    orca_slicer_dll_sha256 = $stageHash
+    magpie_slicer_dll_sha256 = $stageHash
     resource_files = $resourceCount
     smoke_test = 'classic_count1_015 passed'
 }
@@ -86,8 +86,8 @@ Move-Item -LiteralPath $temporaryArchive -Destination $archivePath
 $archiveEntries = @(& tar.exe -tf $archivePath)
 if ($LASTEXITCODE -ne 0) { throw "ZIP listing failed with exit code $LASTEXITCODE" }
 foreach ($requiredEntry in @(
-    "$PackageName/orca-slicer-trinterface.exe",
-    "$PackageName/OrcaSlicer.dll",
+    "$PackageName/magpie-slicer.exe",
+    "$PackageName/MagpieSlicer.dll",
     "$PackageName/resources/",
     "$PackageName/build-info.json"
 )) {

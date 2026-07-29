@@ -31,7 +31,7 @@ if (Test-Path -LiteralPath $script) {
 }
 
 Write-Output "=== Staging payload ==="
-$payload = Join-Path $nsisDir "OrcaSlicerTrInterface_Windows_Installer_V2.5.0-dev_x64"
+$payload = Join-Path $nsisDir "MagpieSlicer_Windows_Installer_V2.5.0-dev_x64"
 if (Test-Path -LiteralPath $payload) {
     $files = @(Get-ChildItem -LiteralPath $payload -Recurse -File)
     $bytes = ($files | Measure-Object Length -Sum).Sum

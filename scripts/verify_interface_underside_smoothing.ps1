@@ -28,7 +28,7 @@ foreach ($path in @($SlicerPath, $ModelPath, $BaseMachinePath, $BaseProcessPath)
 function Find-FilamentProfile([string] $name) {
     $roots = @(
         (Join-Path $RepoRoot 'resources\profiles'),
-        (Join-Path $env:APPDATA 'OrcaSlicerTrInterface\system')
+        (Join-Path $env:APPDATA 'MagpieSlicer\system')
     )
     foreach ($root in $roots) {
         if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }

@@ -9,11 +9,11 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $verificationRoot = Join-Path $root "build\verification\installer\$stamp"
-$installRoot = "C:\OrcaInstallTest\$stamp"
+$installRoot = "C:\MagpieInstallTest\$stamp"
 
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
     $InstallerPath = Get-ChildItem -LiteralPath (Join-Path $root "build\installer") `
-        -Recurse -File -Filter "OrcaSlicerTrInterface_Windows_Installer_*_x64.exe" |
+        -Recurse -File -Filter "MagpieSlicer_Windows_Installer_*_x64.exe" |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1 -ExpandProperty FullName
 }
@@ -57,8 +57,8 @@ if ($installerProcess.ExitCode -ne 0) {
     throw "Installer exited with code $($installerProcess.ExitCode)."
 }
 
-$installedExe = Join-Path $installRoot "orca-slicer-trinterface.exe"
-$installedDll = Join-Path $installRoot "OrcaSlicer.dll"
+$installedExe = Join-Path $installRoot "magpie-slicer.exe"
+$installedDll = Join-Path $installRoot "MagpieSlicer.dll"
 $installedResources = Join-Path $installRoot "resources"
 foreach ($required in @($installedExe, $installedDll, $installedResources)) {
     if (-not (Test-Path -LiteralPath $required)) {

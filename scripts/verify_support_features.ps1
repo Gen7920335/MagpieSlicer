@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($SlicerPath)) {
-    $SlicerPath = Join-Path $RepoRoot 'build\portable\OrcaSlicer-Integrated-MultiNozzle\orca-slicer-trinterface.exe'
+    $SlicerPath = Join-Path $RepoRoot 'build\portable\MagpieSlicer\magpie-slicer.exe'
 }
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $RepoRoot 'build\verification\support-features'
@@ -25,7 +25,7 @@ foreach ($requiredPath in @($SlicerPath, $ModelPath, $BaseMachinePath, $BaseProc
 }
 
 function Find-FilamentProfile([string] $name) {
-    foreach ($root in @((Join-Path $RepoRoot 'resources\profiles'), (Join-Path $env:APPDATA 'OrcaSlicerTrInterface\system'))) {
+    foreach ($root in @((Join-Path $RepoRoot 'resources\profiles'), (Join-Path $env:APPDATA 'MagpieSlicer\system'))) {
         if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
         $match = Get-ChildItem -LiteralPath $root -Recurse -File -Filter "$name.json" -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($null -ne $match) { return $match.FullName }

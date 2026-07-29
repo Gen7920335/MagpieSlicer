@@ -1,6 +1,6 @@
 param(
     [int]$Parallel = [Math]::Max(1, [Environment]::ProcessorCount),
-    [string]$ShortStageRoot = "C:\OrcaPkg"
+    [string]$ShortStageRoot = "C:\MagpiePkg"
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,12 +31,12 @@ if ($LASTEXITCODE -ne 0) {
 $installers = @(
     Get-ChildItem -LiteralPath $stageDir -File -ErrorAction SilentlyContinue |
         Where-Object {
-            $_.Name -match '^OrcaSlicerTrInterface_Windows_Installer_.*_x64\.exe$'
+            $_.Name -match '^MagpieSlicer_Windows_Installer_.*_x64\.exe$'
         } |
         Sort-Object LastWriteTime -Descending
 )
 if ($installers.Count -eq 0) {
-    throw "Package target succeeded but no TrInterface installer was found."
+    throw "Package target succeeded but no Magpie Slicer installer was found."
 }
 
 $stageInstaller = $installers[0]
