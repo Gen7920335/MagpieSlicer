@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <limits>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 
 namespace Slic3r {
@@ -96,6 +99,41 @@ bool is_valid_snapmaker_object_name(std::string_view name)
            std::all_of(name.begin(), name.end(), [](unsigned char c) {
                return std::isalnum(c) != 0 || c == '_' || c == '-' || c == '.';
            });
+}
+
+bool is_public_snapmaker_macro(std::string_view name)
+{
+    if (name.empty() || name.front() == '_' || name == "CANCEL_PRINT" ||
+        name == "PAUSE" || name == "RESUME")
+        return false;
+    if (name.front() == 'T' && name.size() > 1 &&
+        std::all_of(name.begin() + 1, name.end(), [](unsigned char c) { return std::isdigit(c) != 0; }))
+        return false;
+    return is_valid_snapmaker_object_name(name);
+}
+
+std::string snapmaker_jog_script(char axis, double distance)
+{
+    axis = static_cast<char>(std::toupper(static_cast<unsigned char>(axis)));
+    if (axis != 'X' && axis != 'Y' && axis != 'Z')
+        throw std::invalid_argument("Invalid jog axis");
+    if (!std::isfinite(distance) || distance == 0.0 || std::abs(distance) > 100.0)
+        throw std::invalid_argument("Invalid jog distance");
+
+    std::ostringstream out;
+    out << "G91\nG0 " << axis << std::fixed << std::setprecision(3) << distance
+        << " F" << (axis == 'Z' ? 600 : 6000) << "\nG90";
+    return out.str();
+}
+
+std::string snapmaker_heater_script(std::string_view heater, double target)
+{
+    if (!is_valid_snapmaker_object_name(heater) || !std::isfinite(target) || target < 0.0 || target > 400.0)
+        throw std::invalid_argument("Invalid heater command");
+    std::ostringstream out;
+    out << "SET_HEATER_TEMPERATURE HEATER=" << heater << " TARGET="
+        << std::fixed << std::setprecision(1) << target;
+    return out.str();
 }
 
 bool is_success_http_status(unsigned status)

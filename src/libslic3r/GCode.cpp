@@ -14,6 +14,7 @@
 #include "Geometry.hpp"
 #include "Geometry/ConvexHull.hpp"
 #include "GCode/PrintExtents.hpp"
+#include "GCode/SnapmakerHomingPolicy.hpp"
 #include "GCode/Thumbnails.hpp"
 #include "GCode/WipeTower.hpp"
 #include "ShortestPath.hpp"
@@ -27,6 +28,7 @@
 #include "GCode/ExtrusionProcessor.hpp"
 #include <algorithm>
 #include <cctype>
+#include <sstream>
 #include <cfloat>
 #include <cmath>
 #include <cstdlib>
@@ -4250,6 +4252,10 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     this->placeholder_parser().set("used_filament_length", new ConfigOptionString(GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Used_Filament_Length_Placeholder)));
 
     std::string machine_start_gcode = this->placeholder_parser_process("machine_start_gcode", print.config().machine_start_gcode.value, initial_extruder_id);
+    const std::string &printer_model = print.config().printer_model.value;
+    const bool is_snapmaker_u1 = printer_model == "797581801" || printer_model == "Snapmaker U1";
+    if (is_snapmaker_u1)
+        ensure_snapmaker_u1_safe_homing(machine_start_gcode);
     if (print.config().gcode_flavor != gcfKlipper) {
         // Set bed temperature if the start G-code does not contain any bed temp control G-codes.
         this->_print_first_layer_bed_temperature(file, print, machine_start_gcode, initial_extruder_id, true);

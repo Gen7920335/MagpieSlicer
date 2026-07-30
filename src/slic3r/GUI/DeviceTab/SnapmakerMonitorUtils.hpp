@@ -27,6 +27,9 @@ struct SnapmakerControlAvailability
 SnapmakerWebSocketEndpoint parse_snapmaker_websocket_endpoint(std::string base_url);
 std::string normalize_snapmaker_base_url(std::string value);
 bool is_valid_snapmaker_object_name(std::string_view name);
+bool is_public_snapmaker_macro(std::string_view name);
+std::string snapmaker_jog_script(char axis, double distance);
+std::string snapmaker_heater_script(std::string_view heater, double target);
 bool is_success_http_status(unsigned status);
 int valid_snapmaker_layer_number(int requested_layer, int indexed_layer_count);
 

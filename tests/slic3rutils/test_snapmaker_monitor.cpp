@@ -1,5 +1,6 @@
 #include <catch2/catch_all.hpp>
 
+#include "libslic3r/GCode/SnapmakerHomingPolicy.hpp"
 #include "slic3r/GUI/DeviceTab/SnapmakerGCodeLayer.hpp"
 #include "slic3r/GUI/DeviceTab/SnapmakerMonitorUtils.hpp"
 
@@ -8,6 +9,9 @@
 
 using Slic3r::GUI::SnapmakerGCodeLayer;
 using Slic3r::GUI::SnapmakerGCodeLayerCache;
+using Slic3r::GUI::is_public_snapmaker_macro;
+using Slic3r::GUI::snapmaker_heater_script;
+using Slic3r::GUI::snapmaker_jog_script;
 
 namespace {
 
@@ -217,6 +221,64 @@ TEST_CASE("Snapmaker object names are command safe", "[SnapmakerMonitor][Control
     CHECK_FALSE(is_valid_snapmaker_object_name("PART 1"));
     CHECK_FALSE(is_valid_snapmaker_object_name("PART\nCANCEL_PRINT"));
     CHECK_FALSE(is_valid_snapmaker_object_name("한글"));
+}
+
+TEST_CASE("Snapmaker public macros hide internal and tool aliases", "[SnapmakerMonitor][Control]")
+{
+    CHECK(is_public_snapmaker_macro("BED_MESH_CALIBRATE"));
+    CHECK(is_public_snapmaker_macro("SHAPER_CALIBRATE"));
+    CHECK_FALSE(is_public_snapmaker_macro("_CLIENT_EXTRUDE"));
+    CHECK_FALSE(is_public_snapmaker_macro("T0"));
+    CHECK_FALSE(is_public_snapmaker_macro("T31"));
+    CHECK_FALSE(is_public_snapmaker_macro("PAUSE"));
+    CHECK_FALSE(is_public_snapmaker_macro("BAD COMMAND"));
+}
+
+TEST_CASE("Snapmaker control scripts validate motion and heater inputs", "[SnapmakerMonitor][Control]")
+{
+    CHECK(snapmaker_jog_script('x', 10.0) == "G91\nG0 X10.000 F6000\nG90");
+    CHECK(snapmaker_jog_script('Z', -0.1) == "G91\nG0 Z-0.100 F600\nG90");
+    CHECK_THROWS(snapmaker_jog_script('E', 1.0));
+    CHECK_THROWS(snapmaker_jog_script('X', 0.0));
+    CHECK_THROWS(snapmaker_jog_script('X', 101.0));
+
+    CHECK(snapmaker_heater_script("extruder3", 215.0) ==
+          "SET_HEATER_TEMPERATURE HEATER=extruder3 TARGET=215.0");
+    CHECK(snapmaker_heater_script("heater_bed", 60.0) ==
+          "SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=60.0");
+    CHECK_THROWS(snapmaker_heater_script("heater bed", 60.0));
+    CHECK_THROWS(snapmaker_heater_script("extruder", 401.0));
+}
+
+TEST_CASE("Snapmaker U1 homing follows PRINT_START before motion", "[SnapmakerMonitor][GCode]")
+{
+    std::string unsafe =
+        "G28\n"
+        "PRINT_START TOOL=0\n"
+        "M84\n"
+        "M109 S220\n"
+        "G0 X0 Y0 Z10\n";
+    CHECK_FALSE(Slic3r::snapmaker_u1_has_safe_homing(unsafe));
+    CHECK(Slic3r::ensure_snapmaker_u1_safe_homing(unsafe));
+    CHECK(Slic3r::snapmaker_u1_has_safe_homing(unsafe));
+
+    const size_t print_start = unsafe.find("PRINT_START TOOL=0");
+    const size_t inserted_home = unsafe.find(
+        "; Magpie: mandatory Snapmaker U1 homing after PRINT_START\nG28\n");
+    const size_t first_motion = unsafe.find("G0 X0 Y0 Z10");
+    REQUIRE(print_start != std::string::npos);
+    REQUIRE(inserted_home != std::string::npos);
+    REQUIRE(first_motion != std::string::npos);
+    CHECK(print_start < inserted_home);
+    CHECK(inserted_home < first_motion);
+    CHECK_FALSE(Slic3r::ensure_snapmaker_u1_safe_homing(unsafe));
+
+    CHECK(Slic3r::snapmaker_u1_has_safe_homing(
+        "PRINT_STRAT TOOL=0\nG28\nG0 X0 Y0 Z10\n"));
+    CHECK_FALSE(Slic3r::snapmaker_u1_has_safe_homing(
+        "PRINT_START TOOL=0\nG28 X Y\nG0 Z10\n"));
+    CHECK_FALSE(Slic3r::snapmaker_u1_has_safe_homing(
+        "PRINT_START TOOL=0\n; G28\nG0 Z10\n"));
 }
 
 TEST_CASE("Snapmaker control availability follows printer state", "[SnapmakerMonitor][Control]")
