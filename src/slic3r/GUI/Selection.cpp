@@ -2406,9 +2406,14 @@ void Selection::update_type()
                 unsigned int sels_cntr = 0;
                 for (ObjectIdxsToInstanceIdxsMap::iterator it = m_cache.content.begin(); it != m_cache.content.end(); ++it)
                 {
-                    bool               is_wipe_tower   = it->first >= 1000;
-                    int                actual_obj_id   = is_wipe_tower ? it->first - 1000 : it->first;
-                    const ModelObject *model_object    = m_model->objects[actual_obj_id];
+                    // Synthetic towers are not ModelObjects and must never be converted into model indices.
+                    if (it->first >= 1000) {
+                        ++sels_cntr;
+                        continue;
+                    }
+                    if (it->first < 0 || it->first >= int(m_model->objects.size()))
+                        continue;
+                    const ModelObject *model_object = m_model->objects[it->first];
                     unsigned int volumes_count = (unsigned int)model_object->volumes.size();
                     unsigned int instances_count = (unsigned int)model_object->instances.size();
                     sels_cntr += volumes_count * instances_count;

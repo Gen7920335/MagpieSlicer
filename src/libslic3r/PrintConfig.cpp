@@ -6559,6 +6559,15 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("support_interface_temperature_drop_tower_x", coFloats);
+    def->mode = comDevelop;
+    // Negative coordinates request the stable rear-left default for each bed.
+    def->set_default_value(new ConfigOptionFloats{ -1.0 });
+
+    def = this->add("support_interface_temperature_drop_tower_y", coFloats);
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloats{ -1.0 });
+
     def = this->add("support_interface_temperature", coInt);
     def->label = L("Support interface temperature");
     def->category = L("Support");

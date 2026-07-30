@@ -567,13 +567,13 @@ void AppConfig::set_defaults()
     }
 
     if (get("print", "bed_leveling").empty()) {
-        set_str("print", "bed_leveling", "1");
+        set_str("print", "bed_leveling", "0");
     }
     if (get("print", "flow_cali").empty()) {
-        set_str("print", "flow_cali", "1");
+        set_str("print", "flow_cali", "0");
     }
     if (get("print", "timelapse").empty()) {
-        set_str("print", "timelapse", "1");
+        set_str("print", "timelapse", "0");
     }
 
     if (get("enable_step_mesh_setting").empty()) {

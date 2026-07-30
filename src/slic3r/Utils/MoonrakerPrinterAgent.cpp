@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cctype>
 #include <thread>
+#include <utility>
 
 namespace {
 
@@ -275,11 +276,8 @@ int MoonrakerPrinterAgent::set_user_selected_machine(std::string dev_id)
 
 int MoonrakerPrinterAgent::start_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
-    (void) params;
-    (void) update_fn;
-    (void) cancel_fn;
     (void) wait_fn;
-    return BAMBU_NETWORK_SUCCESS;
+    return start_local_print(std::move(params), std::move(update_fn), std::move(cancel_fn));
 }
 
 int MoonrakerPrinterAgent::start_local_print_with_record(PrintParams      params,
@@ -287,11 +285,8 @@ int MoonrakerPrinterAgent::start_local_print_with_record(PrintParams      params
                                                          WasCancelledFn   cancel_fn,
                                                          OnWaitFn         wait_fn)
 {
-    (void) params;
-    (void) update_fn;
-    (void) cancel_fn;
     (void) wait_fn;
-    return BAMBU_NETWORK_SUCCESS;
+    return start_local_print(std::move(params), std::move(update_fn), std::move(cancel_fn));
 }
 
 int MoonrakerPrinterAgent::start_send_gcode_to_sdcard(PrintParams      params,
@@ -367,6 +362,11 @@ int MoonrakerPrinterAgent::start_local_print(PrintParams params, OnUpdateStatusF
     // Check cancellation
     if (cancel_fn && cancel_fn()) {
         return BAMBU_NETWORK_ERR_CANCELED;
+    }
+
+    if (!apply_print_preferences(params)) {
+        BOOST_LOG_TRIVIAL(error) << "MoonrakerPrinterAgent: failed to apply print preferences";
+        return BAMBU_NETWORK_ERR_PRINT_LP_PUBLISH_MSG_FAILED;
     }
 
     // Start print via gcode script (simpler than JSON-RPC)
@@ -1235,6 +1235,33 @@ bool MoonrakerPrinterAgent::send_gcode(const std::string& dev_id, const std::str
     return true;
 }
 
+bool MoonrakerPrinterAgent::supports_print_preferences() const
+{
+    std::lock_guard<std::recursive_mutex> lock(payload_mutex);
+    // Snapmaker registers SET_PRINT_PREFERENCES without a help description, so
+    // it is intentionally absent from Moonraker's /printer/gcode/help result.
+    return available_objects.count("print_task_config") != 0;
+}
+
+bool MoonrakerPrinterAgent::apply_print_preferences(const PrintParams& params) const
+{
+    if (!supports_print_preferences()) {
+        return true;
+    }
+
+    const auto enabled = [](bool value) { return value ? "1" : "0"; };
+    const std::string command =
+        "SET_PRINT_PREFERENCES BED_LEVEL=" + std::string(enabled(params.task_bed_leveling)) +
+        " FLOW_CALIBRATE=" + enabled(params.task_flow_cali) +
+        " TIME_LAPSE_CAMERA=" + enabled(params.task_record_timelapse);
+
+    BOOST_LOG_TRIVIAL(info) << "MoonrakerPrinterAgent: applying print preferences"
+                            << " bed_level=" << enabled(params.task_bed_leveling)
+                            << " flow_calibrate=" << enabled(params.task_flow_cali)
+                            << " time_lapse_camera=" << enabled(params.task_record_timelapse);
+    return send_gcode(device_info.dev_id, command);
+}
+
 bool MoonrakerPrinterAgent::fetch_object_list(const std::string&     base_url,
                                               const std::string&     api_key,
                                               std::set<std::string>& objects,
@@ -1799,6 +1826,11 @@ nlohmann::json MoonrakerPrinterAgent::build_print_payload_locked() const
     // Default to 0 (not supported) if neither object exists
     bool has_bed_leveling                    = (available_objects.count("bed_mesh") != 0 || available_objects.count("probe") != 0);
     payload["print"]["support_bed_leveling"] = has_bed_leveling ? 1 : 0;
+
+    const bool has_print_preferences = available_objects.count("print_task_config") != 0;
+    payload["print"]["support_flow_calibration"]    = has_print_preferences;
+    payload["print"]["support_timelapse"]           = has_print_preferences;
+    payload["print"]["support_internal_timelapse"]  = has_print_preferences;
 
     const nlohmann::json* extruder = nullptr;
     if (status_cache.contains("extruder") && status_cache["extruder"].is_object()) {

@@ -2330,6 +2330,9 @@ void SelectMachineDialog::load_option_vals(MachineObject *obj)
         const std::string &val = config->get(obj->printer_type, item.first);
         if (opt->contain_opt(val)) {
             opt->setValue(val);
+        } else if ((item.first == "bed_leveling" || item.first == "flow_cali" || item.first == "timelapse") &&
+                   opt->contain_opt("off")) {
+            opt->setValue("off");
         } else if (opt->contain_opt("auto")) {
             opt->setValue("auto");
         } else if (opt->contain_opt("on")) {

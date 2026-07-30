@@ -394,6 +394,10 @@ struct TemperatureDropTowerSettings {
     int interface_filament { 0 };
     PrintSequence print_sequence { PrintSequence::ByLayer };
     bool configured_wiper { false };
+    double tower_x { -1.0 };
+    double tower_y { -1.0 };
+    double nozzle_diameter { 0.4 };
+    double layer_height { 0.2 };
     std::vector<Vec2d> printable_area {
         Vec2d(0., 0.), Vec2d(200., 0.), Vec2d(200., 200.), Vec2d(0., 200.)
     };
@@ -419,9 +423,19 @@ static DynamicPrintConfig temperature_drop_tower_config(const TemperatureDropTow
     config.set_key_value(
         "nozzle_temperature_initial_layer", new ConfigOptionInts({ settings.normal_temperature }));
     config.set_key_value(
+        "nozzle_diameter", new ConfigOptionFloats({ settings.nozzle_diameter }));
+    config.set_key_value(
+        "layer_height", new ConfigOptionFloat(settings.layer_height));
+    config.set_key_value(
+        "initial_layer_print_height", new ConfigOptionFloat(settings.layer_height));
+    config.set_key_value(
         "print_sequence", new ConfigOptionEnum<PrintSequence>(settings.print_sequence));
     config.set_key_value(
         "printable_area", new ConfigOptionPoints(settings.printable_area));
+    config.set_key_value(
+        "support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ settings.tower_x }));
+    config.set_key_value(
+        "support_interface_temperature_drop_tower_y", new ConfigOptionFloats({ settings.tower_y }));
     config.set_key_value(
         "support_interface_brush_start", new ConfigOptionPoint(Vec2d(10.0, 10.0)));
     config.set_key_value(
@@ -433,6 +447,18 @@ static std::string temperature_drop_tower_gcode(const TemperatureDropTowerSettin
 {
     DynamicPrintConfig config = temperature_drop_tower_config(settings);
     return slice({ TestMesh::overhang }, config);
+}
+
+static std::string temperature_drop_tower_gcode_for_plate(
+    DynamicPrintConfig config, int plate_index)
+{
+    Print print;
+    Model model;
+    std::vector<TriangleMesh> meshes;
+    meshes.emplace_back(mesh(TestMesh::overhang));
+    init_print(std::move(meshes), print, model, config, nullptr, false);
+    print.set_plate_index(plate_index);
+    return gcode(print);
 }
 
 static std::optional<double> gcode_word(const std::string &line, char letter)
@@ -447,6 +473,14 @@ static std::optional<double> gcode_word(const std::string &line, char letter)
             return value;
     }
     return std::nullopt;
+}
+
+static size_t count_substring(const std::string &text, const std::string &needle)
+{
+    size_t count = 0;
+    for (size_t pos = 0; (pos = text.find(needle, pos)) != std::string::npos; pos += needle.size())
+        ++count;
+    return count;
 }
 
 struct TemperatureDropTowerMetrics {
@@ -575,8 +609,9 @@ TEST_CASE("Temperature drop tower scales and slows only its final 10 mm",
         CHECK(metrics.max_slow_feedrate == Catch::Approx(600.0).margin(0.1));
         CHECK(metrics.max_x - metrics.min_x == Catch::Approx(temperature.expected_size).margin(0.03));
         CHECK(metrics.max_y - metrics.min_y == Catch::Approx(temperature.expected_size).margin(0.03));
-        CHECK(metrics.min_x == Catch::Approx(3.0).margin(0.03));
-        CHECK(metrics.max_y == Catch::Approx(197.0).margin(0.03));
+        CHECK(metrics.min_x > 3.0);
+        CHECK(metrics.max_y < 197.0);
+        CHECK(count_substring(output, "; temperature drop tower brim line") == 5);
 
         const std::string set_temperature = "M104 S" + std::to_string(temperature.interface_temperature);
         const std::string wait_temperature = "M109 S" + std::to_string(temperature.interface_temperature);
@@ -621,16 +656,20 @@ TEST_CASE("Temperature drop tower stays inside rear-left bed bounds",
         check_temperature_drop_tower_passes_are_on_distinct_layers(metrics);
         CHECK(metrics.min_x >= bed_min_x + 3.0 - 0.03);
         CHECK(metrics.max_x <= bed_max_x - 3.0 + 0.03);
-        CHECK(metrics.max_y == Catch::Approx(expected_max_y).margin(0.03));
-        CHECK(metrics.max_x - metrics.min_x == Catch::Approx(expected_size).margin(0.03));
-        CHECK(metrics.max_y - metrics.min_y == Catch::Approx(expected_size).margin(0.03));
+        CHECK(metrics.max_y < expected_max_y);
+        CHECK(metrics.max_x - metrics.min_x <= expected_size + 0.03);
+        CHECK(metrics.max_y - metrics.min_y <= expected_size + 0.03);
     }
 }
 
-TEST_CASE("Temperature drop tower relocates away from a rear-left model",
+TEST_CASE("Temperature drop tower keeps its configured position when a model overlaps it",
           "[SupportMaterial][TemperatureDropTower]")
 {
     TemperatureDropTowerSettings settings;
+    settings.tower_x = 5.0;
+    settings.tower_y = 145.0;
+    const TemperatureDropTowerMetrics baseline =
+        analyze_temperature_drop_tower(temperature_drop_tower_gcode(settings));
     DynamicPrintConfig config = temperature_drop_tower_config(settings);
     TriangleMesh overhang = mesh(TestMesh::overhang);
     const BoundingBoxf3 original_bbox = overhang.bounding_box();
@@ -655,13 +694,132 @@ TEST_CASE("Temperature drop tower relocates away from a rear-left model",
     CHECK(metrics.max_x <= 197.0 + 0.03);
     CHECK(metrics.min_y >= 3.0 - 0.03);
     CHECK(metrics.max_y <= 197.0 + 0.03);
-    constexpr double clearance = 3.0;
-    const bool separated =
-        metrics.max_x <= placed_bbox.min.x() - clearance + 0.03 ||
-        metrics.min_x >= placed_bbox.max.x() + clearance - 0.03 ||
-        metrics.max_y <= placed_bbox.min.y() - clearance + 0.03 ||
-        metrics.min_y >= placed_bbox.max.y() + clearance - 0.03;
-    CHECK(separated);
+    const bool overlaps =
+        metrics.max_x > placed_bbox.min.x() &&
+        metrics.min_x < placed_bbox.max.x() &&
+        metrics.max_y > placed_bbox.min.y() &&
+        metrics.min_y < placed_bbox.max.y();
+    CHECK(overlaps);
+    CHECK(metrics.min_x == Catch::Approx(baseline.min_x).margin(0.03));
+    CHECK(metrics.max_x == Catch::Approx(baseline.max_x).margin(0.03));
+    CHECK(metrics.min_y == Catch::Approx(baseline.min_y).margin(0.03));
+    CHECK(metrics.max_y == Catch::Approx(baseline.max_y).margin(0.03));
+}
+
+TEST_CASE("Temperature drop tower G-code follows a manual project move exactly",
+          "[SupportMaterial][TemperatureDropTower]")
+{
+    TemperatureDropTowerSettings before_move;
+    before_move.tower_x = 20.0;
+    before_move.tower_y = 25.0;
+    const std::string before_output = temperature_drop_tower_gcode(before_move);
+    const TemperatureDropTowerMetrics before =
+        analyze_temperature_drop_tower(before_output);
+
+    TemperatureDropTowerSettings after_move = before_move;
+    after_move.tower_x = 42.0;
+    after_move.tower_y = 31.0;
+    const std::string after_output = temperature_drop_tower_gcode(after_move);
+    const TemperatureDropTowerMetrics after =
+        analyze_temperature_drop_tower(after_output);
+
+    check_temperature_drop_tower_passes_are_on_distinct_layers(before);
+    check_temperature_drop_tower_passes_are_on_distinct_layers(after);
+    CHECK(after.min_x - before.min_x == Catch::Approx(22.0).margin(0.03));
+    CHECK(after.max_x - before.max_x == Catch::Approx(22.0).margin(0.03));
+    CHECK(after.min_y - before.min_y == Catch::Approx(6.0).margin(0.03));
+    CHECK(after.max_y - before.max_y == Catch::Approx(6.0).margin(0.03));
+    CHECK(count_substring(before_output, "; temperature drop tower brim line") == 5);
+    CHECK(count_substring(after_output, "; temperature drop tower brim line") == 5);
+}
+
+TEST_CASE("Temperature drop tower keeps five brim lines across nozzle diameters",
+          "[SupportMaterial][TemperatureDropTower]")
+{
+    const std::array<std::pair<double, double>, 3> nozzle_cases {{
+        { 0.15, 0.08 },
+        { 0.4, 0.2 },
+        { 0.8, 0.3 }
+    }};
+    double previous_body_offset = 0.0;
+    for (const auto &[nozzle_diameter, layer_height] : nozzle_cases) {
+        TemperatureDropTowerSettings settings;
+        settings.tower_x = 20.0;
+        settings.tower_y = 25.0;
+        settings.nozzle_diameter = nozzle_diameter;
+        settings.layer_height = layer_height;
+        const std::string output = temperature_drop_tower_gcode(settings);
+        const TemperatureDropTowerMetrics metrics = analyze_temperature_drop_tower(output);
+        const double body_offset = metrics.min_x - settings.tower_x;
+
+        CAPTURE(nozzle_diameter, body_offset);
+        check_temperature_drop_tower_passes_are_on_distinct_layers(metrics);
+        CHECK(metrics.max_x - metrics.min_x == Catch::Approx(70.0).margin(0.03));
+        CHECK(metrics.max_y - metrics.min_y == Catch::Approx(70.0).margin(0.03));
+        CHECK(count_substring(output, "; temperature drop tower brim line") == 5);
+        CHECK(body_offset > previous_body_offset);
+        previous_body_offset = body_offset;
+    }
+}
+
+TEST_CASE("Temperature drop tower clamps a moved position to printable bed bounds",
+          "[SupportMaterial][TemperatureDropTower]")
+{
+    TemperatureDropTowerSettings settings;
+    settings.tower_x = 1000.0;
+    settings.tower_y = 1000.0;
+    const TemperatureDropTowerMetrics metrics =
+        analyze_temperature_drop_tower(temperature_drop_tower_gcode(settings));
+
+    check_temperature_drop_tower_passes_are_on_distinct_layers(metrics);
+    CHECK(metrics.min_x > 3.0);
+    CHECK(metrics.min_y > 3.0);
+    CHECK(metrics.max_x < 197.0);
+    CHECK(metrics.max_y < 197.0);
+}
+
+TEST_CASE("Temperature drop tower selects and serializes independent plate positions",
+          "[SupportMaterial][TemperatureDropTower]")
+{
+    TemperatureDropTowerSettings settings;
+    DynamicPrintConfig config = temperature_drop_tower_config(settings);
+    config.set_key_value(
+        "support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ 20.0, 65.0 }));
+    config.set_key_value(
+        "support_interface_temperature_drop_tower_y", new ConfigOptionFloats({ 25.0, 40.0 }));
+
+    const std::string serialized_x =
+        config.opt_serialize("support_interface_temperature_drop_tower_x");
+    const std::string serialized_y =
+        config.opt_serialize("support_interface_temperature_drop_tower_y");
+    DynamicPrintConfig restored = DynamicPrintConfig::full_print_config();
+    restored.set_deserialize_strict(
+        "support_interface_temperature_drop_tower_x", serialized_x);
+    restored.set_deserialize_strict(
+        "support_interface_temperature_drop_tower_y", serialized_y);
+    const auto *restored_x = restored.option<ConfigOptionFloats>(
+        "support_interface_temperature_drop_tower_x");
+    const auto *restored_y = restored.option<ConfigOptionFloats>(
+        "support_interface_temperature_drop_tower_y");
+    REQUIRE(restored_x != nullptr);
+    REQUIRE(restored_y != nullptr);
+    REQUIRE(restored_x->values.size() == 2);
+    REQUIRE(restored_y->values.size() == 2);
+    CHECK(restored_x->get_at(0) == Catch::Approx(20.0));
+    CHECK(restored_x->get_at(1) == Catch::Approx(65.0));
+    CHECK(restored_y->get_at(0) == Catch::Approx(25.0));
+    CHECK(restored_y->get_at(1) == Catch::Approx(40.0));
+
+    const TemperatureDropTowerMetrics plate_zero = analyze_temperature_drop_tower(
+        temperature_drop_tower_gcode_for_plate(config, 0));
+    const TemperatureDropTowerMetrics plate_one = analyze_temperature_drop_tower(
+        temperature_drop_tower_gcode_for_plate(config, 1));
+    check_temperature_drop_tower_passes_are_on_distinct_layers(plate_zero);
+    check_temperature_drop_tower_passes_are_on_distinct_layers(plate_one);
+    CHECK(plate_one.min_x - plate_zero.min_x == Catch::Approx(45.0).margin(0.03));
+    CHECK(plate_one.max_x - plate_zero.max_x == Catch::Approx(45.0).margin(0.03));
+    CHECK(plate_one.min_y - plate_zero.min_y == Catch::Approx(15.0).margin(0.03));
+    CHECK(plate_one.max_y - plate_zero.max_y == Catch::Approx(15.0).margin(0.03));
 }
 
 TEST_CASE("Temperature drop tower honors every activation guard",

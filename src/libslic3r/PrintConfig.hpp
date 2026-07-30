@@ -30,6 +30,17 @@
 
 namespace Slic3r {
 
+inline constexpr int TEMPERATURE_DROP_TOWER_LINE_COUNT = 4;
+inline constexpr int TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT = 5;
+inline constexpr double TEMPERATURE_DROP_TOWER_BED_MARGIN = 3.0;
+
+constexpr double temperature_drop_tower_size(double temperature_delta)
+{
+    const double growth = temperature_delta > 30.0 ? temperature_delta - 30.0 : 0.0;
+    const double size = 50.0 + growth;
+    return size < 50.0 ? 50.0 : (size > 80.0 ? 80.0 : size);
+}
+
 enum GCodeFlavor : unsigned char {
     gcfMarlinLegacy, 
     gcfKlipper, 
@@ -990,6 +1001,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                support_interface_auxiliary_fan_cooling_on_temperature_change))
     ((ConfigOptionBool,                support_interface_nozzle_wiping_on_temperature_change))
     ((ConfigOptionBool,                support_interface_temperature_drop_tower))
+    ((ConfigOptionFloats,              support_interface_temperature_drop_tower_x))
+    ((ConfigOptionFloats,              support_interface_temperature_drop_tower_y))
     ((ConfigOptionInt,                 support_interface_temperature))
     ((ConfigOptionInt,                 support_interface_auxiliary_fan_speed))
     ((ConfigOptionFloat,               support_interface_heating_time))

@@ -876,6 +876,48 @@ int GLVolumeCollection::load_wipe_tower_preview(
     return int(volumes.size() - 1);
 }
 
+int GLVolumeCollection::load_temperature_drop_tower_preview(
+    int obj_idx, float pos_x, float pos_y, float size, float arm_width,
+    float brim_width, float height)
+{
+    if (size <= 0.0f || arm_width <= 0.0f)
+        return int(this->volumes.size() - 1);
+
+    height = std::max(height, 0.1f);
+    const float brim_height = std::min(height, 0.05f);
+
+    TriangleMesh vertical = make_cube(arm_width, size, height);
+    vertical.translate({ brim_width, brim_width, 0.0f });
+    TriangleMesh horizontal = make_cube(size, arm_width, height);
+    horizontal.translate({ brim_width, brim_width + size - arm_width, 0.0f });
+    vertical.merge(horizontal);
+
+    TriangleMesh brim = make_cube(
+        arm_width + 2.0f * brim_width, size + 2.0f * brim_width, brim_height);
+    TriangleMesh brim_horizontal = make_cube(
+        size + 2.0f * brim_width, arm_width + 2.0f * brim_width, brim_height);
+    brim_horizontal.translate({ 0.0f, size - arm_width, 0.0f });
+    brim.merge(brim_horizontal);
+    brim.merge(vertical);
+
+    const ColorRGBA color(0.231f, 0.565f, 0.925f, 0.66f);
+    volumes.emplace_back(new GLWipeTowerVolume({ color }));
+    GLWipeTowerVolume &volume = *dynamic_cast<GLWipeTowerVolume *>(volumes.back());
+    volume.model_per_colors.resize(1);
+    volume.model_per_colors.front().init_from(brim);
+    volume.model.init_from(brim);
+    volume.mesh_raycaster =
+        std::make_unique<GUI::MeshRaycaster>(std::make_shared<const TriangleMesh>(brim));
+    volume.set_convex_hull(brim.convex_hull_3d());
+    volume.set_volume_offset(Vec3d(pos_x, pos_y, 0.0));
+    volume.composite_id = GLVolume::CompositeID(obj_idx, 0, 0);
+    volume.geometry_id.first = 0;
+    volume.geometry_id.second = wipe_tower_instance_id().id + obj_idx;
+    volume.is_wipe_tower = true;
+    volume.shader_outside_printer_detection_enabled = true;
+    return int(volumes.size() - 1);
+}
+
 int GLVolumeCollection::load_real_wipe_tower_preview(
     int obj_idx, float pos_x, float pos_y, const TriangleMesh& wt_mesh,const TriangleMesh &brim_mesh,bool render_brim, float rotation_angle, bool size_unknown,  bool opengl_initialized)
 {

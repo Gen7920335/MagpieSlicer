@@ -2523,6 +2523,7 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
     PartPlateList& ppl = wxGetApp().plater()->get_partplate_list();
     int n_plates = ppl.get_plate_count();
     std::vector<int> volume_idxs_wipe_tower_old(n_plates, -1);
+    std::vector<int> volume_idxs_temperature_drop_tower_old(n_plates, -1);
 
     // Release invalidated volumes to conserve GPU memory in case of delayed refresh (see m_reload_delayed).
     // First initialize model_volumes_new_sorted & model_instances_new_sorted.
@@ -2617,11 +2618,16 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
         if (mvs == nullptr || force_full_scene_refresh) {
             // This GLVolume will be released.
             if (volume->is_wipe_tower) {
-                // There is only one wipe tower.
-                //assert(volume_idx_wipe_tower_old == -1);
-                int plate_id = volume->composite_id.object_id - 1000;
-                if (plate_id < n_plates)
+                const int object_id = volume->composite_id.object_id;
+                const int temperature_plate_id =
+                    object_id - TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE;
+                if (temperature_plate_id >= 0 && temperature_plate_id < n_plates) {
+                    volume_idxs_temperature_drop_tower_old[temperature_plate_id] = int(volume_id);
+                } else {
+                    const int plate_id = object_id - 1000;
+                    if (plate_id >= 0 && plate_id < n_plates)
                     volume_idxs_wipe_tower_old[plate_id] = (int)volume_id;
+                }
             }
             if (!m_reload_delayed) {
                 deleted_volumes.emplace_back(volume, volume_id);
@@ -2928,6 +2934,99 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                         int volume_idx_wipe_tower_old = volume_idxs_wipe_tower_old[plate_id];
                         if (volume_idx_wipe_tower_old != -1) map_glvolume_old_to_new[volume_idx_wipe_tower_old] = volume_idx_wipe_tower_new;
                     }
+                }
+            }
+        }
+
+        const auto *temperature_tower_enabled =
+            m_config->option<ConfigOptionBool>("support_interface_temperature_drop_tower");
+        const auto *low_temperature_interface_enabled =
+            m_config->option<ConfigOptionBool>("single_nozzle_low_temperature_interface");
+        const auto *interface_temperature =
+            m_config->option<ConfigOptionInt>("support_interface_temperature");
+        const auto *nozzle_diameters =
+            m_config->option<ConfigOptionFloats>("nozzle_diameter");
+        const auto *normal_temperatures =
+            m_config->option<ConfigOptionInts>("nozzle_temperature");
+        const auto *initial_temperatures =
+            m_config->option<ConfigOptionInts>("nozzle_temperature_initial_layer");
+        const auto *interface_filament =
+            m_config->option<ConfigOptionInt>("support_interface_filament");
+        const auto *print_sequence =
+            m_config->option<ConfigOptionEnum<PrintSequence>>("print_sequence");
+        const auto *nozzle_wiping =
+            m_config->option<ConfigOptionBool>("support_interface_nozzle_wiping_on_temperature_change");
+        const bool show_temperature_tower =
+            temperature_tower_enabled != nullptr && temperature_tower_enabled->value &&
+            low_temperature_interface_enabled != nullptr && low_temperature_interface_enabled->value &&
+            interface_temperature != nullptr && interface_temperature->value > 0 &&
+            (interface_filament == nullptr || interface_filament->value == 0) &&
+            (print_sequence == nullptr || print_sequence->value == PrintSequence::ByLayer) &&
+            (nozzle_wiping == nullptr || !nozzle_wiping->value) &&
+            nozzle_diameters != nullptr && !nozzle_diameters->values.empty() &&
+            !wxGetApp().plater()->only_gcode_mode() && !wxGetApp().plater()->is_gcode_3mf();
+
+        if (show_temperature_tower) {
+            int normal_temperature = 0;
+            if (normal_temperatures != nullptr && !normal_temperatures->values.empty())
+                normal_temperature = *std::max_element(
+                    normal_temperatures->values.begin(), normal_temperatures->values.end());
+            if (initial_temperatures != nullptr && !initial_temperatures->values.empty())
+                normal_temperature = std::max(
+                    normal_temperature,
+                    *std::max_element(initial_temperatures->values.begin(), initial_temperatures->values.end()));
+
+            if (normal_temperature > interface_temperature->value) {
+                const float nozzle_diameter =
+                    float(*std::max_element(nozzle_diameters->values.begin(), nozzle_diameters->values.end()));
+                const float spacing = std::max(nozzle_diameter, 0.1f);
+                const float brim_width = float(TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT) * spacing;
+                const float requested_size = float(temperature_drop_tower_size(
+                    normal_temperature - interface_temperature->value));
+                DynamicPrintConfig &project_config = wxGetApp().preset_bundle->project_config;
+                const auto *tower_x = project_config.option<ConfigOptionFloats>(
+                    "support_interface_temperature_drop_tower_x");
+                const auto *tower_y = project_config.option<ConfigOptionFloats>(
+                    "support_interface_temperature_drop_tower_y");
+
+                for (int plate_id = 0; plate_id < n_plates; ++plate_id) {
+                    PartPlate *part_plate = ppl.get_plate(plate_id);
+                    const Vec3d plate_origin = part_plate->get_origin();
+                    const BoundingBoxf3 plate_bbox = part_plate->get_bounding_box();
+                    const float min_x = float(plate_bbox.min.x() - plate_origin.x());
+                    const float min_y = float(plate_bbox.min.y() - plate_origin.y());
+                    const float max_x = float(plate_bbox.max.x() - plate_origin.x());
+                    const float max_y = float(plate_bbox.max.y() - plate_origin.y());
+                    const float tower_size = std::min(
+                        requested_size,
+                        std::min(max_x - min_x - 6.0f - 2.0f * brim_width,
+                                 max_y - min_y - 6.0f - 2.0f * brim_width));
+                    if (tower_size < 8.0f)
+                        continue;
+
+                    const float footprint_size = tower_size + 2.0f * brim_width;
+                    const float min_origin_x = min_x + 3.0f;
+                    const float min_origin_y = min_y + 3.0f;
+                    const float max_origin_x = max_x - 3.0f - footprint_size;
+                    const float max_origin_y = max_y - 3.0f - footprint_size;
+                    const float configured_x = tower_x == nullptr ? -1.0f : float(tower_x->get_at(plate_id));
+                    const float configured_y = tower_y == nullptr ? -1.0f : float(tower_y->get_at(plate_id));
+                    const float origin_x = configured_x < 0.0f
+                        ? min_origin_x
+                        : std::clamp(configured_x, min_origin_x, max_origin_x);
+                    const float origin_y = configured_y < 0.0f
+                        ? max_origin_y
+                        : std::clamp(configured_y, min_origin_y, max_origin_y);
+
+                    const int new_volume = m_volumes.load_temperature_drop_tower_preview(
+                        TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE + plate_id,
+                        origin_x + float(plate_origin.x()),
+                        origin_y + float(plate_origin.y()),
+                        tower_size, float(TEMPERATURE_DROP_TOWER_LINE_COUNT) * spacing,
+                        brim_width, 0.2f);
+                    const int old_volume = volume_idxs_temperature_drop_tower_old[plate_id];
+                    if (old_volume != -1)
+                        map_glvolume_old_to_new[old_volume] = new_volume;
                 }
             }
         }
@@ -4923,6 +5022,7 @@ void GLCanvas3D::do_move(const std::string& snapshot_type)
     // BBS: support wipe-tower for multi-plates
     int n_plates = wxGetApp().plater()->get_partplate_list().get_plate_count();
     std::vector<Vec3d> wipe_tower_origins(n_plates, Vec3d::Zero());
+    std::vector<Vec3d> temperature_drop_tower_origins(n_plates, Vec3d::Zero());
 
     Selection::EMode selection_mode = m_selection.get_mode();
 
@@ -4969,6 +5069,11 @@ void GLCanvas3D::do_move(const std::string& snapshot_type)
         else if (object_idx >= 1000 && object_idx < 1000 + n_plates) {
             // Move a wipe tower proxy.
             wipe_tower_origins[object_idx - 1000] = v->get_volume_offset();
+        }
+        else if (object_idx >= TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE &&
+                 object_idx < TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE + n_plates) {
+            temperature_drop_tower_origins[object_idx - TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE] =
+                v->get_volume_offset();
         }
     }
 
@@ -5018,6 +5123,24 @@ void GLCanvas3D::do_move(const std::string& snapshot_type)
         ConfigOptionFloats* wipe_tower_y_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_y", true);
         wipe_tower_x_opt->set_at(&wipe_tower_x, plate_id, 0);
         wipe_tower_y_opt->set_at(&wipe_tower_y, plate_id, 0);
+    }
+
+    for (int plate_id = 0; plate_id < temperature_drop_tower_origins.size(); ++plate_id) {
+        const Vec3d &tower_origin = temperature_drop_tower_origins[plate_id];
+        if (tower_origin == Vec3d::Zero())
+            continue;
+
+        PartPlateList &ppl = wxGetApp().plater()->get_partplate_list();
+        DynamicConfig &project_config = wxGetApp().preset_bundle->project_config;
+        const Vec3d plate_origin = ppl.get_plate(plate_id)->get_origin();
+        ConfigOptionFloat tower_x(tower_origin.x() - plate_origin.x());
+        ConfigOptionFloat tower_y(tower_origin.y() - plate_origin.y());
+        ConfigOptionFloats *tower_x_option =
+            project_config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x", true);
+        ConfigOptionFloats *tower_y_option =
+            project_config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y", true);
+        tower_x_option->set_at(&tower_x, plate_id, 0);
+        tower_y_option->set_at(&tower_y, plate_id, 0);
     }
 
     reset_sequential_print_clearance();

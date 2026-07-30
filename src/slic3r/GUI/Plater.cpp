@@ -5107,6 +5107,10 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
 		"nozzle_height", "skirt_type", "skirt_loops", "skirt_speed","min_skirt_length", "skirt_distance", "skirt_start_angle",
         "brim_width", "brim_object_gap", "brim_flow_ratio", "brim_use_efc_outline", "combine_brims", "brim_type", "nozzle_diameter", "single_extruder_multi_material", "preferred_orientation",
         "enable_prime_tower", "wipe_tower_x", "wipe_tower_y", "prime_tower_width", "prime_tower_brim_width", "prime_tower_skip_points", "prime_tower_enable_framework",
+        "single_nozzle_low_temperature_interface", "support_interface_temperature_drop_tower",
+        "support_interface_temperature_drop_tower_x", "support_interface_temperature_drop_tower_y",
+        "support_interface_temperature", "support_interface_nozzle_wiping_on_temperature_change",
+        "nozzle_temperature", "nozzle_temperature_initial_layer",
         "prime_tower_infill_gap", "prime_volume",
         "extruder_colour", "filament_colour", "filament_type", "material_colour", "printable_height", "extruder_printable_height", "printer_model", "printer_technology",
         // These values are necessary to construct SlicingParameters by the Canvas3D variable layer height editor.

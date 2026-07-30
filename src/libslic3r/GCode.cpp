@@ -6922,8 +6922,21 @@ LayerResult GCode::process_layer(
     if (this->temperature_drop_tower_enabled() &&
         std::abs(m_temperature_drop_tower_last_print_z - m_nominal_z) >= EPSILON) {
         ExtrusionPath temperature_drop_tower_path;
-        if (this->build_temperature_drop_tower_path(temperature_drop_tower_path))
+        if (this->build_temperature_drop_tower_path(temperature_drop_tower_path)) {
+            if (first_layer && !m_temperature_drop_tower_brim_printed) {
+                std::vector<ExtrusionPath> brim_paths;
+                if (this->build_temperature_drop_tower_brim_paths(brim_paths)) {
+                    gcode += "; temperature drop tower brim begin\n";
+                    for (const ExtrusionPath &brim_path : brim_paths) {
+                        gcode += "; temperature drop tower brim line\n";
+                        gcode += this->_extrude(brim_path, "temperature drop tower brim", 30.0);
+                    }
+                    gcode += "; temperature drop tower brim end\n";
+                    m_temperature_drop_tower_brim_printed = true;
+                }
+            }
             gcode += this->extrude_temperature_drop_tower(temperature_drop_tower_path, false);
+        }
     }
 
 #if 0
@@ -7882,15 +7895,6 @@ bool GCode::temperature_drop_tower_enabled() const
 
 namespace {
 
-constexpr double temperature_drop_tower_size(double temperature_delta)
-{
-    constexpr double minimum_size = 50.0;
-    constexpr double maximum_size = 80.0;
-    constexpr double growth_threshold = 30.0;
-    return std::clamp(minimum_size + std::max(temperature_delta - growth_threshold, 0.0),
-                      minimum_size, maximum_size);
-}
-
 static_assert(temperature_drop_tower_size(0.0) == 50.0);
 static_assert(temperature_drop_tower_size(30.0) == 50.0);
 static_assert(temperature_drop_tower_size(50.0) == 70.0);
@@ -7934,82 +7938,69 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
             printable_polygon.points.emplace_back(Point::new_scale(point.x(), point.y()));
         }
 
-        constexpr double margin = 3.0;
         const int normal_temperature = std::max(m_config.nozzle_temperature.get_at(filament_id),
                                                 m_config.nozzle_temperature_initial_layer.get_at(filament_id));
         const int interface_temperature = m_config.support_interface_temperature.value;
         const double temperature_delta = std::max(normal_temperature - interface_temperature, 0);
         const double requested_tower_size = temperature_drop_tower_size(temperature_delta);
+        const double spacing = std::max(double(nozzle_diameter), double(flow.spacing()));
+        const double brim_width = TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT * spacing;
+        const double usable_margin = TEMPERATURE_DROP_TOWER_BED_MARGIN + brim_width;
         const double tower_size = std::min(requested_tower_size,
-                                           std::min(max_x - min_x - 2.0 * margin,
-                                                    max_y - min_y - 2.0 * margin));
+                                           std::min(max_x - min_x - 2.0 * usable_margin,
+                                                    max_y - min_y - 2.0 * usable_margin));
         if (tower_size < 8.0)
             return false;
 
-        BoundingBox occupied_bbox;
-        if (m_print != nullptr) {
-            for (const PrintObject *object : m_print->objects()) {
-                const BoundingBox object_bbox = object->bounding_box();
-                for (const PrintInstance &instance : object->instances()) {
-                    const Point shift = instance.shift_without_plate_offset();
-                    occupied_bbox.merge(object_bbox.min + shift);
-                    occupied_bbox.merge(object_bbox.max + shift);
-                }
-            }
-        }
-        const bool has_occupied_bbox = occupied_bbox.defined;
-        const auto square_fits = [
-            &printable_polygon, tower_size, margin, has_occupied_bbox, &occupied_bbox
-        ](double left, double rear) {
-            const std::array<Vec2d, 4> corners = {
-                Vec2d(left, rear), Vec2d(left + tower_size, rear),
-                Vec2d(left, rear - tower_size), Vec2d(left + tower_size, rear - tower_size)
-            };
-            const bool inside_bed = std::all_of(corners.begin(), corners.end(), [&printable_polygon](const Vec2d &corner) {
-                return printable_polygon.contains(Point::new_scale(corner.x(), corner.y()));
-            });
-            if (!inside_bed || !has_occupied_bbox)
-                return inside_bed;
-
-            const double occupied_min_x = unscale_(occupied_bbox.min.x()) - margin;
-            const double occupied_min_y = unscale_(occupied_bbox.min.y()) - margin;
-            const double occupied_max_x = unscale_(occupied_bbox.max.x()) + margin;
-            const double occupied_max_y = unscale_(occupied_bbox.max.y()) + margin;
-            return left + tower_size <= occupied_min_x || left >= occupied_max_x ||
-                   rear <= occupied_min_y || rear - tower_size >= occupied_max_y;
-        };
-
-        double tower_left = 0.0;
-        double tower_rear = 0.0;
-        bool position_found = false;
-        for (double rear = max_y - margin; !position_found && rear - tower_size >= min_y + margin; rear -= 1.0) {
-            for (double left = min_x + margin; left + tower_size <= max_x - margin; left += 1.0) {
-                if (square_fits(left, rear)) {
-                    tower_left = left;
-                    tower_rear = rear;
-                    position_found = true;
-                    break;
-                }
-            }
-        }
-        if (!position_found)
+        const double footprint_size = tower_size + 2.0 * brim_width;
+        const double min_origin_x = min_x + TEMPERATURE_DROP_TOWER_BED_MARGIN;
+        const double min_origin_y = min_y + TEMPERATURE_DROP_TOWER_BED_MARGIN;
+        const double max_origin_x = max_x - TEMPERATURE_DROP_TOWER_BED_MARGIN - footprint_size;
+        const double max_origin_y = max_y - TEMPERATURE_DROP_TOWER_BED_MARGIN - footprint_size;
+        if (max_origin_x < min_origin_x || max_origin_y < min_origin_y)
             return false;
 
-        constexpr int line_count = 4;
-        const double spacing = std::max(double(nozzle_diameter), double(flow.spacing()));
+        const size_t plate_index = m_print == nullptr ? 0 : size_t(m_print->get_plate_index());
+        const double configured_x = m_config.support_interface_temperature_drop_tower_x.get_at(plate_index);
+        const double configured_y = m_config.support_interface_temperature_drop_tower_y.get_at(plate_index);
+        const double origin_x = configured_x < 0.0
+            ? min_origin_x
+            : std::clamp(configured_x, min_origin_x, max_origin_x);
+        const double origin_y = configured_y < 0.0
+            ? max_origin_y
+            : std::clamp(configured_y, min_origin_y, max_origin_y);
+
+        const std::array<Vec2d, 4> footprint_corners = {
+            Vec2d(origin_x, origin_y),
+            Vec2d(origin_x + footprint_size, origin_y),
+            Vec2d(origin_x, origin_y + footprint_size),
+            Vec2d(origin_x + footprint_size, origin_y + footprint_size)
+        };
+        if (!std::all_of(footprint_corners.begin(), footprint_corners.end(), [&printable_polygon](const Vec2d &corner) {
+                return printable_polygon.contains(Point::new_scale(corner.x(), corner.y()));
+            }))
+            return false;
+
+        const double tower_left = origin_x + brim_width;
+        const double tower_rear = origin_y + brim_width + tower_size;
+        m_temperature_drop_tower_left = tower_left;
+        m_temperature_drop_tower_rear = tower_rear;
+        m_temperature_drop_tower_size = tower_size;
+        m_temperature_drop_tower_spacing = spacing;
+
         m_temperature_drop_tower_machine_path.emplace_back(tower_left, tower_rear - tower_size);
-        for (int line = 0; line < line_count; ++line) {
+        for (int line = 0; line < TEMPERATURE_DROP_TOWER_LINE_COUNT; ++line) {
             const double vertical_x = tower_left + line * spacing;
             const double horizontal_y = tower_rear - line * spacing;
             if ((line & 1) == 0) {
                 m_temperature_drop_tower_machine_path.emplace_back(vertical_x, horizontal_y);
                 m_temperature_drop_tower_machine_path.emplace_back(tower_left + tower_size, horizontal_y);
-                if (line + 1 < line_count)
+                if (line + 1 < TEMPERATURE_DROP_TOWER_LINE_COUNT)
                     m_temperature_drop_tower_machine_path.emplace_back(tower_left + tower_size, horizontal_y - spacing);
             } else {
                 m_temperature_drop_tower_machine_path.emplace_back(vertical_x, horizontal_y);
                 m_temperature_drop_tower_machine_path.emplace_back(vertical_x, tower_rear - tower_size);
-                if (line + 1 < line_count)
+                if (line + 1 < TEMPERATURE_DROP_TOWER_LINE_COUNT)
                     m_temperature_drop_tower_machine_path.emplace_back(vertical_x + spacing, tower_rear - tower_size);
             }
         }
@@ -8028,6 +8019,52 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
     path = ExtrusionPath(erWipeTower, flow.mm3_per_mm(), flow.width(), layer_height);
     path.polyline = Polyline3(std::move(polyline));
     return true;
+}
+
+bool GCode::build_temperature_drop_tower_brim_paths(std::vector<ExtrusionPath> &paths)
+{
+    if (!m_temperature_drop_tower_path_initialized || m_layer == nullptr ||
+        m_writer.filament() == nullptr || m_temperature_drop_tower_spacing <= 0.0)
+        return false;
+
+    const unsigned int filament_id = m_writer.filament()->id();
+    if (m_config.nozzle_diameter.values.empty())
+        return false;
+    const float nozzle_diameter = float(m_config.nozzle_diameter.get_at(filament_id));
+    const float layer_height = float(m_layer->height);
+    if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
+        return false;
+
+    const Flow flow(Flow::auto_extrusion_width(frPerimeter, nozzle_diameter), layer_height, nozzle_diameter);
+    const double left = m_temperature_drop_tower_left;
+    const double rear = m_temperature_drop_tower_rear;
+    const double bottom = rear - m_temperature_drop_tower_size;
+    const double inner_right = left + (TEMPERATURE_DROP_TOWER_LINE_COUNT - 1) * m_temperature_drop_tower_spacing;
+    const double inner_bottom = rear - (TEMPERATURE_DROP_TOWER_LINE_COUNT - 1) * m_temperature_drop_tower_spacing;
+    const double right = left + m_temperature_drop_tower_size;
+
+    paths.clear();
+    paths.reserve(TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT);
+    for (int line = 1; line <= TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT; ++line) {
+        const double offset = line * m_temperature_drop_tower_spacing;
+        Polyline polyline;
+        polyline.points = {
+            this->gcode_to_point(Vec2d(left - offset, bottom - offset)),
+            this->gcode_to_point(Vec2d(inner_right + offset, bottom - offset)),
+            this->gcode_to_point(Vec2d(inner_right + offset, inner_bottom - offset)),
+            this->gcode_to_point(Vec2d(right + offset, inner_bottom - offset)),
+            this->gcode_to_point(Vec2d(right + offset, rear + offset)),
+            this->gcode_to_point(Vec2d(left - offset, rear + offset)),
+            this->gcode_to_point(Vec2d(left - offset, bottom - offset))
+        };
+        if ((line & 1) == 0)
+            polyline.reverse();
+
+        ExtrusionPath brim_path(erWipeTower, flow.mm3_per_mm(), flow.width(), layer_height);
+        brim_path.polyline = Polyline3(std::move(polyline));
+        paths.emplace_back(std::move(brim_path));
+    }
+    return !paths.empty();
 }
 
 std::string GCode::extrude_temperature_drop_tower(const ExtrusionPath &path, bool cooling_transition)

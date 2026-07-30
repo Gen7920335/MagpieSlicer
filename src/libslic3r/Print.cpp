@@ -271,6 +271,8 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "ooze_prevention"
             || opt_key == "wipe_tower_x"
             || opt_key == "wipe_tower_y"
+            || opt_key == "support_interface_temperature_drop_tower_x"
+            || opt_key == "support_interface_temperature_drop_tower_y"
             || opt_key == "wipe_tower_rotation_angle") {
             steps.emplace_back(psSkirtBrim);
         } else if (

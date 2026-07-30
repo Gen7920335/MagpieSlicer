@@ -504,6 +504,7 @@ private:
     bool            has_configured_low_temperature_nozzle_wiper() const;
     bool            temperature_drop_tower_enabled() const;
     bool            build_temperature_drop_tower_path(ExtrusionPath &path);
+    bool            build_temperature_drop_tower_brim_paths(std::vector<ExtrusionPath> &paths);
     std::string     extrude_temperature_drop_tower(const ExtrusionPath &path, bool cooling_transition);
     int             low_temperature_support_interface_temperature(ExtrusionRole role) const;
     std::string     start_low_temperature_support_interface(ExtrusionRole role);
@@ -602,7 +603,12 @@ private:
     int                                 m_low_temperature_support_interface_target_temperature { 0 };
     coordf_t                            m_temperature_drop_tower_last_print_z { -std::numeric_limits<coordf_t>::max() };
     bool                                m_temperature_drop_tower_path_initialized { false };
+    bool                                m_temperature_drop_tower_brim_printed { false };
     std::vector<Vec2d>                  m_temperature_drop_tower_machine_path;
+    double                              m_temperature_drop_tower_left { 0.0 };
+    double                              m_temperature_drop_tower_rear { 0.0 };
+    double                              m_temperature_drop_tower_size { 0.0 };
+    double                              m_temperature_drop_tower_spacing { 0.0 };
     // To ignore gapfill role for retract_lift_enforce
     ExtrusionRole                       m_last_notgapfill_extrusion_role;
     // Support for G-Code Processor
