@@ -32,6 +32,7 @@ namespace Slic3r {
 namespace GUI {
 
 class PrinterWebViewHandler;
+class SnapmakerMonitorPanel;
 
 
 class PrinterWebView : public wxPanel {
@@ -55,8 +56,11 @@ private:
     friend class PrinterWebViewHandler;
 
     void SendAPIKey();
+    bool use_snapmaker_monitor() const;
 
     wxWebView* m_browser;
+    SnapmakerMonitorPanel* m_snapmaker_monitor;
+    bool m_snapmaker_mode;
     long m_zoomFactor;
     wxString m_apikey;
     bool m_apikey_sent;

@@ -327,6 +327,14 @@ set(SLIC3R_GUI_SOURCES
     GUI/Monitor.hpp
     GUI/MonitorPage.cpp
     GUI/MonitorPage.hpp
+    GUI/DeviceTab/SnapmakerCameraSession.cpp
+    GUI/DeviceTab/SnapmakerCameraSession.hpp
+    GUI/DeviceTab/SnapmakerGCodeLayer.cpp
+    GUI/DeviceTab/SnapmakerGCodeLayer.hpp
+    GUI/DeviceTab/SnapmakerMonitorPanel.cpp
+    GUI/DeviceTab/SnapmakerMonitorPanel.hpp
+    GUI/DeviceTab/SnapmakerMonitorUtils.cpp
+    GUI/DeviceTab/SnapmakerMonitorUtils.hpp
     GUI/Mouse3DController.cpp
     GUI/Mouse3DController.hpp
     GUI/MsgDialog.cpp

@@ -2,11 +2,13 @@
 
 #include "I18N.hpp"
 #include "PrinterWebViewHandler.hpp"
+#include "DeviceTab/SnapmakerMonitorPanel.hpp"
 #include "slic3r/GUI/PrinterWebView.hpp"
 #include "slic3r/GUI/wxExtensions.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/MainFrame.hpp"
 #include "libslic3r_version.h"
+#include "libslic3r/PresetBundle.hpp"
 
 #include <boost/filesystem/path.hpp>
 #include <wx/sizer.h>
@@ -101,6 +103,8 @@ static void inject_vue_resize_workaround(wxWebView *webView)
 PrinterWebView::PrinterWebView(wxWindow *parent)
         : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize)
     , m_browser(nullptr)
+    , m_snapmaker_monitor(nullptr)
+    , m_snapmaker_mode(false)
     , m_zoomFactor(100)
     , m_apikey()
     , m_apikey_sent(false)
@@ -109,6 +113,11 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
  {
 
     wxBoxSizer* topsizer = new wxBoxSizer(wxVERTICAL);
+    SetSizer(topsizer);
+
+    m_snapmaker_monitor = new SnapmakerMonitorPanel(this);
+    m_snapmaker_monitor->Hide();
+    topsizer->Add(m_snapmaker_monitor, wxSizerFlags().Expand().Proportion(1));
 
       // Create the webview
     m_browser = WebView::CreateWebView(this, "");
@@ -131,8 +140,6 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     m_browser->Bind(wxEVT_WEBVIEW_LOADED, &PrinterWebView::OnLoaded, this);
     m_browser->Bind(wxEVT_WEBVIEW_NEWWINDOW, &PrinterWebView::OnNewWindow, this);
     m_browser->Bind(wxEVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED, &PrinterWebView::OnScriptMessage, this);
-
-    SetSizer(topsizer);
 
     topsizer->Add(m_browser, wxSizerFlags().Expand().Proportion(1));
 
@@ -173,8 +180,23 @@ void PrinterWebView::load_url(wxString& url, wxString apikey)
 {
 //    this->Show();
 //    this->Raise();
+    m_snapmaker_mode = use_snapmaker_monitor();
+    if (m_snapmaker_mode) {
+        m_url_deferred.clear();
+        if (m_browser != nullptr)
+            m_browser->Hide();
+        m_snapmaker_monitor->set_server(url, apikey);
+        m_snapmaker_monitor->Show();
+        m_snapmaker_monitor->set_active(IsShown());
+        Layout();
+        return;
+    }
+
+    m_snapmaker_monitor->set_active(false);
+    m_snapmaker_monitor->Hide();
     if (m_browser == nullptr)
         return;
+    m_browser->Show();
     m_apikey = apikey;
     m_apikey_sent = false;
     m_handler = create_printer_webview_handler(*this);
@@ -192,7 +214,9 @@ void PrinterWebView::load_url(wxString& url, wxString apikey)
 
 bool PrinterWebView::Show(bool show)
 {
-    if (show && !m_url_deferred.empty()) {
+    if (m_snapmaker_mode) {
+        m_snapmaker_monitor->set_active(show);
+    } else if (show && !m_url_deferred.empty() && m_browser != nullptr) {
         m_browser->LoadURL(m_url_deferred);
         //ORCA: m_url_deferred will be cleared on load success
         //m_url_deferred.clear();
@@ -202,12 +226,30 @@ bool PrinterWebView::Show(bool show)
 
 void PrinterWebView::reload()
 {
-    m_browser->Reload();
+    if (m_snapmaker_mode)
+        m_snapmaker_monitor->refresh_now();
+    else if (m_browser != nullptr)
+        m_browser->Reload();
 }
 
 void PrinterWebView::update_mode()
 {
-    m_browser->EnableAccessToDevTools(wxGetApp().app_config->get_bool("developer_mode"));
+    if (m_browser != nullptr)
+        m_browser->EnableAccessToDevTools(wxGetApp().app_config->get_bool("developer_mode"));
+}
+
+bool PrinterWebView::use_snapmaker_monitor() const
+{
+    if (wxGetApp().preset_bundle == nullptr)
+        return false;
+    try {
+        const Preset &preset = wxGetApp().preset_bundle->printers.get_edited_preset();
+        const std::string model = preset.config.opt_string("printer_model");
+        return model == "797581801" || model == "Snapmaker U1" ||
+               preset.name.find("Snapmaker U1") != std::string::npos;
+    } catch (...) {
+        return false;
+    }
 }
 
 /**

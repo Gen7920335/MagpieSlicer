@@ -1,8 +1,19 @@
-$ErrorActionPreference = "Stop"
+param(
+    [string]$StageRoot = "C:\MagpiePkg"
+)
 
+$ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$buildDir = Join-Path $root "build"
-$nsisDir = Join-Path $buildDir "_CPack_Packages\win64\NSIS"
+$stage = Get-ChildItem -LiteralPath $StageRoot -Directory -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Where-Object {
+        Test-Path -LiteralPath (Join-Path $_.FullName "_CPack_Packages\win64\NSIS")
+    } |
+    Select-Object -First 1
+if ($null -eq $stage) {
+    throw "No NSIS staging directory was found below $StageRoot."
+}
+$nsisDir = Join-Path $stage.FullName "_CPack_Packages\win64\NSIS"
 $log = Join-Path $nsisDir "NSISOutput.log"
 $script = Join-Path $nsisDir "project.nsi"
 $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
@@ -31,9 +42,11 @@ if (Test-Path -LiteralPath $script) {
 }
 
 Write-Output "=== Staging payload ==="
-$payload = Join-Path $nsisDir "MagpieSlicer_Windows_Installer_V2.5.0-dev_x64"
-if (Test-Path -LiteralPath $payload) {
-    $files = @(Get-ChildItem -LiteralPath $payload -Recurse -File)
+$payload = Get-ChildItem -LiteralPath $nsisDir -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like "MagpieSlicer_Windows_Installer_*" } |
+    Select-Object -First 1
+if ($null -ne $payload) {
+    $files = @(Get-ChildItem -LiteralPath $payload.FullName -Recurse -File)
     $bytes = ($files | Measure-Object Length -Sum).Sum
     Write-Output "Files=$($files.Count)"
     Write-Output "Bytes=$bytes"

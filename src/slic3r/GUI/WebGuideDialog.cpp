@@ -110,7 +110,10 @@ static wxString update_custom_filaments()
 
 GuideFrame::GuideFrame(GUI_App *pGUI, long style)
     : DPIDialog((wxWindow *) (pGUI->mainframe), wxID_ANY, SLIC3R_APP_NAME, wxDefaultPosition, wxDefaultSize, style),
-	m_appconfig_new()
+	m_appconfig_new(),
+    m_browser(nullptr),
+    m_TestBtn(nullptr),
+    m_load_timer(this)
 {
     SetBackgroundColour(*wxWHITE);
     // INI
@@ -124,17 +127,17 @@ GuideFrame::GuideFrame(GUI_App *pGUI, long style)
     // set the frame icon
     wxBoxSizer *topsizer = new wxBoxSizer(wxVERTICAL);
 
-    wxString TargetUrl = SetStartPage(BBL_WELCOME, false);
-    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(",  set start page to welcome ");
+    Bind(wxEVT_TIMER, &GuideFrame::OnLoadTimeout, this, m_load_timer.GetId());
 
-    // Create the webview
-    m_browser = WebView::CreateWebView(this, TargetUrl);
+    // Bind all navigation handlers before loading the first page. Fast local
+    // pages can otherwise finish before the dialog observes their events.
+    m_browser = WebView::CreateWebView(this, wxEmptyString);
     if (m_browser == nullptr) {
         wxLogError("Could not init m_browser");
+        m_load_failure_detail = _L("The embedded browser could not be initialized.");
+        m_load_timer.StartOnce(1);
         return;
     }
-    m_browser->Hide();
-    m_browser->SetSize(0, 0);
 
     SetSizer(topsizer);
 
@@ -191,6 +194,7 @@ GuideFrame::GuideFrame(GUI_App *pGUI, long style)
 GuideFrame::~GuideFrame()
 {
     m_destroy = true;
+    m_load_timer.Stop();
     if (m_load_task && m_load_task->joinable()) {
         m_load_task->join();
         delete m_load_task;
@@ -205,6 +209,12 @@ GuideFrame::~GuideFrame()
 void GuideFrame::load_url(wxString &url)
 {
     BOOST_LOG_TRIVIAL(trace) << __FUNCTION__<< " enter, url=" << url.ToStdString();
+    if (m_browser == nullptr) {
+        handle_load_failure(_L("The embedded browser is unavailable."));
+        return;
+    }
+    m_navigation_complete = false;
+    m_load_timer.StartOnce(10000);
     WebView::LoadUrl(m_browser, url);
     m_browser->SetFocus();
     UpdateState();
@@ -216,48 +226,61 @@ wxString GuideFrame::SetStartPage(GuidePage startpage, bool load)
 {
     m_page = startpage;
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(" enter, load=%1%, start_page=%2%")%load%int(startpage);
-    //wxLogMessage("GUIDE: webpage_1  %s", (boost::filesystem::path(resources_dir()) / "web\\guide\\1\\index.html").make_preferred().string().c_str() );
-    wxString TargetUrl = from_u8( (boost::filesystem::path(resources_dir()) / "web/guide/0/index.html?target=1").make_preferred().string() );
-    //wxLogMessage("GUIDE: webpage_2  %s", TargetUrl.mb_str());
+    const boost::filesystem::path guide_path =
+        boost::filesystem::path(resources_dir()) / "web/guide/0/index.html";
+    int target = 1;
 
     if (startpage == BBL_WELCOME){
         SetTitle(_L("Setup Wizard"));
-        TargetUrl = from_u8((boost::filesystem::path(resources_dir()) / "web/guide/0/index.html?target=1").make_preferred().string());
+        target = 1;
     } else if (startpage == BBL_REGION) {
         SetTitle(_L("Setup Wizard"));
-        TargetUrl = from_u8((boost::filesystem::path(resources_dir()) / "web/guide/0/index.html?target=11").make_preferred().string());
+        target = 11;
     } else if (startpage == BBL_MODELS) {
         SetTitle(_L("Setup Wizard"));
-        TargetUrl = from_u8((boost::filesystem::path(resources_dir()) / "web/guide/0/index.html?target=21").make_preferred().string());
+        target = 21;
     } else if (startpage == BBL_FILAMENTS) {
         SetTitle(_L("Setup Wizard"));
 
         int nSize = m_ProfileJson["model"].size();
 
         if (nSize>0)
-            TargetUrl = from_u8((boost::filesystem::path(resources_dir()) / "web/guide/0/index.html?target=22").make_preferred().string());
+            target = 22;
         else
-            TargetUrl = from_u8((boost::filesystem::path(resources_dir()) / "web/guide/0/index.html?target=21").make_preferred().string());
+            target = 21;
     } else if (startpage == BBL_FILAMENT_ONLY) {
         SetTitle("");
-        TargetUrl = from_u8((boost::filesystem::path(resources_dir()) / "web/guide/0/index.html?target=23").make_preferred().string());
+        target = 23;
     } else if (startpage == BBL_MODELS_ONLY) {
         SetTitle("");
-        TargetUrl = from_u8((boost::filesystem::path(resources_dir()) / "web/guide/0/index.html?target=24").make_preferred().string());
+        target = 24;
     }
     else {
         SetTitle(_L("Setup Wizard"));
-        TargetUrl = from_u8((boost::filesystem::path(resources_dir()) / "web/guide/0/index.html?target=21").make_preferred().string());
+        target = 21;
     }
 
+    const wxString guide_file = from_u8(guide_path.generic_string());
+#ifdef _WIN32
+    wxString TargetUrl = "file:///" + guide_file;
+#else
+    wxString TargetUrl = "file://" + guide_file;
+#endif
+    TargetUrl += wxString::Format("?target=%d", target);
     wxString strlang = wxGetApp().current_language_code_safe();
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(", strlang=%1%") % into_u8(strlang);
     if (strlang != "")
-        TargetUrl = wxString::Format("%s&lang=%s", w2s(TargetUrl), strlang);
+        TargetUrl += "&lang=" + strlang;
 
-    TargetUrl = "file://" + TargetUrl;
-    if (load)
-        load_url(TargetUrl);
+    if (load) {
+        if (!boost::filesystem::is_regular_file(guide_path)) {
+            m_load_failure_detail =
+                _L("The setup wizard resource is missing.") + "\n" + from_u8(guide_path.string());
+            m_load_timer.StartOnce(1);
+        } else {
+            load_url(TargetUrl);
+        }
+    }
 
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< " exit";
     return TargetUrl;
@@ -303,6 +326,7 @@ void GuideFrame::OnNavigationRequest(wxWebViewEvent &evt)
  */
 void GuideFrame::OnNavigationComplete(wxWebViewEvent &evt)
 {
+    BOOST_LOG_TRIVIAL(info) << "GuideFrame navigation complete: " << evt.GetURL();
     //wxLogMessage("%s", "Navigation complete; url='" + evt.GetURL() + "'");
     if (!bFirstComplete) {
         m_load_task = new boost::thread(boost::bind(&GuideFrame::LoadProfileData, this));
@@ -325,11 +349,15 @@ void GuideFrame::OnNavigationComplete(wxWebViewEvent &evt)
  */
 void GuideFrame::OnDocumentLoaded(wxWebViewEvent &evt)
 {
+    BOOST_LOG_TRIVIAL(info) << "GuideFrame document loaded: " << evt.GetURL();
     // Only notify if the document is the main frame, not a subframe
     wxString tmpUrl = evt.GetURL();
     wxString NowUrl = m_browser->GetCurrentURL();
 
     if (evt.GetURL() == m_browser->GetCurrentURL()) {
+        m_navigation_complete = true;
+        m_load_attempts = 0;
+        m_load_timer.Stop();
         // wxLogMessage("%s", "Document loaded; url='" + evt.GetURL() + "'");
     }
     UpdateState();
@@ -634,9 +662,66 @@ void GuideFrame::OnError(wxWebViewEvent &evt)
     // Show the info bar with an error
     // m_info->ShowMessage(_L("An error occurred loading ") + evt.GetURL() +
     // "\n" + "'" + category + "'", wxICON_ERROR);
-    BOOST_LOG_TRIVIAL(trace) << "GuideFrame::OnError: An error occurred loading " << evt.GetURL() << category;
+    BOOST_LOG_TRIVIAL(error)
+        << "GuideFrame::OnError: url=" << evt.GetURL()
+        << ", category=" << category
+        << ", detail=" << evt.GetString();
 
     UpdateState();
+    if (!m_navigation_complete) {
+        m_load_failure_detail = category + ": " + evt.GetString();
+        m_load_timer.StartOnce(1);
+    }
+}
+
+void GuideFrame::OnLoadTimeout(wxTimerEvent &)
+{
+    if (!m_load_failure_detail.empty()) {
+        const wxString detail = std::move(m_load_failure_detail);
+        m_load_failure_detail.clear();
+        handle_load_failure(detail);
+        return;
+    }
+    if (!m_navigation_complete)
+        handle_load_failure(_L("The setup page did not finish loading within 10 seconds."));
+}
+
+void GuideFrame::handle_load_failure(const wxString &detail)
+{
+    if (m_destroy || m_handling_load_failure)
+        return;
+
+    m_handling_load_failure = true;
+    m_load_timer.Stop();
+    BOOST_LOG_TRIVIAL(error)
+        << "Setup wizard load failure: " << into_u8(detail)
+        << ", attempt=" << m_load_attempts;
+
+    if (m_load_attempts == 0 && m_browser != nullptr) {
+        ++m_load_attempts;
+        m_handling_load_failure = false;
+        SetStartPage(m_page);
+        return;
+    }
+
+    const int retry = wxMessageBox(
+        _L("The setup wizard could not be loaded.") + "\n\n" + detail + "\n\n" +
+            _L("Retry loading the setup wizard?"),
+        _L("Setup Wizard"),
+        wxYES_NO | wxYES_DEFAULT | wxICON_ERROR,
+        this);
+    if (retry == wxYES) {
+        m_load_attempts = 0;
+        m_handling_load_failure = false;
+        SetStartPage(m_page);
+        return;
+    }
+
+    m_handling_load_failure = false;
+    if (IsModal())
+        EndModal(wxID_CANCEL);
+    else
+        Close();
 }
 
 void GuideFrame::OnScriptResponseMessage(wxCommandEvent &WXUNUSED(evt))

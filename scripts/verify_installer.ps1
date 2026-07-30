@@ -1,7 +1,8 @@
 param(
     [string]$InstallerPath,
     [int]$InstallTimeoutSeconds = 180,
-    [int]$SliceTimeoutSeconds = 180
+    [int]$SliceTimeoutSeconds = 180,
+    [switch]$AllowElevationPrompt
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,6 +36,10 @@ Write-Output "Installer=$InstallerPath"
 Write-Output "InstallRoot=$installRoot"
 Write-Output "CurrentShellIsAdministrator=$isAdmin"
 
+if (-not $isAdmin -and -not $AllowElevationPrompt) {
+    throw "The NSIS installer requires administrator rights. Run this script from an elevated shell or pass -AllowElevationPrompt while a user is available to approve UAC."
+}
+
 $arguments = @(
     "/S",
     "/D=$installRoot"
@@ -60,7 +65,8 @@ if ($installerProcess.ExitCode -ne 0) {
 $installedExe = Join-Path $installRoot "magpie-slicer.exe"
 $installedDll = Join-Path $installRoot "MagpieSlicer.dll"
 $installedResources = Join-Path $installRoot "resources"
-foreach ($required in @($installedExe, $installedDll, $installedResources)) {
+$installedGuide = Join-Path $installedResources "web\guide\0\index.html"
+foreach ($required in @($installedExe, $installedDll, $installedResources, $installedGuide)) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "Installed payload is incomplete: $required"
     }

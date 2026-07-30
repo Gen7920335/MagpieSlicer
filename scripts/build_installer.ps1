@@ -8,9 +8,27 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $buildDir = Join-Path $root "build"
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$stageDir = Join-Path ([IO.Path]::GetFullPath($ShortStageRoot)) $stamp
+$resolvedStageRoot = [IO.Path]::GetFullPath($ShortStageRoot)
+$stageDir = Join-Path $resolvedStageRoot $stamp
 $outputDir = Join-Path $buildDir "installer\$stamp"
 Set-Location $root
+
+if ($resolvedStageRoot.Length -gt 80) {
+    throw "NSIS staging root is too long ($($resolvedStageRoot.Length) characters). Use a short path such as C:\MagpiePkg."
+}
+
+$releaseExe = Join-Path $buildDir "src\Release\magpie-slicer.exe"
+$lockingProcesses = @(
+    Get-CimInstance Win32_Process -Filter "Name = 'magpie-slicer.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+            [IO.Path]::GetFullPath($_.ExecutablePath) -eq [IO.Path]::GetFullPath($releaseExe)
+        }
+)
+if ($lockingProcesses.Count -gt 0) {
+    $lockingPids = ($lockingProcesses | ForEach-Object ProcessId) -join ", "
+    throw "The build-tree Magpie Slicer is running and locks the Release DLL. Close process ID(s): $lockingPids."
+}
 
 $started = Get-Date
 Write-Output "Installer build started: $($started.ToString('s'))"
@@ -25,7 +43,15 @@ if ($LASTEXITCODE -ne 0) {
 New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
 & cpack -G NSIS -C Release --config (Join-Path $buildDir "CPackConfig.cmake") -B $stageDir
 if ($LASTEXITCODE -ne 0) {
-    throw "CPack NSIS generation failed with exit code $LASTEXITCODE."
+    $nsisLog = Join-Path $stageDir "_CPack_Packages\win64\NSIS\NSISOutput.log"
+    if (Test-Path -LiteralPath $nsisLog) {
+        $pathError = Select-String -LiteralPath $nsisLog -Pattern "Can't open output file|File: failed opening file" -ErrorAction SilentlyContinue |
+            Select-Object -Last 1 -ExpandProperty Line
+        if ($pathError) {
+            throw "CPack NSIS generation failed. NSIS could not open a staged file, usually because its path is too long: $pathError"
+        }
+    }
+    throw "CPack NSIS generation failed with exit code $LASTEXITCODE. See $nsisLog."
 }
 
 $installers = @(

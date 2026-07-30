@@ -25,6 +25,7 @@
 #include <wx/frame.h>
 #include <wx/tbarbase.h>
 #include "wx/textctrl.h"
+#include "wx/timer.h"
 
 #include "GUI_App.hpp"
 #include "libslic3r/PresetBundle.hpp"
@@ -67,6 +68,7 @@ public:
     void OnTitleChanged(wxWebViewEvent &evt);
     void OnFullScreenChanged(wxWebViewEvent &evt);
     void OnScriptMessage(wxWebViewEvent &evt);
+    void OnLoadTimeout(wxTimerEvent &evt);
 
     void OnScriptResponseMessage(wxCommandEvent &evt);
     void RunScript(const wxString &javascript);
@@ -98,11 +100,18 @@ public:
     void on_dpi_changed(const wxRect &suggested_rect) {}
 
 private:
+    void handle_load_failure(const wxString &detail);
+
     GUI_App *m_MainPtr;
     AppConfig m_appconfig_new;
 
     wxWebView *m_browser;
     wxButton * m_TestBtn;
+    wxTimer m_load_timer;
+    bool m_navigation_complete {false};
+    bool m_handling_load_failure {false};
+    unsigned m_load_attempts {0};
+    wxString m_load_failure_detail;
 
     wxString m_SectionName;
 

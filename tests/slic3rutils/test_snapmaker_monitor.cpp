@@ -1,0 +1,282 @@
+#include <catch2/catch_all.hpp>
+
+#include "slic3r/GUI/DeviceTab/SnapmakerGCodeLayer.hpp"
+#include "slic3r/GUI/DeviceTab/SnapmakerMonitorUtils.hpp"
+
+#include <cmath>
+#include <string>
+
+using Slic3r::GUI::SnapmakerGCodeLayer;
+using Slic3r::GUI::SnapmakerGCodeLayerCache;
+
+namespace {
+
+void check_point(const Slic3r::GUI::SnapmakerGCodePoint &point, double x, double y)
+{
+    CHECK(point.x == Catch::Approx(x));
+    CHECK(point.y == Catch::Approx(y));
+}
+
+std::shared_ptr<SnapmakerGCodeLayerCache> parse(const std::string &gcode)
+{
+    return SnapmakerGCodeLayerCache::parse(gcode);
+}
+
+} // namespace
+
+TEST_CASE("Snapmaker layer parser handles Orca absolute extrusion", "[SnapmakerMonitor][GCode]")
+{
+    const auto cache = parse(
+        "; total layer number: 2\n"
+        "G90\n"
+        "M82\n"
+        "G92 E0\n"
+        ";LAYER_CHANGE\n"
+        "G1 X10 Y10 F6000\n"
+        "G1 X20 Y10 E1\n"
+        ";LAYER_CHANGE\n"
+        "G1 X20 Y20 E2\n");
+
+    REQUIRE(cache->layer_count() == 2);
+    const SnapmakerGCodeLayer first = cache->layer(1);
+    REQUIRE(first.segments.size() == 1);
+    check_point(first.segments[0].from, 10.0, 10.0);
+    check_point(first.segments[0].to, 20.0, 10.0);
+
+    const SnapmakerGCodeLayer second = cache->layer(2);
+    REQUIRE(second.segments.size() == 1);
+    check_point(second.segments[0].from, 20.0, 10.0);
+    check_point(second.segments[0].to, 20.0, 20.0);
+}
+
+TEST_CASE("Snapmaker layer parser handles relative modes and reset", "[SnapmakerMonitor][GCode]")
+{
+    const auto cache = parse(
+        "G90\n"
+        "M83\n"
+        ";LAYER_CHANGE\n"
+        "G1 X5 Y5\n"
+        "G1 X10 E0.5\n"
+        "G1 E-0.2\n"
+        "G1 X15 E0.4\n"
+        "G91\n"
+        "G1 X5 Y5 E0.3\n"
+        "G90\n"
+        "G92 X100 Y200 E0\n"
+        "G1 X101 Y201 E0.2\n");
+
+    const auto layer = cache->layer(1);
+    REQUIRE(layer.segments.size() == 4);
+    check_point(layer.segments[0].from, 5.0, 5.0);
+    check_point(layer.segments[0].to, 10.0, 5.0);
+    check_point(layer.segments[1].from, 10.0, 5.0);
+    check_point(layer.segments[1].to, 15.0, 5.0);
+    check_point(layer.segments[2].from, 15.0, 5.0);
+    check_point(layer.segments[2].to, 20.0, 10.0);
+    check_point(layer.segments[3].from, 100.0, 200.0);
+    check_point(layer.segments[3].to, 101.0, 201.0);
+}
+
+TEST_CASE("Snapmaker layer parser keeps extrusion state per tool", "[SnapmakerMonitor][GCode]")
+{
+    const auto cache = parse(
+        "G90\n"
+        "M82\n"
+        ";LAYER_CHANGE\n"
+        "T0\n"
+        "G92 E0\n"
+        "G1 X10 E1\n"
+        "T1\n"
+        "G92 E0\n"
+        "G1 X20 E1\n"
+        "T0\n"
+        "G1 X30 E2\n");
+
+    const auto layer = cache->layer(1);
+    REQUIRE(layer.segments.size() == 3);
+    CHECK(layer.segments[0].tool == 0);
+    CHECK(layer.segments[1].tool == 1);
+    CHECK(layer.segments[2].tool == 0);
+}
+
+TEST_CASE("Snapmaker layer parser tessellates IJ arcs", "[SnapmakerMonitor][GCode]")
+{
+    const auto cache = parse(
+        "G90\n"
+        "M83\n"
+        ";LAYER_CHANGE\n"
+        "G1 X10 Y0\n"
+        "G3 X0 Y10 I-10 J0 E1\n");
+
+    const auto layer = cache->layer(1);
+    REQUIRE(layer.segments.size() > 2);
+    check_point(layer.segments.front().from, 10.0, 0.0);
+    check_point(layer.segments.back().to, 0.0, 10.0);
+}
+
+TEST_CASE("Snapmaker layer parser supports Cura and numbered markers", "[SnapmakerMonitor][GCode]")
+{
+    SECTION("Cura")
+    {
+        const auto cache = parse(
+            "M83\n"
+            ";LAYER:0\n"
+            "G1 X1 E1\n"
+            ";LAYER:1\n"
+            "G1 X2 E1\n");
+        REQUIRE(cache->layer_count() == 2);
+        REQUIRE(cache->layer(2).segments.size() == 1);
+    }
+
+    SECTION("Numbered")
+    {
+        const auto cache = parse(
+            "; layer num/total_layer_count: 1/2\n"
+            "M83\n"
+            "G1 X1 E1\n"
+            "; layer num/total_layer_count: 2/2\n"
+            "G1 X2 E1\n");
+        REQUIRE(cache->layer_count() == 2);
+        REQUIRE(cache->layer(2).segments.size() == 1);
+    }
+}
+
+TEST_CASE("Snapmaker layer parser tags exclude objects", "[SnapmakerMonitor][GCode]")
+{
+    const auto cache = parse(
+        "M83\n"
+        ";LAYER_CHANGE\n"
+        "EXCLUDE_OBJECT_START NAME=part_one\n"
+        "G1 X10 E1\n"
+        "EXCLUDE_OBJECT_END NAME=part_one\n"
+        "G1 X20 E1\n");
+
+    const auto layer = cache->layer(1);
+    REQUIRE(layer.segments.size() == 2);
+    CHECK(layer.segments[0].object == "part_one");
+    CHECK(layer.segments[1].object.empty());
+}
+
+TEST_CASE("Snapmaker layer parser rejects invalid input and bounds", "[SnapmakerMonitor][GCode]")
+{
+    CHECK_THROWS_AS(parse("G1 X10 Y10 E1\n"), std::runtime_error);
+
+    const auto cache = parse(
+        ";LAYER_CHANGE\n"
+        "G1 X10 Y10 E1\n");
+    CHECK(cache->layer(0).segments.empty());
+    CHECK(cache->layer(-1).segments.empty());
+    CHECK(cache->layer(2).segments.empty());
+}
+
+TEST_CASE("Snapmaker monitor normalizes server URLs", "[SnapmakerMonitor][Server]")
+{
+    using Slic3r::GUI::normalize_snapmaker_base_url;
+
+    CHECK(normalize_snapmaker_base_url("http://192.168.0.32/") == "http://192.168.0.32");
+    CHECK(normalize_snapmaker_base_url("http://printer.local:7125/path/api") == "http://printer.local:7125");
+    CHECK(normalize_snapmaker_base_url("192.168.0.32///") == "192.168.0.32");
+    CHECK(normalize_snapmaker_base_url("") == "");
+}
+
+TEST_CASE("Snapmaker camera endpoint parsing covers IPv4 IPv6 and ports", "[SnapmakerMonitor][Camera]")
+{
+    using Slic3r::GUI::parse_snapmaker_websocket_endpoint;
+
+    const auto ipv4 = parse_snapmaker_websocket_endpoint("http://192.168.0.32");
+    CHECK(ipv4.host == "192.168.0.32");
+    CHECK(ipv4.port == "80");
+    CHECK(ipv4.host_header == "192.168.0.32");
+
+    const auto named = parse_snapmaker_websocket_endpoint("http://printer.local:7125/path");
+    CHECK(named.host == "printer.local");
+    CHECK(named.port == "7125");
+    CHECK(named.host_header == "printer.local:7125");
+
+    const auto ipv6 = parse_snapmaker_websocket_endpoint("http://[fe80::1]:7125");
+    CHECK(ipv6.host == "fe80::1");
+    CHECK(ipv6.port == "7125");
+    CHECK(ipv6.host_header == "[fe80::1]:7125");
+
+    CHECK_THROWS(parse_snapmaker_websocket_endpoint("https://printer.local"));
+    CHECK_THROWS(parse_snapmaker_websocket_endpoint("http://[fe80::1"));
+    CHECK_THROWS(parse_snapmaker_websocket_endpoint("http://"));
+    CHECK_THROWS(parse_snapmaker_websocket_endpoint("http://printer.local:"));
+    CHECK_THROWS(parse_snapmaker_websocket_endpoint("http://printer.local:http"));
+    CHECK_THROWS(parse_snapmaker_websocket_endpoint("http://printer.local:0"));
+    CHECK_THROWS(parse_snapmaker_websocket_endpoint("http://printer.local:65536"));
+}
+
+TEST_CASE("Snapmaker object names are command safe", "[SnapmakerMonitor][Control]")
+{
+    using Slic3r::GUI::is_valid_snapmaker_object_name;
+
+    CHECK(is_valid_snapmaker_object_name("PART_1"));
+    CHECK(is_valid_snapmaker_object_name("part-1.2"));
+    CHECK_FALSE(is_valid_snapmaker_object_name(""));
+    CHECK_FALSE(is_valid_snapmaker_object_name("PART 1"));
+    CHECK_FALSE(is_valid_snapmaker_object_name("PART\nCANCEL_PRINT"));
+    CHECK_FALSE(is_valid_snapmaker_object_name("한글"));
+}
+
+TEST_CASE("Snapmaker control availability follows printer state", "[SnapmakerMonitor][Control]")
+{
+    using Slic3r::GUI::snapmaker_control_availability;
+
+    const auto printing = snapmaker_control_availability(true, false, true, "printing", true, true);
+    CHECK(printing.pause_resume);
+    CHECK(printing.cancel);
+    CHECK(printing.refresh);
+    CHECK(printing.skip_object);
+    CHECK_FALSE(printing.resume_mode);
+
+    const auto paused = snapmaker_control_availability(true, false, true, "paused", true, true);
+    CHECK(paused.pause_resume);
+    CHECK(paused.cancel);
+    CHECK(paused.skip_object);
+    CHECK(paused.resume_mode);
+
+    const auto idle = snapmaker_control_availability(true, false, true, "standby", true, true);
+    CHECK_FALSE(idle.pause_resume);
+    CHECK_FALSE(idle.cancel);
+    CHECK_FALSE(idle.skip_object);
+    CHECK(idle.refresh);
+
+    const auto busy = snapmaker_control_availability(true, true, true, "printing", true, true);
+    CHECK_FALSE(busy.pause_resume);
+    CHECK_FALSE(busy.cancel);
+    CHECK_FALSE(busy.refresh);
+    CHECK_FALSE(busy.skip_object);
+
+    const auto disconnected = snapmaker_control_availability(false, false, true, "printing", true, true);
+    CHECK_FALSE(disconnected.pause_resume);
+    CHECK_FALSE(disconnected.cancel);
+    CHECK_FALSE(disconnected.skip_object);
+    CHECK(disconnected.refresh);
+}
+
+TEST_CASE("Snapmaker layer bounds reject mismatched printer metadata", "[SnapmakerMonitor][GCode]")
+{
+    using Slic3r::GUI::valid_snapmaker_layer_number;
+
+    CHECK(valid_snapmaker_layer_number(1, 1) == 1);
+    CHECK(valid_snapmaker_layer_number(748, 748) == 748);
+    CHECK(valid_snapmaker_layer_number(0, 748) == 0);
+    CHECK(valid_snapmaker_layer_number(-1, 748) == 0);
+    CHECK(valid_snapmaker_layer_number(749, 748) == 0);
+    CHECK(valid_snapmaker_layer_number(1, 0) == 0);
+}
+
+TEST_CASE("Snapmaker HTTP status classification is explicit", "[SnapmakerMonitor][Network]")
+{
+    using Slic3r::GUI::is_success_http_status;
+
+    CHECK(is_success_http_status(200));
+    CHECK(is_success_http_status(204));
+    CHECK(is_success_http_status(299));
+    CHECK_FALSE(is_success_http_status(0));
+    CHECK_FALSE(is_success_http_status(199));
+    CHECK_FALSE(is_success_http_status(300));
+    CHECK_FALSE(is_success_http_status(404));
+    CHECK_FALSE(is_success_http_status(500));
+}

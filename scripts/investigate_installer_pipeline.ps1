@@ -9,8 +9,8 @@ git branch --show-current
 
 Write-Output "=== Release binaries ==="
 Get-Item `
-    ".\build\src\Release\orca-slicer.exe", `
-    ".\build\src\Release\OrcaSlicer.dll" |
+    ".\build\src\Release\magpie-slicer.exe", `
+    ".\build\src\Release\MagpieSlicer.dll" |
     Select-Object FullName, Length, LastWriteTime
 
 Write-Output "=== Packaging files ==="

@@ -869,6 +869,17 @@ void GUI_App::post_init()
             mainframe->select_tab(size_t(0));
         if (app_config->get("default_page") == "1")
             mainframe->select_tab(size_t(1));
+        wxString gui_test_page;
+        if (wxGetEnv("MAGPIE_GUI_TEST_PAGE", &gui_test_page) &&
+            gui_test_page.CmpNoCase("device") == 0) {
+            wxString gui_test_size;
+            if (wxGetEnv("MAGPIE_GUI_TEST_SIZE", &gui_test_size) &&
+                gui_test_size.CmpNoCase("1920x1080") == 0) {
+                mainframe->SetMinSize(wxSize(1920, 1080));
+                mainframe->SetSize(0, 0, 1920, 1080);
+            }
+            mainframe->select_tab(size_t(MainFrame::tpMonitor));
+        }
 #ifndef __linux__
         mainframe->Thaw();
 #endif

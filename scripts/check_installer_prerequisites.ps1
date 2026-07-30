@@ -33,8 +33,8 @@ Select-String -LiteralPath $cache -Pattern `
 Write-Output "=== Release dependency sample ==="
 $releaseDir = Join-Path $root "build\src\Release"
 $required = @(
-    "orca-slicer.exe",
-    "OrcaSlicer.dll"
+    "magpie-slicer.exe",
+    "MagpieSlicer.dll"
 )
 foreach ($name in $required) {
     $path = Join-Path $releaseDir $name
