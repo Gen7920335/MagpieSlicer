@@ -13,6 +13,18 @@
 using namespace Slic3r;
 using namespace Slic3r::Test;
 
+TEST_CASE("Non-zero Z offset initializes before selecting an extruder", "[GCodeWriter][ZOffset]")
+{
+    for (const double z_offset : { -0.2, 0.2 }) {
+        CAPTURE(z_offset);
+        REQUIRE_NOTHROW(Slic3r::Test::slice({ cube(20) }, {
+            { "z_offset", z_offset },
+            { "initial_layer_print_height", 0.25 },
+            { "layer_height", 0.25 }
+        }));
+    }
+}
+
 SCENARIO("set_speed emits values with fixed-point output.", "[GCodeWriter]") {
 
     GIVEN("GCodeWriter instance") {

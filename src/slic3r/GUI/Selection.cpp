@@ -1266,16 +1266,33 @@ void Selection::translate(const Vec3d &displacement, TransformationType transfor
                 transform_instance_relative(v, volume_data, transformation_type, Geometry::translation_transform(displacement), m_cache.dragging_center);
         } else {
             if (v.is_wipe_tower) {//in world cs
-                int           plate_idx           = v.object_idx() - 1000;
-                BoundingBoxf3 plate_bbox = wxGetApp().plater()->get_partplate_list().get_plate(plate_idx)->get_build_volume(true);
+                PartPlateList &plate_list = wxGetApp().plater()->get_partplate_list();
+                const int plate_count = plate_list.get_plate_count();
+                const int object_id = v.object_idx();
+                const bool is_temperature_drop_tower =
+                    is_temperature_drop_tower_object_id(object_id, plate_count);
+                const int plate_idx = is_temperature_drop_tower
+                    ? temperature_drop_tower_plate_index(object_id)
+                    : object_id - 1000;
+                if (plate_idx < 0 || plate_idx >= plate_count)
+                    continue;
+
+                PartPlate *plate = plate_list.get_plate(plate_idx);
+                if (plate == nullptr)
+                    continue;
+
+                BoundingBoxf3 plate_bbox = plate->get_build_volume(true);
                 BoundingBox   plate_bbox2d        = BoundingBox(scaled(Vec2f(plate_bbox.min[0], plate_bbox.min[1])), scaled(Vec2f(plate_bbox.max[0], plate_bbox.max[1])));
                 Vec3d         tower_size          = v.bounding_box().size();
                 Vec3d         tower_origin        = m_cache.volumes_data[i].get_volume_position();
                 Vec3d         actual_displacement = displacement;
-                bool show_read_wipe_tower = wxGetApp().plater()->get_partplate_list().get_plate(plate_idx)->fff_print()->is_step_done(psWipeTower);
+                const bool show_real_wipe_tower =
+                    !is_temperature_drop_tower && plate->fff_print()->is_step_done(psWipeTower);
                 float brim_width = wxGetApp().preset_bundle->prints.get_edited_preset().config.opt_float("prime_tower_brim_width");
 
-                const double margin = show_read_wipe_tower ? WIPE_TOWER_MARGIN : brim_width + 0.5; // 0.5 is the line width of wipe tower
+                const double margin = is_temperature_drop_tower
+                    ? TEMPERATURE_DROP_TOWER_BED_MARGIN
+                    : (show_real_wipe_tower ? WIPE_TOWER_MARGIN : brim_width + 0.5); // 0.5 is the line width of wipe tower
 
                 actual_displacement = (m_cache.volumes_data[i].get_instance_rotation_matrix() * m_cache.volumes_data[i].get_instance_scale_matrix() *
                                         m_cache.volumes_data[i].get_instance_mirror_matrix())

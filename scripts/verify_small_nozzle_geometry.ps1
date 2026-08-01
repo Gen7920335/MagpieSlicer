@@ -505,9 +505,9 @@ $required = @(
     $SlicerPath,
     $ModelPath,
     (Join-Path $RepoRoot 'sandboxes\multinozzle_test\auto_tool2_020_base1_machine.json'),
-    (Join-Path $RepoRoot 'sandboxes\multinozzle_test\auto_tool2_020_base1_process.json')
+    (Join-Path $RepoRoot 'sandboxes\multinozzle_test\auto_tool2_020_base1_process.json'),
+    $NativeAnalyzerPath
 )
-if ($Mode -eq 'Bunny') { $required += $NativeAnalyzerPath }
 foreach ($path in $required) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required file not found: $path" }
 }
@@ -562,60 +562,76 @@ foreach ($case in $cases) {
     $analysisTimer = [Diagnostics.Stopwatch]::StartNew()
     if ($null -ne $gcode) {
         $printableArea = Get-PrintableAreaInfo $profiles.Machine.printable_area
+        $smallTool = if ([double] $case.Nozzle2 -lt 0.4) { 1 } else { 0 }
+        $largeTool = if ([double] $case.Nozzle2 -lt 0.4) { 0 } else { 1 }
+        $probeLayers = @(Get-ProbeLayerNumbers -LayerHeight $case.LayerHeight -ProbeZ 8.0 -Count $case.ProbeLayerCount)
+        $minX = [double] ($printableArea.Points | Measure-Object X -Minimum).Minimum
+        $minY = [double] ($printableArea.Points | Measure-Object Y -Minimum).Minimum
+        $maxX = [double] ($printableArea.Points | Measure-Object X -Maximum).Maximum
+        $maxY = [double] ($printableArea.Points | Measure-Object Y -Maximum).Maximum
+        $nativePath = Join-Path $caseRoot 'native-analysis.json'
+        & $NativeAnalyzerPath $gcode.FullName $smallTool $largeTool $profiles.Machine.nozzle_diameter.Count $nativePath `
+            $probeLayers[0] $probeLayers.Count (Format-Number $minX) (Format-Number $minY) `
+            (Format-Number $maxX) (Format-Number $maxY)
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $nativePath -PathType Leaf)) {
+            throw "Native G-code analyzer failed for $($case.Name)"
+        }
+        $native = Get-Content -LiteralPath $nativePath -Raw | ConvertFrom-Json
+        $settings = @{}
+        foreach ($property in $native.settings.PSObject.Properties) { $settings[$property.Name] = [string] $property.Value }
+        $lengthByLayerTool = @{}
+        $wallToolsByLayer = @{}
+        foreach ($layerMetric in $native.layers) {
+            $layerKey = [string] ([int] $layerMetric.layer)
+            $lengthByLayerTool["$layerKey|$smallTool"] = [double] $layerMetric.small_length
+            $lengthByLayerTool["$layerKey|$largeTool"] = [double] $layerMetric.large_length
+            $tools = [Collections.Generic.List[int]]::new()
+            if ([double] $layerMetric.small_length -gt 0.01) { $tools.Add($smallTool) }
+            if ([double] $layerMetric.large_length -gt 0.01) { $tools.Add($largeTool) }
+            $wallToolsByLayer[$layerKey] = $tools.ToArray()
+        }
+        $lengthByRoleTool = @{}
+        foreach ($property in $native.small_nonwall_lengths.PSObject.Properties) {
+            $lengthByRoleTool["$($property.Name)|$smallTool"] = [double] $property.Value
+        }
+        $medianWidths = @{}
+        $medianSpeeds = @{}
+        $lengthByTool = @{}
+        $wallTools = [Collections.Generic.List[int]]::new()
+        foreach ($toolMetric in $native.tools) {
+            $toolKey = [string] $toolMetric.tool
+            $medianWidths[$toolKey] = [double] $toolMetric.median_width
+            $medianSpeeds[$toolKey] = [double] $toolMetric.median_speed
+            $lengthByTool[$toolKey] = [double] $toolMetric.wall_length
+            if ([double] $toolMetric.wall_length -gt 0.01) { $wallTools.Add([int] $toolMetric.tool) }
+        }
+        $probeSegments = @{}
+        foreach ($property in $native.probe_segments.PSObject.Properties) {
+            $probeSegments[[int] $property.Name] = @($property.Value)
+        }
+        $analysis = [pscustomobject]@{
+            Settings = $settings
+            WallTools = $wallTools.ToArray()
+            WallToolsByLayer = $wallToolsByLayer
+            LengthByTool = $lengthByTool
+            LengthByLayerTool = $lengthByLayerTool
+            LengthByRoleTool = $lengthByRoleTool
+            MovesByTool = @{}
+            MedianWidthByTool = $medianWidths
+            MedianSpeedByTool = $medianSpeeds
+            ProbeLayers = @($native.probe_layers | ForEach-Object { [int] $_ })
+            ProbeSegments = $probeSegments
+            SparseInfillSeen = [bool] $native.sparse_infill_seen
+            LayerCount = [int] $native.layer_count
+            UnsupportedToolCommands = [int] $native.unsupported_tool_commands
+            ExtrusionBeforeTool = [int] $native.extrusion_before_tool
+            NonFiniteNumbers = [int] $native.non_finite_numbers
+            OutOfBoundsExtrusions = [int] $native.out_of_bounds_extrusions
+            MaxToolChangesPerLayer = [int] $native.max_tool_changes_per_layer
+        }
         if ($Mode -eq 'Bunny') {
-            $smallTool = if ([double] $case.Nozzle2 -lt 0.4) { 1 } else { 0 }
-            $largeTool = if ([double] $case.Nozzle2 -lt 0.4) { 0 } else { 1 }
-            $nativePath = Join-Path $caseRoot 'native-analysis.json'
-            & $NativeAnalyzerPath $gcode.FullName $smallTool $largeTool $profiles.Machine.nozzle_diameter.Count $nativePath
-            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $nativePath -PathType Leaf)) {
-                throw "Native G-code analyzer failed for $($case.Name)"
-            }
-            $native = Get-Content -LiteralPath $nativePath -Raw | ConvertFrom-Json
-            $settings = @{}
-            foreach ($property in $native.settings.PSObject.Properties) { $settings[$property.Name] = [string] $property.Value }
-            $lengthByLayerTool = @{}
-            $wallToolsByLayer = @{}
-            foreach ($layerMetric in $native.layers) {
-                $layerKey = [string] ([int] $layerMetric.layer)
-                $lengthByLayerTool["$layerKey|$smallTool"] = [double] $layerMetric.small_length
-                $lengthByLayerTool["$layerKey|$largeTool"] = [double] $layerMetric.large_length
-                $tools = [Collections.Generic.List[int]]::new()
-                if ([double] $layerMetric.small_length -gt 0.01) { $tools.Add($smallTool) }
-                if ([double] $layerMetric.large_length -gt 0.01) { $tools.Add($largeTool) }
-                $wallToolsByLayer[$layerKey] = $tools.ToArray()
-            }
-            $lengthByRoleTool = @{}
-            foreach ($property in $native.small_nonwall_lengths.PSObject.Properties) {
-                $lengthByRoleTool["$($property.Name)|$smallTool"] = [double] $property.Value
-            }
-            $medianWidths = @{}
-            $wallTools = [Collections.Generic.List[int]]::new()
-            foreach ($toolMetric in $native.tools) {
-                $medianWidths[[string]$toolMetric.tool] = [double]$toolMetric.mean_width
-                if ([double]$toolMetric.wall_length -gt 0.01) { $wallTools.Add([int]$toolMetric.tool) }
-            }
-            $analysis = [pscustomobject]@{
-                Settings = $settings
-                WallTools = $wallTools.ToArray()
-                WallToolsByLayer = $wallToolsByLayer
-                LengthByLayerTool = $lengthByLayerTool
-                LengthByRoleTool = $lengthByRoleTool
-                MedianWidthByTool = $medianWidths
-                MedianSpeedByTool = @{}
-                ProbeLayers = @()
-                ProbeSegments = @{}
-                LayerCount = [int] $native.layer_count
-                UnsupportedToolCommands = [int] $native.unsupported_tool_commands
-                ExtrusionBeforeTool = [int] $native.extrusion_before_tool
-                NonFiniteNumbers = [int] $native.non_finite_numbers
-                OutOfBoundsExtrusions = 0
-                MaxToolChangesPerLayer = [int] $native.max_tool_changes_per_layer
-            }
             $verdict = Test-SmallNozzleComplexCase -Case $case -Analysis $analysis
         } else {
-            $analysis = Get-SmallNozzleGcodeAnalysis -Path $gcode.FullName -PrintableArea $printableArea `
-                -PrintableHeight ([double] $profiles.Machine.printable_height) -ToolCount $profiles.Machine.nozzle_diameter.Count `
-                -LayerHeight $case.LayerHeight -ProbeLayerCount $case.ProbeLayerCount
             $verdict = Test-SmallNozzleCase -Case $case -Analysis $analysis -PrintableArea $printableArea
         }
         foreach ($errorText in $verdict.Errors) { $runtimeErrors.Add($errorText) }

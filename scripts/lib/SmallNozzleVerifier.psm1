@@ -393,16 +393,23 @@ function Get-ProbeLoopTopology {
     $topology = @{}
     foreach ($entry in $byTool.GetEnumerator()) {
         $adjacency = @{}
+        $edgeCounts = @{}
         $toolWidths = [Collections.Generic.List[double]]::new()
         foreach ($segment in $entry.Value) {
             if ($segment.Width -gt 0) { $toolWidths.Add([double] $segment.Width) }
             $a = '{0},{1}' -f [Math]::Round($segment.X1 / $Quantization), [Math]::Round($segment.Y1 / $Quantization)
             $b = '{0},{1}' -f [Math]::Round($segment.X2 / $Quantization), [Math]::Round($segment.Y2 / $Quantization)
             if ($a -eq $b) { continue }
+            $edgeKey = if ([string]::CompareOrdinal($a, $b) -lt 0) { "$a|$b" } else { "$b|$a" }
+            $edgeCounts[$edgeKey] = [int] $edgeCounts[$edgeKey] + 1
             if (-not $adjacency.ContainsKey($a)) { $adjacency[$a] = [Collections.Generic.List[string]]::new() }
             if (-not $adjacency.ContainsKey($b)) { $adjacency[$b] = [Collections.Generic.List[string]]::new() }
             $adjacency[$a].Add($b)
             $adjacency[$b].Add($a)
+        }
+        $duplicateEdges = 0
+        foreach ($count in $edgeCounts.Values) {
+            if ([int] $count -gt 1) { $duplicateEdges += [int] $count - 1 }
         }
         $visited = [Collections.Generic.HashSet[string]]::new()
         $components = 0
@@ -465,6 +472,7 @@ function Get-ProbeLoopTopology {
             ClosedComponents = $closedComponents
             RawOpenEndpoints = $openEndpoints
             UnpairedOpenEndpoints = $unpairedOpenEndpoints
+            DuplicateEdges = $duplicateEdges
             MaximumPairedSeamGap = [Math]::Round($maximumPairedGap, 4)
             SeamTolerance = [Math]::Round($seamTolerance, 4)
         }
@@ -724,22 +732,24 @@ function Test-SmallNozzleCase {
             if ($toolCount -gt 0 -and $null -ne $toolTopology -and $toolTopology.UnpairedOpenEndpoints -gt 0) {
                 $errors.Add("Layer $($layerMetric.Layer) T$toolKey has $($toolTopology.UnpairedOpenEndpoints) unpaired open endpoints in the straight loop body")
             }
+            if ($toolCount -gt 0 -and $null -ne $toolTopology -and $toolTopology.DuplicateEdges -gt 0) {
+                $errors.Add("Layer $($layerMetric.Layer) T$toolKey repeats $($toolTopology.DuplicateEdges) wall segments")
+            }
         }
     }
 
     if ($Case.Enabled -and $Case.RequireLarge -and $section.Layers.Count -gt 0) {
-        $boundaryValues = @($section.Layers.BoundarySpacing | Where-Object { $_ -gt 0 })
-        if ($boundaryValues.Count -eq 0) {
-            $errors.Add('No small/large boundary spacing sample was found')
-        } else {
-            $actualBoundary = Get-Median -Values $boundaryValues
-            $smallWidth = [double] $Analysis.MedianWidthByTool[[string] $smallTool]
-            $largeWidth = [double] $Analysis.MedianWidthByTool[[string] $largeTool]
-            $expectedBoundary = Get-ExpectedBoundarySpacing -SmallWidth $smallWidth -LargeWidth $largeWidth `
-                -LayerHeight $Case.LayerHeight -OverlapPercent $Case.Overlap
-            $tolerance = [Math]::Max(0.02, [Math]::Min($smallWidth, $largeWidth) * 0.15)
-            if ([Math]::Abs($actualBoundary - $expectedBoundary) -gt $tolerance) {
-                $errors.Add("Boundary spacing $([Math]::Round($actualBoundary,3)) mm differs from expected $([Math]::Round($expectedBoundary,3)) mm")
+        $smallWidth = [double] $Analysis.MedianWidthByTool[[string] $smallTool]
+        $largeWidth = [double] $Analysis.MedianWidthByTool[[string] $largeTool]
+        $expectedBoundary = Get-ExpectedBoundarySpacing -SmallWidth $smallWidth -LargeWidth $largeWidth `
+            -LayerHeight $Case.LayerHeight -OverlapPercent $Case.Overlap
+        $tolerance = [Math]::Max(0.02, [Math]::Min($smallWidth, $largeWidth) * 0.15)
+        foreach ($layerMetric in $section.Layers) {
+            $actualBoundary = [double] $layerMetric.BoundarySpacing
+            if ($actualBoundary -le 0) {
+                $errors.Add("Layer $($layerMetric.Layer): no small/large boundary spacing sample was found")
+            } elseif ([Math]::Abs($actualBoundary - $expectedBoundary) -gt $tolerance) {
+                $errors.Add("Layer $($layerMetric.Layer): boundary spacing $([Math]::Round($actualBoundary,3)) mm differs from expected $([Math]::Round($expectedBoundary,3)) mm")
             }
         }
     }

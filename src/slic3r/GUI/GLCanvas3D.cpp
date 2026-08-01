@@ -2619,9 +2619,8 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
             // This GLVolume will be released.
             if (volume->is_wipe_tower) {
                 const int object_id = volume->composite_id.object_id;
-                const int temperature_plate_id =
-                    object_id - TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE;
-                if (temperature_plate_id >= 0 && temperature_plate_id < n_plates) {
+                const int temperature_plate_id = temperature_drop_tower_plate_index(object_id);
+                if (is_temperature_drop_tower_object_id(object_id, n_plates)) {
                     volume_idxs_temperature_drop_tower_old[temperature_plate_id] = int(volume_id);
                 } else {
                     const int plate_id = object_id - 1000;
@@ -5070,9 +5069,8 @@ void GLCanvas3D::do_move(const std::string& snapshot_type)
             // Move a wipe tower proxy.
             wipe_tower_origins[object_idx - 1000] = v->get_volume_offset();
         }
-        else if (object_idx >= TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE &&
-                 object_idx < TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE + n_plates) {
-            temperature_drop_tower_origins[object_idx - TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE] =
+        else if (is_temperature_drop_tower_object_id(object_idx, n_plates)) {
+            temperature_drop_tower_origins[temperature_drop_tower_plate_index(object_idx)] =
                 v->get_volume_offset();
         }
     }
@@ -5139,6 +5137,10 @@ void GLCanvas3D::do_move(const std::string& snapshot_type)
             project_config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x", true);
         ConfigOptionFloats *tower_y_option =
             project_config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y", true);
+        if (tower_x_option->values.size() <= size_t(plate_id))
+            tower_x_option->values.resize(size_t(plate_id) + 1, -1.0);
+        if (tower_y_option->values.size() <= size_t(plate_id))
+            tower_y_option->values.resize(size_t(plate_id) + 1, -1.0);
         tower_x_option->set_at(&tower_x, plate_id, 0);
         tower_y_option->set_at(&tower_y, plate_id, 0);
     }

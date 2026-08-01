@@ -483,6 +483,26 @@ static size_t count_substring(const std::string &text, const std::string &needle
     return count;
 }
 
+static size_t count_extruding_moves_between(
+    const std::string &gcode, const std::string &begin_marker, const std::string &end_marker)
+{
+    const size_t begin = gcode.find(begin_marker);
+    const size_t end = begin == std::string::npos ? std::string::npos : gcode.find(end_marker, begin);
+    if (begin == std::string::npos || end == std::string::npos)
+        return 0;
+
+    size_t count = 0;
+    std::istringstream stream(gcode.substr(begin, end - begin));
+    for (std::string line; std::getline(stream, line);) {
+        const bool linear_move =
+            line.rfind("G0 ", 0) == 0 || line.rfind("G1 ", 0) == 0 ||
+            line == "G0" || line == "G1";
+        if (linear_move && gcode_word(line, 'E'))
+            ++count;
+    }
+    return count;
+}
+
 struct TemperatureDropTowerMetrics {
     size_t cooling_passes { 0 };
     std::vector<double> cooling_pass_z;
@@ -617,20 +637,111 @@ TEST_CASE("Temperature drop tower scales and slows only its final 10 mm",
         const std::string wait_temperature = "M109 S" + std::to_string(temperature.interface_temperature);
         const size_t begin = output.find("low-temperature support interface begin");
         const size_t nonblocking_temperature = output.find(set_temperature, begin);
+        const size_t brim_begin = output.find("temperature drop tower brim begin");
+        const size_t brim_end = output.find("temperature drop tower brim end", brim_begin);
+        const size_t first_tower_layer = output.find("; temperature drop tower layer");
         const size_t cooling_pass = output.find("temperature drop tower cooling pass", begin);
         const size_t cooling_end = output.find("temperature drop tower cooling pass end", cooling_pass);
         const size_t interface = output.find("support material interface", cooling_end);
         REQUIRE(begin != std::string::npos);
         REQUIRE(nonblocking_temperature != std::string::npos);
+        REQUIRE(brim_begin != std::string::npos);
+        REQUIRE(brim_end != std::string::npos);
+        REQUIRE(first_tower_layer != std::string::npos);
         REQUIRE(cooling_pass != std::string::npos);
         REQUIRE(cooling_end != std::string::npos);
         REQUIRE(interface != std::string::npos);
         CHECK(begin < nonblocking_temperature);
-        CHECK(nonblocking_temperature < cooling_pass);
+        CHECK(brim_begin < brim_end);
+        CHECK(brim_end < first_tower_layer);
+        CHECK(brim_end < cooling_pass);
         CHECK(cooling_pass < cooling_end);
         CHECK(cooling_end < interface);
         CHECK(output.find(wait_temperature, nonblocking_temperature) > interface);
+        CHECK(count_extruding_moves_between(
+                  output,
+                  "; temperature drop tower brim begin",
+                  "; temperature drop tower brim end") >= TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT);
+        CHECK(count_substring(output, "; temperature drop tower brim begin") == 1);
+        CHECK(count_substring(output, "; temperature drop tower brim end") == 1);
     }
+}
+
+TEST_CASE("Temperature drop tower keeps its brim across a 36-setting slicing matrix",
+          "[SupportMaterial][TemperatureDropTower][Matrix]")
+{
+    struct NozzleCase {
+        double diameter;
+        double layer_height;
+    };
+    const std::array<int, 3> normal_temperatures {{ 200, 220, 260 }};
+    const std::array<int, 2> interface_temperatures {{ 170, 182 }};
+    const std::array<NozzleCase, 3> nozzle_cases {{
+        { 0.15, 0.08 },
+        { 0.4, 0.2 },
+        { 0.8, 0.3 }
+    }};
+    const std::array<bool, 2> manual_position_cases {{ false, true }};
+
+    size_t sliced_combinations = 0;
+    for (const int normal_temperature : normal_temperatures) {
+        for (const int interface_temperature : interface_temperatures) {
+            for (const NozzleCase &nozzle : nozzle_cases) {
+                for (const bool manual_position : manual_position_cases) {
+                    TemperatureDropTowerSettings settings;
+                    settings.normal_temperature = normal_temperature;
+                    settings.interface_temperature = interface_temperature;
+                    settings.nozzle_diameter = nozzle.diameter;
+                    settings.layer_height = nozzle.layer_height;
+                    if (manual_position) {
+                        settings.tower_x = 20.0;
+                        settings.tower_y = 25.0;
+                    }
+
+                    const std::string output = temperature_drop_tower_gcode(settings);
+                    const TemperatureDropTowerMetrics metrics = analyze_temperature_drop_tower(output);
+                    const double temperature_delta = normal_temperature - interface_temperature;
+                    const double expected_size = temperature_delta <= 30.0
+                        ? 50.0
+                        : std::min(80.0, 50.0 + temperature_delta - 30.0);
+                    const size_t brim_begin = output.find("; temperature drop tower brim begin");
+                    const size_t brim_end = output.find("; temperature drop tower brim end", brim_begin);
+                    const size_t first_tower_layer = output.find("; temperature drop tower layer");
+
+                    CAPTURE(normal_temperature, interface_temperature, nozzle.diameter,
+                            nozzle.layer_height, manual_position, expected_size);
+                    check_temperature_drop_tower_passes_are_on_distinct_layers(metrics);
+                    REQUIRE(brim_begin != std::string::npos);
+                    REQUIRE(brim_end != std::string::npos);
+                    REQUIRE(first_tower_layer != std::string::npos);
+                    CHECK(brim_begin < brim_end);
+                    CHECK(brim_end < first_tower_layer);
+                    CHECK(count_substring(output, "; temperature drop tower brim begin") == 1);
+                    CHECK(count_substring(output, "; temperature drop tower brim end") == 1);
+                    CHECK(count_substring(output, "; temperature drop tower brim line") ==
+                          TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT);
+                    CHECK(count_extruding_moves_between(
+                              output,
+                              "; temperature drop tower brim begin",
+                              "; temperature drop tower brim end") >=
+                          TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT);
+                    CHECK(std::isfinite(metrics.min_x));
+                    CHECK(std::isfinite(metrics.min_y));
+                    CHECK(std::isfinite(metrics.max_x));
+                    CHECK(std::isfinite(metrics.max_y));
+                    CHECK(metrics.min_x >= 3.0 - 0.03);
+                    CHECK(metrics.min_y >= 3.0 - 0.03);
+                    CHECK(metrics.max_x <= 197.0 + 0.03);
+                    CHECK(metrics.max_y <= 197.0 + 0.03);
+                    CHECK(metrics.max_x - metrics.min_x == Catch::Approx(expected_size).margin(0.03));
+                    CHECK(metrics.max_y - metrics.min_y == Catch::Approx(expected_size).margin(0.03));
+                    CHECK(metrics.slow_length == Catch::Approx(10.0).margin(0.03));
+                    ++sliced_combinations;
+                }
+            }
+        }
+    }
+    CHECK(sliced_combinations == 36);
 }
 
 TEST_CASE("Temperature drop tower stays inside rear-left bed bounds",

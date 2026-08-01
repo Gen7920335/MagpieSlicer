@@ -42,6 +42,23 @@ namespace Slic3r {
 namespace GUI {
     class Size;
     inline constexpr int TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE = 2000;
+
+    inline constexpr bool is_temperature_drop_tower_object_id(int object_id, int plate_count)
+    {
+        return plate_count > 0 &&
+               object_id >= TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE &&
+               object_id < TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE + plate_count;
+    }
+
+    inline constexpr int temperature_drop_tower_plate_index(int object_id)
+    {
+        return object_id - TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE;
+    }
+
+    static_assert(is_temperature_drop_tower_object_id(TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE, 1));
+    static_assert(!is_temperature_drop_tower_object_id(TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE - 1, 1));
+    static_assert(!is_temperature_drop_tower_object_id(TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE + 1, 1));
+    static_assert(temperature_drop_tower_plate_index(TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE) == 0);
 }
 
 class SLAPrintObject;

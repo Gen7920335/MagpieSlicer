@@ -4121,11 +4121,14 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         int  probe_count_x = std::max(3, (int) std::ceil(mesh_bbox.size().x() / probe_dist_x) + 1);
         int  probe_count_y = std::max(3, (int) std::ceil(mesh_bbox.size().y() / probe_dist_y) + 1);
         auto bed_mesh_algo = "bicubic";
+        const std::string &mesh_printer_model = print.config().printer_model.value;
+        const bool is_snapmaker_u1_mesh =
+            mesh_printer_model == "797581801" || mesh_printer_model == "Snapmaker U1";
         if (probe_count_x * probe_count_y <= 6) { // lagrange needs up to a total of 6 mesh points
             bed_mesh_algo = "lagrange";
         }
         else
-            if(print.config().gcode_flavor == gcfKlipper){
+            if (print.config().gcode_flavor == gcfKlipper || is_snapmaker_u1_mesh) {
               // bicubic needs 4 probe points per axis
               probe_count_x = std::max(probe_count_x,4);
               probe_count_y = std::max(probe_count_y,4);
@@ -4251,10 +4254,14 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     this->placeholder_parser().set("print_time_sec", new ConfigOptionString(GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Print_Time_Sec_Placeholder)));
     this->placeholder_parser().set("used_filament_length", new ConfigOptionString(GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Used_Filament_Length_Placeholder)));
 
-    std::string machine_start_gcode = this->placeholder_parser_process("machine_start_gcode", print.config().machine_start_gcode.value, initial_extruder_id);
     const std::string &printer_model = print.config().printer_model.value;
     const bool is_snapmaker_u1 = printer_model == "797581801" || printer_model == "Snapmaker U1";
-    if (is_snapmaker_u1)
+    const std::string machine_start_template = is_snapmaker_u1 ?
+        snapmaker_u1_start_gcode_template(print.config().machine_start_gcode.value) :
+        print.config().machine_start_gcode.value;
+    std::string machine_start_gcode = this->placeholder_parser_process(
+        "machine_start_gcode", machine_start_template, initial_extruder_id);
+    if (is_snapmaker_u1 && !snapmaker_u1_has_native_start(machine_start_gcode))
         ensure_snapmaker_u1_safe_homing(machine_start_gcode);
     if (print.config().gcode_flavor != gcfKlipper) {
         // Set bed temperature if the start G-code does not contain any bed temp control G-codes.
@@ -6929,18 +6936,6 @@ LayerResult GCode::process_layer(
         std::abs(m_temperature_drop_tower_last_print_z - m_nominal_z) >= EPSILON) {
         ExtrusionPath temperature_drop_tower_path;
         if (this->build_temperature_drop_tower_path(temperature_drop_tower_path)) {
-            if (first_layer && !m_temperature_drop_tower_brim_printed) {
-                std::vector<ExtrusionPath> brim_paths;
-                if (this->build_temperature_drop_tower_brim_paths(brim_paths)) {
-                    gcode += "; temperature drop tower brim begin\n";
-                    for (const ExtrusionPath &brim_path : brim_paths) {
-                        gcode += "; temperature drop tower brim line\n";
-                        gcode += this->_extrude(brim_path, "temperature drop tower brim", 30.0);
-                    }
-                    gcode += "; temperature drop tower brim end\n";
-                    m_temperature_drop_tower_brim_printed = true;
-                }
-            }
             gcode += this->extrude_temperature_drop_tower(temperature_drop_tower_path, false);
         }
     }
@@ -7114,11 +7109,9 @@ std::string GCode::preamble()
 {
     std::string gcode = m_writer.preamble();
 
-    /*  Perform a *silent* move to z_offset: we need this to initialize the Z
-        position of our writer object so that any initial lift taking place
-        before the first layer change will raise the extruder from the correct
-        initial Z instead of 0.  */
-    m_writer.travel_to_z(m_config.z_offset.value);
+    /* Initialize the writer's nominal Z before an extruder is selected. This is
+       state only: emitting a move here would require filament-dependent speeds. */
+    m_writer.get_position().z() = m_config.z_offset.value;
 
     return gcode;
 }
@@ -8073,14 +8066,32 @@ bool GCode::build_temperature_drop_tower_brim_paths(std::vector<ExtrusionPath> &
     return !paths.empty();
 }
 
-std::string GCode::extrude_temperature_drop_tower(const ExtrusionPath &path, bool cooling_transition)
+std::string GCode::extrude_temperature_drop_tower(
+    const ExtrusionPath &path, bool cooling_transition)
 {
-    if (!cooling_transition)
-        return "; temperature drop tower layer\n" +
-               this->_extrude(path, "temperature drop tower", 30.0);
+    std::string gcode;
+    // The auxiliary tower owns its brim; object/support layer IDs do not define its first pass.
+    if (!cooling_transition && !m_temperature_drop_tower_brim_printed) {
+        std::vector<ExtrusionPath> brim_paths;
+        if (this->build_temperature_drop_tower_brim_paths(brim_paths)) {
+            gcode += "; temperature drop tower brim begin\n";
+            for (const ExtrusionPath &brim_path : brim_paths) {
+                gcode += "; temperature drop tower brim line\n";
+                gcode += this->_extrude(brim_path, "temperature drop tower brim", 30.0);
+            }
+            gcode += "; temperature drop tower brim end\n";
+            m_temperature_drop_tower_brim_printed = true;
+        }
+    }
+
+    if (!cooling_transition) {
+        gcode += "; temperature drop tower layer\n";
+        gcode += this->_extrude(path, "temperature drop tower", 30.0);
+        return gcode;
+    }
 
     constexpr double slow_tail_length_mm = 10.0;
-    std::string gcode = "; low-temperature support interface temperature drop tower cooling pass\n";
+    gcode += "; low-temperature support interface temperature drop tower cooling pass\n";
     const double path_length_mm = path.polyline.length() * SCALING_FACTOR;
     if (path_length_mm > slow_tail_length_mm + EPSILON) {
         Polyline3 fast_polyline;

@@ -275,10 +275,40 @@ TEST_CASE("Snapmaker U1 homing follows PRINT_START before motion", "[SnapmakerMo
 
     CHECK(Slic3r::snapmaker_u1_has_safe_homing(
         "PRINT_STRAT TOOL=0\nG28\nG0 X0 Y0 Z10\n"));
+    CHECK(Slic3r::snapmaker_u1_has_safe_homing(
+        "PRINT_START\nG28 X Y\nG28 Z I140 J140\nG0 Z5\n"));
     CHECK_FALSE(Slic3r::snapmaker_u1_has_safe_homing(
         "PRINT_START TOOL=0\nG28 X Y\nG0 Z10\n"));
     CHECK_FALSE(Slic3r::snapmaker_u1_has_safe_homing(
         "PRINT_START TOOL=0\n; G28\nG0 Z10\n"));
+}
+
+TEST_CASE("Snapmaker U1 incomplete start code uses native sequence", "[SnapmakerMonitor][GCode]")
+{
+    const std::string configured =
+        "PRINT_START TOOL_TEMP=220 BED_TEMP=55\n"
+        "M109 S220\n"
+        "G0 X0 Y0 Z10\n";
+    const std::string selected = Slic3r::snapmaker_u1_start_gcode_template(configured);
+
+    CHECK(selected != configured);
+    CHECK(Slic3r::snapmaker_u1_has_native_start(selected));
+    CHECK(selected.find("M190 S{bed_temperature_initial_layer_single}") != std::string::npos);
+    CHECK(selected.find("BED_MESH_CALIBRATE PROBE_COUNT=11,11") != std::string::npos);
+    CHECK(selected.find("Z_OFFSET=-0.07") != std::string::npos);
+
+    const std::string customized_native =
+        "PRINT_START\n"
+        "M140 S55\n"
+        "G28 X Y\n"
+        "G28 Z I140 J140\n"
+        "M190 S55\n"
+        "G28 Z\n"
+        "BED_MESH_CALIBRATE\n"
+        "M109 S220\n"
+        "G1 X185 E15 F360\n"
+        "; user customization\n";
+    CHECK(Slic3r::snapmaker_u1_start_gcode_template(customized_native) == customized_native);
 }
 
 TEST_CASE("Snapmaker control availability follows printer state", "[SnapmakerMonitor][Control]")
