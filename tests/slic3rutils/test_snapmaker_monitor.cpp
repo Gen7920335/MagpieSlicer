@@ -12,6 +12,11 @@ using Slic3r::GUI::SnapmakerGCodeLayerCache;
 using Slic3r::GUI::is_public_snapmaker_macro;
 using Slic3r::GUI::snapmaker_heater_script;
 using Slic3r::GUI::snapmaker_jog_script;
+using Slic3r::GUI::snapmaker_extrude_script;
+using Slic3r::GUI::snapmaker_z_offset_script;
+using Slic3r::GUI::snapmaker_motion_limit_script;
+using Slic3r::GUI::snapmaker_pressure_advance_script;
+using Slic3r::GUI::snapmaker_bed_mesh_profile_script;
 
 namespace {
 
@@ -248,6 +253,51 @@ TEST_CASE("Snapmaker control scripts validate motion and heater inputs", "[Snapm
           "SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=60.0");
     CHECK_THROWS(snapmaker_heater_script("heater bed", 60.0));
     CHECK_THROWS(snapmaker_heater_script("extruder", 401.0));
+}
+
+TEST_CASE("Snapmaker advanced controls generate bounded Klipper commands", "[SnapmakerMonitor][Control]")
+{
+    CHECK(snapmaker_extrude_script(10.0, 5.0) ==
+          "SAVE_GCODE_STATE NAME=MAGPIE_MANUAL_EXTRUDE\nM83\nG1 E10.000 F300.0\n"
+          "RESTORE_GCODE_STATE NAME=MAGPIE_MANUAL_EXTRUDE");
+    CHECK(snapmaker_extrude_script(-2.5, 1.5).find("G1 E-2.500 F90.0") != std::string::npos);
+    CHECK_NOTHROW(snapmaker_extrude_script(0.1, 0.1));
+    CHECK_NOTHROW(snapmaker_extrude_script(-100.0, 100.0));
+    CHECK_NOTHROW(snapmaker_extrude_script(100.0, 50.0));
+    CHECK_THROWS(snapmaker_extrude_script(0.0, 5.0));
+    CHECK_THROWS(snapmaker_extrude_script(101.0, 5.0));
+    CHECK_THROWS(snapmaker_extrude_script(10.0, 0.0));
+
+    CHECK(snapmaker_z_offset_script(0.05) == "SET_GCODE_OFFSET Z_ADJUST=0.050 MOVE=1");
+    CHECK(snapmaker_z_offset_script(-1.0) == "SET_GCODE_OFFSET Z_ADJUST=-1.000 MOVE=1");
+    CHECK_NOTHROW(snapmaker_z_offset_script(0.005));
+    CHECK_NOTHROW(snapmaker_z_offset_script(-0.005));
+    CHECK_NOTHROW(snapmaker_z_offset_script(1.0));
+    CHECK_THROWS(snapmaker_z_offset_script(0.0));
+    CHECK_THROWS(snapmaker_z_offset_script(1.001));
+
+    CHECK(snapmaker_motion_limit_script(300.0, 10000.0, 5.0) ==
+          "SET_VELOCITY_LIMIT VELOCITY=300.0 ACCEL=10000.0 SQUARE_CORNER_VELOCITY=5.0");
+    CHECK_NOTHROW(snapmaker_motion_limit_script(1.0, 100.0, 0.1));
+    CHECK_NOTHROW(snapmaker_motion_limit_script(500.0, 25000.0, 50.0));
+    CHECK_NOTHROW(snapmaker_motion_limit_script(1000.0, 50000.0, 100.0));
+    CHECK_THROWS(snapmaker_motion_limit_script(0.0, 10000.0, 5.0));
+    CHECK_THROWS(snapmaker_motion_limit_script(300.0, 50001.0, 5.0));
+
+    CHECK(snapmaker_pressure_advance_script("extruder3", 0.035, 0.04) ==
+          "SET_PRESSURE_ADVANCE EXTRUDER=extruder3 ADVANCE=0.0350 SMOOTH_TIME=0.0400");
+    CHECK_NOTHROW(snapmaker_pressure_advance_script("extruder", 0.0, 0.001));
+    CHECK_NOTHROW(snapmaker_pressure_advance_script("extruder1", 1.0, 0.5));
+    CHECK_NOTHROW(snapmaker_pressure_advance_script("extruder31", 2.0, 1.0));
+    CHECK_THROWS(snapmaker_pressure_advance_script("heater_bed", 0.035, 0.04));
+    CHECK_THROWS(snapmaker_pressure_advance_script("extruder 1", 0.035, 0.04));
+    CHECK_THROWS(snapmaker_pressure_advance_script("extruder", 2.1, 0.04));
+
+    CHECK(snapmaker_bed_mesh_profile_script("SAVE", "default") == "BED_MESH_PROFILE SAVE=default");
+    CHECK(snapmaker_bed_mesh_profile_script("LOAD", "u1-pla") == "BED_MESH_PROFILE LOAD=u1-pla");
+    CHECK(snapmaker_bed_mesh_profile_script("REMOVE", "mesh_01") == "BED_MESH_PROFILE REMOVE=mesh_01");
+    CHECK_THROWS(snapmaker_bed_mesh_profile_script("IMPORT", "default"));
+    CHECK_THROWS(snapmaker_bed_mesh_profile_script("SAVE", "bad profile"));
 }
 
 TEST_CASE("Snapmaker U1 homing follows PRINT_START before motion", "[SnapmakerMonitor][GCode]")

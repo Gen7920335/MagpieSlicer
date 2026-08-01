@@ -136,6 +136,78 @@ std::string snapmaker_heater_script(std::string_view heater, double target)
     return out.str();
 }
 
+std::string snapmaker_extrude_script(double distance, double speed_mm_s)
+{
+    if (!std::isfinite(distance) || distance == 0.0 || std::abs(distance) > 100.0 ||
+        !std::isfinite(speed_mm_s) || speed_mm_s < 0.1 || speed_mm_s > 100.0)
+        throw std::invalid_argument("Invalid manual extrusion command");
+
+    std::ostringstream out;
+    out << "SAVE_GCODE_STATE NAME=MAGPIE_MANUAL_EXTRUDE\nM83\nG1 E"
+        << std::fixed << std::setprecision(3) << distance
+        << " F" << std::setprecision(1) << speed_mm_s * 60.0
+        << "\nRESTORE_GCODE_STATE NAME=MAGPIE_MANUAL_EXTRUDE";
+    return out.str();
+}
+
+std::string snapmaker_z_offset_script(double adjustment)
+{
+    if (!std::isfinite(adjustment) || adjustment == 0.0 || std::abs(adjustment) > 1.0)
+        throw std::invalid_argument("Invalid Z offset adjustment");
+
+    std::ostringstream out;
+    out << "SET_GCODE_OFFSET Z_ADJUST=" << std::fixed << std::setprecision(3) << adjustment << " MOVE=1";
+    return out.str();
+}
+
+std::string snapmaker_motion_limit_script(
+    double velocity,
+    double acceleration,
+    double square_corner_velocity)
+{
+    if (!std::isfinite(velocity) || velocity < 1.0 || velocity > 1000.0 ||
+        !std::isfinite(acceleration) || acceleration < 100.0 || acceleration > 50000.0 ||
+        !std::isfinite(square_corner_velocity) || square_corner_velocity < 0.1 || square_corner_velocity > 100.0)
+        throw std::invalid_argument("Invalid motion limits");
+
+    std::ostringstream out;
+    out << "SET_VELOCITY_LIMIT VELOCITY=" << std::fixed << std::setprecision(1) << velocity
+        << " ACCEL=" << acceleration
+        << " SQUARE_CORNER_VELOCITY=" << square_corner_velocity;
+    return out.str();
+}
+
+std::string snapmaker_pressure_advance_script(
+    std::string_view extruder,
+    double pressure_advance,
+    double smooth_time)
+{
+    constexpr std::string_view prefix = "extruder";
+    const bool valid_extruder = extruder == prefix ||
+        (extruder.size() > prefix.size() && extruder.substr(0, prefix.size()) == prefix &&
+         std::all_of(extruder.begin() + prefix.size(), extruder.end(), [](unsigned char c) {
+             return std::isdigit(c) != 0;
+         }));
+    if (!is_valid_snapmaker_object_name(extruder) || !valid_extruder ||
+        !std::isfinite(pressure_advance) || pressure_advance < 0.0 || pressure_advance > 2.0 ||
+        !std::isfinite(smooth_time) || smooth_time < 0.001 || smooth_time > 1.0)
+        throw std::invalid_argument("Invalid pressure advance command");
+
+    std::ostringstream out;
+    out << "SET_PRESSURE_ADVANCE EXTRUDER=" << extruder
+        << " ADVANCE=" << std::fixed << std::setprecision(4) << pressure_advance
+        << " SMOOTH_TIME=" << smooth_time;
+    return out.str();
+}
+
+std::string snapmaker_bed_mesh_profile_script(std::string_view operation, std::string_view profile)
+{
+    if ((operation != "LOAD" && operation != "SAVE" && operation != "REMOVE") ||
+        !is_valid_snapmaker_object_name(profile))
+        throw std::invalid_argument("Invalid bed mesh profile command");
+    return "BED_MESH_PROFILE " + std::string(operation) + "=" + std::string(profile);
+}
+
 bool is_success_http_status(unsigned status)
 {
     return status >= 200 && status < 300;

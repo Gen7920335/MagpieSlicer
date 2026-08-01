@@ -25,8 +25,11 @@
 #include <nlohmann/json.hpp>
 
 #include <wx/bitmap.h>
+#include <wx/checkbox.h>
 #include <wx/choice.h>
 #include <wx/dcbuffer.h>
+#include <wx/dialog.h>
+#include <wx/filedlg.h>
 #include <wx/gauge.h>
 #include <wx/image.h>
 #include <wx/listbox.h>
@@ -66,6 +69,31 @@ public:
         Refresh(false);
     }
 
+    void set_transform(int quarter_turns, bool mirror_horizontal, bool mirror_vertical)
+    {
+        m_quarter_turns = ((quarter_turns % 4) + 4) % 4;
+        m_mirror_horizontal = mirror_horizontal;
+        m_mirror_vertical = mirror_vertical;
+        rebuild_bitmap(true);
+        Refresh(false);
+    }
+
+    bool has_frame() const { return m_frame.IsOk(); }
+
+    wxImage transformed_frame() const
+    {
+        if (!m_frame.IsOk())
+            return {};
+        wxImage image = m_frame.Copy();
+        for (int turn = 0; turn < m_quarter_turns; ++turn)
+            image = image.Rotate90(true);
+        if (m_mirror_horizontal)
+            image = image.Mirror(true);
+        if (m_mirror_vertical)
+            image = image.Mirror(false);
+        return image;
+    }
+
 private:
     void rebuild_bitmap(bool force = false)
     {
@@ -75,14 +103,15 @@ private:
         if (client.x <= 0 || client.y <= 0)
             return;
 
+        wxImage image = transformed_frame();
         const double scale = std::min(
-            static_cast<double>(client.x) / m_frame.GetWidth(),
-            static_cast<double>(client.y) / m_frame.GetHeight());
-        const int width = std::max(1, static_cast<int>(std::lround(m_frame.GetWidth() * scale)));
-        const int height = std::max(1, static_cast<int>(std::lround(m_frame.GetHeight() * scale)));
+            static_cast<double>(client.x) / image.GetWidth(),
+            static_cast<double>(client.y) / image.GetHeight());
+        const int width = std::max(1, static_cast<int>(std::lround(image.GetWidth() * scale)));
+        const int height = std::max(1, static_cast<int>(std::lround(image.GetHeight() * scale)));
         if (!force && m_bitmap.IsOk() && m_bitmap.GetWidth() == width && m_bitmap.GetHeight() == height)
             return;
-        m_bitmap = wxBitmap(m_frame.Scale(width, height, wxIMAGE_QUALITY_BILINEAR));
+        m_bitmap = wxBitmap(image.Scale(width, height, wxIMAGE_QUALITY_BILINEAR));
     }
 
     void on_paint(wxPaintEvent &)
@@ -107,6 +136,9 @@ private:
 
     wxImage m_frame;
     wxBitmap m_bitmap;
+    int m_quarter_turns {0};
+    bool m_mirror_horizontal {false};
+    bool m_mirror_vertical {false};
 };
 
 class TemperatureHistoryCanvas final : public wxPanel
@@ -751,6 +783,44 @@ void SnapmakerMonitorPanel::build_ui()
     m_camera->SetMinSize(FromDIP(wxSize(520, 293)));
     m_camera->SetMaxSize(FromDIP(wxSize(-1, 293)));
     camera_sizer->Add(m_camera, wxSizerFlags().Expand());
+    auto *camera_toolbar = new wxBoxSizer(wxHORIZONTAL);
+    camera_toolbar->Add(new wxStaticText(camera_panel, wxID_ANY, _L("Camera")),
+                        wxSizerFlags().CenterVertical().Border(wxRIGHT, FromDIP(8)));
+    m_camera_rotation = new wxChoice(camera_panel, wxID_ANY);
+    for (const wxString &rotation : std::array<wxString, 4> {"0 deg", "90 deg", "180 deg", "270 deg"})
+        m_camera_rotation->Append(rotation);
+    m_camera_rotation->SetSelection(0);
+    camera_toolbar->Add(m_camera_rotation, wxSizerFlags().CenterVertical().Border(wxRIGHT, FromDIP(8)));
+    m_camera_mirror_horizontal = new wxCheckBox(camera_panel, wxID_ANY, _L("Mirror H"));
+    m_camera_mirror_vertical = new wxCheckBox(camera_panel, wxID_ANY, _L("Mirror V"));
+    camera_toolbar->Add(m_camera_mirror_horizontal, wxSizerFlags().CenterVertical().Border(wxRIGHT, FromDIP(8)));
+    camera_toolbar->Add(m_camera_mirror_vertical, wxSizerFlags().CenterVertical().Border(wxRIGHT, FromDIP(8)));
+    const auto update_camera_transform = [this]() {
+        m_camera->set_transform(
+            m_camera_rotation == nullptr ? 0 : m_camera_rotation->GetSelection(),
+            m_camera_mirror_horizontal != nullptr && m_camera_mirror_horizontal->GetValue(),
+            m_camera_mirror_vertical != nullptr && m_camera_mirror_vertical->GetValue());
+    };
+    m_camera_rotation->Bind(wxEVT_CHOICE, [update_camera_transform](wxCommandEvent &) { update_camera_transform(); });
+    m_camera_mirror_horizontal->Bind(wxEVT_CHECKBOX, [update_camera_transform](wxCommandEvent &) { update_camera_transform(); });
+    m_camera_mirror_vertical->Bind(wxEVT_CHECKBOX, [update_camera_transform](wxCommandEvent &) { update_camera_transform(); });
+    camera_toolbar->AddStretchSpacer();
+    m_camera_pause_button = new Button(camera_panel, _L("Pause camera"));
+    m_camera_pause_button->SetStyle(ButtonStyle::Regular, ButtonType::Window);
+    m_camera_pause_button->SetMinSize(FromDIP(wxSize(112, 32)));
+    m_camera_pause_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { on_camera_pause(); });
+    camera_toolbar->Add(m_camera_pause_button, wxSizerFlags().CenterVertical().Border(wxRIGHT, FromDIP(6)));
+    auto *camera_snapshot = new Button(camera_panel, _L("Snapshot"));
+    camera_snapshot->SetStyle(ButtonStyle::Regular, ButtonType::Window);
+    camera_snapshot->SetMinSize(FromDIP(wxSize(92, 32)));
+    camera_snapshot->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { on_camera_snapshot(); });
+    camera_toolbar->Add(camera_snapshot, wxSizerFlags().CenterVertical().Border(wxRIGHT, FromDIP(6)));
+    auto *camera_fullscreen = new Button(camera_panel, _L("Fullscreen"));
+    camera_fullscreen->SetStyle(ButtonStyle::Regular, ButtonType::Window);
+    camera_fullscreen->SetMinSize(FromDIP(wxSize(96, 32)));
+    camera_fullscreen->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { on_camera_fullscreen(); });
+    camera_toolbar->Add(camera_fullscreen, wxSizerFlags().CenterVertical());
+    camera_sizer->Add(camera_toolbar, wxSizerFlags().Expand().Border(wxTOP, FromDIP(6)));
     m_temperature_history = new TemperatureHistoryCanvas(camera_panel);
     m_temperature_history->SetMinSize(FromDIP(wxSize(520, 220)));
     camera_sizer->Add(
@@ -1025,6 +1095,71 @@ void SnapmakerMonitorPanel::build_ui()
     control_page->SetSizer(control_root);
     management->AddPage(control_page, _L("Control"), true);
 
+    auto *fine_page = new wxPanel(management);
+    auto *fine_root = new wxBoxSizer(wxHORIZONTAL);
+    auto make_numeric_row = [this, fine_page](
+        wxSizer *parent_sizer,
+        const wxString &label,
+        wxSpinCtrlDouble *&control,
+        double minimum,
+        double maximum,
+        double value,
+        double increment,
+        unsigned digits) {
+        auto *row = new wxBoxSizer(wxHORIZONTAL);
+        row->Add(new wxStaticText(fine_page, wxID_ANY, label),
+                 wxSizerFlags().CenterVertical().Proportion(1).Border(wxRIGHT, FromDIP(8)));
+        control = new wxSpinCtrlDouble(
+            fine_page, wxID_ANY, wxEmptyString, wxDefaultPosition, FromDIP(wxSize(110, -1)),
+            wxSP_ARROW_KEYS, minimum, maximum, value, increment);
+        control->SetDigits(digits);
+        row->Add(control, wxSizerFlags().CenterVertical());
+        parent_sizer->Add(row, wxSizerFlags().Expand().Border(wxBOTTOM, FromDIP(7)));
+    };
+
+    auto *extrusion_box = new wxStaticBoxSizer(wxVERTICAL, fine_page, _L("Manual extrusion"));
+    make_numeric_row(extrusion_box, _L("Amount") + " (mm)", m_extrude_amount, 0.1, 100.0, 10.0, 1.0, 1);
+    make_numeric_row(extrusion_box, _L("Speed") + " (mm/s)", m_extrude_speed, 0.1, 100.0, 5.0, 1.0, 1);
+    auto *extrusion_buttons = new wxBoxSizer(wxHORIZONTAL);
+    auto *retract = make_action(fine_page, _L("Retract"), [this]() { on_manual_extrude(-1.0); });
+    auto *extrude = make_action(fine_page, _L("Extrude"), [this]() { on_manual_extrude(1.0); });
+    m_extrude_buttons = {retract, extrude};
+    extrusion_buttons->Add(retract, wxSizerFlags().Expand().Proportion(1).Border(wxRIGHT, FromDIP(6)));
+    extrusion_buttons->Add(extrude, wxSizerFlags().Expand().Proportion(1));
+    extrusion_box->Add(extrusion_buttons, wxSizerFlags().Expand());
+    auto *extrusion_note = new wxStaticText(fine_page, wxID_ANY, _L("Enabled above 170 C while idle"));
+    extrusion_note->SetForegroundColour(muted);
+    extrusion_box->Add(extrusion_note, wxSizerFlags().Expand().Border(wxTOP, FromDIP(7)));
+    fine_root->Add(extrusion_box, wxSizerFlags().Expand().Proportion(3).Border(wxALL, FromDIP(10)));
+
+    auto *offset_box = new wxStaticBoxSizer(wxVERTICAL, fine_page, _L("Z offset"));
+    m_z_offset_status = add_value_row(fine_page, offset_box, _L("Current offset: -"));
+    make_numeric_row(offset_box, _L("Step") + " (mm)", m_z_offset_step, 0.005, 1.0, 0.05, 0.005, 3);
+    auto *offset_buttons = new wxBoxSizer(wxHORIZONTAL);
+    auto *z_down = make_action(fine_page, "Z-", [this]() { on_adjust_z_offset(-1.0); });
+    auto *z_up = make_action(fine_page, "Z+", [this]() { on_adjust_z_offset(1.0); });
+    offset_buttons->Add(z_down, wxSizerFlags().Expand().Proportion(1).Border(wxRIGHT, FromDIP(6)));
+    offset_buttons->Add(z_up, wxSizerFlags().Expand().Proportion(1));
+    offset_box->Add(offset_buttons, wxSizerFlags().Expand());
+    fine_root->Add(offset_box, wxSizerFlags().Expand().Proportion(3).Border(wxTOP | wxBOTTOM, FromDIP(10)));
+
+    auto *limits_box = new wxStaticBoxSizer(wxVERTICAL, fine_page, _L("Motion limits"));
+    make_numeric_row(limits_box, _L("Velocity") + " (mm/s)", m_velocity_target, 1.0, 1000.0, 300.0, 10.0, 0);
+    make_numeric_row(limits_box, _L("Acceleration") + " (mm/s2)", m_acceleration_target, 100.0, 50000.0, 10000.0, 500.0, 0);
+    make_numeric_row(limits_box, _L("Corner velocity") + " (mm/s)", m_square_corner_velocity_target, 0.1, 100.0, 5.0, 0.5, 1);
+    auto *apply_limits = make_action(fine_page, _L("Apply motion limits"), [this]() { on_set_motion_limits(); });
+    limits_box->Add(apply_limits, wxSizerFlags().Expand());
+    fine_root->Add(limits_box, wxSizerFlags().Expand().Proportion(4).Border(wxALL, FromDIP(10)));
+
+    auto *pressure_box = new wxStaticBoxSizer(wxVERTICAL, fine_page, _L("Pressure advance"));
+    make_numeric_row(pressure_box, _L("Advance"), m_pressure_advance_target, 0.0, 2.0, 0.0, 0.005, 4);
+    make_numeric_row(pressure_box, _L("Smooth time") + " (s)", m_smooth_time_target, 0.001, 1.0, 0.04, 0.005, 4);
+    auto *apply_pressure = make_action(fine_page, _L("Apply to active hotend"), [this]() { on_set_pressure_advance(); });
+    pressure_box->Add(apply_pressure, wxSizerFlags().Expand());
+    fine_root->Add(pressure_box, wxSizerFlags().Expand().Proportion(3).Border(wxTOP | wxBOTTOM | wxRIGHT, FromDIP(10)));
+    fine_page->SetSizer(fine_root);
+    management->AddPage(fine_page, _L("Fine control"), false);
+
     auto *console_page = new wxPanel(management);
     auto *console_root = new wxBoxSizer(wxHORIZONTAL);
     auto *macro_box = new wxStaticBoxSizer(wxVERTICAL, console_page, _L("Macros"));
@@ -1052,6 +1187,11 @@ void SnapmakerMonitorPanel::build_ui()
     m_console_send = make_action(console_page, _L("Send"), [this]() { on_send_console(); });
     command_row->Add(m_console_send, wxSizerFlags().Expand());
     command_box->Add(command_row, wxSizerFlags().Expand().Border(wxTOP, FromDIP(7)));
+    auto *clear_console = new Button(console_page, _L("Clear view"));
+    clear_console->SetStyle(ButtonStyle::Regular, ButtonType::Window);
+    clear_console->SetMinSize(FromDIP(wxSize(92, 34)));
+    clear_console->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { m_console_output->Clear(); });
+    command_box->Add(clear_console, wxSizerFlags().Align(wxALIGN_RIGHT).Border(wxTOP, FromDIP(7)));
     console_root->Add(command_box, wxSizerFlags().Expand().Proportion(8).Border(wxALL, FromDIP(10)));
     console_page->SetSizer(console_root);
     management->AddPage(console_page, _L("Console / Macros"), false);
@@ -1109,6 +1249,19 @@ void SnapmakerMonitorPanel::build_ui()
     });
     mesh_buttons->Add(m_mesh_clear, wxSizerFlags().Expand().Proportion(1));
     mesh_box->Add(mesh_buttons, wxSizerFlags().Expand().Border(wxBOTTOM, FromDIP(8)));
+    m_mesh_profile_name = new wxTextCtrl(machine_page, wxID_ANY);
+    m_mesh_profile_name->SetHint(_L("Mesh profile name"));
+    mesh_box->Add(m_mesh_profile_name, wxSizerFlags().Expand().Border(wxBOTTOM, FromDIP(7)));
+    auto *profile_buttons = new wxBoxSizer(wxHORIZONTAL);
+    for (const auto &operation : std::array<std::pair<const char *, wxString>, 3> {{
+             {"LOAD", _L("Load")}, {"SAVE", _L("Save")}, {"REMOVE", _L("Delete")}}}) {
+        auto *button = make_action(machine_page, operation.second, [this, command = std::string(operation.first)]() {
+            on_bed_mesh_profile(command);
+        });
+        m_mesh_profile_buttons.emplace_back(button);
+        profile_buttons->Add(button, wxSizerFlags().Expand().Proportion(1).Border(wxRIGHT, FromDIP(5)));
+    }
+    mesh_box->Add(profile_buttons, wxSizerFlags().Expand().Border(wxBOTTOM, FromDIP(8)));
     m_endstop_status = add_value_row(machine_page, mesh_box, _L("Endstops: -"));
     auto *query_endstops = make_action(machine_page, _L("Query endstops"), [this]() {
         send_gcode_script("QUERY_ENDSTOPS", _L("Endstop query sent"));
@@ -1131,6 +1284,44 @@ void SnapmakerMonitorPanel::build_ui()
             send_gcode_script("FIRMWARE_RESTART", _L("Firmware restart requested"));
     });
     system_box->Add(firmware_restart, wxSizerFlags().Expand().Border(wxBOTTOM, FromDIP(7)));
+    auto *service_row = new wxBoxSizer(wxHORIZONTAL);
+    auto *restart_klipper = make_action(machine_page, _L("Restart Klipper"), [this]() {
+        on_machine_action(
+            "/machine/services/restart?service=klipper",
+            _L("Restart the Klipper service?"),
+            _L("Restart Klipper"),
+            _L("Klipper restart requested"));
+    });
+    auto *restart_moonraker = make_action(machine_page, _L("Restart Moonraker"), [this]() {
+        on_machine_action(
+            "/machine/services/restart?service=moonraker",
+            _L("Restart the Moonraker service? The device page will disconnect briefly."),
+            _L("Restart Moonraker"),
+            _L("Moonraker restart requested"));
+    });
+    service_row->Add(restart_klipper, wxSizerFlags().Expand().Proportion(1).Border(wxRIGHT, FromDIP(6)));
+    service_row->Add(restart_moonraker, wxSizerFlags().Expand().Proportion(1));
+    system_box->Add(service_row, wxSizerFlags().Expand().Border(wxBOTTOM, FromDIP(7)));
+    auto *power_row = new wxBoxSizer(wxHORIZONTAL);
+    auto *reboot_host = make_action(machine_page, _L("Reboot host"), [this]() {
+        on_machine_action(
+            "/machine/reboot",
+            _L("Reboot the printer controller? Any active print will stop."),
+            _L("Reboot controller"),
+            _L("Controller reboot requested"));
+    });
+    auto *shutdown_host = make_action(machine_page, _L("Shut down host"), [this]() {
+        on_machine_action(
+            "/machine/shutdown",
+            _L("Shut down the printer controller? Any active print will stop."),
+            _L("Shut down controller"),
+            _L("Controller shutdown requested"));
+    });
+    reboot_host->SetStyle(ButtonStyle::Alert, ButtonType::Window);
+    shutdown_host->SetStyle(ButtonStyle::Alert, ButtonType::Window);
+    power_row->Add(reboot_host, wxSizerFlags().Expand().Proportion(1).Border(wxRIGHT, FromDIP(6)));
+    power_row->Add(shutdown_host, wxSizerFlags().Expand().Proportion(1));
+    system_box->Add(power_row, wxSizerFlags().Expand().Border(wxBOTTOM, FromDIP(7)));
     m_emergency_stop = make_action(machine_page, _L("Emergency stop"), [this]() { on_emergency_stop(); });
     m_emergency_stop->SetStyle(ButtonStyle::Alert, ButtonType::Window);
     system_box->Add(m_emergency_stop, wxSizerFlags().Expand());
@@ -1203,8 +1394,11 @@ void SnapmakerMonitorPanel::set_server(const wxString &url, const wxString &api_
     m_bed_mesh_supported = false;
     m_cavity_fan_supported = false;
     m_light_supported = false;
+    m_camera_paused = false;
     m_slow_refresh_tick = 0;
     m_print_state.clear();
+    m_active_extruder_name.clear();
+    m_active_extruder_temperature = 0.0;
     m_current_layer = 0;
     m_total_layers = 0;
     m_displayed_layer = 0;
@@ -1232,6 +1426,8 @@ void SnapmakerMonitorPanel::set_server(const wxString &url, const wxString &api_
     m_fps_window_started = std::chrono::steady_clock::now();
     m_connection->SetLabel(_L("Connecting..."));
     m_state->SetLabel(_L("Unavailable"));
+    if (m_camera_pause_button != nullptr)
+        m_camera_pause_button->SetLabel(_L("Pause camera"));
     update_controls();
     update_footer();
 
@@ -1461,7 +1657,7 @@ void SnapmakerMonitorPanel::request_system_info()
 
 void SnapmakerMonitorPanel::request_camera()
 {
-    if (m_camera_in_flight || m_base_url.empty())
+    if (m_camera_paused || m_camera_in_flight || m_base_url.empty())
         return;
     m_camera_in_flight = true;
     const auto lifetime = std::weak_ptr<int>(m_lifetime);
@@ -1673,6 +1869,10 @@ void SnapmakerMonitorPanel::apply_status(const std::string &body)
         const std::string active_extruder = status.contains("toolhead")
             ? string_or(status.at("toolhead"), "extruder")
             : std::string();
+        m_active_extruder_name = active_extruder;
+        m_active_extruder_temperature = status.contains(active_extruder)
+            ? number_or(status.at(active_extruder), "temperature")
+            : 0.0;
         double progress = number_or(virtual_sd, "progress", number_or(display, "progress"));
         progress = std::clamp(progress, 0.0, 1.0);
 
@@ -1737,6 +1937,31 @@ void SnapmakerMonitorPanel::apply_status(const std::string &body)
                     max_y = min_y + bed_width;
                 m_layer_view->set_bed_bounds(min_x, min_y, max_x, max_y);
             }
+            if (m_velocity_target != nullptr && wxWindow::FindFocus() != m_velocity_target)
+                m_velocity_target->SetValue(number_or(*toolhead_it, "max_velocity", m_velocity_target->GetValue()));
+            if (m_acceleration_target != nullptr && wxWindow::FindFocus() != m_acceleration_target)
+                m_acceleration_target->SetValue(number_or(*toolhead_it, "max_accel", m_acceleration_target->GetValue()));
+            if (m_square_corner_velocity_target != nullptr && wxWindow::FindFocus() != m_square_corner_velocity_target)
+                m_square_corner_velocity_target->SetValue(
+                    number_or(*toolhead_it, "square_corner_velocity", m_square_corner_velocity_target->GetValue()));
+        }
+
+        if (status.contains("gcode_move") && status.at("gcode_move").is_object()) {
+            const auto homing_origin = status.at("gcode_move").find("homing_origin");
+            if (homing_origin != status.at("gcode_move").end() && homing_origin->is_array() &&
+                homing_origin->size() >= 3 && (*homing_origin)[2].is_number())
+                m_z_offset_status->SetLabel(wxString::Format(
+                    "%s: %.3f mm", _L("Current offset"), (*homing_origin)[2].get<double>()));
+        }
+
+        if (!active_extruder.empty() && status.contains(active_extruder) && status.at(active_extruder).is_object()) {
+            const json &extruder_status = status.at(active_extruder);
+            if (m_pressure_advance_target != nullptr && wxWindow::FindFocus() != m_pressure_advance_target)
+                m_pressure_advance_target->SetValue(
+                    number_or(extruder_status, "pressure_advance", m_pressure_advance_target->GetValue()));
+            if (m_smooth_time_target != nullptr && wxWindow::FindFocus() != m_smooth_time_target)
+                m_smooth_time_target->SetValue(
+                    number_or(extruder_status, "smooth_time", m_smooth_time_target->GetValue()));
         }
 
         std::vector<ExcludeObjectShape> exclude_objects;
@@ -2319,6 +2544,150 @@ void SnapmakerMonitorPanel::on_set_fans()
     send_gcode_script(script.str(), _L("Fans and light updated"));
 }
 
+void SnapmakerMonitorPanel::on_manual_extrude(double direction)
+{
+    if (m_extrude_amount == nullptr || m_extrude_speed == nullptr ||
+        m_active_extruder_temperature < 170.0 ||
+        m_print_state == "printing" || m_print_state == "paused")
+        return;
+    try {
+        send_gcode_script(
+            snapmaker_extrude_script(direction * m_extrude_amount->GetValue(), m_extrude_speed->GetValue()),
+            direction < 0.0 ? _L("Filament retracted") : _L("Filament extruded"));
+    } catch (const std::exception &e) {
+        m_message->SetLabel(from_u8(e.what()));
+    }
+}
+
+void SnapmakerMonitorPanel::on_adjust_z_offset(double direction)
+{
+    if (m_z_offset_step == nullptr)
+        return;
+    try {
+        send_gcode_script(
+            snapmaker_z_offset_script(direction * m_z_offset_step->GetValue()),
+            _L("Z offset adjusted"));
+    } catch (const std::exception &e) {
+        m_message->SetLabel(from_u8(e.what()));
+    }
+}
+
+void SnapmakerMonitorPanel::on_set_motion_limits()
+{
+    if (m_velocity_target == nullptr || m_acceleration_target == nullptr ||
+        m_square_corner_velocity_target == nullptr)
+        return;
+    try {
+        send_gcode_script(
+            snapmaker_motion_limit_script(
+                m_velocity_target->GetValue(),
+                m_acceleration_target->GetValue(),
+                m_square_corner_velocity_target->GetValue()),
+            _L("Motion limits applied"));
+    } catch (const std::exception &e) {
+        m_message->SetLabel(from_u8(e.what()));
+    }
+}
+
+void SnapmakerMonitorPanel::on_set_pressure_advance()
+{
+    if (m_pressure_advance_target == nullptr || m_smooth_time_target == nullptr ||
+        m_active_extruder_name.empty())
+        return;
+    try {
+        send_gcode_script(
+            snapmaker_pressure_advance_script(
+                m_active_extruder_name,
+                m_pressure_advance_target->GetValue(),
+                m_smooth_time_target->GetValue()),
+            _L("Pressure advance applied"));
+    } catch (const std::exception &e) {
+        m_message->SetLabel(from_u8(e.what()));
+    }
+}
+
+void SnapmakerMonitorPanel::on_bed_mesh_profile(const std::string &operation)
+{
+    if (m_mesh_profile_name == nullptr || !m_bed_mesh_supported)
+        return;
+    wxString profile = m_mesh_profile_name->GetValue();
+    profile.Trim(true).Trim(false);
+    try {
+        const std::string script = snapmaker_bed_mesh_profile_script(operation, profile.ToUTF8().data());
+        if (operation == "REMOVE" && wxMessageBox(
+                _L("Delete this bed mesh profile?") + "\n\n" + profile,
+                _L("Delete bed mesh profile"),
+                wxYES_NO | wxNO_DEFAULT | wxICON_WARNING,
+                this) != wxYES)
+            return;
+        send_gcode_script(script, _L("Bed mesh profile updated"));
+    } catch (const std::exception &e) {
+        m_message->SetLabel(from_u8(e.what()));
+    }
+}
+
+void SnapmakerMonitorPanel::on_camera_snapshot()
+{
+    if (m_camera == nullptr || !m_camera->has_frame())
+        return;
+    wxFileDialog dialog(
+        this,
+        _L("Save camera snapshot"),
+        wxEmptyString,
+        "magpie-camera.png",
+        "PNG image (*.png)|*.png",
+        wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+    if (dialog.ShowModal() != wxID_OK)
+        return;
+    const wxImage image = m_camera->transformed_frame();
+    if (!image.IsOk() || !image.SaveFile(dialog.GetPath(), wxBITMAP_TYPE_PNG))
+        m_message->SetLabel(_L("Camera snapshot could not be saved"));
+    else
+        m_message->SetLabel(_L("Camera snapshot saved"));
+}
+
+void SnapmakerMonitorPanel::on_camera_fullscreen()
+{
+    if (m_camera == nullptr || !m_camera->has_frame())
+        return;
+    wxDialog dialog(
+        this,
+        wxID_ANY,
+        _L("Camera"),
+        wxDefaultPosition,
+        wxDefaultSize,
+        wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX);
+    auto *preview = new CameraCanvas(&dialog);
+    preview->SetMinSize(FromDIP(wxSize(960, 540)));
+    preview->set_frame(m_camera->transformed_frame());
+    auto *sizer = new wxBoxSizer(wxVERTICAL);
+    sizer->Add(preview, wxSizerFlags().Expand().Proportion(1));
+    dialog.SetSizerAndFit(sizer);
+    dialog.Maximize();
+    dialog.ShowModal();
+}
+
+void SnapmakerMonitorPanel::on_camera_pause()
+{
+    m_camera_paused = !m_camera_paused;
+    if (m_camera_pause_button != nullptr)
+        m_camera_pause_button->SetLabel(m_camera_paused ? _L("Resume camera") : _L("Pause camera"));
+    if (!m_camera_paused)
+        request_camera();
+    update_footer();
+}
+
+void SnapmakerMonitorPanel::on_machine_action(
+    const std::string &endpoint,
+    const wxString &question,
+    const wxString &title,
+    const wxString &success_message)
+{
+    if (wxMessageBox(question, title, wxYES_NO | wxNO_DEFAULT | wxICON_WARNING, this) != wxYES)
+        return;
+    send_print_command(endpoint, success_message);
+}
+
 void SnapmakerMonitorPanel::on_run_macro()
 {
     const int selection = m_macro_list == nullptr ? wxNOT_FOUND : m_macro_list->GetSelection();
@@ -2521,6 +2890,16 @@ void SnapmakerMonitorPanel::update_controls()
     for (Button *button : m_jog_buttons)
         if (button != nullptr)
             button->Enable(command_ready && m_homed);
+    const bool printer_idle = m_print_state != "printing" && m_print_state != "paused";
+    const bool extrusion_ready = command_ready && printer_idle &&
+                                 !m_active_extruder_name.empty() &&
+                                 m_active_extruder_temperature >= 170.0;
+    for (Button *button : m_extrude_buttons)
+        if (button != nullptr)
+            button->Enable(extrusion_ready);
+    for (Button *button : m_mesh_profile_buttons)
+        if (button != nullptr)
+            button->Enable(command_ready && m_bed_mesh_supported);
 
     const int macro_selection = m_macro_list == nullptr ? wxNOT_FOUND : m_macro_list->GetSelection();
     if (m_macro_run != nullptr)
@@ -2531,7 +2910,6 @@ void SnapmakerMonitorPanel::update_controls()
     const int file_selection = m_file_list == nullptr ? wxNOT_FOUND : m_file_list->GetSelection();
     const bool file_selected =
         file_selection != wxNOT_FOUND && static_cast<size_t>(file_selection) < m_file_names.size();
-    const bool printer_idle = m_print_state != "printing" && m_print_state != "paused";
     if (m_file_print != nullptr)
         m_file_print->Enable(command_ready && printer_idle && file_selected);
     if (m_file_delete != nullptr)
@@ -2601,6 +2979,9 @@ void SnapmakerMonitorPanel::update_camera_rate()
 
 void SnapmakerMonitorPanel::update_footer()
 {
+    if (m_camera_paused) {
+        m_camera_status->SetLabel(_L("Camera: paused"));
+    } else
     if (m_camera_fps > 0.0) {
         m_camera_status->SetLabel(wxString::Format(
             "%s: %.1f FPS  |  %s: %.1f Hz",
@@ -2636,7 +3017,7 @@ void SnapmakerMonitorPanel::on_status_timer(wxTimerEvent &)
 
 void SnapmakerMonitorPanel::on_camera_timer(wxTimerEvent &)
 {
-    if (!m_active || !IsShownOnScreen())
+    if (!m_active || m_camera_paused || !IsShownOnScreen())
         return;
     if (auto *window = dynamic_cast<wxTopLevelWindow *>(wxGetTopLevelParent(this)); window != nullptr && window->IsIconized())
         return;

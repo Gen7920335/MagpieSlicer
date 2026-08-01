@@ -14,6 +14,7 @@
 
 class wxGauge;
 class wxChoice;
+class wxCheckBox;
 class wxListBox;
 class wxNotebook;
 class wxSpinCtrlDouble;
@@ -76,6 +77,19 @@ private:
     void on_set_temperature(size_t heater_index);
     void on_set_tuning();
     void on_set_fans();
+    void on_manual_extrude(double direction);
+    void on_adjust_z_offset(double direction);
+    void on_set_motion_limits();
+    void on_set_pressure_advance();
+    void on_bed_mesh_profile(const std::string &operation);
+    void on_camera_snapshot();
+    void on_camera_fullscreen();
+    void on_camera_pause();
+    void on_machine_action(
+        const std::string &endpoint,
+        const wxString &question,
+        const wxString &title,
+        const wxString &success_message);
     void on_run_macro();
     void on_send_console();
     void on_start_file();
@@ -113,6 +127,7 @@ private:
     bool m_bed_mesh_supported {false};
     bool m_cavity_fan_supported {false};
     bool m_light_supported {false};
+    bool m_camera_paused {false};
     int m_camera_interval_ms {150};
     int m_slow_refresh_tick {0};
     unsigned m_camera_frames_in_window {0};
@@ -141,6 +156,8 @@ private:
     std::unique_ptr<SnapmakerCameraSession> m_camera_session;
     wxString m_camera_session_status;
     std::string m_print_state;
+    std::string m_active_extruder_name;
+    double m_active_extruder_temperature {0.0};
 
     CameraCanvas *m_camera {nullptr};
     LayerToolpathCanvas *m_layer_view {nullptr};
@@ -170,6 +187,19 @@ private:
     wxStaticText *m_file_details {nullptr};
     wxStaticText *m_endstop_status {nullptr};
     wxChoice *m_jog_distance {nullptr};
+    wxChoice *m_camera_rotation {nullptr};
+    wxCheckBox *m_camera_mirror_horizontal {nullptr};
+    wxCheckBox *m_camera_mirror_vertical {nullptr};
+    wxSpinCtrlDouble *m_extrude_amount {nullptr};
+    wxSpinCtrlDouble *m_extrude_speed {nullptr};
+    wxSpinCtrlDouble *m_z_offset_step {nullptr};
+    wxStaticText *m_z_offset_status {nullptr};
+    wxSpinCtrlDouble *m_velocity_target {nullptr};
+    wxSpinCtrlDouble *m_acceleration_target {nullptr};
+    wxSpinCtrlDouble *m_square_corner_velocity_target {nullptr};
+    wxSpinCtrlDouble *m_pressure_advance_target {nullptr};
+    wxSpinCtrlDouble *m_smooth_time_target {nullptr};
+    wxTextCtrl *m_mesh_profile_name {nullptr};
     std::array<wxSpinCtrlDouble *, 5> m_temperature_targets {};
     wxSpinCtrlDouble *m_speed_target {nullptr};
     wxSpinCtrlDouble *m_flow_target {nullptr};
@@ -194,6 +224,9 @@ private:
     Button *m_mesh_calibrate {nullptr};
     Button *m_mesh_clear {nullptr};
     Button *m_emergency_stop {nullptr};
+    Button *m_camera_pause_button {nullptr};
+    std::vector<Button *> m_extrude_buttons;
+    std::vector<Button *> m_mesh_profile_buttons;
     std::vector<Button *> m_connected_buttons;
     std::vector<Button *> m_jog_buttons;
 };
