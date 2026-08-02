@@ -125,6 +125,12 @@ void AppConfig::set_defaults()
         if (get("auto_slice_change_delay_seconds").empty())
             set("auto_slice_change_delay_seconds", "1");
 
+        if (get("vulkan_slicer_mode").empty()) {
+            // The old checkbox was opt-in. Preserve an explicit enabled choice,
+            // while moving the old/default disabled state to calibrated Auto.
+            set("vulkan_slicer_mode", get_bool("vulkan_slicer_compute") ? "on" : "auto");
+        }
+
         if (get("drop_project_action").empty())
             set_bool("drop_project_action", true);
 

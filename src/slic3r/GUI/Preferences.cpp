@@ -7,6 +7,7 @@
 #include "I18N.hpp"
 #include "libslic3r/AppConfig.hpp"
 #include "libslic3r/Format/DRC.hpp"
+#include "libslic3r/Gpu/VulkanSlicer.hpp"
 #include <wx/language.h>
 #include "OG_CustomCtrl.hpp"
 #include "wx/graphics.h"
@@ -1798,6 +1799,18 @@ void PreferencesDialog::create_items()
     f_sizers.push_back(new wxFlexGridSizer(1, 1, v_gap, 0));
     g_sizer = f_sizers.back();
     g_sizer->AddGrowableCol(0, 1);
+
+    if (Gpu::VulkanSlicerBackend::compiled_with_vulkan()) {
+        g_sizer->Add(create_item_title(_L("Slicing acceleration")), 1, wxEXPAND);
+        auto item_vulkan_slicer_mode = create_item_combobox(
+            _L("Vulkan slicing acceleration"),
+            _L("Auto benchmarks the CPU and GPU before slicing and uses Vulkan only when it is expected to be faster. "
+               "On prefers qualified Vulkan hardware, while Off always uses the CPU. Failed workloads automatically use the CPU path."),
+            "vulkan_slicer_mode",
+            {_L("Auto"), _L("On"), _L("Off")},
+            {"auto", "on", "off"});
+        g_sizer->Add(item_vulkan_slicer_mode);
+    }
 
     //// GRAPHICS > Realistic view
     g_sizer->Add(create_item_title(_L("Realistic View")), 1, wxEXPAND);

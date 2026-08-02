@@ -554,7 +554,9 @@ static inline void fill_expolygon_generate_paths(
     Polylines polylines;
     try {
         assert(!fill_params.use_arachne);
-        polylines = filler->fill_surface(&surface, fill_params);
+        FillParams effective_fill_params = fill_params;
+        effective_fill_params.extrusion_role = role;
+        polylines = filler->fill_surface(&surface, effective_fill_params);
     } catch (InfillFailedException &) {
     }
     extrusion_entities_append_paths(

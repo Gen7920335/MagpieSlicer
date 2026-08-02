@@ -3,8 +3,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <random>
+#include <string>
 
 #include <boost/container/small_vector.hpp>
 #include <boost/log/trivial.hpp>
@@ -14,6 +16,7 @@
 #include "../ClipperUtils.hpp"
 #include "../ExPolygon.hpp"
 #include "../Geometry.hpp"
+#include "../Gpu/VulkanSlicer.hpp"
 #include "../Surface.hpp"
 #include "../ShortestPath.hpp"
 #include "../VariableWidth.hpp"
@@ -756,7 +759,95 @@ enum DirectionMask
     DIR_BACKWARD = 2
 };
 
-static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(const ExPolygonWithOffset &poly_with_offset, size_t n_vlines, coord_t x0, coord_t line_spacing)
+#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+static bool vulkan_slice_diagnostics_enabled()
+{
+    static const bool enabled = [] {
+        const char* value = std::getenv("MAGPIE_VULKAN_SLICER_DIAGNOSTICS");
+        if (value == nullptr)
+            value = std::getenv("ORCA_VULKAN_SLICER_DIAGNOSTICS");
+        return value != nullptr && *value != '\0' && std::string(value) != "0";
+    }();
+    return enabled;
+}
+
+static Gpu::VulkanVerticalIntersectionBatch prepare_vulkan_vertical_intersections(
+    const ExPolygonWithOffset &poly_with_offset, size_t n_vlines, coord_t x0, coord_t line_spacing)
+{
+    constexpr size_t maximum_gpu_candidate_requests = 256 * 1024;
+    constexpr size_t initial_request_reserve = 32 * 1024;
+
+    size_t contour_edge_count = 0;
+    for (size_t contour_index = 0; contour_index < poly_with_offset.n_contours; ++contour_index) {
+        const Points &contour = poly_with_offset.contour(contour_index).points;
+        if (contour.size() >= 2)
+            contour_edge_count += contour.size();
+    }
+    if (contour_edge_count == 0 || n_vlines == 0)
+        return {};
+    const size_t upper_bound = contour_edge_count > maximum_gpu_candidate_requests / n_vlines ?
+        maximum_gpu_candidate_requests : contour_edge_count * n_vlines;
+    if (!Gpu::VulkanSlicerBackend::should_dispatch_vertical_intersections(upper_bound)) {
+        Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(upper_bound);
+        return {};
+    }
+
+    std::vector<Gpu::VulkanVerticalIntersectionRequest> requests;
+    requests.reserve(std::min(upper_bound, initial_request_reserve));
+    for (size_t contour_index = 0; contour_index < poly_with_offset.n_contours; ++contour_index) {
+        const Points &contour = poly_with_offset.contour(contour_index).points;
+        if (contour.size() < 2)
+            continue;
+        for (size_t segment_index = 0; segment_index < contour.size(); ++segment_index) {
+            const size_t previous_index = ((segment_index == 0) ? contour.size() : segment_index) - 1;
+            const Point &p1 = contour[previous_index];
+            const Point &p2 = contour[segment_index];
+            const coord_t left = std::min(p1.x(), p2.x());
+            const coord_t right = std::max(p1.x(), p2.x());
+            int first_line = (left - x0) / line_spacing;
+            while (first_line * line_spacing + x0 < left)
+                ++first_line;
+            first_line = std::max(0, first_line);
+            int last_line = (right - x0 + line_spacing) / line_spacing;
+            while (last_line * line_spacing + x0 > right)
+                --last_line;
+            last_line = std::min(int(n_vlines) - 1, last_line);
+            for (int line_index = first_line; line_index <= last_line; ++line_index) {
+                const coord_t scan_x = x0 + line_index * line_spacing;
+                if (p1.x() == scan_x || p2.x() == scan_x)
+                    continue;
+                if (requests.size() == maximum_gpu_candidate_requests) {
+                    Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(requests.size());
+                    return {};
+                }
+                requests.push_back({
+                    { { int64_t(p1.x()), int64_t(p1.y()) }, { int64_t(p2.x()), int64_t(p2.y()) } },
+                    int64_t(scan_x), uint64_t(requests.size())
+                });
+            }
+        }
+    }
+
+    if (!Gpu::VulkanSlicerBackend::should_dispatch_vertical_intersections(requests.size())) {
+        Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(requests.size());
+        return {};
+    }
+    Gpu::VulkanVerticalIntersectionBatch batch =
+        Gpu::VulkanSlicerBackend::dispatch_vertical_intersections(requests);
+    if (!batch.dispatched || batch.intersections.size() != requests.size())
+        return {};
+    for (size_t index = 0; index < batch.intersections.size(); ++index) {
+        const Gpu::VulkanVerticalIntersection &intersection = batch.intersections[index];
+        if (!intersection.valid || intersection.stable_id != index || intersection.denominator <= 0)
+            return {};
+    }
+    return batch;
+}
+#endif
+
+static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(
+    const ExPolygonWithOffset &poly_with_offset, size_t n_vlines, coord_t x0,
+    coord_t line_spacing, bool allow_vulkan = true)
 {
     // Allocate storage for the segments.
     std::vector<SegmentedIntersectionLine> segs(n_vlines, SegmentedIntersectionLine());
@@ -764,6 +855,13 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(con
         segs[i].idx = i;
         segs[i].pos = x0 + i * line_spacing;
     }
+#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+    const Gpu::VulkanVerticalIntersectionBatch gpu_intersections =
+        allow_vulkan ? prepare_vulkan_vertical_intersections(poly_with_offset, n_vlines, x0, line_spacing) :
+                       Gpu::VulkanVerticalIntersectionBatch {};
+    const bool use_gpu_intersections = gpu_intersections.dispatched;
+    size_t gpu_intersection_index = 0;
+#endif
     // For each contour
     for (size_t iContour = 0; iContour < poly_with_offset.n_contours; ++ iContour) {
         const Points &contour = poly_with_offset.contour(iContour).points;
@@ -823,6 +921,16 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(con
                     is.pos_p = p2.y();
                     is.pos_q = 1;
                 } else {
+#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+                    if (use_gpu_intersections &&
+                        gpu_intersection_index < gpu_intersections.intersections.size()) {
+                        const Gpu::VulkanVerticalIntersection &gpu_result =
+                            gpu_intersections.intersections[gpu_intersection_index];
+                        is.pos_p = gpu_result.numerator;
+                        is.pos_q = gpu_result.denominator;
+                    } else
+#endif
+                    {
                     // First calculate the intersection parameter 't' as a rational number with non negative denominator.
                     if (p2.x() > p1.x()) {
                         is.pos_p = this_x - p1.x();
@@ -836,6 +944,10 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(con
                     // Make an intersection point from the 't'.
                     is.pos_p *= int64_t(p2.y() - p1.y());
                     is.pos_p += p1.y() * int64_t(is.pos_q);
+                    }
+#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+                    ++gpu_intersection_index;
+#endif
                 }
                 // +-1 to take rounding into account.
                 assert(is.pos() + 1 >= std::min(p1.y(), p2.y()));
@@ -844,6 +956,26 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(con
             }
         }
     }
+
+#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+    if (use_gpu_intersections) {
+        const bool complete_batch_consumed = gpu_intersection_index == gpu_intersections.intersections.size();
+        Gpu::VulkanSlicerBackend::note_vertical_intersection_usage(
+            complete_batch_consumed ? gpu_intersection_index : 0,
+            gpu_intersection_index,
+            !complete_batch_consumed,
+            complete_batch_consumed ? "GPU scanline intersection batch accepted." :
+                                      "GPU scanline intersection batch consumption mismatch.");
+        if (vulkan_slice_diagnostics_enabled()) {
+            BOOST_LOG_TRIVIAL(info) << "[Magpie Vulkan] scanline batch "
+                << (complete_batch_consumed ? "accepted" : "mismatched")
+                << " requests=" << gpu_intersections.intersections.size()
+                << " gpu_ms=" << gpu_intersections.gpu_elapsed_ms
+                << " host_ms=" << gpu_intersections.host_elapsed_ms;
+        }
+        assert(complete_batch_consumed);
+    }
+#endif
 
     // Sort the intersections along their segments, specify the intersection types.
     for (size_t i_seg = 0; i_seg < segs.size(); ++ i_seg) {
@@ -2826,7 +2958,13 @@ bool FillRectilinear::fill_surface_by_lines(const Surface *surface, const FillPa
     }
     iRun ++;
 #endif /* SLIC3R_DEBUG */
-    std::vector<SegmentedIntersectionLine> segs = slice_region_by_vertical_lines(poly_with_offset, n_vlines, x0, line_spacing);
+    const bool support_generation_active = this->print_object_config != nullptr &&
+        (this->print_object_config->enable_support.value ||
+         this->print_object_config->enforce_support_layers.value > 0 ||
+         this->print_object_config->raft_layers.value > 0);
+    std::vector<SegmentedIntersectionLine> segs = slice_region_by_vertical_lines(
+        poly_with_offset, n_vlines, x0, line_spacing,
+        !support_generation_active && !is_support(params.extrusion_role));
     // Connect by horizontal / vertical links, classify the links based on link_max_length as too long.
 	connect_segment_intersections_by_contours(poly_with_offset, segs, params, link_max_length);
 
@@ -2917,7 +3055,8 @@ bool FillRectilinear::fill_surface_by_lines(const Surface *surface, const FillPa
     return true;
 }
 
-void make_fill_lines(const ExPolygonWithOffset &poly_with_offset, Point refpt, double angle, coord_t x_margin, coord_t line_spacing, coord_t pattern_shift, Polylines &fill_lines)
+void make_fill_lines(const ExPolygonWithOffset &poly_with_offset, Point refpt, double angle, coord_t x_margin,
+                     coord_t line_spacing, coord_t pattern_shift, Polylines &fill_lines, bool allow_vulkan)
 {
     BoundingBox bounding_box = poly_with_offset.bounding_box_src();
     // Don't produce infill lines, which fully overlap with the infill perimeter.
@@ -2934,7 +3073,8 @@ void make_fill_lines(const ExPolygonWithOffset &poly_with_offset, Point refpt, d
     const size_t n_vlines = (bounding_box.max.x() - bounding_box.min.x() + line_spacing - 1) / line_spacing;
     const double cos_a    = cos(angle);
     const double sin_a    = sin(angle);
-    for (const SegmentedIntersectionLine &vline : slice_region_by_vertical_lines(poly_with_offset, n_vlines, bounding_box.min.x(), line_spacing))
+    for (const SegmentedIntersectionLine &vline : slice_region_by_vertical_lines(
+             poly_with_offset, n_vlines, bounding_box.min.x(), line_spacing, allow_vulkan))
         if (vline.pos >= x_min) {
             if (vline.pos > x_max)
                 break;
@@ -3010,12 +3150,18 @@ bool FillRectilinear::fill_surface_by_multilines(const Surface *surface, FillPar
     coord_t line_width   = coord_t(scale_(this->spacing));
     coord_t line_spacing = coord_t(scale_(this->spacing) * params.multiline / params.density);
     std::pair<float, Point> rotate_vector = this->_infill_direction(surface);
+    const bool support_generation_active = this->print_object_config != nullptr &&
+        (this->print_object_config->enable_support.value ||
+         this->print_object_config->enforce_support_layers.value > 0 ||
+         this->print_object_config->raft_layers.value > 0);
+    const bool allow_vulkan = !support_generation_active && !is_support(params.extrusion_role);
     for (const SweepParams &sweep : sweep_params) {
         // Rotate polygons so that we can work with vertical lines here
         float angle = rotate_vector.first + sweep.angle_base;
 
         make_fill_lines(ExPolygonWithOffset(poly_with_offset_base, -angle), rotate_vector.second.rotated(-angle), angle,
-                        line_width + coord_t(SCALED_EPSILON), line_spacing, coord_t(scale_(sweep.pattern_shift)), fill_lines);
+                        line_width + coord_t(SCALED_EPSILON), line_spacing, coord_t(scale_(sweep.pattern_shift)),
+                        fill_lines, allow_vulkan);
     }
         
     // Apply multiline offset if needed
@@ -3619,7 +3765,8 @@ Polylines FillSupportBase::fill_surface(const Surface *surface, const FillParams
         Polylines fill_lines;
         coord_t line_spacing = coord_t(scale_(this->spacing) / params.density);
         // Create infill lines, keep them vertical.
-        make_fill_lines(poly_with_offset, rotate_vector.second.rotated(- rotate_vector.first), 0, 0, line_spacing, 0, fill_lines);
+        make_fill_lines(poly_with_offset, rotate_vector.second.rotated(- rotate_vector.first), 0, 0, line_spacing, 0,
+                        fill_lines, false);
         // Both the poly_with_offset and polylines_out are rotated, so the infill lines are strictly vertical.
         if (params.cura_style_support_zigzag)
             connect_cura_support(std::move(fill_lines), poly_with_offset.polygons_outer, poly_with_offset.bounding_box_outer(), polylines_out, this->spacing);
@@ -3647,7 +3794,8 @@ Points sample_grid_pattern(const ExPolygon& expolygon, coord_t spacing, const Bo
         poly_with_offset, 
         (global_bounding_box.max.x() - global_bounding_box.min.x() + spacing - 1) / spacing,
         global_bounding_box.min.x(),
-        spacing);
+        spacing,
+        false); // Lightning tree generation is order-sensitive; keep its sampling deterministic on the CPU.
 
     Points out;
     for (const SegmentedIntersectionLine &sil : segs) {
@@ -3838,7 +3986,13 @@ void FillMonotonicLineWGapFill::fill_surface_by_lines(const Surface* surface, co
 	if (params.full_infill())
 		x0 += (line_spacing + coord_t(SCALED_EPSILON)) / 2;
 
-    std::vector<SegmentedIntersectionLine> segs = slice_region_by_vertical_lines(poly_with_offset, n_vlines, x0, line_spacing);
+    const bool support_generation_active = this->print_object_config != nullptr &&
+        (this->print_object_config->enable_support.value ||
+         this->print_object_config->enforce_support_layers.value > 0 ||
+         this->print_object_config->raft_layers.value > 0);
+    std::vector<SegmentedIntersectionLine> segs = slice_region_by_vertical_lines(
+        poly_with_offset, n_vlines, x0, line_spacing,
+        !support_generation_active && !is_support(params.extrusion_role));
     // Connect by horizontal / vertical links, classify the links based on link_max_length as too long.
 	connect_segment_intersections_by_contours(poly_with_offset, segs, params, link_max_length);
 

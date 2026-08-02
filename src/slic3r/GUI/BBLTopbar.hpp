@@ -7,6 +7,7 @@
 #include "DeviceManager.hpp"
 
 #include <wx/control.h>
+#include <wx/choice.h>
 
 using namespace Slic3r::GUI;
 
@@ -100,6 +101,7 @@ private:
     wxAuiToolBarItem* m_undo_item;
     wxAuiToolBarItem* m_redo_item;
     wxAuiToolBarItem* m_calib_item;
+    wxChoice*          m_vulkan_mode_choice { nullptr };
     wxAuiToolBarItem* maximize_btn;
 
     wxBitmap m_publish_bitmap;

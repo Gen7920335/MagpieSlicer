@@ -14,8 +14,12 @@
 #include "MainFrame.hpp"
 #include "WebViewDialog.hpp"
 #include "PartPlate.hpp"
+#include "libslic3r/Gpu/VulkanSlicer.hpp"
 
 #include <boost/log/trivial.hpp>
+
+#include <algorithm>
+#include <array>
 
 #ifdef __WXGTK__
 #include <gtk/gtk.h>
@@ -36,6 +40,7 @@ enum CUSTOM_ID
     ID_MODEL_STORE,
     ID_PUBLISH,
     ID_CALIB,
+    ID_VULKAN_MODE,
     ID_TOOL_BAR = 3200,
     ID_AMS_NOTEBOOK,
 };
@@ -316,6 +321,21 @@ void BBLTopbar::Init(wxFrame* parent)
     m_calib_item                   = this->AddTool(ID_CALIB, _L("Calibration"), calib_bitmap);
     m_calib_item->SetDisabledBitmap(calib_bitmap_inactive);
 
+    if (Gpu::VulkanSlicerBackend::compiled_with_vulkan()) {
+        this->AddSpacer(FromDIP(10));
+        const std::string mode = wxGetApp().app_config->get("vulkan_slicer_mode");
+        m_vulkan_mode_choice = new wxChoice(this, ID_VULKAN_MODE);
+        m_vulkan_mode_choice->Append(_L("Vulkan: Auto"));
+        m_vulkan_mode_choice->Append(_L("Vulkan: On"));
+        m_vulkan_mode_choice->Append(_L("Vulkan: Off"));
+        m_vulkan_mode_choice->SetSelection(mode == "on" ? 1 : (mode == "off" ? 2 : 0));
+        m_vulkan_mode_choice->SetToolTip(_L("Automatically use Vulkan only when calibration predicts a slicing speed benefit"));
+        m_vulkan_mode_choice->SetMinSize(FromDIP(wxSize(116, -1)));
+        this->AddControl(m_vulkan_mode_choice, _L("Vulkan slicing mode"));
+        Gpu::VulkanSlicerBackend::set_compute_enabled(mode != "off");
+        Gpu::VulkanSlicerBackend::set_gpu_priority_enabled(mode == "on");
+    }
+
     this->AddSpacer(FromDIP(25));
     //this->AddStretchSpacer(1);
 
@@ -390,6 +410,22 @@ void BBLTopbar::Init(wxFrame* parent)
     this->Bind(wxEVT_AUITOOLBAR_TOOL_DROPDOWN, &BBLTopbar::OnSaveProject, this, wxID_SAVE);
     this->Bind(wxEVT_AUITOOLBAR_TOOL_DROPDOWN, &BBLTopbar::OnRedo, this, wxID_REDO);
     this->Bind(wxEVT_AUITOOLBAR_TOOL_DROPDOWN, &BBLTopbar::OnUndo, this, wxID_UNDO);
+    if (m_vulkan_mode_choice) {
+        m_vulkan_mode_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent& event) {
+            static const std::array<const char*, 3> modes { "auto", "on", "off" };
+            const int selection = std::clamp(event.GetSelection(), 0, 2);
+            const std::string mode = modes[size_t(selection)];
+            wxGetApp().app_config->set("vulkan_slicer_mode", mode);
+            Gpu::VulkanSlicerBackend::set_compute_enabled(mode != "off");
+            Gpu::VulkanSlicerBackend::set_gpu_priority_enabled(mode == "on");
+        });
+        m_vulkan_mode_choice->Bind(wxEVT_UPDATE_UI, [this](wxUpdateUIEvent&) {
+            const std::string mode = wxGetApp().app_config->get("vulkan_slicer_mode");
+            const int selection = mode == "on" ? 1 : (mode == "off" ? 2 : 0);
+            if (m_vulkan_mode_choice->GetSelection() != selection)
+                m_vulkan_mode_choice->SetSelection(selection);
+        });
+    }
     //this->Bind(wxEVT_AUITOOLBAR_TOOL_DROPDOWN, &BBLTopbar::OnModelStoreClicked, this, ID_MODEL_STORE);
     //this->Bind(wxEVT_AUITOOLBAR_TOOL_DROPDOWN, &BBLTopbar::OnPublishClicked, this, ID_PUBLISH);
 }

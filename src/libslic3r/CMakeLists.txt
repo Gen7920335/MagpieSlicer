@@ -19,6 +19,7 @@ if (TARGET OpenVDB::openvdb)
 endif()
 
 option(BUILD_SHARED_LIBS "Build shared libs" OFF)
+option(SLIC3R_ENABLE_VULKAN_SLICER "Build the experimental deterministic Vulkan slicer backend" OFF)
 
 set(lisbslic3r_sources
     AABBMesh.cpp
@@ -474,6 +475,9 @@ set(lisbslic3r_sources
     FilamentGroupUtils.cpp
     GCode/ToolOrderUtils.hpp
     GCode/ToolOrderUtils.cpp
+    Gpu/GpuExactGeometry.hpp
+    Gpu/VulkanSlicer.hpp
+    Gpu/VulkanSlicer.cpp
     FlushVolPredictor.hpp
     FlushVolPredictor.cpp
 )
@@ -490,6 +494,64 @@ add_library(libslic3r STATIC ${lisbslic3r_sources}
     "${CMAKE_CURRENT_BINARY_DIR}/libslic3r_version.h"
     ${OpenVDBUtils_SOURCES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${lisbslic3r_sources})
+
+if (SLIC3R_ENABLE_VULKAN_SLICER)
+    find_package(Vulkan 1.2 REQUIRED)
+    if (NOT Vulkan_GLSLC_EXECUTABLE)
+        message(FATAL_ERROR "Vulkan glslc is required when SLIC3R_ENABLE_VULKAN_SLICER=ON")
+    endif ()
+    target_link_libraries(libslic3r PRIVATE Vulkan::Vulkan)
+    target_compile_definitions(libslic3r PRIVATE SLIC3R_ENABLE_VULKAN_SLICER=1)
+    target_compile_definitions(libslic3r PRIVATE
+        SLIC3R_VULKAN_BUILD_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/resources/vulkan")
+
+    set(MAGPIE_VULKAN_WORKGROUP_SIZES 64 128 256 512 1024)
+    set(MAGPIE_VULKAN_INTERSECTION_SHADERS)
+    foreach(MAGPIE_VULKAN_WORKGROUP_SIZE IN LISTS MAGPIE_VULKAN_WORKGROUP_SIZES)
+        set(MAGPIE_VULKAN_INTERSECTION_SHADER
+            "${CMAKE_CURRENT_BINARY_DIR}/resources/vulkan/perimeter_infill_candidates_${MAGPIE_VULKAN_WORKGROUP_SIZE}.spv")
+        add_custom_command(
+            OUTPUT "${MAGPIE_VULKAN_INTERSECTION_SHADER}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory
+                    "${CMAKE_CURRENT_BINARY_DIR}/resources/vulkan"
+            COMMAND "${Vulkan_GLSLC_EXECUTABLE}" --target-env=vulkan1.2 -O
+                    "-DMAGPIE_WORKGROUP_SIZE=${MAGPIE_VULKAN_WORKGROUP_SIZE}"
+                    -o "${MAGPIE_VULKAN_INTERSECTION_SHADER}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/Gpu/shaders/perimeter_infill_candidates.comp"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Gpu/shaders/perimeter_infill_candidates.comp"
+            VERBATIM)
+        list(APPEND MAGPIE_VULKAN_INTERSECTION_SHADERS "${MAGPIE_VULKAN_INTERSECTION_SHADER}")
+    endforeach()
+
+    add_custom_target(magpie_vulkan_intersection_shaders ALL
+        DEPENDS ${MAGPIE_VULKAN_INTERSECTION_SHADERS})
+    add_dependencies(libslic3r magpie_vulkan_intersection_shaders)
+    install(FILES ${MAGPIE_VULKAN_INTERSECTION_SHADERS}
+        DESTINATION "./resources/vulkan")
+
+    set(MAGPIE_VULKAN_TREE_CONTOUR_SHADER
+        "${CMAKE_CURRENT_BINARY_DIR}/resources/vulkan/tree_support_contour_candidates.spv")
+    add_custom_command(
+        OUTPUT "${MAGPIE_VULKAN_TREE_CONTOUR_SHADER}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+                "${CMAKE_CURRENT_BINARY_DIR}/resources/vulkan"
+        COMMAND "${Vulkan_GLSLC_EXECUTABLE}" --target-env=vulkan1.2 -O
+                -o "${MAGPIE_VULKAN_TREE_CONTOUR_SHADER}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Gpu/shaders/tree_support_contour_candidates.comp"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Gpu/shaders/tree_support_contour_candidates.comp"
+        VERBATIM)
+    add_custom_target(magpie_vulkan_tree_contour_shader ALL
+        DEPENDS "${MAGPIE_VULKAN_TREE_CONTOUR_SHADER}")
+    add_dependencies(libslic3r magpie_vulkan_tree_contour_shader)
+    install(FILES "${MAGPIE_VULKAN_TREE_CONTOUR_SHADER}"
+        DESTINATION "./resources/vulkan")
+
+    if (ORCA_TOOLS)
+        add_executable(magpie-vulkan-compute-selftest Gpu/VulkanComputeSelfTest.cpp)
+        target_link_libraries(magpie-vulkan-compute-selftest PRIVATE libslic3r)
+        target_include_directories(magpie-vulkan-compute-selftest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif ()
+endif ()
 
 if (SLIC3R_STATIC)
     set(CGAL_Boost_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)

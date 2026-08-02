@@ -22,6 +22,7 @@
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/GCode/PostProcessor.hpp"
 #include "libslic3r/Format/SL1.hpp"
+#include "libslic3r/Gpu/VulkanSlicer.hpp"
 #include "libslic3r/Thread.hpp"
 #include "libslic3r/libslic3r.h"
 
@@ -228,8 +229,25 @@ void BackgroundSlicingProcess::process_fff()
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: will start slicing, reset gcode_result %2% firstly")%__LINE__%m_gcode_result;
 		m_gcode_result->reset();
 
+        Gpu::VulkanSlicerBackend::begin_slicing_session();
+        const std::string vulkan_mode = wxGetApp().app_config->get("vulkan_slicer_mode");
+        const bool vulkan_compute_enabled =
+            Gpu::VulkanSlicerBackend::compiled_with_vulkan() && vulkan_mode != "off";
+        Gpu::VulkanSlicerBackend::set_compute_enabled(vulkan_compute_enabled);
+        Gpu::VulkanSlicerBackend::set_gpu_priority_enabled(vulkan_mode == "on");
+        if (vulkan_compute_enabled && !Gpu::VulkanSlicerBackend::prepare_for_slicing()) {
+            BOOST_LOG_TRIVIAL(warning) << "[Magpie Vulkan] "
+                << Gpu::VulkanSlicerBackend::query_runtime_stats().last_diagnostic;
+        }
+
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: gcode_result reseted, will start print::process")%__LINE__;
-		m_print->process();
+		try {
+            m_print->process();
+        } catch (...) {
+            Gpu::VulkanSlicerBackend::release_unused_staging_memory();
+            throw;
+        }
+        Gpu::VulkanSlicerBackend::release_unused_staging_memory();
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: after print::process, send slicing complete event to gui...")%__LINE__;
         if (m_current_plate->get_real_filament_map_mode(preset_bundle.project_config) < FilamentMapMode::fmmManual) {
             std::vector<int> f_maps = m_fff_print->get_filament_maps();
