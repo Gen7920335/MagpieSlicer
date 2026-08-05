@@ -3,6 +3,7 @@
 
 #include "PresetBundle.hpp"
 #include "PrintConfig.hpp"
+#include "ProjectConfigService.hpp"
 #include "libslic3r.h"
 #include "I18N.hpp"
 #include "Utils.hpp"
@@ -18,6 +19,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/algorithm/clamp.hpp>
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/nowide/cstdio.hpp>
 #include <boost/nowide/fstream.hpp>
@@ -67,6 +69,98 @@ const char *PresetBundle::ORCA_DEFAULT_FILAMENT = "Generic PLA @System";
 const char *PresetBundle::ORCA_FILAMENT_LIBRARY = "OrcaFilamentLibrary";
 const char *PresetBundle::ORCA_DEFAULT_FILAMENT_PLACEHOLDER = "Default Filament";
 
+static std::vector<int> resolve_filament_map(
+    const DynamicPrintConfig                  &config,
+    size_t                                     filament_count,
+    size_t                                     toolhead_count,
+    const std::optional<std::vector<int>>     &override_map)
+{
+    DynamicPrintConfig normalized;
+    const auto *saved_map = config.option<ConfigOptionInts>("filament_map");
+    normalized.set_key_value("filament_map", new ConfigOptionInts(
+        override_map.has_value() ? *override_map : (saved_map != nullptr ? saved_map->values : std::vector<int>{})));
+    normalize_project_filament_map(normalized, filament_count, std::max<size_t>(1, toolhead_count));
+    return normalized.option<ConfigOptionInts>("filament_map")->values;
+}
+
+static void apply_extruder_variants(DynamicPrintConfig &config, bool apply_extruder)
+{
+    if (!apply_extruder)
+        return;
+
+    config.update_values_to_printer_extruders(config, printer_options_with_variant_1, "printer_extruder_id", "printer_extruder_variant");
+    config.update_values_to_printer_extruders(config, printer_options_with_variant_2, "printer_extruder_id", "printer_extruder_variant", 2);
+    config.update_values_to_printer_extruders(config, print_options_with_variant, "print_extruder_id", "print_extruder_variant");
+}
+
+static DynamicPrintConfig mapped_filament_config(
+    const DynamicPrintConfig &source,
+    DynamicPrintConfig       &full_config,
+    bool                      apply_extruder,
+    int                       mapped_toolhead)
+{
+    DynamicPrintConfig result = source;
+    if (apply_extruder)
+        result.update_values_to_printer_extruders(
+            full_config, filament_options_with_variant, "", "filament_extruder_variant", 1, mapped_toolhead);
+    return result;
+}
+
+static void merge_filament_configs(
+    DynamicPrintConfig                         &out,
+    const std::vector<const DynamicPrintConfig *> &filament_configs,
+    const t_config_option_keys                 &option_keys,
+    bool                                        apply_extruder,
+    const std::vector<int>                     &filament_map)
+{
+    const size_t filament_count = filament_configs.size();
+    std::vector<DynamicPrintConfig> mapped_configs;
+    mapped_configs.reserve(filament_count);
+    for (size_t i = 0; i < filament_count; ++i)
+        mapped_configs.emplace_back(mapped_filament_config(*filament_configs[i], out, apply_extruder, filament_map[i]));
+
+    std::vector<int> filament_variant_count(filament_count, 1);
+    for (const t_config_option_key &key : option_keys) {
+        if (key == "compatible_prints" || key == "compatible_printers")
+            continue;
+
+        ConfigOption *opt_dst = out.option(key, false);
+        if (opt_dst->is_scalar()) {
+            if (const ConfigOption *opt_src = mapped_configs.front().option(key); opt_src != nullptr)
+                opt_dst->set(opt_src);
+            continue;
+        }
+
+        auto *opt_vec_dst = static_cast<ConfigOptionVectorBase *>(opt_dst);
+        if (apply_extruder) {
+            std::vector<const ConfigOption *> filament_options(filament_count, nullptr);
+            for (size_t i = 0; i < filament_count; ++i)
+                filament_options[i] = mapped_configs[i].option(key);
+            opt_vec_dst->set(filament_options);
+            continue;
+        }
+
+        for (size_t i = 0; i < filament_count; ++i) {
+            const auto *filament_option = static_cast<const ConfigOptionVectorBase *>(mapped_configs[i].option(key));
+            if (i == 0)
+                opt_vec_dst->set(filament_option);
+            else
+                opt_vec_dst->append(filament_option);
+            if (key == "filament_extruder_variant")
+                filament_variant_count[i] = filament_option->size();
+        }
+    }
+
+    if (!apply_extruder) {
+        std::vector<int> &filament_self_indices = out.option<ConfigOptionInts>("filament_self_index", true)->values;
+        filament_self_indices.resize(out.option<ConfigOptionStrings>("filament_extruder_variant")->size(), 1);
+        size_t index = 0;
+        for (size_t filament = 0; filament < filament_count; ++filament)
+            for (int variant = 0; variant < filament_variant_count[filament]; ++variant)
+                filament_self_indices[index++] = int(filament + 1);
+    }
+}
+
 DynamicPrintConfig PresetBundle::construct_full_config(
     Preset& in_printer_preset,
     Preset& in_print_preset,
@@ -89,15 +183,9 @@ DynamicPrintConfig PresetBundle::construct_full_config(
 
     size_t num_filaments = in_filament_presets.size();
 
-    std::vector<int> filament_maps = out.option<ConfigOptionInts>("filament_map")->values;
-    if (filament_maps_new.has_value())
-        filament_maps = *filament_maps_new;
-    // in some middle state, they may be different
-    if (filament_maps.size() != num_filaments) {
-        filament_maps.resize(num_filaments, 1);
-    }
-
     auto *extruder_diameter = dynamic_cast<const ConfigOptionFloats *>(out.option("nozzle_diameter"));
+    std::vector<int> filament_maps = resolve_filament_map(
+        out, num_filaments, extruder_diameter != nullptr ? extruder_diameter->values.size() : 1, filament_maps_new);
     // Collect the "compatible_printers_condition" and "inherits" values over all presets (print, filaments, printers) into a single vector.
     std::vector<std::string> compatible_printers_condition;
     std::vector<std::string> compatible_prints_condition;
@@ -115,18 +203,11 @@ DynamicPrintConfig PresetBundle::construct_full_config(
     std::string print_inherits = in_print_preset.inherits();
     inherits.emplace_back(print_inherits);
 
-    // BBS: update printer config related with variants
-    if (apply_extruder) {
-        out.update_values_to_printer_extruders(out, printer_options_with_variant_1, "printer_extruder_id", "printer_extruder_variant");
-        out.update_values_to_printer_extruders(out, printer_options_with_variant_2, "printer_extruder_id", "printer_extruder_variant", 2);
-        // update print config related with variants
-        out.update_values_to_printer_extruders(out, print_options_with_variant, "print_extruder_id", "print_extruder_variant");
-    }
+    apply_extruder_variants(out, apply_extruder);
 
     if (num_filaments <= 1) {
         // BBS: update filament config related with variants
-        DynamicPrintConfig filament_config = in_filament_presets[0].config;
-        if (apply_extruder) filament_config.update_values_to_printer_extruders(out, filament_options_with_variant, "", "filament_extruder_variant", 1, filament_maps[0]);
+        DynamicPrintConfig filament_config = mapped_filament_config(in_filament_presets[0].config, out, apply_extruder, filament_maps[0]);
         out.apply(filament_config);
         compatible_printers_condition.emplace_back(in_filament_presets[0].compatible_printers_condition());
         compatible_prints_condition.emplace_back(in_filament_presets[0].compatible_prints_condition());
@@ -139,64 +220,10 @@ DynamicPrintConfig PresetBundle::construct_full_config(
         filament_self_indice.resize(index_size, 1);
     } else {
         std::vector<const DynamicPrintConfig *> filament_configs;
-        std::vector<const Preset *>             filament_presets;
         for (const Preset & preset : in_filament_presets) {
-            filament_presets.emplace_back(&preset);
             filament_configs.emplace_back(&(preset.config));
         }
-
-        std::vector<DynamicPrintConfig> filament_temp_configs;
-        filament_temp_configs.resize(num_filaments);
-        for (size_t i = 0; i < num_filaments; ++i) {
-            filament_temp_configs[i] = *(filament_configs[i]);
-            if (apply_extruder)
-                filament_temp_configs[i].update_values_to_printer_extruders(out, filament_options_with_variant, "", "filament_extruder_variant", 1, filament_maps[i]);
-        }
-
-        // loop through options and apply them to the resulting config.
-        std::vector<int> filament_variant_count(num_filaments, 1);
-        for (const t_config_option_key &key : in_filament_presets[0].config.keys()) {
-            if (key == "compatible_prints" || key == "compatible_printers") continue;
-            // Get a destination option.
-            ConfigOption *opt_dst = out.option(key, false);
-            if (opt_dst->is_scalar()) {
-                // Get an option, do not create if it does not exist.
-                const ConfigOption *opt_src = filament_temp_configs.front().option(key);
-                if (opt_src != nullptr) opt_dst->set(opt_src);
-            } else {
-                // BBS
-                ConfigOptionVectorBase *opt_vec_dst = static_cast<ConfigOptionVectorBase *>(opt_dst);
-                {
-                    if (apply_extruder) {
-                        std::vector<const ConfigOption *> filament_opts(num_filaments, nullptr);
-                        // Setting a vector value from all filament_configs.
-                        for (size_t i = 0; i < filament_opts.size(); ++i) filament_opts[i] = filament_temp_configs[i].option(key);
-                        opt_vec_dst->set(filament_opts);
-                    } else {
-                        for (size_t i = 0; i < num_filaments; ++i) {
-                            const ConfigOptionVectorBase *filament_option = static_cast<const ConfigOptionVectorBase *>(filament_temp_configs[i].option(key));
-                            if (i == 0)
-                                opt_vec_dst->set(filament_option);
-                            else
-                                opt_vec_dst->append(filament_option);
-
-                            if (key == "filament_extruder_variant") filament_variant_count[i] = filament_option->size();
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!apply_extruder) {
-            // append filament_self_index
-            std::vector<int> &filament_self_indice = out.option<ConfigOptionInts>("filament_self_index", true)->values;
-            int               index_size           = out.option<ConfigOptionStrings>("filament_extruder_variant")->size();
-            filament_self_indice.resize(index_size, 1);
-            int k = 0;
-            for (size_t i = 0; i < num_filaments; i++) {
-                for (size_t j = 0; j < filament_variant_count[i]; j++) { filament_self_indice[k++] = i + 1; }
-            }
-        }
+        merge_filament_configs(out, filament_configs, in_filament_presets[0].config.keys(), apply_extruder, filament_maps);
     }
 
     // These value types clash between the print and filament profiles. They should be renamed.
@@ -393,6 +420,7 @@ PresetBundle::PresetBundle()
     this->printers.select_preset(0);
 
     this->project_config.apply_only(FullPrintConfig::defaults(), s_project_options);
+    normalize_loaded_project_config(this->project_config);
 }
 
 PresetBundle::PresetBundle(const PresetBundle &rhs)
@@ -3951,18 +3979,9 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
     // BBS
     size_t  num_filaments = this->filament_presets.size();
 
-    std::vector<int> filament_maps = out.option<ConfigOptionInts>("filament_map")->values;
-    if (filament_maps_new.has_value())
-        filament_maps = *filament_maps_new;
-    //in some middle state, they may be different
-    if (filament_maps.size() != num_filaments) {
-        filament_maps.resize(num_filaments, 1);
-    }
-    else {
-        assert(filament_maps.size() == num_filaments);
-    }
-
     auto* extruder_diameter = dynamic_cast<const ConfigOptionFloats*>(out.option("nozzle_diameter"));
+    std::vector<int> filament_maps = resolve_filament_map(
+        out, num_filaments, extruder_diameter != nullptr ? extruder_diameter->values.size() : 1, filament_maps_new);
     // Collect the "compatible_printers_condition" and "inherits" values over all presets (print, filaments, printers) into a single vector.
     std::vector<std::string> compatible_printers_condition;
     std::vector<std::string> compatible_prints_condition;
@@ -3989,19 +4008,12 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
     }
     different_settings.emplace_back(different_print_settings);
 
-    //BBS: update printer config related with variants
-    if (apply_extruder) {
-        out.update_values_to_printer_extruders(out, printer_options_with_variant_1, "printer_extruder_id", "printer_extruder_variant");
-        out.update_values_to_printer_extruders(out, printer_options_with_variant_2, "printer_extruder_id", "printer_extruder_variant", 2);
-        //update print config related with variants
-        out.update_values_to_printer_extruders(out, print_options_with_variant, "print_extruder_id", "print_extruder_variant");
-    }
+    apply_extruder_variants(out, apply_extruder);
 
     if (num_filaments <= 1) {
         //BBS: update filament config related with variants
-        DynamicPrintConfig filament_config = this->filaments.get_edited_preset().config;
-        if (apply_extruder)
-            filament_config.update_values_to_printer_extruders(out, filament_options_with_variant, "", "filament_extruder_variant", 1, filament_maps[0]);
+        DynamicPrintConfig filament_config = mapped_filament_config(
+            this->filaments.get_edited_preset().config, out, apply_extruder, filament_maps[0]);
         out.apply(filament_config);
         compatible_printers_condition.emplace_back(this->filaments.get_edited_preset().compatible_printers_condition());
         compatible_prints_condition  .emplace_back(this->filaments.get_edited_preset().compatible_prints_condition());
@@ -4090,65 +4102,8 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
             different_settings.emplace_back(different_filament_settings);
         }
 
-        std::vector<DynamicPrintConfig> filament_temp_configs;
-        filament_temp_configs.resize(num_filaments);
-        for (size_t i = 0; i < num_filaments; ++i) {
-            filament_temp_configs[i] = *(filament_configs[i]);
-            if (apply_extruder)
-                filament_temp_configs[i].update_values_to_printer_extruders(out, filament_options_with_variant, "", "filament_extruder_variant", 1, filament_maps[i]);
-        }
-
-        // loop through options and apply them to the resulting config.
-        std::vector<int> filament_variant_count(num_filaments, 1);
-        for (const t_config_option_key &key : this->filaments.default_preset().config.keys()) {
-			if (key == "compatible_prints" || key == "compatible_printers")
-				continue;
-            // Get a destination option.
-            ConfigOption *opt_dst = out.option(key, false);
-            if (opt_dst->is_scalar()) {
-                // Get an option, do not create if it does not exist.
-                const ConfigOption *opt_src = filament_temp_configs.front().option(key);
-                if (opt_src != nullptr)
-                    opt_dst->set(opt_src);
-            } else {
-                // BBS
-                ConfigOptionVectorBase* opt_vec_dst = static_cast<ConfigOptionVectorBase*>(opt_dst);
-                {
-                    if (apply_extruder) {
-                        std::vector<const ConfigOption*> filament_opts(num_filaments, nullptr);
-                        // Setting a vector value from all filament_configs.
-                        for (size_t i = 0; i < filament_opts.size(); ++i)
-                            filament_opts[i] = filament_temp_configs[i].option(key);
-                        opt_vec_dst->set(filament_opts);
-                    }
-                    else {
-                        for (size_t i = 0; i < num_filaments; ++i) {
-                            const ConfigOptionVectorBase* filament_option = static_cast<const ConfigOptionVectorBase*>(filament_temp_configs[i].option(key));
-                            if (i == 0)
-                                opt_vec_dst->set(filament_option);
-                            else
-                                opt_vec_dst->append(filament_option);
-
-                            if (key == "filament_extruder_variant")
-                                filament_variant_count[i] = filament_option->size();
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!apply_extruder) {
-            //append filament_self_index
-            std::vector<int>& filament_self_indice = out.option<ConfigOptionInts>("filament_self_index", true)->values;
-            int index_size = out.option<ConfigOptionStrings>("filament_extruder_variant")->size();
-            filament_self_indice.resize(index_size, 1);
-            int k = 0;
-            for (size_t i = 0; i < num_filaments; i++) {
-                for (size_t j = 0; j < filament_variant_count[i]; j++) {
-                    filament_self_indice[k++] = i + 1;
-                }
-            }
-        }
+        merge_filament_configs(
+            out, filament_configs, this->filaments.default_preset().config.keys(), apply_extruder, filament_maps);
     }
 
     //BBS: add logic for settings check between different system presets
@@ -4620,6 +4575,16 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
 
         // 4) Load the project config values (the per extruder wipe matrix etc).
         this->project_config.apply_only(config, s_project_options);
+        const auto *nozzles = this->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
+        const size_t toolhead_count = nozzles == nullptr ? 1 : std::max<size_t>(1, nozzles->values.size());
+        ProjectConfigNormalizationContext normalization_context;
+        normalization_context.filament_count = std::max<size_t>(1, this->filament_presets.size());
+        normalization_context.toolhead_count = toolhead_count;
+        const std::vector<std::string> repaired =
+            normalize_loaded_project_config(this->project_config, normalization_context);
+        if (!repaired.empty())
+            BOOST_LOG_TRIVIAL(warning) << "Repaired loaded project settings: "
+                                       << boost::algorithm::join(repaired, ", ");
 
         break;
     }

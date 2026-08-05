@@ -6,6 +6,7 @@
 #include "libslic3r/BuildVolume.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/ProjectConfigService.hpp"
 #include "libslic3r/GCode/ThumbnailData.hpp"
 #include "libslic3r/Geometry/ConvexHull.hpp"
 #include "libslic3r/ExtrusionEntity.hpp"
@@ -3008,8 +3009,8 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                     const float min_origin_y = min_y + 3.0f;
                     const float max_origin_x = max_x - 3.0f - footprint_size;
                     const float max_origin_y = max_y - 3.0f - footprint_size;
-                    const float configured_x = tower_x == nullptr ? -1.0f : float(tower_x->get_at(plate_id));
-                    const float configured_y = tower_y == nullptr ? -1.0f : float(tower_y->get_at(plate_id));
+                    const float configured_x = float(temperature_drop_tower_position_at(tower_x, size_t(plate_id)));
+                    const float configured_y = float(temperature_drop_tower_position_at(tower_y, size_t(plate_id)));
                     const float origin_x = configured_x < 0.0f
                         ? min_origin_x
                         : std::clamp(configured_x, min_origin_x, max_origin_x);

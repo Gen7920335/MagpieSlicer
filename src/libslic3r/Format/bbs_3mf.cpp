@@ -2,6 +2,7 @@
 #include "../Exception.hpp"
 #include "../Model.hpp"
 #include "../Preset.hpp"
+#include "../ProjectConfigService.hpp"
 #include "../Utils.hpp"
 #include "../LocalesUtils.hpp"
 #include "../GCode.hpp"
@@ -65,6 +66,84 @@ namespace pt = boost::property_tree;
 #define EXPORT_3MF_USE_SPIRIT_KARMA_FP 0
 
 #define WRITE_ZIP_LANGUAGE_ENCODING 1
+
+namespace {
+
+bool normalize_plate_filament_mapping(
+    Slic3r::PlateData &plate, const Slic3r::ProjectConfigNormalizationContext &context)
+{
+    auto *override_map = plate.config.option<Slic3r::ConfigOptionInts>("filament_map");
+    if (override_map != nullptr && !override_map->values.empty()) {
+        const bool repaired = Slic3r::normalize_optional_filament_map(
+            override_map->values, context.filament_count, context.toolhead_count);
+        plate.filament_maps = override_map->values;
+        return repaired;
+    }
+
+    return Slic3r::normalize_optional_filament_map(
+        plate.filament_maps, context.filament_count, context.toolhead_count);
+}
+
+} // namespace
+
+bool Slic3r::normalize_plate_slice_metadata(
+    Slic3r::PlateData &plate, const Slic3r::ProjectConfigNormalizationContext &context,
+    bool force_invalidate)
+{
+    const auto invalid_filament = [&context](unsigned int id) {
+        return size_t(id) >= context.filament_count;
+    };
+    const auto invalid_toolhead = [&context](unsigned int id) {
+        return size_t(id) >= context.toolhead_count;
+    };
+
+    bool incompatible = force_invalidate || std::any_of(
+        plate.filament_change_sequence.begin(), plate.filament_change_sequence.end(), invalid_filament);
+    incompatible = incompatible || std::any_of(
+        plate.nozzle_change_sequence.begin(), plate.nozzle_change_sequence.end(), invalid_toolhead);
+    if (!plate.limit_filament_maps.empty()) {
+        incompatible = incompatible || plate.limit_filament_maps.size() != context.filament_count;
+        constexpr size_t mask_bits = sizeof(int) * 8;
+        if (context.toolhead_count < mask_bits) {
+            const unsigned int allowed_mask = context.toolhead_count == 0
+                ? 0u : (1u << context.toolhead_count) - 1u;
+            incompatible = incompatible || std::any_of(
+                plate.limit_filament_maps.begin(), plate.limit_filament_maps.end(),
+                [allowed_mask](int mask) {
+                    return (static_cast<unsigned int>(mask) & ~allowed_mask) != 0u;
+                });
+        }
+    }
+    incompatible = incompatible || std::any_of(
+        plate.slice_filaments_info.begin(), plate.slice_filaments_info.end(),
+        [&context](const Slic3r::FilamentInfo &info) {
+            return info.id < 0 || size_t(info.id) >= context.filament_count;
+        });
+    incompatible = incompatible || std::any_of(
+        plate.optimal_assignment.begin(), plate.optimal_assignment.end(),
+        [&context](int assignment) {
+            return assignment < -1 || (assignment >= 0 && size_t(assignment) >= context.toolhead_count);
+        });
+    if (!incompatible) {
+        for (const auto &layer_entry : plate.layer_filaments) {
+            if (std::any_of(layer_entry.first.begin(), layer_entry.first.end(), invalid_filament)) {
+                incompatible = true;
+                break;
+            }
+        }
+    }
+    if (!incompatible)
+        return false;
+
+    plate.is_sliced_valid = false;
+    plate.filament_change_sequence.clear();
+    plate.nozzle_change_sequence.clear();
+    plate.optimal_assignment.clear();
+    plate.layer_filaments.clear();
+    plate.limit_filament_maps.clear();
+    plate.slice_filaments_info.clear();
+    return true;
+}
 
 // @see https://commons.apache.org/proper/commons-compress/apidocs/src-html/org/apache/commons/compress/archivers/zip/AbstractUnicodeExtraField.html
 struct ZipUnicodePathExtraField
@@ -2221,34 +2300,6 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 ++volume_idx;
             }
             ++object_idx;
-        }
-
-        const ConfigOptionStrings* filament_ids_opt = config.option<ConfigOptionStrings>("filament_settings_id");
-        int max_filament_id = filament_ids_opt ? filament_ids_opt->size() : std::numeric_limits<int>::max();
-        for (ModelObject* mo : m_model->objects) {
-            const ConfigOptionInt* extruder_opt = dynamic_cast<const ConfigOptionInt*>(mo->config.option("extruder"));
-            int extruder_id = 0;
-            if (extruder_opt != nullptr)
-                extruder_id = extruder_opt->getInt();
-
-            if (extruder_id == 0 || extruder_id > max_filament_id)
-                mo->config.set_key_value("extruder", new ConfigOptionInt(1));
-
-            if (mo->volumes.size() == 1) {
-                mo->volumes[0]->config.erase("extruder");
-            }
-            else {
-                for (ModelVolume* mv : mo->volumes) {
-                    const ConfigOptionInt* vol_extruder_opt = dynamic_cast<const ConfigOptionInt*>(mv->config.option("extruder"));
-                    if (vol_extruder_opt == nullptr)
-                        continue;
-
-                    if (vol_extruder_opt->getInt() == 0)
-                        mv->config.erase("extruder");
-                    else if (vol_extruder_opt->getInt() > max_filament_id)
-                        mv->config.set_key_value("extruder", new ConfigOptionInt(1));
-                }
-            }
         }
 
 //        // fixes the min z of the model if negative
@@ -4451,11 +4502,6 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             else if (key == FILAMENT_MAP_ATTR) {
                 if (m_curr_plater){
                     auto filament_map = get_vector_from_string(value);
-                    for (size_t idx = 0; idx < filament_map.size(); ++idx) {
-                        if (filament_map[idx] < 1) {
-                            filament_map[idx] = 1;
-                        }
-                    }
                     m_curr_plater->filament_maps = filament_map;
                     m_curr_plater->config.set_key_value("filament_map", new ConfigOptionInts(filament_map));
                 }
@@ -5899,7 +5945,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         bool _add_sla_drain_holes_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_print_config_file_to_archive(mz_zip_archive& archive, const DynamicPrintConfig &config);
         //BBS: add project config file logic for json format
-        bool _add_project_config_file_to_archive(mz_zip_archive& archive, const DynamicPrintConfig &config, Model& model);
+        bool _add_project_config_file_to_archive(
+            mz_zip_archive& archive, const DynamicPrintConfig &config, Model& model, size_t plate_count);
         //BBS: add project embedded preset files
         bool _add_project_embedded_presets_to_archive(mz_zip_archive& archive, Model& model, std::vector<Preset*> project_presets);
         bool _add_model_config_file_to_archive(mz_zip_archive& archive, const Model& model, PlateDataPtrs& plate_data_list, const ObjectToObjectDataMap &objects_data, const DynamicPrintConfig& config, int export_plate_idx = -1, bool save_gcode = true, bool use_loaded_id = false);
@@ -6040,6 +6087,14 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         int export_plate_idx)
     {
         PackingTemporaryData temp_data;
+
+        if (config != nullptr) {
+            const ProjectConfigNormalizationContext mapping_context =
+                infer_project_config_normalization_context(*config, plate_data_list.size());
+            for (PlateData *plate : plate_data_list)
+                if (plate != nullptr)
+                    normalize_plate_filament_mapping(*plate, mapping_context);
+        }
 
         mz_zip_archive archive;
         mz_zip_zero_struct(&archive);
@@ -6351,7 +6406,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             if (config != nullptr) {
                 // BBS: change to json format
                 // if (!_add_print_config_file_to_archive(archive, *config)) {
-                if (!_add_project_config_file_to_archive(archive, *config, model)) { return false; }
+                if (!_add_project_config_file_to_archive(archive, *config, model, plate_data_list.size())) { return false; }
             }
 
             // BBS progress point
@@ -7719,11 +7774,15 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
     }
 
     //BBS: add project config file logic for new json format
-    bool _BBS_3MF_Exporter::_add_project_config_file_to_archive(mz_zip_archive& archive, const DynamicPrintConfig &config, Model& model)
+    bool _BBS_3MF_Exporter::_add_project_config_file_to_archive(
+        mz_zip_archive& archive, const DynamicPrintConfig &config, Model& model, size_t plate_count)
     {
+        const ProjectConfigNormalizationContext context =
+            infer_project_config_normalization_context(config, std::max<size_t>(1, plate_count));
+        const DynamicPrintConfig normalized = normalized_project_config_for_save(config, context);
         const std::string& temp_path = model.get_backup_path();
         std::string temp_file = temp_path + std::string("/") + "_temp_1.config";
-        config.save_to_json(temp_file, std::string("project_settings"), std::string("project"), std::string(SLIC3R_VERSION));
+        normalized.save_to_json(temp_file, std::string("project_settings"), std::string("project"), std::string(SLIC3R_VERSION));
         return _add_file_to_archive(archive, BBS_PROJECT_CONFIG_FILE, temp_file);
     }
 
@@ -8959,6 +9018,21 @@ bool load_bbs_3mf(const char* path, DynamicPrintConfig* config, ConfigSubstituti
     CNumericLocalesSetter locales_setter;
     _BBS_3MF_Importer importer;
     bool res = importer.load_model_from_file(path, *model, *plate_data_list, *project_presets, *config, *config_substitutions, strategy, is_bbl_3mf, is_orca_3mf, *file_version, proFn, project, plate_id);
+    if (res) {
+        const ProjectConfigNormalizationContext mapping_context =
+            infer_project_config_normalization_context(*config, plate_data_list->size());
+        normalize_loaded_project_config(*config, mapping_context);
+        const bool model_assignments_repaired =
+            normalize_model_filament_assignments(*model, mapping_context.filament_count) != 0;
+        for (PlateData *plate : *plate_data_list)
+            if (plate != nullptr) {
+                const bool plate_mapping_repaired =
+                    normalize_plate_filament_mapping(*plate, mapping_context);
+                normalize_plate_slice_metadata(
+                    *plate, mapping_context,
+                    model_assignments_repaired || plate_mapping_repaired);
+            }
+    }
     importer.log_errors();
     //BBS: remove legacy project logic currently
     //handle_legacy_project_loaded(importer.version(), *config);

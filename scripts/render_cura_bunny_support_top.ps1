@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($SlicerPath)) {
-    $SlicerPath = Join-Path $RepoRoot 'build\src\Release\orca-slicer.exe'
+    $SlicerPath = Join-Path $RepoRoot 'build\src\Release\magpie-slicer.exe'
 }
 if ([string]::IsNullOrWhiteSpace($ModelPath)) {
     $ModelPath = Join-Path $RepoRoot 'resources\handy_models\Stanford_Bunny.drc'

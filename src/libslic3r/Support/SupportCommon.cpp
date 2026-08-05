@@ -611,6 +611,18 @@ static Polylines draw_perimeters(const ExPolygon &expoly, double clip_length)
     return polylines;
 }
 
+static void hollow_support_generate_paths(
+    ExtrusionEntitiesPtr &dst, const Polygons &polygons, const Flow &flow)
+{
+    const double clip_length = flow.scaled_spacing() * 0.15;
+    for (const ExPolygon &expoly : closing_ex(
+             polygons, float(SCALED_EPSILON), float(SCALED_EPSILON + 0.5 * flow.scaled_width()))) {
+        extrusion_entities_append_paths(
+            dst, draw_perimeters(expoly, clip_length), ExtrusionRole::erSupportMaterial,
+            flow.mm3_per_mm(), flow.width(), flow.height());
+    }
+}
+
 void tree_supports_generate_paths(
     ExtrusionEntitiesPtr    &dst,
     const Polygons          &polygons,
@@ -2053,6 +2065,16 @@ void generate_support_toolpaths(
                     if (support_layer.print_z > 100.0)
                         support_params2.tree_branch_diameter_double_wall_area_scaled = 0.1;
                     tree_supports_generate_paths(base_layer.extrusions, base_layer.polygons_to_extrude(), flow, support_params2);
+                    done = true;
+                }
+                const bool solid_cura_first_layer =
+                    base_layer.layer->bottom_z < EPSILON &&
+                    is_normal_cura(config.support_type.value) &&
+                    config.cura_solid_support_raft.value;
+                if (!done && is_normal_cura(config.support_type.value) &&
+                    config.support_base_pattern == smpNone && !solid_cura_first_layer) {
+                    hollow_support_generate_paths(
+                        base_layer.extrusions, base_layer.polygons_to_extrude(), flow);
                     done = true;
                 }
                 if (! done)

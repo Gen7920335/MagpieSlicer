@@ -69,12 +69,8 @@ static unsigned int effective_inner_wall_filament_1based(const PrintRegionConfig
 
 static double nozzle_diameter_for_filament_1based(const PrintConfig &print_config, unsigned int filament_id)
 {
-    if (print_config.nozzle_diameter.values.empty())
-        return 0.4;
-    if (filament_id == 0)
-        filament_id = 1;
-    const size_t idx = std::min<size_t>(size_t(filament_id - 1), print_config.nozzle_diameter.values.size() - 1);
-    return print_config.nozzle_diameter.get_at(idx);
+    const ResolvedWallTool tool = wall_tool_for_filament(print_config, filament_id == 0 ? 1 : filament_id);
+    return tool ? tool.nozzle_diameter : 0.4;
 }
 
 static bool detail_candidate_available(const PerimeterGenerator &perimeter_generator)
@@ -82,43 +78,27 @@ static bool detail_candidate_available(const PerimeterGenerator &perimeter_gener
     if (!detail_walls_enabled_for_layer(*perimeter_generator.config, size_t(perimeter_generator.layer_id), perimeter_generator.print_config->nozzle_diameter.values.size()))
         return false;
 
-    const unsigned int base_extruder = effective_outer_wall_filament_1based(*perimeter_generator.config);
-    const unsigned int detail_extruder = detail_external_perimeter_extruder_1based(
-        *perimeter_generator.print_config, *perimeter_generator.config, base_extruder);
-    return detail_extruder != 0 && detail_extruder != base_extruder;
+    const unsigned int base_filament = effective_outer_wall_filament_1based(*perimeter_generator.config);
+    const ResolvedWallTool base_tool = wall_tool_for_filament(*perimeter_generator.print_config, base_filament);
+    const ResolvedWallTool detail_tool = detail_wall_tool(
+        *perimeter_generator.print_config, *perimeter_generator.config, base_filament);
+    return base_tool && detail_tool && detail_tool.hotend_id_1based != base_tool.hotend_id_1based;
 }
 
 static Flow detail_external_perimeter_flow(const PerimeterGenerator &perimeter_generator)
 {
-    const unsigned int base_extruder = effective_outer_wall_filament_1based(*perimeter_generator.config);
-    unsigned int detail_extruder = detail_external_perimeter_extruder_1based(
-        *perimeter_generator.print_config, *perimeter_generator.config, base_extruder);
-    if (detail_extruder == 0 || detail_extruder == base_extruder) {
-        const size_t base_idx = size_t(std::max(1u, base_extruder) - 1);
-        if (base_idx >= perimeter_generator.print_config->nozzle_diameter.values.size())
-            return perimeter_generator.ext_perimeter_flow;
-        const double base_nozzle = perimeter_generator.print_config->nozzle_diameter.get_at(base_idx);
-        double best_nozzle = base_nozzle;
-        for (size_t idx = 0; idx < perimeter_generator.print_config->nozzle_diameter.values.size(); ++idx) {
-            const double nozzle = perimeter_generator.print_config->nozzle_diameter.get_at(idx);
-            if (nozzle > EPSILON && nozzle < best_nozzle) {
-                best_nozzle = nozzle;
-                detail_extruder = unsigned(idx + 1);
-            }
-        }
-        if (detail_extruder == 0 || detail_extruder == base_extruder)
-            return perimeter_generator.ext_perimeter_flow;
-    }
-
-    const size_t detail_idx = size_t(detail_extruder - 1);
-    if (detail_idx >= perimeter_generator.print_config->nozzle_diameter.values.size())
+    const unsigned int base_filament = effective_outer_wall_filament_1based(*perimeter_generator.config);
+    const ResolvedWallTool base_tool = wall_tool_for_filament(*perimeter_generator.print_config, base_filament);
+    const ResolvedWallTool detail_tool = detail_wall_tool(
+        *perimeter_generator.print_config, *perimeter_generator.config, base_filament);
+    if (!base_tool || !detail_tool || detail_tool.hotend_id_1based == base_tool.hotend_id_1based)
         return perimeter_generator.ext_perimeter_flow;
 
-    const float detail_nozzle_diameter = float(perimeter_generator.print_config->nozzle_diameter.get_at(detail_idx));
+    const float detail_nozzle_diameter = float(detail_tool.nozzle_diameter);
     ConfigOptionFloatOrPercent width = toolhead_line_width_or(
         *perimeter_generator.print_config,
         frExternalPerimeter,
-        int(detail_extruder),
+        int(detail_tool.hotend_id_1based),
         false,
         perimeter_generator.config->outer_wall_line_width);
     const double min_positive_width = perimeter_generator.layer_height * (1. - 0.25 * PI) + EPSILON;
@@ -216,69 +196,85 @@ static bool surface_requires_detail_nozzle(const PerimeterGenerator &perimeter_g
     return false;
 }
 
-static int manual_detail_wall_count_for_layer(const PerimeterGenerator &perimeter_generator)
+struct MultiNozzleWallPlan {
+    bool    active { false };
+    int     requested_detail_walls { 0 };
+    int     detail_walls { 0 };
+    int     requested_large_walls { 0 };
+    int     large_walls { 0 };
+    int     total_walls { 0 };
+    coord_t detail_spacing { 0 };
+    coord_t large_spacing { 0 };
+    coord_t detail_width { 0 };
+    double  overlap_ratio { 0. };
+    coord_t infill_boundary_compensation { 0 };
+
+    int loop_number() const { return total_walls - 1; }
+    bool depth_uses_detail_nozzle(int depth) const { return active && depth >= 0 && depth < detail_walls; }
+
+    coord_t center_distance(int current_depth) const
+    {
+        assert(active && current_depth > 0);
+        const bool previous_is_detail = depth_uses_detail_nozzle(current_depth - 1);
+        const bool current_is_detail = depth_uses_detail_nozzle(current_depth);
+        if (previous_is_detail && current_is_detail)
+            return detail_spacing;
+        if (!previous_is_detail && !current_is_detail)
+            return large_spacing;
+
+        const coord_t overlap = coord_t(std::min(detail_spacing, large_spacing) * overlap_ratio);
+        return std::max<coord_t>(SCALED_EPSILON,
+            coord_t(0.5 * double(detail_spacing + large_spacing)) - overlap);
+    }
+
+    coord_t minimum_spacing(int current_depth) const
+    {
+        assert(active && current_depth > 0);
+        const coord_t width_or_spacing = depth_uses_detail_nozzle(current_depth) ? detail_width : large_spacing;
+        return coord_t(width_or_spacing * (1 - INSET_OVERLAP_TOLERANCE));
+    }
+
+    coord_t arachne_outer_spacing(coord_t fallback) const { return active ? detail_spacing : fallback; }
+    coord_t arachne_boundary_overlap() const
+    {
+        return active ? coord_t(std::min(detail_spacing, large_spacing) * overlap_ratio) : 0;
+    }
+};
+
+static MultiNozzleWallPlan make_multi_nozzle_wall_plan(const PerimeterGenerator &perimeter_generator,
+                                                       int base_loop_number,
+                                                       bool surface_uses_detail_nozzle)
 {
-    return detail_wall_count_for_layer(*perimeter_generator.config, size_t(perimeter_generator.layer_id), perimeter_generator.print_config->nozzle_diameter.values.size());
-}
-
-static int enforce_detail_and_large_wall_counts(const PerimeterGenerator &perimeter_generator,
-                                                int loop_number,
-                                                bool surface_uses_detail_nozzle)
-{
-    if (!surface_uses_detail_nozzle)
-        return loop_number;
-
-    // loop_number is zero-based. Small-nozzle walls are additional outer walls;
-    // the configured wall count remains the number of large-nozzle inner walls.
-    const int configured_detail_walls = std::max(1, perimeter_generator.config->crisp_corner_small_nozzle_wall_count.value);
-    const int generated_large_walls = std::max(2, loop_number + 1);
-    return configured_detail_walls + generated_large_walls - 1;
-}
-
-static coord_t detail_wall_center_distance(const PerimeterGenerator &perimeter_generator, int current_depth, int detail_count)
-{
-    if (detail_count <= 0 || current_depth <= 0)
-        return current_depth == 1 ?
-            coord_t(0.5f * (perimeter_generator.ext_perimeter_flow.scaled_spacing() + perimeter_generator.perimeter_flow.scaled_spacing())) :
-            perimeter_generator.perimeter_flow.scaled_spacing();
-
-    const bool prev_detail = current_depth - 1 < detail_count;
-    const bool curr_detail = current_depth < detail_count;
-    if (!prev_detail && !curr_detail)
-        return perimeter_generator.perimeter_flow.scaled_spacing();
-    if (prev_detail && curr_detail)
-        return perimeter_generator.smaller_ext_perimeter_flow.scaled_spacing();
-
-    const double overlap_ratio = std::clamp(perimeter_generator.config->crisp_corner_nozzle_wall_overlap.value / 100., 0., 0.8);
+    const int base_wall_count = std::max(0, base_loop_number + 1);
     const coord_t detail_spacing = perimeter_generator.smaller_ext_perimeter_flow.scaled_spacing();
-    const coord_t prev_spacing = prev_detail ?
-        detail_spacing :
-        (current_depth == 1 ? perimeter_generator.ext_perimeter_flow.scaled_spacing() : perimeter_generator.perimeter_flow.scaled_spacing());
-    const coord_t curr_spacing = curr_detail ?
-        detail_spacing :
-        perimeter_generator.perimeter_flow.scaled_spacing();
-    const coord_t overlap = coord_t(std::min(prev_spacing, curr_spacing) * overlap_ratio);
-    return std::max<coord_t>(SCALED_EPSILON, coord_t(0.5 * double(prev_spacing + curr_spacing)) - overlap);
-}
+    const coord_t large_spacing = perimeter_generator.perimeter_flow.scaled_spacing();
+    const coord_t detail_width = perimeter_generator.smaller_ext_perimeter_flow.scaled_width();
 
-static coord_t detail_wall_min_spacing(const PerimeterGenerator &perimeter_generator, int current_depth, int detail_count)
-{
-    const bool curr_detail = detail_count > 0 && current_depth < detail_count;
-    return coord_t((curr_detail ? perimeter_generator.smaller_ext_perimeter_flow.scaled_width() :
-                                  perimeter_generator.perimeter_flow.scaled_spacing()) *
-                   (1 - INSET_OVERLAP_TOLERANCE));
-}
+    if (!surface_uses_detail_nozzle)
+        return MultiNozzleWallPlan { false, 0, 0, base_wall_count, base_wall_count, base_wall_count,
+                                     detail_spacing, large_spacing, detail_width, 0., 0 };
 
-static coord_t interlocking_infill_boundary_compensation(const PerimeterGenerator &perimeter_generator, int detail_count)
-{
-    if (detail_count <= 0 ||
-        !perimeter_generator.config->crisp_corner_interlace_small_nozzle_walls.value ||
-        perimeter_generator.layer_id % 2 == 0 ||
-        perimeter_generator.config->crisp_corner_small_nozzle_wall_count.value <= 1)
-        return 0;
+    const size_t hotend_count = perimeter_generator.print_config->nozzle_diameter.values.size();
+    const int effective_detail_walls = detail_wall_count_for_layer(
+        *perimeter_generator.config, size_t(perimeter_generator.layer_id), hotend_count);
+    if (effective_detail_walls <= 0)
+        return MultiNozzleWallPlan { false, 0, 0, base_wall_count, base_wall_count, base_wall_count,
+                                     detail_spacing, large_spacing, detail_width, 0., 0 };
 
-    return std::max<coord_t>(0, perimeter_generator.perimeter_flow.scaled_spacing() -
-                                perimeter_generator.smaller_ext_perimeter_flow.scaled_spacing());
+    const int requested_detail_walls = std::max(1,
+        perimeter_generator.config->crisp_corner_small_nozzle_wall_count.value);
+    const int requested_large_walls = std::max(2, base_wall_count);
+    const int total_walls = requested_detail_walls + requested_large_walls;
+    const int effective_large_walls = total_walls - effective_detail_walls;
+    const double overlap_ratio = std::clamp(
+        perimeter_generator.config->crisp_corner_nozzle_wall_overlap.value / 100., 0., 0.8);
+    const coord_t infill_compensation = effective_detail_walls < requested_detail_walls ?
+        std::max<coord_t>(0, large_spacing - detail_spacing) : 0;
+
+    return MultiNozzleWallPlan { true, requested_detail_walls, effective_detail_walls,
+                                 requested_large_walls, effective_large_walls, total_walls,
+                                 detail_spacing, large_spacing, detail_width, overlap_ratio,
+                                 infill_compensation };
 }
 
 template<class _T>
@@ -1453,7 +1449,8 @@ void PerimeterGenerator::process_classic()
     // BBS: this flow is for smaller external perimeter for small area
     coord_t ext_min_spacing_smaller = coord_t(ext_perimeter_spacing * (1 - SMALLER_EXT_INSET_OVERLAP_TOLERANCE));
     this->smaller_ext_perimeter_flow = this->ext_perimeter_flow;
-    if (manual_detail_wall_count_for_layer(*this) > 0 || detail_candidate_available(*this))
+    if (detail_wall_count_for_layer(*this->config, size_t(this->layer_id), this->print_config->nozzle_diameter.values.size()) > 0 ||
+        detail_candidate_available(*this))
         this->smaller_ext_perimeter_flow = detail_external_perimeter_flow(*this);
     else {
         const double min_positive_width = this->layer_height * (1. - 0.25 * PI) + EPSILON;
@@ -1497,8 +1494,10 @@ void PerimeterGenerator::process_classic()
             loop_number = 0;
         const bool surface_uses_detail_nozzle = surface_requires_detail_nozzle(
             *this, surface.expolygon, surface_simplify_resolution);
-        const int prepared_detail_wall_count = surface_uses_detail_nozzle ? manual_detail_wall_count_for_layer(*this) : 0;
-        loop_number = enforce_detail_and_large_wall_counts(*this, loop_number, surface_uses_detail_nozzle);
+        const MultiNozzleWallPlan wall_plan = make_multi_nozzle_wall_plan(
+            *this, loop_number, surface_uses_detail_nozzle);
+        const int prepared_detail_wall_count = wall_plan.detail_walls;
+        loop_number = wall_plan.loop_number();
 
         ExPolygons last        = union_ex(surface.expolygon.simplify_p(surface_simplify_resolution));
         ExPolygons gaps;
@@ -1574,8 +1573,8 @@ void PerimeterGenerator::process_classic()
                 } else {
                     //FIXME Is this offset correct if the line width of the inner perimeters differs
                     // from the line width of the infill?
-                    coord_t distance = prepared_detail_wall_count > 0 ?
-                        detail_wall_center_distance(*this, i, prepared_detail_wall_count) :
+                    coord_t distance = wall_plan.active ?
+                        wall_plan.center_distance(i) :
                         ((i == 1) ? ext_perimeter_spacing2 : perimeter_spacing);
                     //BBS
                     //offsets = this->config->thin_walls ?
@@ -1595,8 +1594,8 @@ void PerimeterGenerator::process_classic()
                     //BBS: For internal perimeter, we should "enable" thin wall strategy in which offset2 is used to
                     // remove too closed line, so that gap fill can be used for such internal narrow area in following
                     // handling.
-                    const coord_t current_min_spacing = prepared_detail_wall_count > 0 ?
-                        detail_wall_min_spacing(*this, i, prepared_detail_wall_count) : min_spacing;
+                    const coord_t current_min_spacing = wall_plan.active ?
+                        wall_plan.minimum_spacing(i) : min_spacing;
                     offsets = offset2_ex(last,
                         -float(distance + current_min_spacing / 2. - 1.),
                         float(current_min_spacing / 2. - 1.));
@@ -1930,7 +1929,7 @@ void PerimeterGenerator::process_classic()
         }
         // simplify infill contours according to resolution
         ExPolygons stable_infill_boundary = last;
-        if (const coord_t compensation = interlocking_infill_boundary_compensation(*this, prepared_detail_wall_count); compensation > 0)
+        if (const coord_t compensation = wall_plan.infill_boundary_compensation; compensation > 0)
             stable_infill_boundary = intersection_ex(offset_ex(stable_infill_boundary, double(compensation)), { surface.expolygon });
 
         Polygons pp;
@@ -2393,7 +2392,8 @@ void PerimeterGenerator::process_arachne()
     coord_t solid_infill_spacing = this->solid_infill_flow.scaled_spacing();
 
     this->smaller_ext_perimeter_flow = this->ext_perimeter_flow;
-    if (manual_detail_wall_count_for_layer(*this) > 0 || detail_candidate_available(*this))
+    if (detail_wall_count_for_layer(*this->config, size_t(this->layer_id), this->print_config->nozzle_diameter.values.size()) > 0 ||
+        detail_candidate_available(*this))
         this->smaller_ext_perimeter_flow = detail_external_perimeter_flow(*this);
     m_ext_mm3_per_mm_smaller_width = this->smaller_ext_perimeter_flow.mm3_per_mm();
 
@@ -2456,19 +2456,17 @@ void PerimeterGenerator::process_arachne()
             loop_number = 0;
         const bool surface_uses_detail_nozzle = surface_requires_detail_nozzle(
             *this, surface.expolygon, surface_simplify_resolution);
-        const int arachne_detail_wall_count = surface_uses_detail_nozzle ? manual_detail_wall_count_for_layer(*this) : 0;
-        loop_number = enforce_detail_and_large_wall_counts(*this, loop_number, surface_uses_detail_nozzle);
+        const MultiNozzleWallPlan wall_plan = make_multi_nozzle_wall_plan(
+            *this, loop_number, surface_uses_detail_nozzle);
+        const int arachne_detail_wall_count = wall_plan.detail_walls;
+        loop_number = wall_plan.loop_number();
 
         Arachne::WallToolPathsParams input_params_tmp = input_params;
         input_params_tmp.fixed_outer_wall_count = size_t(std::max(1, arachne_detail_wall_count));
         const coord_t arachne_wall_spacing = perimeter_spacing;
-        const coord_t arachne_outer_spacing = arachne_detail_wall_count > 0 ?
-            this->smaller_ext_perimeter_flow.scaled_spacing() : bead_width_0;
-        if (arachne_detail_wall_count > 0) {
-            const double overlap_ratio = std::clamp(this->config->crisp_corner_nozzle_wall_overlap.value / 100., 0., 0.8);
-            input_params_tmp.fixed_outer_wall_boundary_overlap = coord_t(
-                std::min(arachne_outer_spacing, arachne_wall_spacing) * overlap_ratio);
-        }
+        const coord_t arachne_outer_spacing = wall_plan.arachne_outer_spacing(bead_width_0);
+        if (wall_plan.active)
+            input_params_tmp.fixed_outer_wall_boundary_overlap = wall_plan.arachne_boundary_overlap();
         
         Polygons   last_p = to_polygons(last);
         Arachne::WallToolPaths wallToolPaths(last_p, arachne_outer_spacing, arachne_wall_spacing, coord_t(loop_number + 1),
@@ -2548,7 +2546,7 @@ void PerimeterGenerator::process_arachne()
         }
         //PS
 
-        if (const coord_t compensation = interlocking_infill_boundary_compensation(*this, arachne_detail_wall_count); compensation > 0)
+        if (const coord_t compensation = wall_plan.infill_boundary_compensation; compensation > 0)
             infill_contour = intersection_ex(offset_ex(infill_contour, double(compensation)), { surface.expolygon });
 
         loop_number = int(perimeters.size()) - 1;

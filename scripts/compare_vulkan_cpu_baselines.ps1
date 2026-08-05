@@ -3,6 +3,9 @@ param(
     [string] $ReferenceRun,
     [Parameter(Mandatory = $true)]
     [string] $CandidateRun,
+    [string[]] $CpuEnvelopeRuns = @(),
+    [string] $DispatchDiagnosticsRoot = "",
+    [switch] $PassCpuFallbackWithoutDispatch,
     [string] $OutputPath = "",
     [ValidateRange(0.01, 0.25)]
     [double] $CoverageGridMm = 0.05,
@@ -15,6 +18,10 @@ Set-StrictMode -Version Latest
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
 $ReferenceRun = [IO.Path]::GetFullPath($ReferenceRun)
 $CandidateRun = [IO.Path]::GetFullPath($CandidateRun)
+$CpuEnvelopeRuns = @($CpuEnvelopeRuns | ForEach-Object { [IO.Path]::GetFullPath($_) })
+if (-not [string]::IsNullOrWhiteSpace($DispatchDiagnosticsRoot)) {
+    $DispatchDiagnosticsRoot = [IO.Path]::GetFullPath($DispatchDiagnosticsRoot)
+}
 $analyzerSource = Join-Path $PSScriptRoot 'lib\GcodeGeometryAnalyzer.cs'
 if (-not (Test-Path -LiteralPath $analyzerSource -PathType Leaf)) { throw "Missing analyzer source: $analyzerSource" }
 Add-Type -Path $analyzerSource
@@ -137,6 +144,15 @@ if ($reference.Count -ne $candidate.Count -or $reference.Count -lt $MinimumCaseC
     throw "Baseline sizes are invalid: reference=$($reference.Count), candidate=$($candidate.Count)"
 }
 $candidateById = @{}; foreach ($item in $candidate) { $candidateById[$item.id] = $item }
+$cpuEnvelopeResults = [Collections.Generic.List[object]]::new()
+foreach ($run in $CpuEnvelopeRuns) {
+    $items = @(Read-Results $run)
+    if ($items.Count -ne $reference.Count) {
+        throw "CPU envelope size is invalid: run=$run reference=$($reference.Count) envelope=$($items.Count)"
+    }
+    $byId = @{}; foreach ($item in $items) { $byId[$item.id] = $item }
+    $cpuEnvelopeResults.Add([pscustomobject]@{ run=$run; by_id=$byId })
+}
 $planPath = Join-Path $CandidateRun 'case-plan.json'
 if (-not (Test-Path -LiteralPath $planPath -PathType Leaf)) { throw "Missing case plan: $planPath" }
 $planDocument = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
@@ -150,10 +166,25 @@ foreach ($left in $reference) {
     $right = $candidateById[$left.id]
     $mode = 'exact-motion'
     $passed = $left.settings_sha256 -eq $right.settings_sha256 -and $left.motion_sha256 -eq $right.motion_sha256
+    $candidateDispatched = $null
+    if (-not [string]::IsNullOrWhiteSpace($DispatchDiagnosticsRoot)) {
+        $diagnosticsPath = Join-Path (Join-Path $DispatchDiagnosticsRoot $left.id) 'vulkan-dispatch.csv'
+        $candidateDispatched = Test-Path -LiteralPath $diagnosticsPath -PathType Leaf
+        if ($candidateDispatched) {
+            $candidateDispatched = (Get-Item -LiteralPath $diagnosticsPath).Length -gt 0
+        }
+    }
     $leftGeometry = $null; $rightGeometry = $null
     $coverageDifferenceRatio = $null
     $lengthDifferenceRatio = $null
     $extrusionDifferenceRatio = $null
+    $coverageLimitApplied = $null
+    $metricLimitApplied = $null
+    if (-not $passed -and $left.settings_sha256 -eq $right.settings_sha256 -and
+        $PassCpuFallbackWithoutDispatch -and $candidateDispatched -eq $false -and [bool]$right.passed) {
+        $mode = 'cpu-fallback-no-vulkan-work'
+        $passed = $true
+    }
     if (-not $passed -and $left.settings_sha256 -eq $right.settings_sha256) {
         $leftGcode = Get-ChildItem -LiteralPath (Join-Path $ReferenceRun $left.id) -File -Filter '*.gcode' | Select-Object -First 1
         $rightGcode = Get-ChildItem -LiteralPath (Join-Path $CandidateRun $left.id) -File -Filter '*.gcode' | Select-Object -First 1
@@ -176,6 +207,27 @@ foreach ($left in $reference) {
                     $pattern = [string]$caseById[[string]$left.id].sparse_infill_pattern
                     $coverageLimit = if ($pattern -eq 'lightning') { 0.02 } else { 0.002 }
                     $metricLimit = if ($pattern -eq 'lightning') { 0.002 } else { 0.0001 }
+                    foreach ($envelope in $cpuEnvelopeResults) {
+                        if (-not $envelope.by_id.ContainsKey($left.id)) {
+                            throw "CPU envelope is missing $($left.id): $($envelope.run)"
+                        }
+                        $envelopeItem = $envelope.by_id[$left.id]
+                        if ($envelopeItem.settings_sha256 -ne $left.settings_sha256) {
+                            throw "CPU envelope settings differ for $($left.id): $($envelope.run)"
+                        }
+                        $envelopeGcode = Get-ChildItem -LiteralPath (Join-Path $envelope.run $left.id) -File -Filter '*.gcode' | Select-Object -First 1
+                        if ($null -eq $envelopeGcode) {
+                            throw "CPU envelope G-code is missing for $($left.id): $($envelope.run)"
+                        }
+                        $envelopeGeometry = [Magpie.Verification.GcodeGeometryAnalyzer]::Analyze($envelopeGcode.FullName, $CoverageGridMm, $true)
+                        $envelopeCoverage = $leftGeometry.CoverageDifferenceRatio($envelopeGeometry)
+                        $envelopeLength = if ($leftGeometry.TotalLength -gt 0) { [Math]::Abs($leftGeometry.TotalLength - $envelopeGeometry.TotalLength) / $leftGeometry.TotalLength } else { 0 }
+                        $envelopeExtrusion = if ($leftGeometry.TotalExtrusion -gt 0) { [Math]::Abs($leftGeometry.TotalExtrusion - $envelopeGeometry.TotalExtrusion) / $leftGeometry.TotalExtrusion } else { 0 }
+                        $coverageLimit = [Math]::Max($coverageLimit, $envelopeCoverage * 1.01 + 1e-9)
+                        $metricLimit = [Math]::Max($metricLimit, [Math]::Max($envelopeLength, $envelopeExtrusion) * 1.01 + 1e-9)
+                    }
+                    $coverageLimitApplied = $coverageLimit
+                    $metricLimitApplied = $metricLimit
                     if ($coverageDifferenceRatio -le $coverageLimit -and
                         $lengthDifferenceRatio -le $metricLimit -and
                         $extrusionDifferenceRatio -le $metricLimit) {
@@ -194,6 +246,9 @@ foreach ($left in $reference) {
         coverage_difference_ratio = $coverageDifferenceRatio
         length_difference_ratio = $lengthDifferenceRatio
         extrusion_difference_ratio = $extrusionDifferenceRatio
+        candidate_dispatched = $candidateDispatched
+        coverage_limit_applied = $coverageLimitApplied
+        metric_limit_applied = $metricLimitApplied
         infill_pattern = [string]$caseById[[string]$left.id].sparse_infill_pattern
         reference_geometry = $leftGeometry
         candidate_geometry = $rightGeometry
@@ -213,6 +268,7 @@ $summary = [pscustomobject][ordered]@{
     unordered_segments = @($rows | Where-Object comparison -eq 'unordered-segments').Count
     coverage_and_metrics = @($rows | Where-Object comparison -eq 'coverage-and-metrics').Count
     cpu_nondeterminism_envelope = @($rows | Where-Object comparison -eq 'cpu-nondeterminism-envelope').Count
+    cpu_fallback_no_vulkan_work = @($rows | Where-Object comparison -eq 'cpu-fallback-no-vulkan-work').Count
     geometry_mismatch = @($rows | Where-Object comparison -eq 'geometry-mismatch').Count
     rows = @($rows)
 }

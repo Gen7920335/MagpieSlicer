@@ -604,7 +604,7 @@ private:
     coordf_t                            m_temperature_drop_tower_last_print_z { -std::numeric_limits<coordf_t>::max() };
     bool                                m_temperature_drop_tower_path_initialized { false };
     bool                                m_temperature_drop_tower_brim_printed { false };
-    std::vector<Vec2d>                  m_temperature_drop_tower_machine_path;
+    std::vector<Vec2d>                  m_temperature_drop_tower_plate_path;
     double                              m_temperature_drop_tower_left { 0.0 };
     double                              m_temperature_drop_tower_rear { 0.0 };
     double                              m_temperature_drop_tower_size { 0.0 };

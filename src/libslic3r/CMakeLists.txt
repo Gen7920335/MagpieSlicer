@@ -223,6 +223,11 @@ set(lisbslic3r_sources
     GCode/GCodeProcessor.cpp
     GCode/GCodeProcessor.hpp
     GCode.hpp
+    HotendConfigService.cpp
+    ProjectConfigService.cpp
+    ProjectConfigService.hpp
+    HotendPresetStore.cpp
+    HotendPresetStore.hpp
     GCode/PchipInterpolatorHelper.cpp
     GCode/PchipInterpolatorHelper.hpp
     GCode/PostProcessor.cpp
@@ -314,6 +319,7 @@ set(lisbslic3r_sources
     NormalUtils.hpp
     NSVGUtils.cpp
     NSVGUtils.hpp
+    NanoSVG.cpp
     ObjColorUtils.cpp
     ObjColorUtils.hpp
     ObjectID.cpp

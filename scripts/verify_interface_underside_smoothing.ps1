@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($SlicerPath)) {
-    $SlicerPath = Join-Path $RepoRoot 'build\src\Release\orca-slicer.exe'
+    $SlicerPath = Join-Path $RepoRoot 'build\src\Release\magpie-slicer.exe'
 }
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $RepoRoot 'build\verification\interface-underside-smoothing'

@@ -14,7 +14,7 @@ $paths = @(
     'build\src\libslic3r\Release\libslic3r.lib',
     'build\src\OrcaSlicer.dir\Release\OrcaSlicer.obj',
     'build\src\Release\OrcaSlicer.dll',
-    'build\src\Release\orca-slicer.exe'
+    'build\src\Release\magpie-slicer.exe'
 )
 foreach ($path in $paths) {
     if (Test-Path $path) {

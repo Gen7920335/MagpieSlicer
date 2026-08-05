@@ -16,6 +16,9 @@ add_executable(${_TEST_NAME}_tests
     test_preset_setting_id.cpp
     test_elephant_foot_compensation.cpp
     test_geometry.cpp
+    test_hotend_preset_store.cpp
+    test_project_config_service.cpp
+    test_wall_tool_routing.cpp
     test_placeholder_parser.cpp
     test_polygon.cpp
     test_mutable_polygon.cpp

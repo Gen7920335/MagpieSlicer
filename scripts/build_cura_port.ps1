@@ -11,7 +11,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "OrcaSlicer build failed with exit code $LASTEXITCODE"
 }
 
-$exe = Join-Path $repo 'build\src\Release\orca-slicer.exe'
+$exe = Join-Path $repo 'build\src\Release\magpie-slicer.exe'
 if (-not (Test-Path $exe)) {
     throw "Expected executable not found: $exe"
 }

@@ -461,7 +461,8 @@ foreach ($case in $cases) {
     $filamentsArg = [char]34 + ($filamentProfiles -join ';') + [char]34
     $outputArg = [char]34 + $caseRoot + [char]34
     $modelArg = [char]34 + $ModelPath + [char]34
-    $arguments = @('--slice', '0', '--debug', '1', '--load-settings', $settingsArg, '--load-filaments', $filamentsArg, '--outputdir', $outputArg, $modelArg)
+    $initialFilamentMap = (1..$filamentProfiles.Count) -join ','
+    $arguments = @('--slice', '0', '--debug', '1', '--filament-map', $initialFilamentMap, '--load-settings', $settingsArg, '--load-filaments', $filamentsArg, '--outputdir', $outputArg, $modelArg)
     $processHandle = Start-Process -FilePath $SlicerPath -ArgumentList $arguments -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
     if (-not $processHandle.WaitForExit($SliceTimeoutSeconds * 1000)) {
         $processHandle.Kill()

@@ -252,6 +252,76 @@ static DynamicPrintConfig sublayer_config(
     return config;
 }
 
+TEST_CASE("Cura normal support honors explicit geometry styles", "[SupportMaterial][CuraStyle]")
+{
+    CHECK(uses_cura_support_geometry(stNormalCuraAuto, smsDefault));
+    CHECK(uses_cura_support_geometry(stNormalCura, smsDefault));
+    CHECK(uses_cura_support_geometry(stNormalCuraAuto, smsGrid));
+    CHECK(uses_cura_support_geometry(stNormalCuraAuto, smsSnug));
+
+    CHECK(is_normal_support(stNormalAuto));
+    CHECK(is_normal_support(stNormalCuraAuto));
+    CHECK(is_normal_support(stNormal));
+    CHECK(is_normal_support(stNormalCura));
+    CHECK_FALSE(is_normal_support(stTreeAuto));
+    CHECK_FALSE(is_normal_support(stTree));
+}
+
+TEST_CASE("Cura hollow support emits walls without sparse base fill", "[SupportMaterial][CuraStyle][Hollow]")
+{
+    const auto support_length = [](SupportMaterialPattern pattern, bool solid_raft) {
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_deserialize_strict({
+            { "enable_support", true },
+            { "support_threshold_angle", 90.0 },
+            { "support_interface_top_layers", 0 },
+            { "support_interface_bottom_layers", 0 },
+            { "cura_solid_support_raft", solid_raft }
+        });
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormalCuraAuto));
+        config.set_key_value("support_base_pattern", new ConfigOptionEnum<SupportMaterialPattern>(pattern));
+
+        Print print;
+        init_and_process_print({ TestMesh::overhang }, print, config);
+        const std::string output = gcode(print);
+
+        const auto axis_value = [](const std::string &line, char axis, double fallback) {
+            const std::string marker { ' ', axis };
+            const size_t position = line.find(marker);
+            return position == std::string::npos ? fallback : std::strtod(line.c_str() + position + 2, nullptr);
+        };
+
+        bool in_support = false;
+        double x = 0.;
+        double y = 0.;
+        double length = 0.;
+        std::istringstream lines(output);
+        for (std::string line; std::getline(lines, line);) {
+            if (line.rfind(";TYPE:", 0) == 0) {
+                in_support = line == ";TYPE:Support";
+            } else if (line.rfind("G1 ", 0) == 0) {
+                const double next_x = axis_value(line, 'X', x);
+                const double next_y = axis_value(line, 'Y', y);
+                const double extrusion = axis_value(line, 'E', 0.);
+                if (in_support && extrusion > 0.)
+                    length += std::hypot(next_x - x, next_y - y);
+                x = next_x;
+                y = next_y;
+            }
+        }
+        return length;
+    };
+
+    const double rectilinear_length = support_length(smpRectilinear, false);
+    const double hollow_length = support_length(smpNone, false);
+    const double solid_raft_length = support_length(smpNone, true);
+
+    REQUIRE(rectilinear_length > 0.);
+    REQUIRE(hollow_length > 0.);
+    CHECK(hollow_length < rectilinear_length);
+    CHECK(solid_raft_length > hollow_length);
+}
+
 TEST_CASE("Support interface sublayer range is contact-first and clamped", "[SupportMaterial][Sublayer]")
 {
     const auto selected = [](bool enabled, int start, int end, int number, int total) {
@@ -401,6 +471,9 @@ struct TemperatureDropTowerSettings {
     std::vector<Vec2d> printable_area {
         Vec2d(0., 0.), Vec2d(200., 0.), Vec2d(200., 200.), Vec2d(0., 200.)
     };
+    std::vector<std::vector<Vec2d>> extruder_printable_areas;
+    std::vector<Vec2d> extruder_offsets;
+    std::vector<int> filament_map;
 };
 
 static DynamicPrintConfig temperature_drop_tower_config(const TemperatureDropTowerSettings &settings)
@@ -432,6 +505,13 @@ static DynamicPrintConfig temperature_drop_tower_config(const TemperatureDropTow
         "print_sequence", new ConfigOptionEnum<PrintSequence>(settings.print_sequence));
     config.set_key_value(
         "printable_area", new ConfigOptionPoints(settings.printable_area));
+    if (!settings.extruder_printable_areas.empty())
+        config.set_key_value(
+            "extruder_printable_area", new ConfigOptionPointsGroups(settings.extruder_printable_areas));
+    if (!settings.extruder_offsets.empty())
+        config.set_key_value("extruder_offset", new ConfigOptionPoints(settings.extruder_offsets));
+    if (!settings.filament_map.empty())
+        config.set_key_value("filament_map", new ConfigOptionInts(settings.filament_map));
     config.set_key_value(
         "support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ settings.tower_x }));
     config.set_key_value(
@@ -887,6 +967,50 @@ TEST_CASE("Temperature drop tower clamps a moved position to printable bed bound
     CHECK(metrics.min_y > 3.0);
     CHECK(metrics.max_x < 197.0);
     CHECK(metrics.max_y < 197.0);
+}
+
+TEST_CASE("Temperature drop tower automatic placement respects the mapped extruder area",
+          "[SupportMaterial][TemperatureDropTower]")
+{
+    TemperatureDropTowerSettings settings;
+    settings.filament_map = { 2 };
+    settings.extruder_printable_areas = {
+        settings.printable_area,
+        { Vec2d(24., 12.), Vec2d(176., 12.), Vec2d(176., 188.), Vec2d(24., 188.) }
+    };
+    settings.tower_x = -1.0;
+    settings.tower_y = -1.0;
+
+    DynamicPrintConfig config = temperature_drop_tower_config(settings);
+    config.set_num_extruders(2);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4, 0.4 }));
+    config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+    config.set_key_value("filament_map", new ConfigOptionInts({ 2 }));
+    config.set_key_value(
+        "extruder_printable_area", new ConfigOptionPointsGroups(settings.extruder_printable_areas));
+    const TemperatureDropTowerMetrics metrics = analyze_temperature_drop_tower(
+        slice({ TestMesh::overhang }, config));
+
+    check_temperature_drop_tower_passes_are_on_distinct_layers(metrics);
+    CHECK(metrics.min_x > 24.0);
+    CHECK(metrics.min_y > 12.0);
+    CHECK(metrics.max_x < 176.0);
+    CHECK(metrics.max_y < 188.0);
+}
+
+TEST_CASE("Temperature drop tower follows the standard extruder offset transform",
+          "[SupportMaterial][TemperatureDropTower]")
+{
+    TemperatureDropTowerSettings settings;
+    settings.extruder_offsets = { Vec2d(-32.0, 0.0) };
+    const TemperatureDropTowerMetrics metrics = analyze_temperature_drop_tower(
+        temperature_drop_tower_gcode(settings));
+
+    check_temperature_drop_tower_passes_are_on_distinct_layers(metrics);
+    CHECK(metrics.min_x > 34.0);
+    CHECK(metrics.max_x < 109.0);
+    CHECK(metrics.min_y > 2.0);
+    CHECK(metrics.max_y < 198.0);
 }
 
 TEST_CASE("Temperature drop tower selects and serializes independent plate positions",

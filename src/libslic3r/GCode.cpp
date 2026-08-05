@@ -3,6 +3,7 @@
 #include "GCodeWriter.hpp"
 #include "Polygon.hpp"
 #include "PrintConfig.hpp"
+#include "ProjectConfigService.hpp"
 #include "libslic3r.h"
 #include "I18N.hpp"
 #include "GCode.hpp"
@@ -5378,13 +5379,13 @@ static bool detail_entity_needs_smaller_nozzle(const ExtrusionEntity &entity, do
 
 static bool detail_collection_needs_smaller_nozzle(const ExtrusionEntityCollection &extrusions, const PrintConfig &config, const PrintRegionConfig &region_config)
 {
-    const unsigned int base_extruder = region_config.outer_wall_filament_id.value > 0 ?
+    const unsigned int base_filament = region_config.outer_wall_filament_id.value > 0 ?
         region_config.outer_wall_filament_id.value : 1;
-    const size_t base_idx = size_t(base_extruder - 1);
-    if (base_idx >= config.nozzle_diameter.values.size())
+    const ResolvedWallTool base_tool = wall_tool_for_filament(config, base_filament);
+    if (!base_tool)
         return false;
 
-    return detail_entity_needs_smaller_nozzle(extrusions, config.nozzle_diameter.get_at(base_idx));
+    return detail_entity_needs_smaller_nozzle(extrusions, base_tool.nozzle_diameter);
 }
 
 static unsigned int effective_outer_wall_filament_1based(const PrintRegionConfig &region_config)
@@ -5399,11 +5400,12 @@ static unsigned int effective_inner_wall_filament_1based(const PrintRegionConfig
     return effective_outer_wall_filament_1based(region_config);
 }
 
-static unsigned int marked_detail_wall_extruder_1based(const PrintConfig &config, const PrintRegion &region)
+static unsigned int marked_detail_wall_filament_1based(const PrintConfig &config, const PrintRegion &region)
 {
     const PrintRegionConfig &region_config = region.config();
-    const unsigned int base_extruder = effective_outer_wall_filament_1based(region_config);
-    return detail_external_perimeter_extruder_1based(config, region_config, base_extruder);
+    const unsigned int base_filament = effective_outer_wall_filament_1based(region_config);
+    const ResolvedWallTool tool = detail_wall_tool(config, region_config, base_filament);
+    return tool ? tool.filament_id_1based : base_filament;
 }
 
 static bool entity_has_tool_hint(const ExtrusionEntity &entity, ExtrusionToolHint hint)
@@ -6420,10 +6422,12 @@ LayerResult GCode::process_layer(
                                                        int                              forced_extruder_id) {
                             // This extrusion is part of certain Region, which tells us which extruder should be used for it.
                             int correct_extruder_id = forced_extruder_id >= 0 ? forced_extruder_id : layer_tools.extruder(*current_extrusions, region);
-                            const unsigned int override_wall_hotend = entity_type == ObjectByExtruder::Island::Region::PERIMETERS ?
-                                large_nozzle_override_toolhead_1based(region.config(), layer.id(), print.config().nozzle_diameter.values.size()) : 0;
-                            if (override_wall_hotend > 0)
-                                correct_extruder_id = int(override_wall_hotend - 1);
+                            const unsigned int base_wall_filament = effective_outer_wall_filament_1based(region.config());
+                            const ResolvedWallTool override_wall_tool = entity_type == ObjectByExtruder::Island::Region::PERIMETERS ?
+                                large_nozzle_override_wall_tool(print.config(), region.config(), layer.id(), base_wall_filament) :
+                                ResolvedWallTool {};
+                            if (override_wall_tool)
+                                correct_extruder_id = int(override_wall_tool.filament_id_1based - 1);
                             const WipingExtrusions::ExtruderPerCopy *entity_overrides = nullptr;
                             if (! layer_tools.has_extruder(correct_extruder_id)) {
                                 // this entity is not overridden, but its extruder is not in layer_tools - we'll print it
@@ -6469,12 +6473,13 @@ LayerResult GCode::process_layer(
                             }
                         };
 
-                        const unsigned int override_wall_hotend = large_nozzle_override_toolhead_1based(
-                            region.config(), layer.id(), print.config().nozzle_diameter.values.size());
-                        const unsigned int external_wall_filament = override_wall_hotend > 0 ?
-                            override_wall_hotend : marked_detail_wall_extruder_1based(print.config(), region);
-                        const unsigned int inner_wall_filament = override_wall_hotend > 0 ?
-                            override_wall_hotend : effective_inner_wall_filament_1based(region.config());
+                        const unsigned int base_wall_filament = effective_outer_wall_filament_1based(region.config());
+                        const ResolvedWallTool override_wall_tool = large_nozzle_override_wall_tool(
+                            print.config(), region.config(), layer.id(), base_wall_filament);
+                        const unsigned int external_wall_filament = override_wall_tool ?
+                            override_wall_tool.filament_id_1based : marked_detail_wall_filament_1based(print.config(), region);
+                        const unsigned int inner_wall_filament = override_wall_tool ?
+                            override_wall_tool.filament_id_1based : effective_inner_wall_filament_1based(region.config());
                         bool split_mixed_perimeters =
                             entity_type == ObjectByExtruder::Island::Region::PERIMETERS &&
                             external_wall_filament != inner_wall_filament &&
@@ -6494,7 +6499,7 @@ LayerResult GCode::process_layer(
                             }
 
                             if (!detail_perimeters->entities.empty()) {
-                                const int detail_extruder_id = int(marked_detail_wall_extruder_1based(print.config(), region)) - 1;
+                                const int detail_extruder_id = int(marked_detail_wall_filament_1based(print.config(), region)) - 1;
                                 split_perimeter_storage.emplace_back(std::move(detail_perimeters));
                                 process_extrusions(split_perimeter_storage.back().get(), nullptr, false, detail_extruder_id);
                             }
@@ -7923,18 +7928,45 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
         if (printable_area.size() < 3)
             return false;
 
+        Polygon printable_polygon;
+        printable_polygon.points.reserve(printable_area.size());
+        for (const Vec2d &point : printable_area) {
+            printable_polygon.points.emplace_back(Point::new_scale(point.x(), point.y()));
+        }
+
+        const size_t plate_index = m_print == nullptr ? 0 : size_t(m_print->get_plate_index());
+        const double configured_x = temperature_drop_tower_position_at(
+            &m_config.support_interface_temperature_drop_tower_x, plate_index);
+        const double configured_y = temperature_drop_tower_position_at(
+            &m_config.support_interface_temperature_drop_tower_y, plate_index);
+
+        // Automatic placement must use the same physical tool area as the final
+        // multi-extruder G-code validation. Explicit positions retain their existing
+        // whole-bed clamping behavior and are validated below.
+        const bool automatic_placement = configured_x < 0.0 || configured_y < 0.0;
+        Polygon extruder_placement_polygon;
+        const Polygon *placement_polygon = &printable_polygon;
+        if (automatic_placement && m_print != nullptr) {
+            const size_t extruder_id = m_print->get_extruder_id(filament_id);
+            const std::vector<Polygons> extruder_printable_polygons =
+                m_print->get_extruder_printable_polygons();
+            if (extruder_id < extruder_printable_polygons.size() &&
+                !extruder_printable_polygons[extruder_id].empty()) {
+                extruder_placement_polygon = extruder_printable_polygons[extruder_id].front();
+                placement_polygon = &extruder_placement_polygon;
+            }
+        }
+
         double min_x = std::numeric_limits<double>::max();
         double min_y = std::numeric_limits<double>::max();
         double max_x = std::numeric_limits<double>::lowest();
         double max_y = std::numeric_limits<double>::lowest();
-        Polygon printable_polygon;
-        printable_polygon.points.reserve(printable_area.size());
-        for (const Vec2d &point : printable_area) {
-            min_x = std::min(min_x, point.x());
-            min_y = std::min(min_y, point.y());
-            max_x = std::max(max_x, point.x());
-            max_y = std::max(max_y, point.y());
-            printable_polygon.points.emplace_back(Point::new_scale(point.x(), point.y()));
+        for (const Point &point : placement_polygon->points) {
+            const Vec2d unscaled_point = unscale(point);
+            min_x = std::min(min_x, unscaled_point.x());
+            min_y = std::min(min_y, unscaled_point.y());
+            max_x = std::max(max_x, unscaled_point.x());
+            max_y = std::max(max_y, unscaled_point.y());
         }
 
         const int normal_temperature = std::max(m_config.nozzle_temperature.get_at(filament_id),
@@ -7959,9 +7991,6 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
         if (max_origin_x < min_origin_x || max_origin_y < min_origin_y)
             return false;
 
-        const size_t plate_index = m_print == nullptr ? 0 : size_t(m_print->get_plate_index());
-        const double configured_x = m_config.support_interface_temperature_drop_tower_x.get_at(plate_index);
-        const double configured_y = m_config.support_interface_temperature_drop_tower_y.get_at(plate_index);
         const double origin_x = configured_x < 0.0
             ? min_origin_x
             : std::clamp(configured_x, min_origin_x, max_origin_x);
@@ -7975,8 +8004,9 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
             Vec2d(origin_x, origin_y + footprint_size),
             Vec2d(origin_x + footprint_size, origin_y + footprint_size)
         };
-        if (!std::all_of(footprint_corners.begin(), footprint_corners.end(), [&printable_polygon](const Vec2d &corner) {
-                return printable_polygon.contains(Point::new_scale(corner.x(), corner.y()));
+        if (!std::all_of(footprint_corners.begin(), footprint_corners.end(), [&](const Vec2d &corner) {
+                const Point scaled_corner = Point::new_scale(corner.x(), corner.y());
+                return printable_polygon.contains(scaled_corner) && placement_polygon->contains(scaled_corner);
             }))
             return false;
 
@@ -7987,31 +8017,33 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
         m_temperature_drop_tower_size = tower_size;
         m_temperature_drop_tower_spacing = spacing;
 
-        m_temperature_drop_tower_machine_path.emplace_back(tower_left, tower_rear - tower_size);
+        m_temperature_drop_tower_plate_path.emplace_back(tower_left, tower_rear - tower_size);
         for (int line = 0; line < TEMPERATURE_DROP_TOWER_LINE_COUNT; ++line) {
             const double vertical_x = tower_left + line * spacing;
             const double horizontal_y = tower_rear - line * spacing;
             if ((line & 1) == 0) {
-                m_temperature_drop_tower_machine_path.emplace_back(vertical_x, horizontal_y);
-                m_temperature_drop_tower_machine_path.emplace_back(tower_left + tower_size, horizontal_y);
+                m_temperature_drop_tower_plate_path.emplace_back(vertical_x, horizontal_y);
+                m_temperature_drop_tower_plate_path.emplace_back(tower_left + tower_size, horizontal_y);
                 if (line + 1 < TEMPERATURE_DROP_TOWER_LINE_COUNT)
-                    m_temperature_drop_tower_machine_path.emplace_back(tower_left + tower_size, horizontal_y - spacing);
+                    m_temperature_drop_tower_plate_path.emplace_back(tower_left + tower_size, horizontal_y - spacing);
             } else {
-                m_temperature_drop_tower_machine_path.emplace_back(vertical_x, horizontal_y);
-                m_temperature_drop_tower_machine_path.emplace_back(vertical_x, tower_rear - tower_size);
+                m_temperature_drop_tower_plate_path.emplace_back(vertical_x, horizontal_y);
+                m_temperature_drop_tower_plate_path.emplace_back(vertical_x, tower_rear - tower_size);
                 if (line + 1 < TEMPERATURE_DROP_TOWER_LINE_COUNT)
-                    m_temperature_drop_tower_machine_path.emplace_back(vertical_x + spacing, tower_rear - tower_size);
+                    m_temperature_drop_tower_plate_path.emplace_back(vertical_x + spacing, tower_rear - tower_size);
             }
         }
     }
 
-    if (m_temperature_drop_tower_machine_path.size() < 2)
+    if (m_temperature_drop_tower_plate_path.size() < 2)
         return false;
 
     Polyline polyline;
-    polyline.points.reserve(m_temperature_drop_tower_machine_path.size());
-    for (const Vec2d &point : m_temperature_drop_tower_machine_path)
-        polyline.points.emplace_back(this->gcode_to_point(point));
+    polyline.points.reserve(m_temperature_drop_tower_plate_path.size());
+    for (const Vec2d &point : m_temperature_drop_tower_plate_path) {
+        const Vec2d local_point = point - m_origin;
+        polyline.points.emplace_back(scaled<coord_t>(local_point));
+    }
     if ((m_layer_index & 1) != 0)
         polyline.reverse();
 
@@ -8046,15 +8078,19 @@ bool GCode::build_temperature_drop_tower_brim_paths(std::vector<ExtrusionPath> &
     paths.reserve(TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT);
     for (int line = 1; line <= TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT; ++line) {
         const double offset = line * m_temperature_drop_tower_spacing;
+        auto plate_to_point = [this](const Vec2d &point) {
+            const Vec2d local_point = point - m_origin;
+            return Point(scaled<coord_t>(local_point));
+        };
         Polyline polyline;
         polyline.points = {
-            this->gcode_to_point(Vec2d(left - offset, bottom - offset)),
-            this->gcode_to_point(Vec2d(inner_right + offset, bottom - offset)),
-            this->gcode_to_point(Vec2d(inner_right + offset, inner_bottom - offset)),
-            this->gcode_to_point(Vec2d(right + offset, inner_bottom - offset)),
-            this->gcode_to_point(Vec2d(right + offset, rear + offset)),
-            this->gcode_to_point(Vec2d(left - offset, rear + offset)),
-            this->gcode_to_point(Vec2d(left - offset, bottom - offset))
+            plate_to_point(Vec2d(left - offset, bottom - offset)),
+            plate_to_point(Vec2d(inner_right + offset, bottom - offset)),
+            plate_to_point(Vec2d(inner_right + offset, inner_bottom - offset)),
+            plate_to_point(Vec2d(right + offset, inner_bottom - offset)),
+            plate_to_point(Vec2d(right + offset, rear + offset)),
+            plate_to_point(Vec2d(left - offset, rear + offset)),
+            plate_to_point(Vec2d(left - offset, bottom - offset))
         };
         if ((line & 1) == 0)
             polyline.reverse();

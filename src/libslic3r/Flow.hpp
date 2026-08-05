@@ -150,13 +150,24 @@ extern Flow support_material_flow(const PrintObject* object, float layer_height 
 extern Flow support_transition_flow(const PrintObject *object); //BBS
 extern Flow support_material_1st_layer_flow(const PrintObject *object, float layer_height = 0.f);
 extern Flow support_material_interface_flow(const PrintObject *object, float layer_height = 0.f);
-extern ConfigOptionFloatOrPercent toolhead_line_width_or(const PrintConfig &print_config, FlowRole role, int extruder_id, bool first_layer, const ConfigOptionFloatOrPercent &fallback);
+extern ConfigOptionFloatOrPercent toolhead_line_width_or(const PrintConfig &print_config, FlowRole role, int hotend_id_1based, bool first_layer, const ConfigOptionFloatOrPercent &fallback);
 extern double support_interface_density_from_spacing(double extrusion_spacing, double interface_spacing);
 extern double support_interface_spacing_from_density(double extrusion_spacing, double density);
 struct LargeNozzleOverrideRegion {
     size_t       first_layer { 0 };
     size_t       last_layer { 0 };
     unsigned int toolhead_1based { 0 };
+};
+
+struct ResolvedWallTool {
+    unsigned int filament_id_1based { 0 };
+    unsigned int hotend_id_1based { 0 };
+    double       nozzle_diameter { 0. };
+
+    explicit operator bool() const
+    {
+        return filament_id_1based > 0 && hotend_id_1based > 0 && nozzle_diameter > 0.;
+    }
 };
 
 extern std::optional<LargeNozzleOverrideRegion> parse_large_nozzle_override_region(const std::string &serialized);
@@ -166,7 +177,10 @@ extern bool detail_walls_enabled(const PrintRegionConfig &region_config);
 extern bool detail_walls_enabled_for_layer(const PrintRegionConfig &region_config, size_t layer_id, size_t toolhead_count = std::numeric_limits<size_t>::max());
 extern int detail_wall_count_for_layer(const PrintRegionConfig &region_config, size_t layer_id, size_t toolhead_count = std::numeric_limits<size_t>::max());
 extern int total_wall_count_for_layer(const PrintRegionConfig &region_config, size_t layer_id, size_t toolhead_count = std::numeric_limits<size_t>::max());
-extern unsigned int detail_external_perimeter_extruder_1based(const PrintConfig &print_config, const PrintRegionConfig &region_config, unsigned int base_extruder_id);
+extern ResolvedWallTool wall_tool_for_filament(const PrintConfig &print_config, unsigned int filament_id_1based);
+extern ResolvedWallTool wall_tool_for_hotend(const PrintConfig &print_config, unsigned int hotend_id_1based, unsigned int preferred_filament_id_1based);
+extern ResolvedWallTool detail_wall_tool(const PrintConfig &print_config, const PrintRegionConfig &region_config, unsigned int base_filament_id_1based);
+extern ResolvedWallTool large_nozzle_override_wall_tool(const PrintConfig &print_config, const PrintRegionConfig &region_config, size_t layer_id, unsigned int preferred_filament_id_1based);
 
 }
 

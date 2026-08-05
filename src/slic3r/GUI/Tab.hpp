@@ -597,10 +597,15 @@ private:
     void            add_filament_overrides_page();
     void            update_filament_overrides_page(const DynamicPrintConfig* printers_config);
 	void 			update_volumetric_flow_preset_hints();
-    void            sync_hotend_config_from_printer();
+    void            refresh_hotend_view_from_printer();
+    void            apply_hotend_preset(const DynamicPrintConfig &hotend_config);
+    void            save_hotend_preset();
+    void            load_hotend_preset();
 
     std::map<std::string, ::CheckBox*> m_overrides_options;
-    DynamicPrintConfig                 m_hotend_config;
+    // Single-value projection used only by the option controls. The edited
+    // printer preset remains the sole owner of persisted hotend values.
+    DynamicPrintConfig                 m_hotend_view_config;
     ConfigOptionsGroupShp              m_hotend_optgroup;
     size_t                             m_hotend_index {0};
 
@@ -611,7 +616,6 @@ public:
 	~TabFilament() {}
 
 	void		build() override;
-	void        save_preset(std::string name = std::string(), bool detach = false, bool save_to_project = false, bool from_input = false, std::string input_name = "") override;
 	void		reload_config() override;
 	void		update_description_lines() override;
 	void		toggle_options() override;

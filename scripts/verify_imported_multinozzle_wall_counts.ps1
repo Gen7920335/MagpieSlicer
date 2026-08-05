@@ -192,7 +192,8 @@ foreach ($generator in @('classic', 'arachne')) {
     $modelArg = [char]34 + $modelPath + [char]34
     $stdoutPath = Join-Path $caseRoot 'cli.out.log'
     $stderrPath = Join-Path $caseRoot 'cli.err.log'
-    $arguments = @('--slice', '0', '--debug', '1', '--load-settings', $settingsArg, '--load-filaments', $filamentsArg, '--outputdir', $outputArg, $modelArg)
+    $initialFilamentMap = (1..$filamentProfiles.Count) -join ','
+    $arguments = @('--slice', '0', '--debug', '1', '--filament-map', $initialFilamentMap, '--load-settings', $settingsArg, '--load-filaments', $filamentsArg, '--outputdir', $outputArg, $modelArg)
     $handle = Start-Process -FilePath $SlicerPath -ArgumentList $arguments -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
     if (-not $handle.WaitForExit($SliceTimeoutSeconds * 1000)) {
         $handle.Kill()

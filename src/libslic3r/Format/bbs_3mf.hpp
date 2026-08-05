@@ -13,6 +13,7 @@ struct ConfigSubstitutionContext;
 class DynamicPrintConfig;
 class Preset;
 struct FilamentInfo;
+struct ProjectConfigNormalizationContext;
 struct ThumbnailData;
 
 
@@ -120,6 +121,12 @@ struct PlateData
     }
     bool locked;
 };
+
+// Drops cached slice metadata only when its filament/tool indices no longer
+// match the loaded project, or when a caller repaired slicing assignments.
+bool normalize_plate_slice_metadata(
+    PlateData &plate, const ProjectConfigNormalizationContext &context,
+    bool force_invalidate = false);
 
 // BBS: encrypt
 enum class SaveStrategy

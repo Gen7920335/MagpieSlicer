@@ -38,7 +38,8 @@ Flow LayerRegion::bridging_flow(FlowRole role, bool thick_bridge) const
     // Here this->extruder(role) - 1 may underflow to MAX_INT, but then the get_at() will fall back to zero'th element, so everything is all right.
     const PrintConfig &print_config = print_object.print()->config();
     const int          extruder_id  = int(region.extruder(role));
-    auto nozzle_diameter = float(print_config.nozzle_diameter.get_at(extruder_id - 1));
+    const ResolvedWallTool tool = wall_tool_for_filament(print_config, extruder_id);
+    auto nozzle_diameter = tool ? float(tool.nozzle_diameter) : float(print_config.nozzle_diameter.get_at(extruder_id - 1));
     ConfigOptionFloatOrPercent bridge_width_opt = region_config.bridge_line_width;
     const FloatOrPercent       toolhead_bridge_width = print_config.toolhead_bridge_line_width.get_at(extruder_id > 0 ? size_t(extruder_id - 1) : 0);
     if (toolhead_bridge_width.value > 0.)
@@ -99,22 +100,23 @@ void LayerRegion::make_perimeters(const SurfaceCollection &slices, const LayerRe
         (this->layer()->id() >= size_t(region_config.bottom_shell_layers.value) &&
          this->layer()->print_z >= region_config.bottom_shell_thickness - EPSILON);
 
-    const unsigned int override_hotend = large_nozzle_override_toolhead_1based(
-        region_config, this->layer()->id(), print_config.nozzle_diameter.values.size());
+    const unsigned int base_wall_filament = region_config.outer_wall_filament_id.value > 0 ?
+        unsigned(region_config.outer_wall_filament_id.value) : 1u;
+    const ResolvedWallTool override_tool = large_nozzle_override_wall_tool(
+        print_config, region_config, this->layer()->id(), base_wall_filament);
     Flow perimeter_flow = this->flow(frPerimeter);
     Flow external_perimeter_flow = this->flow(frExternalPerimeter);
-    if (override_hotend > 0) {
-        const size_t hotend_idx = size_t(override_hotend - 1);
-        const float nozzle = float(print_config.nozzle_diameter.get_at(hotend_idx));
+    if (override_tool) {
+        const float nozzle = float(override_tool.nozzle_diameter);
         const bool first_layer = this->layer()->id() == 0;
         perimeter_flow = Flow::new_from_config_width(
             frPerimeter,
-            toolhead_line_width_or(print_config, frPerimeter, int(override_hotend), first_layer, region_config.inner_wall_line_width),
+            toolhead_line_width_or(print_config, frPerimeter, int(override_tool.hotend_id_1based), first_layer, region_config.inner_wall_line_width),
             nozzle,
             float(this->layer()->height));
         external_perimeter_flow = Flow::new_from_config_width(
             frExternalPerimeter,
-            toolhead_line_width_or(print_config, frExternalPerimeter, int(override_hotend), first_layer, region_config.outer_wall_line_width),
+            toolhead_line_width_or(print_config, frExternalPerimeter, int(override_tool.hotend_id_1based), first_layer, region_config.outer_wall_line_width),
             nozzle,
             float(this->layer()->height));
     }

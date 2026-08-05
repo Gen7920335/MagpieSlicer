@@ -218,6 +218,17 @@ inline bool is_normal_prusa(SupportType stype)
 {
     return std::set<SupportType>{stNormalAuto, stNormal}.count(stype) != 0;
 };
+inline bool is_normal_support(SupportType stype)
+{
+    return is_normal_prusa(stype) || is_normal_cura(stype);
+};
+inline bool uses_cura_support_geometry(SupportType stype, SupportMaterialStyle style)
+{
+    // Support style controls path generation, not the geometry engine. Switching
+    // engines for Grid or Snug breaks the Cura interface stack into thin islands.
+    (void) style;
+    return is_normal_cura(stype);
+};
 inline bool is_tree_slim(SupportType type, SupportMaterialStyle style)
 {
     return is_tree(type) && style==smsTreeSlim;

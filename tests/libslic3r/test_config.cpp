@@ -14,6 +14,19 @@
 
 using namespace Slic3r;
 
+TEST_CASE("Cura support styles keep the Cura geometry engine", "[Config][Support][Cura]")
+{
+    for (const SupportType type : {stNormalCuraAuto, stNormalCura}) {
+        for (const SupportMaterialStyle style : {smsDefault, smsGrid, smsSnug}) {
+            INFO("type=" << int(type) << " style=" << int(style));
+            CHECK(uses_cura_support_geometry(type, style));
+        }
+    }
+
+    CHECK_FALSE(uses_cura_support_geometry(stNormalAuto, smsDefault));
+    CHECK_FALSE(uses_cura_support_geometry(stNormal, smsGrid));
+}
+
 SCENARIO("Generic config validation performs as expected.", "[Config]") {
     GIVEN("A config generated from default options") {
         Slic3r::DynamicPrintConfig config = Slic3r::DynamicPrintConfig::full_print_config();

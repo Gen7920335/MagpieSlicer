@@ -47,22 +47,26 @@ Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_he
     if (config_width.value == 0)
         config_width = object.config().line_width;
     
-    // Get the configured nozzle_diameter for the extruder associated to the flow role requested.
-    // Here this->extruder(role) - 1 may underflow to MAX_INT, but then the get_at() will follback to zero'th element, so everything is all right.
-    unsigned int extruder_id = this->extruder(role);
-    config_width = toolhead_line_width_or(print_config, role, int(extruder_id), first_layer, config_width);
-    auto nozzle_diameter = float(print_config.nozzle_diameter.get_at(extruder_id - 1));
+    const unsigned int filament_id = this->extruder(role);
+    const ResolvedWallTool tool = wall_tool_for_filament(print_config, filament_id);
+    const unsigned int hotend_id = tool ? tool.hotend_id_1based : filament_id;
+    config_width = toolhead_line_width_or(print_config, role, int(hotend_id), first_layer, config_width);
+    const float nozzle_diameter = tool ? float(tool.nozzle_diameter) : float(print_config.nozzle_diameter.get_at(hotend_id - 1));
     return Flow::new_from_config_width(role, config_width, nozzle_diameter, float(layer_height));
 }
 
 coordf_t PrintRegion::nozzle_dmr_avg(const PrintConfig &print_config) const
 {
-    return (print_config.nozzle_diameter.get_at(m_config.outer_wall_filament_id.value    - 1) +
-            print_config.nozzle_diameter.get_at(m_config.inner_wall_filament_id.value    - 1) +
-            print_config.nozzle_diameter.get_at(m_config.sparse_infill_filament_id.value       - 1) +
-            print_config.nozzle_diameter.get_at(m_config.internal_solid_filament_id.value - 1) +
-            print_config.nozzle_diameter.get_at(m_config.top_surface_filament_id.value    - 1) +
-            print_config.nozzle_diameter.get_at(m_config.bottom_surface_filament_id.value - 1)) / 6.;
+    auto nozzle_for_filament = [&print_config](unsigned int filament_id) {
+        const ResolvedWallTool tool = wall_tool_for_filament(print_config, filament_id);
+        return tool ? tool.nozzle_diameter : print_config.nozzle_diameter.get_at(filament_id > 0 ? filament_id - 1 : 0);
+    };
+    return (nozzle_for_filament(m_config.outer_wall_filament_id.value) +
+            nozzle_for_filament(m_config.inner_wall_filament_id.value) +
+            nozzle_for_filament(m_config.sparse_infill_filament_id.value) +
+            nozzle_for_filament(m_config.internal_solid_filament_id.value) +
+            nozzle_for_filament(m_config.top_surface_filament_id.value) +
+            nozzle_for_filament(m_config.bottom_surface_filament_id.value)) / 6.;
 }
 
 coordf_t PrintRegion::bridging_height_avg(const PrintConfig &print_config) const

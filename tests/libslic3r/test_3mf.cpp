@@ -145,9 +145,6 @@ SCENARIO("2D convex hull of sinking object", "[3mf][.]") {
             ModelObject* object = model.objects[0];
             object->center_around_origin(false);
 
-	    // This outputs the same exact data as the Prusaslicer test
-	    object->volumes[0]->mesh().write_ascii("/tmp/orca.ascii");
-
             // set instance's attitude so that it is rotated, scaled (and sinking? how is it sinking? the rotation? does it matter if it's sinking?)
             ModelInstance* instance = object->instances[0];
             instance->set_rotation(X, -M_PI / 4.0);
@@ -183,7 +180,8 @@ SCENARIO("2D convex hull of sinking object", "[3mf][.]") {
                     for (size_t i = 0; i < result.size(); ++ i) {
                         const Point &p1 = result[i];
                         const Point &p2 = hull_2d.points[i];
-                        CHECK((std::abs(p1.x() - p2.x()) > 1 || std::abs(p1.y() - p2.y()) > 1));
+                        CHECK(std::abs(p1.x() - p2.x()) <= 1);
+                        CHECK(std::abs(p1.y() - p2.y()) <= 1);
                     }
                 }
 

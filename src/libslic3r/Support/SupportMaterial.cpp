@@ -1384,7 +1384,8 @@ static inline ExPolygons detect_overhangs(
     Polygons overhang_polygons;
 
     // BBS.
-    const bool   auto_normal_support = object_config.support_type.value == stNormalAuto;
+    const bool   auto_normal_support = is_auto(object_config.support_type.value) &&
+                                       is_normal_support(object_config.support_type.value);
     const bool   buildplate_only = ! annotations.buildplate_covered.empty();
     // If user specified a custom angle threshold, convert it to radians.
     // Zero means automatic overhang detection.
@@ -1569,7 +1570,8 @@ static inline std::tuple<Polygons, Polygons, double> detect_contacts(
     Polygons enforcer_polygons;
 
     // BBS.
-    const bool   auto_normal_support = object_config.support_type.value == stNormalAuto;
+    const bool   auto_normal_support = is_auto(object_config.support_type.value) &&
+                                       is_normal_support(object_config.support_type.value);
     const bool   buildplate_only = !annotations.buildplate_covered.empty();
     float        no_interface_offset = 0.f;
 
@@ -2103,7 +2105,7 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
 
     // BBS: tree support is selected so normal supports need not be generated.
     // Note we still need to go through the following steps if support is disabled but raft is enabled.
-    if (m_object_config->enable_support.value && (m_object_config->support_type.value != stNormalAuto && m_object_config->support_type.value != stNormal)) {
+    if (m_object_config->enable_support.value && !is_normal_support(m_object_config->support_type.value)) {
         return SupportGeneratorLayersPtr();
     }
 

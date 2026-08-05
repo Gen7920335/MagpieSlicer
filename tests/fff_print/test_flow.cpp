@@ -151,19 +151,19 @@ TEST_CASE("Detail tool selection uses actual nozzle diameters", "[Flow][MultiNoz
 
     SECTION("same-colour smaller nozzle has priority over manual fallback") {
         config.crisp_corner_detail_toolhead.value = 3;
-        CHECK(detail_external_perimeter_extruder_1based(config, config, 1) == 2);
+        CHECK(detail_wall_tool(config, config, 1).filament_id_1based == 2);
     }
 
     SECTION("manual selection is used when no same-colour candidate exists") {
         config.filament_colour.values = { "#FF0000", "#00FF00", "#0000FF" };
         config.crisp_corner_detail_toolhead.value = 2;
-        CHECK(detail_external_perimeter_extruder_1based(config, config, 1) == 2);
+        CHECK(detail_wall_tool(config, config, 1).filament_id_1based == 2);
     }
 
     SECTION("disabled feature always returns the base tool") {
         config.use_smaller_nozzles_in_crisp_corners.value = false;
         config.crisp_corner_small_nozzle_wall_count.value = 4;
-        CHECK(detail_external_perimeter_extruder_1based(config, config, 1) == 1);
+        CHECK(detail_wall_tool(config, config, 1).filament_id_1based == 1);
     }
 
     SECTION("larger nozzles are never detail candidates even with a narrow line width") {
@@ -171,24 +171,24 @@ TEST_CASE("Detail tool selection uses actual nozzle diameters", "[Flow][MultiNoz
         config.filament_colour.values = { "#FF0000", "#FF0000" };
         config.toolhead_outer_wall_line_width.values = { FloatOrPercent(0., false), FloatOrPercent(0.1, false) };
         config.crisp_corner_detail_toolhead.value = 2;
-        CHECK(detail_external_perimeter_extruder_1based(config, config, 1) == 1);
+        CHECK(detail_wall_tool(config, config, 1).filament_id_1based == 1);
     }
 
     SECTION("base tool reverses when the selected base nozzle is larger") {
         config.nozzle_diameter.values = { 0.4, 0.8, 0.2 };
         config.filament_colour.values = { "#FF0000", "#FF0000", "#0000FF" };
         config.crisp_corner_detail_toolhead.value = 0;
-        CHECK(detail_external_perimeter_extruder_1based(config, config, 2) == 1);
+        CHECK(detail_wall_tool(config, config, 2).filament_id_1based == 1);
     }
 
     SECTION("four independent hotends use the smallest valid nozzle for each base tool") {
         config.nozzle_diameter.values = { 0.4, 0.15, 0.6, 0.8 };
         config.filament_colour.values = { "#110000", "#001100", "#000011", "#111100" };
         config.crisp_corner_detail_toolhead.value = 0;
-        CHECK(detail_external_perimeter_extruder_1based(config, config, 1) == 2);
-        CHECK(detail_external_perimeter_extruder_1based(config, config, 2) == 2);
-        CHECK(detail_external_perimeter_extruder_1based(config, config, 3) == 2);
-        CHECK(detail_external_perimeter_extruder_1based(config, config, 4) == 2);
+        CHECK(detail_wall_tool(config, config, 1).filament_id_1based == 2);
+        CHECK(detail_wall_tool(config, config, 2).filament_id_1based == 2);
+        CHECK(detail_wall_tool(config, config, 3).filament_id_1based == 2);
+        CHECK(detail_wall_tool(config, config, 4).filament_id_1based == 2);
     }
 }
 

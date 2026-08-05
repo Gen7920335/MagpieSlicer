@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 
-$exe = Join-Path $repo 'build\src\Release\orca-slicer.exe'
+$exe = Join-Path $repo 'build\src\Release\magpie-slicer.exe'
 if (-not (Test-Path $exe)) {
     throw "Executable not found: $exe"
 }

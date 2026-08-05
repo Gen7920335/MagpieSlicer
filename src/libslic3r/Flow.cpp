@@ -76,16 +76,16 @@ static bool is_line_width_set(const ConfigOptionFloatOrPercent &value)
     return value.value > 0.;
 }
 
-static ConfigOptionFloatOrPercent indexed_toolhead_line_width(const ConfigOptionFloatsOrPercents &values, int extruder_id)
+static ConfigOptionFloatOrPercent indexed_toolhead_line_width(const ConfigOptionFloatsOrPercents &values, int hotend_id_1based)
 {
-    const size_t idx = extruder_id > 0 ? size_t(extruder_id - 1) : 0;
+    const size_t idx = hotend_id_1based > 0 ? size_t(hotend_id_1based - 1) : 0;
     return to_config_option(values.get_at(idx));
 }
 
-ConfigOptionFloatOrPercent toolhead_line_width_or(const PrintConfig &print_config, FlowRole role, int extruder_id, bool first_layer, const ConfigOptionFloatOrPercent &fallback)
+ConfigOptionFloatOrPercent toolhead_line_width_or(const PrintConfig &print_config, FlowRole role, int hotend_id_1based, bool first_layer, const ConfigOptionFloatOrPercent &fallback)
 {
     if (first_layer) {
-        ConfigOptionFloatOrPercent first_layer_width = indexed_toolhead_line_width(print_config.toolhead_initial_layer_line_width, extruder_id);
+        ConfigOptionFloatOrPercent first_layer_width = indexed_toolhead_line_width(print_config.toolhead_initial_layer_line_width, hotend_id_1based);
         if (is_line_width_set(first_layer_width))
             return first_layer_width;
     }
@@ -115,12 +115,12 @@ ConfigOptionFloatOrPercent toolhead_line_width_or(const PrintConfig &print_confi
     }
 
     if (role_widths != nullptr) {
-        ConfigOptionFloatOrPercent role_width = indexed_toolhead_line_width(*role_widths, extruder_id);
+        ConfigOptionFloatOrPercent role_width = indexed_toolhead_line_width(*role_widths, hotend_id_1based);
         if (is_line_width_set(role_width))
             return role_width;
     }
 
-    ConfigOptionFloatOrPercent default_width = indexed_toolhead_line_width(print_config.toolhead_line_width, extruder_id);
+    ConfigOptionFloatOrPercent default_width = indexed_toolhead_line_width(print_config.toolhead_line_width, hotend_id_1based);
     if (is_line_width_set(default_width))
         return default_width;
 
@@ -217,63 +217,122 @@ int total_wall_count_for_layer(const PrintRegionConfig &region_config, size_t la
            std::max(minimum_large_nozzle_walls, region_config.wall_loops.value);
 }
 
-unsigned int detail_external_perimeter_extruder_1based(const PrintConfig &print_config, const PrintRegionConfig &region_config, unsigned int base_extruder_id)
+static size_t configured_filament_count(const PrintConfig &print_config)
 {
-    if (!detail_walls_enabled(region_config))
-        return base_extruder_id;
+    return std::max({print_config.filament_map.values.size(),
+                     print_config.filament_diameter.values.size(),
+                     print_config.filament_colour.values.size()});
+}
 
-    const size_t extruder_count = print_config.nozzle_diameter.values.size();
-    if (base_extruder_id == 0)
-        base_extruder_id = 1;
-    const size_t base_idx       = size_t(base_extruder_id - 1);
-    if (extruder_count == 0 || base_idx >= extruder_count)
-        return base_extruder_id;
+ResolvedWallTool wall_tool_for_filament(const PrintConfig &print_config, unsigned int filament_id_1based)
+{
+    const size_t hotend_count = print_config.nozzle_diameter.values.size();
+    if (filament_id_1based == 0 || hotend_count == 0)
+        return {};
 
-    const double base_nozzle = print_config.nozzle_diameter.get_at(base_idx);
-    if (base_nozzle <= EPSILON)
-        return base_extruder_id;
+    const size_t filament_idx = size_t(filament_id_1based - 1);
+    unsigned int hotend_id_1based = filament_id_1based;
+    if (filament_idx < print_config.filament_map.values.size()) {
+        const int mapped_hotend = print_config.filament_map.values[filament_idx];
+        if (mapped_hotend <= 0)
+            return {};
+        hotend_id_1based = unsigned(mapped_hotend);
+    } else if (filament_idx >= configured_filament_count(print_config)) {
+        return {};
+    }
 
-    auto is_smaller_candidate = [&](size_t idx) {
-        if (idx >= extruder_count || idx == base_idx)
+    if (hotend_id_1based == 0 || size_t(hotend_id_1based) > hotend_count)
+        return {};
+
+    const double nozzle = print_config.nozzle_diameter.values[size_t(hotend_id_1based - 1)];
+    return nozzle > EPSILON ? ResolvedWallTool { filament_id_1based, hotend_id_1based, nozzle } : ResolvedWallTool {};
+}
+
+ResolvedWallTool wall_tool_for_hotend(const PrintConfig &print_config, unsigned int hotend_id_1based, unsigned int preferred_filament_id_1based)
+{
+    if (hotend_id_1based == 0 || size_t(hotend_id_1based) > print_config.nozzle_diameter.values.size())
+        return {};
+
+    if (const ResolvedWallTool preferred = wall_tool_for_filament(print_config, preferred_filament_id_1based);
+        preferred && preferred.hotend_id_1based == hotend_id_1based)
+        return preferred;
+
+    const size_t filament_count = configured_filament_count(print_config);
+    const size_t preferred_idx = preferred_filament_id_1based > 0 ? size_t(preferred_filament_id_1based - 1) : std::numeric_limits<size_t>::max();
+    const bool preferred_colour_known = preferred_idx < print_config.filament_colour.values.size();
+    const std::string preferred_colour = preferred_colour_known ? print_config.filament_colour.values[preferred_idx] : std::string();
+    ResolvedWallTool first_candidate;
+
+    for (size_t filament_idx = 0; filament_idx < filament_count; ++filament_idx) {
+        const ResolvedWallTool candidate = wall_tool_for_filament(print_config, unsigned(filament_idx + 1));
+        if (!candidate || candidate.hotend_id_1based != hotend_id_1based)
+            continue;
+        if (!first_candidate)
+            first_candidate = candidate;
+        if (preferred_colour_known && filament_idx < print_config.filament_colour.values.size() &&
+            print_config.filament_colour.values[filament_idx] == preferred_colour)
+            return candidate;
+    }
+
+    return first_candidate;
+}
+
+ResolvedWallTool detail_wall_tool(const PrintConfig &print_config, const PrintRegionConfig &region_config, unsigned int base_filament_id_1based)
+{
+    const ResolvedWallTool base_tool = wall_tool_for_filament(print_config, base_filament_id_1based);
+    if (!base_tool || !detail_walls_enabled(region_config))
+        return base_tool;
+
+    const size_t hotend_count = print_config.nozzle_diameter.values.size();
+    auto is_smaller_candidate = [&](size_t hotend_idx) {
+        if (hotend_idx >= hotend_count || hotend_idx == size_t(base_tool.hotend_id_1based - 1))
             return false;
-        const double candidate_nozzle = print_config.nozzle_diameter.get_at(idx);
-        return candidate_nozzle > EPSILON && candidate_nozzle < base_nozzle - EPSILON;
+        const double candidate_nozzle = print_config.nozzle_diameter.values[hotend_idx];
+        return candidate_nozzle > EPSILON && candidate_nozzle < base_tool.nozzle_diameter - EPSILON;
     };
 
-    auto best_smaller = [&](bool require_same_colour) -> unsigned int {
-        auto filament_colour_at = [&](size_t idx) -> std::string {
-            return idx < print_config.filament_colour.values.size() ? print_config.filament_colour.get_at(idx) : std::string();
-        };
-        const bool        base_colour_known = base_idx < print_config.filament_colour.values.size();
-        const std::string base_colour       = filament_colour_at(base_idx);
-        double       best_nozzle = std::numeric_limits<double>::max();
-        unsigned int best_id     = 0;
-        for (size_t idx = 0; idx < extruder_count; ++idx) {
-            if (!is_smaller_candidate(idx))
+    const size_t base_filament_idx = size_t(base_tool.filament_id_1based - 1);
+    const bool base_colour_known = base_filament_idx < print_config.filament_colour.values.size();
+    const std::string base_colour = base_colour_known ? print_config.filament_colour.values[base_filament_idx] : std::string();
+
+    auto best_smaller = [&](bool require_same_colour) -> ResolvedWallTool {
+        ResolvedWallTool best;
+        for (size_t hotend_idx = 0; hotend_idx < hotend_count; ++hotend_idx) {
+            if (!is_smaller_candidate(hotend_idx))
                 continue;
-            if (require_same_colour &&
-                (!base_colour_known || idx >= print_config.filament_colour.values.size() || filament_colour_at(idx) != base_colour))
+            const ResolvedWallTool candidate = wall_tool_for_hotend(print_config, unsigned(hotend_idx + 1), base_tool.filament_id_1based);
+            if (!candidate)
                 continue;
-            const double nozzle = print_config.nozzle_diameter.get_at(idx);
-            if (nozzle < best_nozzle) {
-                best_nozzle = nozzle;
-                best_id     = unsigned(idx + 1);
-            }
+            const size_t candidate_filament_idx = size_t(candidate.filament_id_1based - 1);
+            if (require_same_colour && (!base_colour_known || candidate_filament_idx >= print_config.filament_colour.values.size() ||
+                                        print_config.filament_colour.values[candidate_filament_idx] != base_colour))
+                continue;
+            if (!best || candidate.nozzle_diameter < best.nozzle_diameter)
+                best = candidate;
         }
-        return best_id;
+        return best;
     };
 
-    if (unsigned int same_colour = best_smaller(true); same_colour != 0)
+    if (ResolvedWallTool same_colour = best_smaller(true); same_colour)
         return same_colour;
 
     const int manual_toolhead = region_config.crisp_corner_detail_toolhead.value;
-    if (manual_toolhead > 0 && is_smaller_candidate(size_t(manual_toolhead - 1)))
-        return unsigned(manual_toolhead);
+    if (manual_toolhead > 0 && is_smaller_candidate(size_t(manual_toolhead - 1))) {
+        if (ResolvedWallTool manual = wall_tool_for_hotend(print_config, unsigned(manual_toolhead), base_tool.filament_id_1based); manual)
+            return manual;
+    }
 
-    if (unsigned int any_smaller = best_smaller(false); any_smaller != 0)
+    if (ResolvedWallTool any_smaller = best_smaller(false); any_smaller)
         return any_smaller;
 
-    return base_extruder_id;
+    return base_tool;
+}
+
+ResolvedWallTool large_nozzle_override_wall_tool(const PrintConfig &print_config, const PrintRegionConfig &region_config, size_t layer_id, unsigned int preferred_filament_id_1based)
+{
+    const unsigned int hotend_id = large_nozzle_override_toolhead_1based(
+        region_config, layer_id, print_config.nozzle_diameter.values.size());
+    return hotend_id == 0 ? ResolvedWallTool {} : wall_tool_for_hotend(print_config, hotend_id, preferred_filament_id_1based);
 }
 
 // Used to provide hints to the user on default extrusion width values, and to provide reasonable values to the PlaceholderParser.

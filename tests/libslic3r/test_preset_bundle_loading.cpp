@@ -776,6 +776,11 @@ TEST_CASE("Custom process settings survive JSON save and reload", "[Preset][Roun
         std::array<double, 4>{ 0.0, 30.0, 90.0, 180.0 }[level];
     required_option<ConfigOptionInt>(process, "support_interface_sublayer_temperature").value =
         std::array<int, 4>{ 0, 120, 220, 300 }[level];
+    required_option<ConfigOptionFloat>(process, "support_interface_spacing").value =
+        std::array<double, 4>{ 0.0, 0.5, 2.5, 10.0 }[level];
+    required_option<ConfigOptionBool>(process, "cura_solid_support_raft").value = enabled;
+    required_option<ConfigOptionInt>(process, "tree_support_wall_count").value =
+        std::array<int, 4>{ 0, 1, 5, 10 }[level];
 
     const std::vector<std::string> keys = {
         "use_smaller_nozzles_in_crisp_corners",
@@ -797,7 +802,10 @@ TEST_CASE("Custom process settings survive JSON save and reload", "[Preset][Roun
         "support_interface_sublayer_end_layer",
         "support_interface_sublayer_pattern_type",
         "support_interface_sublayer_angle",
-        "support_interface_sublayer_temperature"
+        "support_interface_sublayer_temperature",
+        "support_interface_spacing",
+        "cura_solid_support_raft",
+        "tree_support_wall_count"
     };
 
     check_json_roundtrip(process, defaults, bundle.prints, Preset::TYPE_PRINT, keys,

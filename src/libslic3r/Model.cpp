@@ -1642,66 +1642,25 @@ BoundingBoxf3 ModelObject::instance_convex_hull_bounding_box(const ModelInstance
 // This method is used by the auto arrange function.
 Polygon ModelObject::convex_hull_2d(const Transform3d& trafo_instance) const
 {
-#if 0
     Points pts;
+    for (const ModelVolume *volume : this->volumes) {
+        if (!volume->is_model_part())
+            continue;
 
-    for (const ModelVolume* v : volumes) {
-        if (v->is_model_part()) {
-            //BBS: use convex hull vertex instead of all
-            append(pts, its_convex_hull_2d_above(v->get_convex_hull().its, (trafo_instance * v->get_matrix()).cast<float>(), 0.0f).points);
-	    // The next commented line instead of the previous + the rest of this #if0 section is the same as PrusaSlicer until https://github.com/prusa3d/PrusaSlicer/commit/2f7f3578d531f2d34f7732a64449606d86bb4aaa where it was parallelised.
-            //append(pts, its_convex_hull_2d_above(v->mesh().its, (trafo_instance * v->get_matrix()).cast<float>(), 0.0f).points);
-	    // its_convex_hull_2d_above calls its_collect_mesh_projection_points_above
-	    // The latter multiplies each vertex by the full matrix
-	    // For every vector which crosses the Z plane, the intersection is used instead of any point below. Consecutive points below the Z plane are ignored.
-	}
-    }
-    return Geometry::convex_hull(std::move(pts));
-#else
-    // This seems to differ from PrusaSlicer (and the old code above) in that
-    // points below the Z plane aren't treated specially.
-    Points pts;
-    for (const ModelVolume *v : this->volumes)
-        if (v->is_model_part()) {
-            const Polygon& volume_hull = v->get_convex_hull_2d(trafo_instance);
-	    // In comparison to the old code above, get_convex_hull_2d starts with:
-	    // new_matrix = trafo_instance * m_transformation.get_matrix();
-	    // which is the same matrix multiplication as above.
-	    // Then checks caches, maybe calling ModelVolume::calculate_convex_hull_2d(const Geometry::Transformation &) if no hit
-	    // That method accesses v->get_convex_hull().its (also used above).
-	    // It multiplies each point by the matrix w/o translate, then calls convex_hull(pts)
-	    // Then translates polygon in X & Y
+        const TriangleMesh &hull = volume->get_convex_hull();
+        if (hull.empty())
+            continue;
 
+        const Transform3d transform = trafo_instance * volume->get_matrix();
+        if (hull.transformed_bounding_box(transform).min.z() < 0.0) {
+            append(pts, its_convex_hull_2d_above(
+                volume->mesh().its, transform.cast<float>(), 0.0f).points);
+        } else {
+            const Polygon &volume_hull = volume->get_convex_hull_2d(trafo_instance);
             pts.insert(pts.end(), volume_hull.points.begin(), volume_hull.points.end());
         }
-
-    //std::sort(pts.begin(), pts.end(), [](const Point& a, const Point& b) { return a(0) < b(0) || (a(0) == b(0) && a(1) < b(1)); });
-    //pts.erase(std::unique(pts.begin(), pts.end(), [](const Point& a, const Point& b) { return a(0) == b(0) && a(1) == b(1); }), pts.end());
-    /*std::vector<Points> points;
-    //points.push_back(pts);
-    Polygon hull = Geometry::convex_hull(std::move(pts));
-    static int irun = 0;
-    BoundingBox bbox_svg;
-
-    bbox_svg.merge(get_extents(pts));
-    bbox_svg.merge(get_extents(hull));
-    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": bbox_svg.min{%1%,%2%} max{%3%,%4%}, points count %5%")% bbox_svg.min.x()% bbox_svg.min.y()% bbox_svg.max.x()% bbox_svg.max.y()%points[0].size();
-    {
-        std::stringstream stri;
-        stri << "convex_2d_hull_" << irun << ".svg";
-        SVG svg(stri.str(), bbox_svg);
-
-        std::vector<Polygon> hulls;
-        hulls.push_back(hull);
-        svg.draw(to_polylines(points), "blue");
-        svg.draw(to_polylines(hulls), "red");
-        svg.Close();
-        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": stri %1%, Polygon.size %2%, point[0] {%3%, %4%}, point[1] {%5%, %6%}")% stri.str()% hull.size()% hull[0].x()% hull[0].y()% hull[1].x()% hull[1].y();
     }
-    ++ irun;
-    return hull;*/
     return Geometry::convex_hull(std::move(pts));
-#endif
 }
 
 void ModelObject::center_around_origin(bool include_modifiers)

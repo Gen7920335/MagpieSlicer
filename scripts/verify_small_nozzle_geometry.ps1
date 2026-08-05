@@ -537,7 +537,8 @@ foreach ($case in $cases) {
     $quotedFilaments = [char]34 + ($filaments -join ';') + [char]34
     $quotedOutput = [char]34 + $caseRoot + [char]34
     $quotedModel = [char]34 + ([IO.Path]::GetFullPath($ModelPath)) + [char]34
-    $arguments = @('--slice','0','--debug','1','--load-settings',$quotedSettings,
+    $initialFilamentMap = (1..$filaments.Count) -join ','
+    $arguments = @('--slice','0','--debug','1','--filament-map',$initialFilamentMap,'--load-settings',$quotedSettings,
         '--load-filaments',$quotedFilaments,'--outputdir',$quotedOutput,$quotedModel)
     $timer = [Diagnostics.Stopwatch]::StartNew()
     $handle = Start-Process -FilePath $SlicerPath -ArgumentList $arguments -NoNewWindow -PassThru `

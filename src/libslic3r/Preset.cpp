@@ -5,6 +5,7 @@
 #include "Preset.hpp"
 #include "PresetBundle.hpp"
 #include "AppConfig.hpp"
+#include "HotendConfigService.hpp"
 
 #ifdef _MSC_VER
     #define WIN32_LEAN_AND_MEAN
@@ -446,7 +447,7 @@ void Preset::normalize(DynamicPrintConfig &config)
     size_t n = 1;
     auto *nozzle_diameter = dynamic_cast<const ConfigOptionFloats*>(config.option("nozzle_diameter"));
     if (nozzle_diameter != nullptr)
-        config.set_num_extruders(unsigned(std::max<size_t>(1, nozzle_diameter->values.size())));
+        HotendConfigService::normalize_printer_config(config);
 
     if (config.option("single_extruder_multi_material") == nullptr || config.opt_bool("single_extruder_multi_material")) {
         // BBS
@@ -757,6 +758,8 @@ void Preset::reload(Preset const &parent)
         ConfigSubstitutions                config_substitutions = config.load_from_json(file, substitution_rule, key_values, reason);
         this->config = parent.config;
         this->config.apply(std::move(config));
+        if (type == TYPE_PRINTER)
+            HotendConfigService::normalize_printer_config(this->config);
     } catch (const std::exception &err) {
         BOOST_LOG_TRIVIAL(error) << boost::format("Failed loading the user-config file: %1%. Reason: %2%") % file % err.what();
     }
@@ -2562,6 +2565,9 @@ std::pair<Preset*, bool> PresetCollection::load_external_preset(
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": change preset %1% 's value to %2% 's values")%original_name %path;
         cfg.update_non_diff_values_to_base_config(it->config, keys, different_settings_list, extruder_id_name, extruder_variant_name, *key_set1, *key_set2);
     }
+
+    if (m_type == Preset::TYPE_PRINTER)
+        HotendConfigService::normalize_printer_config(cfg);
 
     //BBS: add config related logs
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(" enter, type %1% , path %2%, name %3%, original_name %4%, inherits %5%")%Preset::get_type_string(m_type) %path %name %original_name %inherits;

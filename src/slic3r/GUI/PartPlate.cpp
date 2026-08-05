@@ -28,6 +28,7 @@
 #include "GUI_App.hpp"
 #include "libslic3r/AppConfig.hpp"
 #include "libslic3r/PresetBundle.hpp"
+#include "libslic3r/ProjectConfigService.hpp"
 #include "BackgroundSlicingProcess.hpp"
 #include "Widgets/Label.hpp"
 #include "2DBed.hpp"
@@ -4211,12 +4212,7 @@ void PartPlateList::set_default_wipe_tower_pos_for_plate(int plate_idx, bool ini
     ConfigOptionFloats *wipe_tower_y = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_y");
     wipe_tower_x->values.resize(m_plate_list.size(), wipe_tower_x->values.front());
     wipe_tower_y->values.resize(m_plate_list.size(), wipe_tower_y->values.front());
-    ConfigOptionFloats *temperature_tower_x =
-        proj_cfg.opt<ConfigOptionFloats>("support_interface_temperature_drop_tower_x");
-    ConfigOptionFloats *temperature_tower_y =
-        proj_cfg.opt<ConfigOptionFloats>("support_interface_temperature_drop_tower_y");
-    temperature_tower_x->values.resize(m_plate_list.size(), -1.0);
-    temperature_tower_y->values.resize(m_plate_list.size(), -1.0);
+    normalize_temperature_drop_tower_positions(proj_cfg, m_plate_list.size());
 
     auto printer_structure_opt = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionEnum<PrinterStructure>>("printer_structure");
     // set the default position, the same with print config(left top)
@@ -4588,10 +4584,6 @@ int PartPlateList::delete_plate(int index)
 		DynamicConfig& proj_cfg = wxGetApp().preset_bundle->project_config;
 		ConfigOptionFloats* wipe_tower_x = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_x");
 		ConfigOptionFloats* wipe_tower_y = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_y");
-		ConfigOptionFloats* temperature_tower_x =
-			proj_cfg.opt<ConfigOptionFloats>("support_interface_temperature_drop_tower_x");
-		ConfigOptionFloats* temperature_tower_y =
-			proj_cfg.opt<ConfigOptionFloats>("support_interface_temperature_drop_tower_y");
 		// wipe_tower_x and wip_tower_y may be less than plate count in the following case:
 		// 1. wipe_tower is enabled after creating new plates
 		// 2. wipe tower is not enabled
@@ -4599,10 +4591,7 @@ int PartPlateList::delete_plate(int index)
 			wipe_tower_x->values.erase(wipe_tower_x->values.begin() + index);
 		if (index < wipe_tower_y->values.size())
 			wipe_tower_y->values.erase(wipe_tower_y->values.begin() + index);
-		if (index < temperature_tower_x->values.size())
-			temperature_tower_x->values.erase(temperature_tower_x->values.begin() + index);
-		if (index < temperature_tower_y->values.size())
-			temperature_tower_y->values.erase(temperature_tower_y->values.begin() + index);
+		erase_temperature_drop_tower_plate(proj_cfg, size_t(index), m_plate_list.size());
 	}
 
 	int cols = compute_colum_count(m_plate_list.size() - 1);

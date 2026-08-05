@@ -8,6 +8,8 @@
 #include "libslic3r/Model.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/Flow.hpp"
+#include "libslic3r/HotendPresetStore.hpp"
+#include "libslic3r/HotendConfigService.hpp"
 
 #include "Search.hpp"
 #include "OG_CustomCtrl.hpp"
@@ -26,6 +28,8 @@
 #include <wx/imaglist.h>
 #include <wx/settings.h>
 #include <wx/filedlg.h>
+#include <wx/choicdlg.h>
+#include <wx/textdlg.h>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/replace.hpp>
@@ -325,18 +329,6 @@ private:
 
 namespace
 {
-static constexpr std::array<const char*, 9> s_toolhead_width_keys = {
-    "toolhead_line_width",
-    "toolhead_initial_layer_line_width",
-    "toolhead_outer_wall_line_width",
-    "toolhead_inner_wall_line_width",
-    "toolhead_top_surface_line_width",
-    "toolhead_sparse_infill_line_width",
-    "toolhead_internal_solid_infill_line_width",
-    "toolhead_support_line_width",
-    "toolhead_bridge_line_width"
-};
-
 int mode_to_selection(ConfigOptionMode mode)
 {
     return mode == comExpert ? 2 :
@@ -344,72 +336,6 @@ int mode_to_selection(ConfigOptionMode mode)
            0;
 }
 
-static void normalize_toolhead_width_mm(DynamicPrintConfig &config, const DynamicPrintConfig &current, const std::string &key, size_t index, double nozzle_diameter)
-{
-    std::vector<FloatOrPercent> values;
-    if (const auto *opt = current.option<ConfigOptionFloatsOrPercents>(key))
-        values = opt->values;
-    if (values.size() <= index)
-        values.resize(index + 1, FloatOrPercent(0., false));
-
-    FloatOrPercent value = values[index];
-    if (value.percent)
-        value = FloatOrPercent(std::round(value.get_abs_value(nozzle_diameter) * 1000.) / 1000., false);
-    if (value.value <= 0.)
-        value = default_toolhead_line_width_for_nozzle(key, nozzle_diameter);
-
-    values[index] = value;
-    config.set_key_value(key, new ConfigOptionFloatsOrPercents(values));
-}
-
-static void normalize_toolhead_widths_mm(DynamicPrintConfig &config, const DynamicPrintConfig &current, size_t index, double nozzle_diameter)
-{
-    for (const char *key : s_toolhead_width_keys)
-        normalize_toolhead_width_mm(config, current, key, index, nozzle_diameter);
-}
-
-static double toolhead_nozzle_diameter_at(const DynamicPrintConfig &config, size_t index)
-{
-    const auto *nozzles = config.option<ConfigOptionFloats>("nozzle_diameter");
-    if (nozzles == nullptr || nozzles->values.empty())
-        return 0.4;
-    return nozzles->values[std::min(index, nozzles->values.size() - 1)];
-}
-
-static DynamicPrintConfig make_hotend_config(const DynamicPrintConfig &printer_config, size_t index)
-{
-    DynamicPrintConfig hotend_config;
-    const double nozzle_diameter = toolhead_nozzle_diameter_at(printer_config, index);
-    hotend_config.set_key_value("nozzle_diameter", new ConfigOptionFloats({nozzle_diameter}));
-
-    for (const char *key : s_toolhead_width_keys) {
-        FloatOrPercent value = default_toolhead_line_width_for_nozzle(key, nozzle_diameter);
-        if (const auto *widths = printer_config.option<ConfigOptionFloatsOrPercents>(key);
-            widths != nullptr && !widths->values.empty()) {
-            value = widths->values[std::min(index, widths->values.size() - 1)];
-            if (value.percent)
-                value = FloatOrPercent(std::round(value.get_abs_value(nozzle_diameter) * 1000.) / 1000., false);
-            if (value.value <= 0.)
-                value = default_toolhead_line_width_for_nozzle(key, nozzle_diameter);
-        }
-        hotend_config.set_key_value(key, new ConfigOptionFloatsOrPercents({value}));
-    }
-
-    return hotend_config;
-}
-
-static void set_toolhead_width_at(DynamicPrintConfig &config, const DynamicPrintConfig &current,
-                                  const std::string &key, size_t index, const FloatOrPercent &value)
-{
-    std::vector<FloatOrPercent> values;
-    if (const auto *widths = current.option<ConfigOptionFloatsOrPercents>(key))
-        values = widths->values;
-    if (values.size() <= index)
-        values.resize(index + 1, default_toolhead_line_width_for_nozzle(
-            key, toolhead_nozzle_diameter_at(current, index)));
-    values[index] = value;
-    config.set_key_value(key, new ConfigOptionFloatsOrPercents(values));
-}
 }
 
 #define DISABLE_UNDO_SYS
@@ -4714,11 +4640,26 @@ void TabFilament::build()
 
     if (m_presets_choice != nullptr)
         m_hotend_index = size_t(std::max(0, m_presets_choice->get_filament_idx()));
-    sync_hotend_config_from_printer();
+    refresh_hotend_view_from_printer();
 
     auto hotend_page = add_options_page(L("Hotend"), "custom-gcode_extruder");
         m_hotend_optgroup = hotend_page->new_optgroup(L("Hotend"), L"param_line_width", -1, true);
-        m_hotend_optgroup->set_config(&m_hotend_config);
+        m_hotend_optgroup->set_config(&m_hotend_view_config);
+        Line hotend_preset_line{L("Hotend preset"), L("Save or load nozzle diameter and line widths for the selected toolhead.")};
+        hotend_preset_line.full_width = 1;
+        hotend_preset_line.append_widget([this](wxWindow *parent) {
+            auto *sizer = new wxBoxSizer(wxHORIZONTAL);
+            auto *save_button = new wxButton(parent, wxID_ANY, _L("Save hotend preset"));
+            auto *load_button = new wxButton(parent, wxID_ANY, _L("Load hotend preset"));
+            save_button->SetToolTip(_L("Save the selected toolhead's nozzle diameter and line widths."));
+            load_button->SetToolTip(_L("Load nozzle diameter and line widths into the selected toolhead."));
+            save_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { save_hotend_preset(); });
+            load_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { load_hotend_preset(); });
+            sizer->Add(save_button, 0, wxRIGHT, FromDIP(8));
+            sizer->Add(load_button, 0);
+            return sizer;
+        });
+        m_hotend_optgroup->append_line(hotend_preset_line);
         m_hotend_optgroup->append_single_option_line("nozzle_diameter", "printer_extruder_basic_information#nozzle-diameter", 0);
         m_hotend_optgroup->append_single_option_line("toolhead_line_width", "printer_extruder_toolhead_line_width", 0);
         m_hotend_optgroup->append_single_option_line("toolhead_initial_layer_line_width", "printer_extruder_toolhead_line_width#first-layer", 0);
@@ -4731,11 +4672,11 @@ void TabFilament::build()
         m_hotend_optgroup->append_single_option_line("toolhead_bridge_line_width", "printer_extruder_toolhead_line_width#bridge", 0);
 
         m_hotend_optgroup->m_get_initial_config = [this]() {
-            return make_hotend_config(m_preset_bundle->printers.get_selected_preset().config, m_hotend_index);
+            return HotendConfigService::extract(m_preset_bundle->printers.get_selected_preset().config, m_hotend_index);
         };
         m_hotend_optgroup->m_get_sys_config = [this]() {
             const Preset *parent = m_preset_bundle->printers.get_selected_preset_parent();
-            return parent != nullptr ? make_hotend_config(parent->config, m_hotend_index) : DynamicPrintConfig();
+            return parent != nullptr ? HotendConfigService::extract(parent->config, m_hotend_index) : DynamicPrintConfig();
         };
         m_hotend_optgroup->have_sys_config = [this]() {
             return m_preset_bundle->printers.get_selected_preset_parent() != nullptr;
@@ -4745,22 +4686,29 @@ void TabFilament::build()
             DynamicPrintConfig &current_config = m_preset_bundle->printers.get_edited_preset().config;
             DynamicPrintConfig new_conf = current_config;
 
-            if (short_key == "nozzle_diameter") {
-                const auto *nozzles = m_hotend_config.option<ConfigOptionFloats>("nozzle_diameter");
-                if (nozzles == nullptr || nozzles->values.empty()) {
-                    BOOST_LOG_TRIVIAL(error) << "Ignoring hotend nozzle update with no nozzle diameter value";
+            try {
+                if (short_key == "nozzle_diameter") {
+                    HotendConfigService::apply_nozzle_diameter(
+                        new_conf, m_hotend_index, boost::any_cast<double>(value));
+                } else if (boost::algorithm::starts_with(short_key, "toolhead_")) {
+                    std::string serialized = boost::any_cast<std::string>(value);
+                    if (serialized.empty() || serialized.back() == '%')
+                        throw std::invalid_argument("Hotend line width must be a positive millimeter value.");
+                    size_t parsed_characters = 0;
+                    const double width = std::stod(serialized, &parsed_characters);
+                    if (parsed_characters != serialized.size())
+                        throw std::invalid_argument("Hotend line width contains invalid characters.");
+                    HotendConfigService::apply_width(
+                        new_conf, m_hotend_index, short_key.c_str(), FloatOrPercent(width, false));
+                } else {
                     return;
                 }
-                const double nozzle_diameter = nozzles->values.front();
-                set_toolhead_nozzle_diameter(new_conf, m_hotend_index, nozzle_diameter);
-            } else if (boost::algorithm::starts_with(short_key, "toolhead_")) {
-                const auto *widths = m_hotend_config.option<ConfigOptionFloatsOrPercents>(short_key);
-                if (widths == nullptr || widths->values.empty()) {
-                    BOOST_LOG_TRIVIAL(error) << "Ignoring hotend width update with no value for " << short_key;
-                    return;
-                }
-                const FloatOrPercent width = widths->values.front();
-                set_toolhead_width_at(new_conf, current_config, short_key, m_hotend_index, width);
+            } catch (const std::exception &error) {
+                BOOST_LOG_TRIVIAL(error) << "Ignoring invalid hotend edit for " << short_key << ": " << error.what();
+                refresh_hotend_view_from_printer();
+                if (m_hotend_optgroup)
+                    m_hotend_optgroup->reload_config();
+                return;
             }
 
             if (Tab *printer_tab = wxGetApp().get_tab(Preset::TYPE_PRINTER)) {
@@ -4769,7 +4717,7 @@ void TabFilament::build()
                 printer_tab->on_value_change(short_key, value);
             }
             wxGetApp().sidebar().sync_toolhead_nozzle_combos(new_conf);
-            sync_hotend_config_from_printer();
+            refresh_hotend_view_from_printer();
             if (m_hotend_optgroup)
                 m_hotend_optgroup->reload_config();
             wxGetApp().plater()->on_config_change(m_preset_bundle->full_config());
@@ -5140,36 +5088,30 @@ void TabFilament::reload_config()
 {
     this->compatible_widget_reload(m_compatible_printers);
     this->compatible_widget_reload(m_compatible_prints);
-    sync_hotend_config_from_printer();
+    refresh_hotend_view_from_printer();
     Tab::reload_config();
 
     // Recompute derived override UI from the newly loaded config
     update_filament_overrides_page(&m_preset_bundle->printers.get_edited_preset().config);
 }
 
-void TabFilament::sync_hotend_config_from_printer()
+void TabFilament::refresh_hotend_view_from_printer()
 {
     const DynamicPrintConfig &printer_config = m_preset_bundle->printers.get_edited_preset().config;
-    const auto *nozzles = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
-    const size_t hotend_count = nozzles == nullptr ? 1 : std::max<size_t>(1, nozzles->values.size());
-    m_hotend_index = std::min(m_hotend_index, hotend_count - 1);
-    m_hotend_config = make_hotend_config(printer_config, m_hotend_index);
+    m_hotend_index = HotendConfigService::clamp_toolhead_index(printer_config, m_hotend_index);
+    m_hotend_view_config = HotendConfigService::extract(printer_config, m_hotend_index);
 }
 
 void TabFilament::set_hotend_index(size_t hotend_index)
 {
     const DynamicPrintConfig &printer_config = m_preset_bundle->printers.get_edited_preset().config;
-    const auto *nozzles = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
-    const size_t hotend_count = nozzles == nullptr ? 1 : std::max<size_t>(1, nozzles->values.size());
-    m_hotend_index = std::min(hotend_index, hotend_count - 1);
+    m_hotend_index = HotendConfigService::clamp_toolhead_index(printer_config, hotend_index);
 
-    const double nozzle_diameter = toolhead_nozzle_diameter_at(printer_config, m_hotend_index);
-    DynamicPrintConfig normalized_config;
-    normalize_toolhead_widths_mm(normalized_config, printer_config, m_hotend_index, nozzle_diameter);
+    DynamicPrintConfig normalized_config = HotendConfigService::normalization_patch(printer_config, m_hotend_index);
     if (Tab *printer_tab = wxGetApp().get_tab(Preset::TYPE_PRINTER))
         printer_tab->load_config(normalized_config);
 
-    sync_hotend_config_from_printer();
+    refresh_hotend_view_from_printer();
     if (m_hotend_optgroup)
         m_hotend_optgroup->reload_config();
 }
@@ -5183,17 +5125,84 @@ bool Tab::save_dirty_preset()
     return !current_preset_is_dirty();
 }
 
-void TabFilament::save_preset(std::string name, bool detach, bool save_to_project, bool from_input, std::string input_name)
+void TabFilament::apply_hotend_preset(const DynamicPrintConfig &hotend_config)
 {
-    // Hotend controls are displayed here but belong to the printer preset.
-    // Persist that owner first so saving the material cannot silently discard them.
-    if (Tab *printer_tab = wxGetApp().get_tab(Preset::TYPE_PRINTER);
-        printer_tab != nullptr && !printer_tab->save_dirty_preset())
+    const DynamicPrintConfig &current_config = m_preset_bundle->printers.get_edited_preset().config;
+    DynamicPrintConfig new_config = current_config;
+
+    HotendConfigService::apply(new_config, m_hotend_index, hotend_config);
+
+    if (Tab *printer_tab = wxGetApp().get_tab(Preset::TYPE_PRINTER)) {
+        printer_tab->load_config(new_config);
+        printer_tab->update_dirty();
+    }
+    wxGetApp().sidebar().sync_toolhead_nozzle_combos(new_config);
+    refresh_hotend_view_from_printer();
+    if (m_hotend_optgroup)
+        m_hotend_optgroup->reload_config();
+    wxGetApp().plater()->on_config_change(m_preset_bundle->full_config());
+    wxGetApp().plater()->update();
+}
+
+void TabFilament::save_hotend_preset()
+{
+    const DynamicPrintConfig &printer_config = m_preset_bundle->printers.get_edited_preset().config;
+    const DynamicPrintConfig hotend_config = HotendConfigService::extract(printer_config, m_hotend_index);
+    const double nozzle_diameter = HotendConfigService::nozzle_diameter(printer_config, m_hotend_index);
+    const wxString default_name = wxString::Format("Hotend %d - %.2f mm", int(m_hotend_index + 1), nozzle_diameter);
+    wxTextEntryDialog dialog(m_parent, _L("Enter a name for this hotend preset."), _L("Save hotend preset"), default_name);
+    wxGetApp().UpdateDlgDarkUI(&dialog);
+    if (dialog.ShowModal() != wxID_OK)
         return;
 
-    const bool explicit_save = !name.empty() || detach || save_to_project || from_input || !input_name.empty();
-    if (current_preset_is_dirty() || explicit_save)
-        Tab::save_preset(std::move(name), detach, save_to_project, from_input, std::move(input_name));
+    const std::string name = into_u8(dialog.GetValue());
+    HotendPresetStore store(boost::filesystem::path(data_dir()) / "hotend_presets");
+    if (!HotendPresetStore::is_valid_name(name)) {
+        wxMessageBox(_L("The hotend preset name is empty or contains characters that cannot be used in a filename."),
+                     _L("Invalid hotend preset name"), wxOK | wxICON_ERROR, m_parent);
+        return;
+    }
+    if (store.contains(name) &&
+        wxMessageBox(_L("A hotend preset with this name already exists. Overwrite it?"), _L("Save hotend preset"),
+                     wxYES_NO | wxNO_DEFAULT | wxICON_WARNING, m_parent) != wxYES)
+        return;
+
+    try {
+        store.save(name, hotend_config);
+    } catch (const std::exception &error) {
+        wxMessageBox(_L("Failed to save the hotend preset:") + "\n" + from_u8(error.what()),
+                     _L("Save hotend preset"), wxOK | wxICON_ERROR, m_parent);
+    }
+}
+
+void TabFilament::load_hotend_preset()
+{
+    try {
+        HotendPresetStore store(boost::filesystem::path(data_dir()) / "hotend_presets");
+        const std::vector<std::string> names = store.names();
+        if (names.empty()) {
+            wxMessageBox(_L("No saved hotend presets were found."), _L("Load hotend preset"),
+                         wxOK | wxICON_INFORMATION, m_parent);
+            return;
+        }
+
+        wxArrayString choices;
+        for (const std::string &name : names)
+            choices.Add(from_u8(name));
+        wxSingleChoiceDialog dialog(m_parent, _L("Select a hotend preset to load into the current toolhead."),
+                                    _L("Load hotend preset"), choices);
+        wxGetApp().UpdateDlgDarkUI(&dialog);
+        if (dialog.ShowModal() != wxID_OK || dialog.GetSelection() < 0)
+            return;
+
+        const DynamicPrintConfig &printer_config = m_preset_bundle->printers.get_edited_preset().config;
+        DynamicPrintConfig hotend_config = HotendConfigService::extract(printer_config, m_hotend_index);
+        store.load(names[size_t(dialog.GetSelection())], hotend_config);
+        apply_hotend_preset(hotend_config);
+    } catch (const std::exception &error) {
+        wxMessageBox(_L("Failed to load the hotend preset:") + "\n" + from_u8(error.what()),
+                     _L("Load hotend preset"), wxOK | wxICON_ERROR, m_parent);
+    }
 }
 
 //void TabFilament::update_volumetric_flow_preset_hints()

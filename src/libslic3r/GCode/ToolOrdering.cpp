@@ -47,7 +47,8 @@ static unsigned int detail_external_perimeter_filament_1based(const PrintConfig 
     const PrintRegionConfig &region_config = region.config();
     if (!detail_walls_enabled(region_config))
         return base_filament_id;
-    return detail_external_perimeter_extruder_1based(*print_config, region_config, base_filament_id);
+    const ResolvedWallTool tool = detail_wall_tool(*print_config, region_config, base_filament_id);
+    return tool ? tool.filament_id_1based : base_filament_id;
 }
 
 static bool entity_has_tool_hint(const ExtrusionEntity &entity, ExtrusionToolHint hint)
@@ -781,6 +782,9 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                         region.config().inner_wall_filament_id.value : base_outer_wall_filament;
                     const unsigned int override_wall_hotend = m_print_config_ptr ?
                         large_nozzle_override_toolhead_1based(region.config(), layer->id(), m_print_config_ptr->nozzle_diameter.values.size()) : 0;
+                    const ResolvedWallTool override_wall_tool = m_print_config_ptr ?
+                        large_nozzle_override_wall_tool(*m_print_config_ptr, region.config(), layer->id(), base_outer_wall_filament) :
+                        ResolvedWallTool {};
                     bool has_detail_walls = false;
                     bool has_large_walls = false;
                     for (const ExtrusionEntity *entity : layerm->perimeters.entities) {
@@ -793,7 +797,13 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                     if (extruder_override != 0) {
                         layer_tools.extruders.emplace_back(extruder_override);
                     } else if (override_wall_hotend > 0) {
-                        layer_tools.extruders.emplace_back(override_wall_hotend);
+                        if (override_wall_tool) {
+                            layer_tools.extruders.emplace_back(override_wall_tool.filament_id_1based);
+                        } else {
+                            layer_tools.extruders.emplace_back(base_outer_wall_filament);
+                            if (region.config().wall_loops.value > 1)
+                                layer_tools.extruders.emplace_back(base_inner_wall_filament);
+                        }
                     } else if (has_detail_walls || has_large_walls) {
                         if (has_detail_walls)
                             layer_tools.extruders.emplace_back(detail_external_perimeter_filament_1based(
@@ -1686,6 +1696,13 @@ int WipingExtrusions::last_nonsoluble_extruder_on_layer(const PrintConfig& print
 // Decides whether this entity could be overridden
 bool WipingExtrusions::is_overriddable(const ExtrusionEntityCollection& eec, const PrintConfig& print_config, const PrintObject& object, const PrintRegion& region) const
 {
+    // Mixed-nozzle walls carry a physical tool contract. Reassigning either
+    // side for flush-into-object would change its nozzle diameter and destroy
+    // both the requested wall count and the small/large wall boundary.
+    if (entity_has_tool_hint(eec, ExtrusionToolHint::DetailWall) ||
+        entity_has_tool_hint(eec, ExtrusionToolHint::LargeWall))
+        return false;
+
     if (print_config.filament_soluble.get_at(m_layer_tools->extruder(eec, region)))
         return false;
 
