@@ -1,17 +1,33 @@
 param(
     [int]$Parallel = [Math]::Max(1, [Environment]::ProcessorCount),
-    [string]$ShortStageRoot = "C:\MagpiePkg"
+    [string]$ShortStageRoot = "C:\MagpiePkg",
+    [string]$BuildDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$buildDir = Join-Path $root "build"
+if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
+    $BuildDirectory = Join-Path $root "build-vulkan"
+}
+$buildDir = [IO.Path]::GetFullPath($BuildDirectory)
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $resolvedStageRoot = [IO.Path]::GetFullPath($ShortStageRoot)
 $stageDir = Join-Path $resolvedStageRoot $stamp
 $outputDir = Join-Path $buildDir "installer\$stamp"
 Set-Location $root
+
+$cachePath = Join-Path $buildDir 'CMakeCache.txt'
+if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
+    throw "CMake cache not found: $cachePath"
+}
+$cacheText = Get-Content -LiteralPath $cachePath -Raw
+if ($cacheText -notmatch '(?m)^SLIC3R_ENABLE_VULKAN_SLICER:BOOL=ON\r?$') {
+    throw "Installer packaging requires SLIC3R_ENABLE_VULKAN_SLICER=ON: $cachePath"
+}
+if ($cacheText -match '(?m)^MAGPIE_VULKAN_TEST_BRANDING:BOOL=ON\r?$') {
+    throw "Installer packaging rejects MAGPIE_VULKAN_TEST_BRANDING=ON: $cachePath"
+}
 
 if ($resolvedStageRoot.Length -gt 80) {
     throw "NSIS staging root is too long ($($resolvedStageRoot.Length) characters). Use a short path such as C:\MagpiePkg."
@@ -33,6 +49,9 @@ if ($lockingProcesses.Count -gt 0) {
 $started = Get-Date
 Write-Output "Installer build started: $($started.ToString('s'))"
 Write-Output "Parallel jobs: $Parallel"
+Write-Output "Build directory: $buildDir"
+Write-Output "Vulkan slicer: ON"
+Write-Output "Vulkan test branding: OFF"
 Write-Output "Short staging directory: $stageDir"
 
 & cmake --build $buildDir --config Release --target OrcaSlicer_app_gui --parallel $Parallel

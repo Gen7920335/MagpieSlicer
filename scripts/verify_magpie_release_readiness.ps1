@@ -4,7 +4,8 @@ param(
     [ValidateSet('Core', 'Full')]
     [string] $Mode = 'Core',
     [int] $StepTimeoutSeconds = 600,
-    [string] $OutputRoot = ""
+    [string] $OutputRoot = "",
+    [string] $TestBuildDirectory = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -93,7 +94,16 @@ if ([IO.Path]::GetFileName($SlicerPath) -ne $expectedName) {
     throw "Release verification requires $expectedName, got $([IO.Path]::GetFileName($SlicerPath))"
 }
 
-$testRoot = Join-Path $RepoRoot 'build\tests'
+if ([string]::IsNullOrWhiteSpace($TestBuildDirectory)) {
+    $slicerBuildRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $SlicerPath))
+    $matchingTestRoot = Join-Path $slicerBuildRoot 'tests'
+    $TestBuildDirectory = if (Test-Path -LiteralPath $matchingTestRoot -PathType Container) {
+        $matchingTestRoot
+    } else {
+        Join-Path $RepoRoot 'build\tests'
+    }
+}
+$testRoot = [IO.Path]::GetFullPath($TestBuildDirectory)
 $jobs = @(
     @{ Name='preset-roundtrip'; File=(Join-Path $testRoot 'libslic3r\Release\libslic3r_tests.exe'); Args=@('[Preset][Roundtrip],[Preset][Project][MultiNozzle]', '--reporter', 'compact'); Required='All tests passed' },
     @{ Name='multinozzle-config'; File=(Join-Path $testRoot 'fff_print\Release\fff_print_tests.exe'); Args=@('[MultiFilament][Config],[Flow][MultiNozzleWalls]', '--reporter', 'compact'); Required='All tests passed' },
