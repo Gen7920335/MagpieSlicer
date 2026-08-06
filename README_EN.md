@@ -1,166 +1,177 @@
+<div align="center">
+
+<img alt="Magpie Slicer logo" src="resources/images/MagpieSlicer.png" width="150">
+
 # Magpie Slicer
+
+An OrcaSlicer-based fork integrating mixed nozzle sizes, extended supports, and GPU-assisted slicing
+
+</div>
 
 [한국어](README.md) | **English**
 
-Magpie Slicer is an experimental OrcaSlicer fork focused on mixed-nozzle
-printing and support-generation controls.
+## Latest Release
 
-- Application name: **Magpie Slicer**
-- Current version: **2.5.0 (modified)**
-- Installer package name: **OrcaSlicer(name pending)**
+- Version: **2.5.0 (modified)**
+- Tag: `v2.5.0-modified-vulkan-preview-1`
 - Platform: **Windows x64**
-- Upstream: [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer)
+- Status: **Pre-release**
+- Commit: `7b2ce903085f9722e2493d0ca3ba9c32e16cea10`
+- [Download the Windows installer](https://github.com/Gen7920335/MagpieSlicer/releases/download/v2.5.0-modified-vulkan-preview-1/MagpieSlicer_Windows_Installer_V2.5.0-modified_x64.exe)
 
-> This project is under active development. Verify generated G-code and machine
-> behavior before using it on production hardware.
+```text
+SHA-256: 3CD4469DC7DAE1B93AE4FDCE81B11A2981B75DA9A6C1CF8AD2F0E90921C436F0
+```
+
+This release fixes Cura-style automatic support being generated while support was disabled. With no raft, no support is generated. Requesting one raft layer creates only that raft layer without enabling automatic support. The slicing timer now includes G-code generation and post-processing.
+
+> This fork is under active development. Inspect the preview and generated G-code before printing on real hardware.
 
 ## Main Features
 
-### Mixed-nozzle wall printing
+| Feature | Purpose |
+| --- | --- |
+| Mixed-nozzle walls | Print internal structure quickly with a large nozzle and sharp outer details with a smaller nozzle |
+| Multi-nozzle interlocking | Move the small/large wall boundary between adjacent layers to reduce delamination |
+| Large-hotend override | Force selected layer ranges to a chosen hotend |
+| `Nozzle used` preview | Show the actual nozzle used independently of material color |
+| Cura-style normal support | Provide continuous Cura-style support paths while preserving the original support modes |
+| Triangle interfaces and sublayers | Control pattern, angle, and temperature for selected interface layers |
+| Low-temperature interface | Print model and interface at different temperatures with one nozzle |
+| Tree wall count | Reinforce tree branches with up to ten walls |
+| Vulkan-assisted slicing | Select Auto, On, Max GPU, or Off acceleration modes |
+| LESIC | Integrated temperature and volumetric-flow calibration model |
 
-Multiple hotends may use different nozzle diameters in one print.
+## Mixed-Nozzle Printing
 
-- Per-hotend nozzle diameter and line-width settings
-- Automatic smaller-nozzle detection
-- Small-nozzle wall count
-- Classic and Arachne wall-generator support
-- Small/large-nozzle wall overlap
-- Optional alternating-layer interlocking
+### Per-hotend configuration
+
+Each toolhead has an independent nozzle diameter and extrusion widths. The toolhead selector, printer extruder settings, and `Hotend` page share the same source value. These values are stored in projects and presets.
+
+- Nozzle diameter and default width
+- First-layer, outer-wall, inner-wall, top-surface, infill, and support widths
+- Separate hotend and filament preset save/load actions
 - Small-nozzle wall speed override
-- Layer-range large-nozzle override with selectable hotend
-- Project and printer-preset persistence
-- `Nozzle used` preview mode with a separate color for each nozzle
 
-The smaller nozzle is selected only when the larger nozzle cannot completely
-cover a connected wall loop. The selected loop remains on one nozzle to avoid
-visible seams and weak mixed-width sections.
+### Automatic detail-nozzle selection
+
+`Use smaller nozzles in crisp corners` finds the smallest usable configured nozzle. If a large-nozzle path cannot cover any part of a connected outer-wall loop, the complete loop is assigned to the smaller nozzle to avoid tool-change seams in the middle of that loop. Inner walls and infill remain on the larger nozzle where space permits.
+
+- Small-nozzle wall count is configured independently from the normal wall count.
+- Small outer walls have priority when space is limited.
+- Both Classic and Arachne wall generators are supported.
+- Tool selection reverses automatically when tool 2 has a larger nozzle than tool 1.
+
+### Interlocking
+
+Interlocking moves one wall between the small- and large-nozzle regions on alternating layers.
+
+```text
+L L L S S S S
+L L L L S S S
+L L L S S S S
+L L L L S S S
+```
+
+Only the wall/infill boundary moves. The infill pattern itself remains stable.
+
+### Large-hotend override
+
+Specify a start layer, end layer, and hotend to bypass automatic small-nozzle selection in that range. `Add region` creates additional ranges. Reversed and overlapping ranges are normalized safely.
+
+### Preview
+
+- `Nozzle used`: fixed colors per nozzle diameter
+- `Layer width`: actual extrusion width
+- Slicing time: includes G-code generation and post-processing
+
+## Support
 
 ### Cura-style normal support
 
-Magpie Slicer adds Cura-style normal-support choices while retaining the
-original Orca/Prusa and tree-support paths.
+The original Orca/Prusa normal and tree supports remain available. Magpie adds:
 
-- `Normal (Cura style) auto`
-- `Normal (Cura style)`
-- Cura-style support-region handling
-- Continuous ZigZag support paths
-- 70-degree and 90-degree threshold-angle handling
+- `Normal (Cura style) auto`: threshold-angle detection
+- `Normal (Cura style)`: manual and painted support regions
 
-### Triangle support interface
+The Cura-style path propagates required support regions between layers and produces continuous zigzag paths. Its generator is not invoked when support is disabled.
 
-The support-interface pattern list includes `Triangles`.
+`Cura solid support raft` fills the first Cura support layer at 100% density for bed adhesion. It does not implicitly enable automatic support.
 
-- Three fixed line directions
-- 120-degree directional spacing
-- Zero-spacing dense interface support
-- Consistent behavior for Prusa, Cura-style, and tree support
-- Smoothed interface underside
+### Interfaces
+
+- Triangle patterns use exactly three directions separated by 120 degrees.
+- `Interface density / spacing` keeps both representations synchronized.
+- A selected interface hotend uses that nozzle diameter and support width.
+- Requested interface thickness is preserved, with underside smoothing for stepped curved surfaces.
 
 ### Interface sublayers
 
-Selected interface layers may use a separate pattern.
+The model-contacting interface is layer 1. A selected start/end range may use a different pattern, angle, and temperature. End values are clamped to the available interface layers, and the feature is disabled for a single-layer interface.
 
-- Enable/disable toggle
-- Start and end interface-layer range
-- Pattern type
-- Pattern angle
-- Interface temperature
-- Contact-side interface is counted as layer 1
-- End values are clamped to the available interface-layer count
-- Automatically disabled when the interface has one layer or less
+### Low-temperature interface
 
-### Low-temperature support interface
+Single-nozzle printing can use separate model and support-interface temperatures.
 
-Single-nozzle printing may use a separate support-interface temperature.
+```text
+model -> support body -> cooling/temperature transition -> interface -> reheating -> next layer
+```
 
-- Interface extrusion temperature
-- Interface-exit heating time
-- Auxiliary-fan cooling toggle and speed
-- Nozzle-wiping toggle
-- Temperature-drop tower
-- Hardware-dependent options remain disabled when the selected printer does
-  not provide the required coordinates or hardware capability
+The temperature-drop tower is visible and movable before slicing. It has a five-line brim and does not automatically move away from models.
 
-The temperature-drop tower uses a rear-left bed location when available. Its
-path length starts at 50 mm for a temperature difference up to 30 C, increases
-by 1 mm per additional degree, and is capped at 80 mm. The final 10 mm uses a
-reduced speed when additional cooling time is needed.
+- Temperature delta up to 30 C: 50 mm path
+- Above 30 C: add 1 mm per degree
+- Maximum path: 80 mm
+- Final 10 mm: 10 mm/s
+- AUX cooling and nozzle wiping are enabled only for supported hardware profiles
 
-### Tree-support wall count
+### Tree support
 
-Tree Slim and Organic support wall count may be selected from 0 through 10.
+- Automatic tree support receives the configured threshold angle.
+- Tree Slim and Organic wall counts accept `0-10`.
+- `0` preserves automatic behavior; narrow branches generate only walls that physically fit.
 
-### LESIC calibration
+## Vulkan-Assisted Slicing
 
-The calibration menu includes `LESIC`, a cylindrical calibration model that
-adapts to the selected bed and nozzle.
+The top selector provides:
 
-- Temperature range and step
-- Layers per temperature
-- Minimum and maximum volumetric speed
-- Bed-aware diameter and placement
-- Perimeter labels, tick marks, and internal brim
+- `Vulkan: Auto`: use calibrated CPU/GPU detection to select profitable work
+- `Vulkan: On`: prefer validated GPU paths
+- `Vulkan: Max GPU`: expand GPU use to the maximum supported range
+- `Vulkan: Off`: use the CPU pipeline only
 
-## Verification Status
+Validation and CPU fallback paths remain for topology-sensitive work. Performance depends on the GPU, driver, CPU, and model complexity.
 
-The current Release build was tested on 2026-07-28.
+## Device and Calibration Features
 
-| Area | Result |
-| --- | --- |
-| `libslic3r` unit tests | 50,042 assertions, 138 cases passed |
-| `fff_print` unit tests | 35,058 assertions, 85 cases passed |
-| Support type, angle, triangle, and sublayer matrix | 9/9 passed |
-| Interface thickness, spacing, pattern, and nozzle matrix | 13/13 passed |
-| Tree Slim and Organic wall count, 0.4/0.15 mm | 44/44 passed |
-| Mixed-nozzle OrcaCube, Classic | 25/25 passed |
-| Mixed-nozzle OrcaCube, Arachne | 25/25 passed |
-| Small-nozzle speed override | 8/8 passed |
-| Low-temperature interface and drop tower | 4,330 assertions, 9 cases passed |
+### Snapmaker device view
 
-The long 66-case complex-geometry matrix was stopped at the per-step time
-limit after its first 10 cases passed. Equivalent setting and routing paths
-were completed with the 50-case OrcaCube matrix.
+Magpie extends the Snapmaker U1 print-start flow and native device panel. Camera, current layer, temperatures, fans, motion state, and common device controls are available in one view. PA calibration, bed leveling, and timelapse options default to off.
 
-Physical-printer validation remains the user's responsibility.
+### LESIC
+
+LESIC creates a centered cylindrical calibration model sized to bed dimensions minus 20 mm. It includes floor labels, perimeter marks, and an internal brim, with reduced label sizing for small beds. Temperature and maximum volumetric speed can be evaluated in one print.
+
+## Verification
+
+Completed for the latest release:
+
+- Full CTest suite: **349/349 passed**
+- Release-readiness suite: **12/12 passed**
+- Real installer extraction: **15,093 files verified**
+- Installed Cura geometry slices: **3/3 passed**
+- Support-off regression: `0` support layers without raft, exactly `1` raft layer when requested
+- Installed EXE/DLL SHA-256 values match the verified build
+
+These checks do not guarantee every printer and firmware combination. Review multi-tool output, machine-specific start G-code, and low-temperature interface behavior before uploading a job.
 
 ## Building on Windows
 
-Requirements are the same as the upstream OrcaSlicer Windows build.
-
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build_cura_port.ps1
+cmake --build build-vulkan --config Release --parallel 8
+powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -BuildDirectory build-vulkan -Parallel 8
 ```
-
-The Release executable is generated at:
-
-```text
-build/src/Release/orca-slicer.exe
-```
-
-To build the NSIS installer:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build_installer.ps1
-```
-
-## Repository Layout
-
-- `src/`: application and slicing-engine source
-- `tests/`: unit and regression tests
-- `scripts/`: build, slicing, geometry, and regression-verification scripts
-- `resources/`: profiles, translations, icons, and calibration assets
-
-Generated builds, local sandboxes, backups, and verification output are not
-tracked.
-
-## Project Status
-
-This repository is experimental and is not an official OrcaSlicer release.
-Compatibility with every printer profile and firmware is not guaranteed.
 
 ## License and Attribution
 
-Magpie Slicer is based on
-[OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer). Upstream copyright,
-third-party notices, and license requirements remain applicable. See
-[LICENSE.txt](LICENSE.txt).
+Magpie Slicer is based on [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer). OrcaSlicer-specific calibration tools and model names retain their original names. See [LICENSE](LICENSE.txt) and the upstream project license for usage and distribution terms.
