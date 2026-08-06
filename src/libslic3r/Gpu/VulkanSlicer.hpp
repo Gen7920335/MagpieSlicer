@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -65,12 +66,49 @@ struct VulkanVerticalIntersectionBatch {
 struct VulkanTreeContourRequest {
     Segment  segment;
     uint64_t stable_id { 0 };
+    uint32_t first_candidate { 0 };
+    uint32_t candidate_count { std::numeric_limits<uint32_t>::max() };
 };
 
 struct VulkanTreeContourBatch {
     bool                 dispatched { false };
     std::string          diagnostic;
     std::vector<uint8_t> may_intersect;
+};
+
+struct VulkanAabb {
+    Point min;
+    Point max;
+};
+
+struct VulkanAabbBatch {
+    struct OverlapPair {
+        uint32_t query { 0 };
+        uint32_t target { 0 };
+
+        bool operator==(const OverlapPair& rhs) const { return query == rhs.query && target == rhs.target; }
+    };
+
+    bool                 resolved { false };
+    bool                 dispatched { false };
+    std::string          diagnostic;
+    std::vector<uint8_t> may_overlap;
+    // Populated for operation-specific 6542 callers. Pairs are stable-sorted
+    // by query and target; callers still perform their established exact
+    // topology test before changing a toolpath.
+    std::vector<OverlapPair> overlap_pairs;
+    size_t               candidate_pairs { 0 };
+};
+
+enum class VulkanAabbOperation {
+    Spatial,
+    TreeSupport,
+    DistanceField,
+    Gyroid,
+    SeamTravel,
+    ClassicWall,
+    CuraSupport,
+    ArachneWall
 };
 
 // The accelerated scan-conversion path must remain observable while it is
@@ -85,6 +123,9 @@ struct VulkanSlicerRuntimeStats {
     uint64_t    validation_failures { 0 };
     uint64_t    skipped_small_workloads { 0 };
     uint64_t    skipped_intersections { 0 };
+    size_t      smallest_submitted_intersection_batch { 0 };
+    size_t      largest_submitted_intersection_batch { 0 };
+    size_t      largest_skipped_intersection_batch { 0 };
     double      total_gpu_ms { 0.0 };
     double      total_host_ms { 0.0 };
     double      last_gpu_ms { -1.0 };
@@ -108,7 +149,16 @@ enum class VulkanIntersectionValidationMode {
     Strict,
     // The default performance mode after the in-process qualification test:
     // check the first, last, and periodic results of every batch.
-    Sampled
+    Sampled,
+    // Maximum mode relies on exact startup qualification and result contracts
+    // without repeating intersection arithmetic on the CPU.
+    Qualified
+};
+
+enum class VulkanSlicerComputeMode {
+    Balanced,
+    Priority,
+    Maximum
 };
 
 // This capability layer is intentionally independent of the slicing pipeline.
@@ -125,10 +175,10 @@ public:
     static void set_compute_enabled(bool enabled);
     static bool compute_enabled();
 
-    // GPU-priority mode is opt-in. The default uses the calibrated conservative
-    // CPU/GPU crossover policy.
-    static void set_gpu_priority_enabled(bool enabled);
-    static bool gpu_priority_enabled();
+    // Auto, On and Max GPU map to one policy value so transitions cannot leave
+    // independent acceleration flags in an inconsistent state.
+    static void set_compute_mode(VulkanSlicerComputeMode mode);
+    static VulkanSlicerComputeMode compute_mode();
 
     // Clears per-slice counters while retaining the qualified device and
     // pipeline. The progress UI can then report this slice's actual GPU work
@@ -140,9 +190,10 @@ public:
     // UI can distinguish "ready but idle" from an initialization failure.
     static bool prepare_for_slicing();
 
-    // Releases the reusable host-visible Vulkan staging buffers after a slice.
-    // The device and qualified pipeline remain ready for the next job.
-    static void release_unused_staging_memory();
+    // Retains bounded host-visible buffers for the next interactive slice and
+    // releases only oversized allocations. Interrupted slices force a complete
+    // staging cleanup while preserving the qualified device and pipelines.
+    static void release_unused_staging_memory(bool force = false);
 
     // Executes the high-cardinality, fixed-point portion of rectilinear and
     // support-infill scan conversion. Results are returned in input order;
@@ -156,6 +207,17 @@ public:
     static VulkanTreeContourBatch dispatch_tree_contour_candidates(
         const std::vector<VulkanTreeContourRequest>& requests,
         const std::vector<Segment>& contour_edges);
+
+    // Deterministic spatial broad phase shared by support, distance-field and
+    // non-rectilinear fill callers. A CPU-built uniform grid compacts each
+    // query to its local target range before Vulkan evaluates the remaining
+    // integer AABB pairs. A false result is exact; true remains on the caller's
+    // established CPU geometry path.
+    static VulkanAabbBatch dispatch_indexed_aabb_candidates(
+        const std::vector<VulkanAabb>& queries,
+        const std::vector<VulkanAabb>& targets,
+        Coord cell_size = 0,
+        VulkanAabbOperation operation = VulkanAabbOperation::Spatial);
 
     // Calibrated at Vulkan initialization from this CPU's fixed-point
     // throughput and the selected GPU's real submission latency.

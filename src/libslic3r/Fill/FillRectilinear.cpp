@@ -771,77 +771,50 @@ static bool vulkan_slice_diagnostics_enabled()
     return enabled;
 }
 
-static Gpu::VulkanVerticalIntersectionBatch prepare_vulkan_vertical_intersections(
-    const ExPolygonWithOffset &poly_with_offset, size_t n_vlines, coord_t x0, coord_t line_spacing)
+constexpr size_t maximum_gpu_candidate_requests = 256 * 1024;
+constexpr size_t initial_gpu_request_reserve = 32 * 1024;
+
+struct DeferredVerticalIntersection
 {
-    constexpr size_t maximum_gpu_candidate_requests = 256 * 1024;
-    constexpr size_t initial_request_reserve = 32 * 1024;
+    size_t vline_index { 0 };
+    size_t intersection_index { 0 };
+};
 
-    size_t contour_edge_count = 0;
-    for (size_t contour_index = 0; contour_index < poly_with_offset.n_contours; ++contour_index) {
-        const Points &contour = poly_with_offset.contour(contour_index).points;
-        if (contour.size() >= 2)
-            contour_edge_count += contour.size();
+static void resolve_vertical_intersection_on_cpu(
+    const Gpu::VulkanVerticalIntersectionRequest &request, SegmentIntersection &intersection)
+{
+    const int64_t ax = request.segment.a.x;
+    const int64_t ay = request.segment.a.y;
+    const int64_t bx = request.segment.b.x;
+    const int64_t by = request.segment.b.y;
+    if (bx > ax) {
+        intersection.pos_p = request.scan_x - ax;
+        intersection.pos_q = bx - ax;
+    } else {
+        intersection.pos_p = ax - request.scan_x;
+        intersection.pos_q = ax - bx;
     }
-    if (contour_edge_count == 0 || n_vlines == 0)
-        return {};
-    const size_t upper_bound = contour_edge_count > maximum_gpu_candidate_requests / n_vlines ?
-        maximum_gpu_candidate_requests : contour_edge_count * n_vlines;
-    if (!Gpu::VulkanSlicerBackend::should_dispatch_vertical_intersections(upper_bound)) {
-        Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(upper_bound);
-        return {};
-    }
+    assert(intersection.pos_q > 1);
+    assert(intersection.pos_p > 0 && intersection.pos_p < intersection.pos_q);
+    intersection.pos_p *= by - ay;
+    intersection.pos_p += ay * int64_t(intersection.pos_q);
+}
 
-    std::vector<Gpu::VulkanVerticalIntersectionRequest> requests;
-    requests.reserve(std::min(upper_bound, initial_request_reserve));
-    for (size_t contour_index = 0; contour_index < poly_with_offset.n_contours; ++contour_index) {
-        const Points &contour = poly_with_offset.contour(contour_index).points;
-        if (contour.size() < 2)
-            continue;
-        for (size_t segment_index = 0; segment_index < contour.size(); ++segment_index) {
-            const size_t previous_index = ((segment_index == 0) ? contour.size() : segment_index) - 1;
-            const Point &p1 = contour[previous_index];
-            const Point &p2 = contour[segment_index];
-            const coord_t left = std::min(p1.x(), p2.x());
-            const coord_t right = std::max(p1.x(), p2.x());
-            int first_line = (left - x0) / line_spacing;
-            while (first_line * line_spacing + x0 < left)
-                ++first_line;
-            first_line = std::max(0, first_line);
-            int last_line = (right - x0 + line_spacing) / line_spacing;
-            while (last_line * line_spacing + x0 > right)
-                --last_line;
-            last_line = std::min(int(n_vlines) - 1, last_line);
-            for (int line_index = first_line; line_index <= last_line; ++line_index) {
-                const coord_t scan_x = x0 + line_index * line_spacing;
-                if (p1.x() == scan_x || p2.x() == scan_x)
-                    continue;
-                if (requests.size() == maximum_gpu_candidate_requests) {
-                    Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(requests.size());
-                    return {};
-                }
-                requests.push_back({
-                    { { int64_t(p1.x()), int64_t(p1.y()) }, { int64_t(p2.x()), int64_t(p2.y()) } },
-                    int64_t(scan_x), uint64_t(requests.size())
-                });
-            }
-        }
+static void resolve_vertical_intersections_on_cpu(
+    const std::vector<Gpu::VulkanVerticalIntersectionRequest> &requests,
+    const std::vector<DeferredVerticalIntersection> &deferred,
+    std::vector<SegmentedIntersectionLine> &segs)
+{
+    assert(requests.size() == deferred.size());
+    for (size_t index = 0; index < requests.size(); ++index) {
+        const DeferredVerticalIntersection &location = deferred[index];
+        assert(location.vline_index < segs.size());
+        assert(location.intersection_index < segs[location.vline_index].intersections.size());
+        SegmentIntersection &intersection = segs[location.vline_index].intersections[location.intersection_index];
+        resolve_vertical_intersection_on_cpu(requests[index], intersection);
+        assert(intersection.pos() + 1 >= std::min(requests[index].segment.a.y, requests[index].segment.b.y));
+        assert(intersection.pos() <= std::max(requests[index].segment.a.y, requests[index].segment.b.y) + 1);
     }
-
-    if (!Gpu::VulkanSlicerBackend::should_dispatch_vertical_intersections(requests.size())) {
-        Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(requests.size());
-        return {};
-    }
-    Gpu::VulkanVerticalIntersectionBatch batch =
-        Gpu::VulkanSlicerBackend::dispatch_vertical_intersections(requests);
-    if (!batch.dispatched || batch.intersections.size() != requests.size())
-        return {};
-    for (size_t index = 0; index < batch.intersections.size(); ++index) {
-        const Gpu::VulkanVerticalIntersection &intersection = batch.intersections[index];
-        if (!intersection.valid || intersection.stable_id != index || intersection.denominator <= 0)
-            return {};
-    }
-    return batch;
 }
 #endif
 
@@ -856,11 +829,28 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(
         segs[i].pos = x0 + i * line_spacing;
     }
 #ifdef SLIC3R_ENABLE_VULKAN_SLICER
-    const Gpu::VulkanVerticalIntersectionBatch gpu_intersections =
-        allow_vulkan ? prepare_vulkan_vertical_intersections(poly_with_offset, n_vlines, x0, line_spacing) :
-                       Gpu::VulkanVerticalIntersectionBatch {};
-    const bool use_gpu_intersections = gpu_intersections.dispatched;
-    size_t gpu_intersection_index = 0;
+    std::vector<Gpu::VulkanVerticalIntersectionRequest> vulkan_requests;
+    std::vector<DeferredVerticalIntersection> deferred_intersections;
+    bool collect_vulkan_requests = false;
+    if (allow_vulkan && n_vlines > 0) {
+        size_t contour_edge_count = 0;
+        for (size_t contour_index = 0; contour_index < poly_with_offset.n_contours; ++contour_index) {
+            const Points &contour = poly_with_offset.contour(contour_index).points;
+            if (contour.size() >= 2)
+                contour_edge_count += contour.size();
+        }
+        const size_t upper_bound = contour_edge_count > maximum_gpu_candidate_requests / n_vlines ?
+            maximum_gpu_candidate_requests : contour_edge_count * n_vlines;
+        collect_vulkan_requests = upper_bound != 0 &&
+            Gpu::VulkanSlicerBackend::should_dispatch_vertical_intersections(upper_bound);
+        if (collect_vulkan_requests) {
+            const size_t reserve = std::min(upper_bound, initial_gpu_request_reserve);
+            vulkan_requests.reserve(reserve);
+            deferred_intersections.reserve(reserve);
+        } else if (upper_bound != 0) {
+            Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(upper_bound);
+        }
+    }
 #endif
     // For each contour
     for (size_t iContour = 0; iContour < poly_with_offset.n_contours; ++ iContour) {
@@ -922,15 +912,25 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(
                     is.pos_q = 1;
                 } else {
 #ifdef SLIC3R_ENABLE_VULKAN_SLICER
-                    if (use_gpu_intersections &&
-                        gpu_intersection_index < gpu_intersections.intersections.size()) {
-                        const Gpu::VulkanVerticalIntersection &gpu_result =
-                            gpu_intersections.intersections[gpu_intersection_index];
-                        is.pos_p = gpu_result.numerator;
-                        is.pos_q = gpu_result.denominator;
-                    } else
+                    if (collect_vulkan_requests && vulkan_requests.size() == maximum_gpu_candidate_requests) {
+                        Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(vulkan_requests.size());
+                        resolve_vertical_intersections_on_cpu(vulkan_requests, deferred_intersections, segs);
+                        vulkan_requests.clear();
+                        deferred_intersections.clear();
+                        collect_vulkan_requests = false;
+                    }
+                    if (collect_vulkan_requests) {
+                        const size_t request_index = vulkan_requests.size();
+                        vulkan_requests.push_back({
+                            { { int64_t(p1.x()), int64_t(p1.y()) }, { int64_t(p2.x()), int64_t(p2.y()) } },
+                            int64_t(this_x), uint64_t(request_index)
+                        });
+                        deferred_intersections.push_back({ size_t(i), segs[i].intersections.size() });
+                        // Filled after this single contour pass by either the GPU or the exact CPU fallback.
+                        is.pos_p = 0;
+                        is.pos_q = 1;
+                    } else {
 #endif
-                    {
                     // First calculate the intersection parameter 't' as a rational number with non negative denominator.
                     if (p2.x() > p1.x()) {
                         is.pos_p = this_x - p1.x();
@@ -944,36 +944,70 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(
                     // Make an intersection point from the 't'.
                     is.pos_p *= int64_t(p2.y() - p1.y());
                     is.pos_p += p1.y() * int64_t(is.pos_q);
-                    }
 #ifdef SLIC3R_ENABLE_VULKAN_SLICER
-                    ++gpu_intersection_index;
+                    }
 #endif
                 }
                 // +-1 to take rounding into account.
+#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+                if (!collect_vulkan_requests)
+#endif
+                {
                 assert(is.pos() + 1 >= std::min(p1.y(), p2.y()));
                 assert(is.pos() <= std::max(p1.y(), p2.y()) + 1);
+                }
                 segs[i].intersections.push_back(is);
             }
         }
     }
 
 #ifdef SLIC3R_ENABLE_VULKAN_SLICER
-    if (use_gpu_intersections) {
-        const bool complete_batch_consumed = gpu_intersection_index == gpu_intersections.intersections.size();
+    if (!vulkan_requests.empty()) {
+        bool accepted_gpu_batch = false;
+        Gpu::VulkanVerticalIntersectionBatch gpu_intersections;
+        if (Gpu::VulkanSlicerBackend::should_dispatch_vertical_intersections(vulkan_requests.size())) {
+            gpu_intersections = Gpu::VulkanSlicerBackend::dispatch_vertical_intersections(vulkan_requests);
+            accepted_gpu_batch = gpu_intersections.dispatched &&
+                gpu_intersections.intersections.size() == vulkan_requests.size();
+            for (size_t index = 0; accepted_gpu_batch && index < gpu_intersections.intersections.size(); ++index) {
+                const Gpu::VulkanVerticalIntersection &result = gpu_intersections.intersections[index];
+                accepted_gpu_batch = result.valid && result.stable_id == index && result.denominator > 0;
+            }
+        } else {
+            Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(vulkan_requests.size());
+        }
+
+        if (accepted_gpu_batch) {
+            for (size_t index = 0; index < vulkan_requests.size(); ++index) {
+                const DeferredVerticalIntersection &location = deferred_intersections[index];
+                SegmentIntersection &intersection =
+                    segs[location.vline_index].intersections[location.intersection_index];
+                intersection.pos_p = gpu_intersections.intersections[index].numerator;
+                intersection.pos_q = gpu_intersections.intersections[index].denominator;
+                assert(intersection.pos() + 1 >=
+                    std::min(vulkan_requests[index].segment.a.y, vulkan_requests[index].segment.b.y));
+                assert(intersection.pos() <=
+                    std::max(vulkan_requests[index].segment.a.y, vulkan_requests[index].segment.b.y) + 1);
+            }
+        } else {
+            resolve_vertical_intersections_on_cpu(vulkan_requests, deferred_intersections, segs);
+        }
+
+        if (gpu_intersections.dispatched) {
         Gpu::VulkanSlicerBackend::note_vertical_intersection_usage(
-            complete_batch_consumed ? gpu_intersection_index : 0,
-            gpu_intersection_index,
-            !complete_batch_consumed,
-            complete_batch_consumed ? "GPU scanline intersection batch accepted." :
-                                      "GPU scanline intersection batch consumption mismatch.");
+            accepted_gpu_batch ? vulkan_requests.size() : 0,
+            accepted_gpu_batch ? vulkan_requests.size() : 0,
+            !accepted_gpu_batch,
+            accepted_gpu_batch ? "GPU scanline intersection batch accepted." :
+                                 "GPU scanline intersection batch rejected; exact CPU fallback used.");
         if (vulkan_slice_diagnostics_enabled()) {
             BOOST_LOG_TRIVIAL(info) << "[Magpie Vulkan] scanline batch "
-                << (complete_batch_consumed ? "accepted" : "mismatched")
-                << " requests=" << gpu_intersections.intersections.size()
+                << (accepted_gpu_batch ? "accepted" : "rejected")
+                << " requests=" << vulkan_requests.size()
                 << " gpu_ms=" << gpu_intersections.gpu_elapsed_ms
                 << " host_ms=" << gpu_intersections.host_elapsed_ms;
         }
-        assert(complete_batch_consumed);
+        }
     }
 #endif
 

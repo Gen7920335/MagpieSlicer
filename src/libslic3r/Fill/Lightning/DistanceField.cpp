@@ -4,6 +4,7 @@
 #include "DistanceField.hpp" //Class we're implementing.
 #include "../FillRectilinear.hpp"
 #include "../../ClipperUtils.hpp"
+#include "../../Gpu/VulkanSlicer.hpp"
 
 #include <tbb/parallel_for.h>
 
@@ -49,20 +50,78 @@ DistanceField::DistanceField(const coord_t& radius, const Polygons& current_outl
         const size_t unsupported_points_prev_size = m_unsupported_points.size();
         m_unsupported_points.resize(unsupported_points_prev_size + sampled_points.size());
 
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, sampled_points.size()), [&self = *this, &expoly = std::as_const(expoly), &sampled_points = std::as_const(sampled_points), &unsupported_points_prev_size = std::as_const(unsupported_points_prev_size)](const tbb::blocked_range<size_t> &range) -> void {
+        std::vector<Line> boundary_edges;
+        for (size_t contour_index = 0; contour_index <= expoly.holes.size(); ++contour_index) {
+            const Polygon &contour = contour_index == 0 ? expoly.contour : expoly.holes[contour_index - 1];
+            if (contour.size() < 2)
+                continue;
+            boundary_edges.reserve(boundary_edges.size() + contour.size());
+            Point previous = contour.points.back();
+            for (const Point &point : contour.points) {
+                boundary_edges.emplace_back(previous, point);
+                previous = point;
+            }
+        }
+
+        std::vector<size_t> seed_indices;
+        constexpr size_t seed_count = 4;
+        const size_t actual_seed_count = std::min(seed_count, boundary_edges.size());
+        for (size_t seed = 0; seed < actual_seed_count; ++seed) {
+            const size_t index = seed * boundary_edges.size() / actual_seed_count;
+            if (seed_indices.empty() || seed_indices.back() != index)
+                seed_indices.push_back(index);
+        }
+        std::vector<uint8_t> is_seed(boundary_edges.size(), uint8_t(0));
+        for (const size_t index : seed_indices)
+            is_seed[index] = 1;
+
+        std::vector<double> seed_distance2(sampled_points.size(), std::numeric_limits<double>::max());
+        std::vector<Gpu::VulkanAabb> distance_queries;
+        distance_queries.reserve(sampled_points.size());
+        for (size_t point_index = 0; point_index < sampled_points.size(); ++point_index) {
+            const Point &point = sampled_points[point_index];
+            double best = std::numeric_limits<double>::max();
+            for (const size_t edge_index : seed_indices)
+                best = std::min(best, boundary_edges[edge_index].distance_to_squared(point));
+            seed_distance2[point_index] = best;
+            const coord_t radius_bound = std::isfinite(best) ?
+                coord_t(std::min<double>(std::numeric_limits<coord_t>::max() / 4,
+                                         std::ceil(std::sqrt(best)) + 1.0)) :
+                std::numeric_limits<coord_t>::max() / 4;
+            distance_queries.push_back({
+                { int64_t(point.x()) - int64_t(radius_bound), int64_t(point.y()) - int64_t(radius_bound) },
+                { int64_t(point.x()) + int64_t(radius_bound), int64_t(point.y()) + int64_t(radius_bound) }
+            });
+        }
+
+        std::vector<Gpu::VulkanAabb> remaining_edge_bounds;
+        remaining_edge_bounds.reserve(boundary_edges.size());
+        for (size_t edge_index = 0; edge_index < boundary_edges.size(); ++edge_index) {
+            if (is_seed[edge_index] != 0)
+                continue;
+            const Line &edge = boundary_edges[edge_index];
+            remaining_edge_bounds.push_back({
+                { std::min<int64_t>(edge.a.x(), edge.b.x()), std::min<int64_t>(edge.a.y(), edge.b.y()) },
+                { std::max<int64_t>(edge.a.x(), edge.b.x()), std::max<int64_t>(edge.a.y(), edge.b.y()) }
+            });
+        }
+        const Gpu::VulkanAabbBatch distance_candidates =
+            Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+                distance_queries, remaining_edge_bounds, std::max<coord_t>(1, m_cell_size * 4),
+                Gpu::VulkanAabbOperation::DistanceField);
+        const bool seeds_cover_all_edges = remaining_edge_bounds.empty() && !seed_indices.empty();
+
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, sampled_points.size()), [&self = *this, &sampled_points = std::as_const(sampled_points), &unsupported_points_prev_size = std::as_const(unsupported_points_prev_size), &boundary_edges = std::as_const(boundary_edges), &seed_distance2 = std::as_const(seed_distance2), &distance_candidates = std::as_const(distance_candidates), seeds_cover_all_edges](const tbb::blocked_range<size_t> &range) -> void {
             for (size_t sp_idx = range.begin(); sp_idx < range.end(); ++sp_idx) {
                 const Point &sp = sampled_points[sp_idx];
-                // Find a squared distance to the source expolygon boundary.
-                double d2 = std::numeric_limits<double>::max();
-                for (size_t icontour = 0; icontour <= expoly.holes.size(); ++icontour) {
-                    const Polygon &contour = icontour == 0 ? expoly.contour : expoly.holes[icontour - 1];
-                    if (contour.size() > 2) {
-                        Point prev = contour.points.back();
-                        for (const Point &p2 : contour.points) {
-                            d2   = std::min(d2, Line::distance_to_squared(sp, prev, p2));
-                            prev = p2;
-                        }
-                    }
+                const bool seed_is_final = seeds_cover_all_edges ||
+                    (distance_candidates.resolved &&
+                     distance_candidates.may_overlap.size() == sampled_points.size() &&
+                     distance_candidates.may_overlap[sp_idx] == 0);
+                double d2 = seed_is_final ? seed_distance2[sp_idx] : std::numeric_limits<double>::max();
+                if (!seed_is_final) {
+                    for (const Line &edge : boundary_edges)
+                        d2 = std::min(d2, edge.distance_to_squared(sp));
                 }
                 self.m_unsupported_points[unsupported_points_prev_size + sp_idx] = {sp, coord_t(std::sqrt(d2))};
                 assert(self.m_unsupported_points_bbox.contains(sp));

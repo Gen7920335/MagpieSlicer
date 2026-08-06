@@ -905,6 +905,7 @@ public:
     bool  is_collapse_toolbar_on_left() const;
     float get_collapse_toolbar_width() const;
     float get_collapse_toolbar_height() const;
+    float get_slice_duration_overlay_width() const;
 
     void update_volumes_colors_by_extruder();
 

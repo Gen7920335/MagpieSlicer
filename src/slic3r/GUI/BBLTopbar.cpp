@@ -327,13 +327,16 @@ void BBLTopbar::Init(wxFrame* parent)
         m_vulkan_mode_choice = new wxChoice(this, ID_VULKAN_MODE);
         m_vulkan_mode_choice->Append(_L("Vulkan: Auto"));
         m_vulkan_mode_choice->Append(_L("Vulkan: On"));
+        m_vulkan_mode_choice->Append(_L("Vulkan: Max GPU"));
         m_vulkan_mode_choice->Append(_L("Vulkan: Off"));
-        m_vulkan_mode_choice->SetSelection(mode == "on" ? 1 : (mode == "off" ? 2 : 0));
-        m_vulkan_mode_choice->SetToolTip(_L("Automatically use Vulkan only when calibration predicts a slicing speed benefit"));
-        m_vulkan_mode_choice->SetMinSize(FromDIP(wxSize(116, -1)));
+        m_vulkan_mode_choice->SetSelection(mode == "on" ? 1 : (mode == "max" ? 2 : (mode == "off" ? 3 : 0)));
+        m_vulkan_mode_choice->SetToolTip(_L("Select calibrated, preferred, maximum, or disabled Vulkan slicing"));
+        m_vulkan_mode_choice->SetMinSize(FromDIP(wxSize(132, -1)));
         this->AddControl(m_vulkan_mode_choice, _L("Vulkan slicing mode"));
         Gpu::VulkanSlicerBackend::set_compute_enabled(mode != "off");
-        Gpu::VulkanSlicerBackend::set_gpu_priority_enabled(mode == "on");
+        Gpu::VulkanSlicerBackend::set_compute_mode(
+            mode == "max" ? Gpu::VulkanSlicerComputeMode::Maximum :
+            (mode == "on" ? Gpu::VulkanSlicerComputeMode::Priority : Gpu::VulkanSlicerComputeMode::Balanced));
     }
 
     this->AddSpacer(FromDIP(25));
@@ -412,16 +415,18 @@ void BBLTopbar::Init(wxFrame* parent)
     this->Bind(wxEVT_AUITOOLBAR_TOOL_DROPDOWN, &BBLTopbar::OnUndo, this, wxID_UNDO);
     if (m_vulkan_mode_choice) {
         m_vulkan_mode_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent& event) {
-            static const std::array<const char*, 3> modes { "auto", "on", "off" };
-            const int selection = std::clamp(event.GetSelection(), 0, 2);
+            static const std::array<const char*, 4> modes { "auto", "on", "max", "off" };
+            const int selection = std::clamp(event.GetSelection(), 0, 3);
             const std::string mode = modes[size_t(selection)];
             wxGetApp().app_config->set("vulkan_slicer_mode", mode);
             Gpu::VulkanSlicerBackend::set_compute_enabled(mode != "off");
-            Gpu::VulkanSlicerBackend::set_gpu_priority_enabled(mode == "on");
+            Gpu::VulkanSlicerBackend::set_compute_mode(
+                mode == "max" ? Gpu::VulkanSlicerComputeMode::Maximum :
+                (mode == "on" ? Gpu::VulkanSlicerComputeMode::Priority : Gpu::VulkanSlicerComputeMode::Balanced));
         });
         m_vulkan_mode_choice->Bind(wxEVT_UPDATE_UI, [this](wxUpdateUIEvent&) {
             const std::string mode = wxGetApp().app_config->get("vulkan_slicer_mode");
-            const int selection = mode == "on" ? 1 : (mode == "off" ? 2 : 0);
+            const int selection = mode == "on" ? 1 : (mode == "max" ? 2 : (mode == "off" ? 3 : 0));
             if (m_vulkan_mode_choice->GetSelection() != selection)
                 m_vulkan_mode_choice->SetSelection(selection);
         });

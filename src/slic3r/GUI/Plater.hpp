@@ -753,6 +753,8 @@ public:
 
     const GLToolbar& get_collapse_toolbar() const;
     GLToolbar& get_collapse_toolbar();
+    std::string get_slice_duration_label() const;
+    bool is_slice_timer_running() const;
 
     void update_preview_bottom_toolbar();
     void update_preview_moves_slider();

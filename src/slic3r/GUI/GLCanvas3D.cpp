@@ -1925,6 +1925,15 @@ float GLCanvas3D::get_collapse_toolbar_height() const
     return state != Sidebar::None ? collapse_toolbar.get_height() : 0;
 }
 
+float GLCanvas3D::get_slice_duration_overlay_width() const
+{
+    const Plater* plater = wxGetApp().plater();
+    if (plater == nullptr || (!plater->is_slice_timer_running() && plater->get_slice_duration_label().empty()))
+        return 0.0f;
+
+    return 186.0f * get_scale();
+}
+
 bool GLCanvas3D::make_current_for_postinit() {
     return _set_current();
 }
@@ -8502,9 +8511,11 @@ void GLCanvas3D::_check_and_update_toolbar_icon_scale()
 
     //BBS: GUI refactor: GLToolbar
 #if BBS_TOOLBAR_ON_TOP
-    float collapse_toolbar_width = collapse_toolbar.is_enabled() ? collapse_toolbar.get_width() : 0;
+    const float collapse_toolbar_width = collapse_toolbar.is_enabled() ? collapse_toolbar.get_width() : 0;
+    const float left_overlay_width = collapse_toolbar_width +
+        std::max(collapse_toolbar_width, get_slice_duration_overlay_width());
 
-    float top_tb_width = m_main_toolbar.get_width() + m_gizmos.get_scaled_total_width() + m_assemble_view_toolbar.get_width() + m_separator_toolbar.get_width() + collapse_toolbar_width * 2;
+    float top_tb_width = m_main_toolbar.get_width() + m_gizmos.get_scaled_total_width() + m_assemble_view_toolbar.get_width() + m_separator_toolbar.get_width() + left_overlay_width;
     int   items_cnt = m_main_toolbar.get_visible_items_cnt() + m_gizmos.get_selectable_icons_cnt() + m_assemble_view_toolbar.get_visible_items_cnt() + m_separator_toolbar.get_visible_items_cnt() + collapse_toolbar.get_visible_items_cnt();
     float noitems_width = top_tb_width - size * items_cnt; // width of separators and borders in top toolbars
 
@@ -8757,17 +8768,19 @@ void GLCanvas3D::_render_gizmos_overlay()
 int GLCanvas3D::get_main_toolbar_offset() const
 {
     const float cnv_width              = get_canvas_size().get_width();
-    const float collapse_toolbar_width = get_collapse_toolbar_width() * 2;
+    const float collapse_toolbar_width = get_collapse_toolbar_width();
+    const float left_overlay_width     = collapse_toolbar_width +
+        std::max(collapse_toolbar_width, get_slice_duration_overlay_width());
     const float gizmo_width            = m_gizmos.get_scaled_total_width();
     const float assemble_width         = m_assemble_view_toolbar.get_width();
     const float separator_width        = m_separator_toolbar.get_width();
-    const float toolbar_total_width    = m_main_toolbar.get_width() + separator_width + gizmo_width + assemble_width + collapse_toolbar_width;
+    const float toolbar_total_width    = m_main_toolbar.get_width() + separator_width + gizmo_width + assemble_width + left_overlay_width;
 
     if (cnv_width < toolbar_total_width) {
-        return is_collapse_toolbar_on_left() ? collapse_toolbar_width : 0;
+        return is_collapse_toolbar_on_left() ? left_overlay_width : 0;
     } else {
         const float offset = (cnv_width - toolbar_total_width) / 2;
-        return is_collapse_toolbar_on_left() ? offset + collapse_toolbar_width : offset;
+        return is_collapse_toolbar_on_left() ? offset + left_overlay_width : offset;
     }
 }
 
@@ -9252,6 +9265,8 @@ void GLCanvas3D::_render_return_toolbar() const
     float window_height = button_icon_size.y + imgui.scaled(2.0f);
     float window_pos_x = 30.0f + (is_collapse_toolbar_on_left() ? (get_collapse_toolbar_width() + 5.f) : 0);
     float window_pos_y = 14.0f;
+    if (get_slice_duration_overlay_width() > 0.0f)
+        window_pos_y += ImGui::GetFontSize() + imgui.scaled(18.0f);
 
     imgui.set_next_window_pos(window_pos_x, window_pos_y, ImGuiCond_Always, 0, 0);
 #ifdef __WINDOWS__
@@ -9548,6 +9563,37 @@ void GLCanvas3D::_render_collapse_toolbar() const
 
     collapse_toolbar.set_position(top, left);
     collapse_toolbar.render(*this);
+
+    const std::string duration = plater.get_slice_duration_label();
+    if (!plater.is_slice_timer_running() && duration.empty())
+        return;
+
+    ImGuiWrapper& imgui = *wxGetApp().imgui();
+    const float scale = get_scale();
+    const float gap = 6.0f * scale;
+    const float label_width = get_slice_duration_overlay_width() - gap;
+    const ImVec2 display_size = ImGui::GetIO().DisplaySize;
+    const float toolbar_width = collapse_toolbar.get_width();
+    const float x = sidebar_docking_dir == Sidebar::Right
+        ? display_size.x - toolbar_width - gap - label_width
+        : toolbar_width + gap;
+    const float y = 4.0f * scale;
+
+    ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(label_width, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.82f);
+    imgui.begin(
+        std::string("###slice_duration_overlay"),
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoInputs);
+    imgui.text(plater.is_slice_timer_running()
+        ? into_u8(_L("Slicing..."))
+        : into_u8(_L("Slice time")) + ": " + duration);
+    imgui.end();
 }
 
 //BBS reander assemble toolbar

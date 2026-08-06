@@ -13,6 +13,7 @@
 #include "Geometry/ConvexHull.hpp"
 #include "ExPolygonCollection.hpp"
 #include "Geometry.hpp"
+#include "Gpu/VulkanSlicer.hpp"
 #include "Line.hpp"
 #include <cmath>
 #include <cassert>
@@ -958,12 +959,39 @@ Polylines reconnect_polylines(const Polylines &polylines, double limit_distance)
         }
     }
 
+    std::unordered_set<uint64_t> nearby_pairs;
+    bool use_vulkan_pairs = false;
+    if (polylines.size() <= std::numeric_limits<uint32_t>::max()) {
+        std::vector<Gpu::VulkanAabb> queries;
+        std::vector<Gpu::VulkanAabb> targets;
+        queries.reserve(polylines.size());
+        targets.reserve(polylines.size());
+        const coord_t margin = std::max<coord_t>(1, coord_t(std::ceil(limit_distance)));
+        for (const Polyline &polyline : polylines) {
+            BoundingBox target = polyline.bounding_box();
+            BoundingBox query = target;
+            query.offset(margin);
+            queries.push_back({ { query.min.x(), query.min.y() }, { query.max.x(), query.max.y() } });
+            targets.push_back({ { target.min.x(), target.min.y() }, { target.max.x(), target.max.y() } });
+        }
+        const auto batch = Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+            queries, targets, margin, Gpu::VulkanAabbOperation::SeamTravel);
+        use_vulkan_pairs = batch.resolved;
+        if (use_vulkan_pairs) {
+            nearby_pairs.reserve(batch.overlap_pairs.size());
+            for (const auto &pair : batch.overlap_pairs)
+                nearby_pairs.insert((uint64_t(pair.query) << 32) | uint64_t(pair.target));
+        }
+    }
+
     for (size_t a = 0; a < polylines.size(); a++) {
         if (connected.find(a) == connected.end()) {
             continue;
         }
         Polyline &base = connected.at(a);
         for (size_t b = a + 1; b < polylines.size(); b++) {
+            if (use_vulkan_pairs && nearby_pairs.count((uint64_t(a) << 32) | uint64_t(b)) == 0)
+                continue;
             if (connected.find(b) == connected.end()) {
                 continue;
             }
@@ -1000,9 +1028,36 @@ ExtrusionPaths sort_extra_perimeters(const ExtrusionPaths& extra_perims, int ind
 {
     if (extra_perims.empty()) return {};
 
+    std::unordered_set<uint64_t> nearby_pairs;
+    bool use_vulkan_pairs = false;
+    if (extra_perims.size() <= std::numeric_limits<uint32_t>::max()) {
+        std::vector<Gpu::VulkanAabb> queries;
+        std::vector<Gpu::VulkanAabb> targets;
+        queries.reserve(extra_perims.size());
+        targets.reserve(extra_perims.size());
+        const coord_t margin = std::max<coord_t>(1, coord_t(std::ceil(extrusion_spacing * 1.5)));
+        for (const ExtrusionPath &path : extra_perims) {
+            BoundingBox target = path.as_polyline().bounding_box();
+            BoundingBox query = target;
+            query.offset(margin);
+            queries.push_back({ { query.min.x(), query.min.y() }, { query.max.x(), query.max.y() } });
+            targets.push_back({ { target.min.x(), target.min.y() }, { target.max.x(), target.max.y() } });
+        }
+        const auto batch = Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+            queries, targets, margin, Gpu::VulkanAabbOperation::ClassicWall);
+        use_vulkan_pairs = batch.resolved;
+        if (use_vulkan_pairs) {
+            nearby_pairs.reserve(batch.overlap_pairs.size());
+            for (const auto &pair : batch.overlap_pairs)
+                nearby_pairs.insert((uint64_t(pair.query) << 32) | uint64_t(pair.target));
+        }
+    }
+
     std::vector<std::unordered_set<size_t>> dependencies(extra_perims.size());
     for (size_t path_idx = 0; path_idx < extra_perims.size(); path_idx++) {
         for (size_t prev_path_idx = 0; prev_path_idx < path_idx; prev_path_idx++) {
+            if (use_vulkan_pairs && nearby_pairs.count((uint64_t(path_idx) << 32) | uint64_t(prev_path_idx)) == 0)
+                continue;
             if (paths_touch(extra_perims[path_idx], extra_perims[prev_path_idx], extrusion_spacing * 1.5f)) {
                        dependencies[path_idx].insert(prev_path_idx);        
             }

@@ -234,17 +234,19 @@ void BackgroundSlicingProcess::process_fff()
         const bool vulkan_compute_enabled =
             Gpu::VulkanSlicerBackend::compiled_with_vulkan() && vulkan_mode != "off";
         Gpu::VulkanSlicerBackend::set_compute_enabled(vulkan_compute_enabled);
-        Gpu::VulkanSlicerBackend::set_gpu_priority_enabled(vulkan_mode == "on");
+        Gpu::VulkanSlicerBackend::set_compute_mode(
+            vulkan_mode == "max" ? Gpu::VulkanSlicerComputeMode::Maximum :
+            (vulkan_mode == "on" ? Gpu::VulkanSlicerComputeMode::Priority : Gpu::VulkanSlicerComputeMode::Balanced));
         if (vulkan_compute_enabled && !Gpu::VulkanSlicerBackend::prepare_for_slicing()) {
             BOOST_LOG_TRIVIAL(warning) << "[Magpie Vulkan] "
                 << Gpu::VulkanSlicerBackend::query_runtime_stats().last_diagnostic;
         }
 
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: gcode_result reseted, will start print::process")%__LINE__;
-		try {
+        try {
             m_print->process();
         } catch (...) {
-            Gpu::VulkanSlicerBackend::release_unused_staging_memory();
+            Gpu::VulkanSlicerBackend::release_unused_staging_memory(true);
             throw;
         }
         Gpu::VulkanSlicerBackend::release_unused_staging_memory();

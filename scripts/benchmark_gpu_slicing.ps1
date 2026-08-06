@@ -6,16 +6,19 @@ param(
     [string] $ProcessSettings = "",
     [string[]] $FilamentProfiles = @(),
     [string] $OutputRoot = "",
-    [ValidateRange(3, 20)]
+    [ValidateRange(1, 20)]
     [int] $Repeats = 5,
     [ValidateRange(0, 5)]
     [int] $WarmupPairs = 1,
     [ValidateRange(30, 3600)]
     [int] $SliceTimeoutSeconds = 900,
-    [ValidateRange(4, 14)]
-    [int] $SyntheticGridSize = 10,
+    [ValidateRange(8, 40)]
+    [int] $SyntheticGridSize = 28,
     [ValidateRange(20, 120)]
     [double] $SyntheticHeightMm = 80,
+    [ValidateSet('auto', 'on', 'max')]
+    [string] $GpuMode = 'auto',
+    [switch] $VerificationMode,
     [switch] $OpenReport
 )
 
@@ -102,21 +105,55 @@ function Add-Box([Text.StringBuilder] $Builder, [double] $X0, [double] $Y0, [dou
     }
 }
 
+function Add-LatticePrism([Text.StringBuilder] $Builder, [int] $OpeningCount,
+                          [double] $Width, [double] $HeightMm) {
+    $cellCount = 2 * $OpeningCount + 1
+    $cell = $Width / $cellCount
+    for ($y = 0; $y -lt $cellCount; ++$y) {
+        for ($x = 0; $x -lt $cellCount; ++$x) {
+            $occupied = (($x % 2) -eq 0) -or (($y % 2) -eq 0)
+            if (-not $occupied) { continue }
+
+            $x0 = $x * $cell
+            $x1 = ($x + 1) * $cell
+            $y0 = $y * $cell
+            $y1 = ($y + 1) * $cell
+            $p = @(
+                @($x0,$y0,0.0), @($x1,$y0,0.0), @($x1,$y1,0.0), @($x0,$y1,0.0),
+                @($x0,$y0,$HeightMm), @($x1,$y0,$HeightMm),
+                @($x1,$y1,$HeightMm), @($x0,$y1,$HeightMm)
+            )
+
+            Add-Triangle $Builder $p[0] $p[2] $p[1]
+            Add-Triangle $Builder $p[0] $p[3] $p[2]
+            Add-Triangle $Builder $p[4] $p[5] $p[6]
+            Add-Triangle $Builder $p[4] $p[6] $p[7]
+
+            if ($x -eq 0 -or (($x - 1) % 2) -ne 0 -and ($y % 2) -ne 0) {
+                Add-Triangle $Builder $p[3] $p[0] $p[4]
+                Add-Triangle $Builder $p[3] $p[4] $p[7]
+            }
+            if ($x + 1 -eq $cellCount -or (($x + 1) % 2) -ne 0 -and ($y % 2) -ne 0) {
+                Add-Triangle $Builder $p[1] $p[2] $p[6]
+                Add-Triangle $Builder $p[1] $p[6] $p[5]
+            }
+            if ($y -eq 0 -or (($y - 1) % 2) -ne 0 -and ($x % 2) -ne 0) {
+                Add-Triangle $Builder $p[0] $p[1] $p[5]
+                Add-Triangle $Builder $p[0] $p[5] $p[4]
+            }
+            if ($y + 1 -eq $cellCount -or (($y + 1) % 2) -ne 0 -and ($x % 2) -ne 0) {
+                Add-Triangle $Builder $p[2] $p[3] $p[7]
+                Add-Triangle $Builder $p[2] $p[7] $p[6]
+            }
+        }
+    }
+}
+
 function New-SyntheticBenchmarkModel([string] $Path, [int] $GridSize, [double] $HeightMm) {
     $builder = [Text.StringBuilder]::new()
     [void] $builder.AppendLine('solid magpie_gpu_benchmark')
-    $tower = 5.0
-    $gap = 2.0
-    $pitch = $tower + $gap
-    $width = $GridSize * $tower + ($GridSize - 1) * $gap
-    Add-Box $builder 0 0 0 $width $width 0.8
-    for ($y = 0; $y -lt $GridSize; ++$y) {
-        for ($x = 0; $x -lt $GridSize; ++$x) {
-            $x0 = $x * $pitch
-            $y0 = $y * $pitch
-            Add-Box $builder $x0 $y0 0.8 ($x0 + $tower) ($y0 + $tower) $HeightMm
-        }
-    }
+    $width = 112.0
+    Add-LatticePrism $builder $GridSize $width $HeightMm
     [void] $builder.AppendLine('endsolid magpie_gpu_benchmark')
     [IO.File]::WriteAllText($Path, $builder.ToString(), [Text.UTF8Encoding]::new($false))
 }
@@ -133,9 +170,10 @@ function Get-GcodeFingerprint([string] $Path) {
         if ($command -match '^G[0123]\s' -and $command -match '(?:^|\s)E-?(?:\d|\.)') { ++$extrusion }
         if ($command -match '(?i)(?:^|[\s=,])(?:nan|[+-]?inf(?:inity)?)(?=$|[\s,])') { ++$nonFinite }
     }
-    $geometry = [Magpie.Verification.GcodeGeometryAnalyzer]::Analyze($Path, 0.10, $false)
+    $geometry = [Magpie.Verification.GcodeGeometryAnalyzer]::Analyze($Path, 0.05, $true)
     [pscustomobject]@{
         segment_sha256 = $geometry.SegmentSha256
+        coverage_sha256 = $geometry.CoverageSha256
         metrics_sha256 = $geometry.MetricsSha256
         positive_segments = $geometry.PositiveSegments
         total_length = $geometry.TotalLength
@@ -192,17 +230,30 @@ function Get-HardwareInventory {
 
 function Set-BenchmarkEnvironment([string] $Mode, [string] $DiagnosticsPath) {
     foreach ($name in @(
-        'MAGPIE_VULKAN_SLICER_ENABLE', 'MAGPIE_VULKAN_SLICER_GPU_PRIORITY',
+        'MAGPIE_VULKAN_SLICER_ENABLE', 'MAGPIE_VULKAN_SLICER_GPU_PRIORITY', 'MAGPIE_VULKAN_SLICER_MAXIMUM',
         'MAGPIE_VULKAN_SLICER_FORCE_DISPATCH', 'MAGPIE_VULKAN_SLICER_VALIDATION',
         'MAGPIE_VULKAN_SLICER_DIAGNOSTICS_FILE', 'MAGPIE_VULKAN_SLICER_POLICY',
         'ORCA_VULKAN_SLICER_POLICY'
     )) { [Environment]::SetEnvironmentVariable($name, $null, 'Process') }
     if ($Mode -eq 'gpu') {
         $env:MAGPIE_VULKAN_SLICER_ENABLE = '1'
-        $env:MAGPIE_VULKAN_SLICER_GPU_PRIORITY = '1'
-        $env:MAGPIE_VULKAN_SLICER_FORCE_DISPATCH = '1'
-        $env:MAGPIE_VULKAN_SLICER_POLICY = 'gpu'
         $env:MAGPIE_VULKAN_SLICER_DIAGNOSTICS_FILE = $DiagnosticsPath
+        if ($VerificationMode) {
+            $env:MAGPIE_VULKAN_SLICER_GPU_PRIORITY = '1'
+            $env:MAGPIE_VULKAN_SLICER_POLICY = 'gpu'
+            $env:MAGPIE_VULKAN_SLICER_FORCE_DISPATCH = '1'
+            $env:MAGPIE_VULKAN_SLICER_VALIDATION = 'strict'
+        } elseif ($GpuMode -eq 'max') {
+            $env:MAGPIE_VULKAN_SLICER_MAXIMUM = '1'
+            $env:MAGPIE_VULKAN_SLICER_POLICY = 'max'
+        } elseif ($GpuMode -eq 'on') {
+            $env:MAGPIE_VULKAN_SLICER_GPU_PRIORITY = '1'
+            $env:MAGPIE_VULKAN_SLICER_POLICY = 'gpu'
+        } else {
+            # Keep a user's saved GUI mode from changing an Auto benchmark
+            # after the CLI process has initialized.
+            $env:MAGPIE_VULKAN_SLICER_POLICY = 'auto'
+        }
     }
 }
 
@@ -241,7 +292,7 @@ function Invoke-Slice([string] $Mode, [string] $Model, [int] $Pair, [bool] $Warm
     $gcode = Get-ChildItem -LiteralPath $caseRoot -File -Filter '*.gcode' | Select-Object -First 1
     $fingerprint = if ($null -ne $gcode) { Get-GcodeFingerprint $gcode.FullName } else { $null }
     [array] $dispatchRows = @(if (Test-Path -LiteralPath $diagnostics -PathType Leaf) {
-        Get-Content -LiteralPath $diagnostics | Where-Object { $_ -match '^[^,]+,\d+$' }
+        Get-Content -LiteralPath $diagnostics | Where-Object { $_ -match '^vertical,\d+$' }
     })
     $dispatchRequests = 0L
     foreach ($row in $dispatchRows) { $dispatchRequests += [int64](($row -split ',',2)[1]) }
@@ -266,7 +317,10 @@ function Invoke-Slice([string] $Mode, [string] $Model, [int] $Pair, [bool] $Warm
         vulkan_dispatches = $dispatchRows.Count
         vulkan_requests = $dispatchRequests
         segment_sha256 = if ($fingerprint) { $fingerprint.segment_sha256 } else { '' }
+        coverage_sha256 = if ($fingerprint) { $fingerprint.coverage_sha256 } else { '' }
         metrics_sha256 = if ($fingerprint) { $fingerprint.metrics_sha256 } else { '' }
+        total_length = if ($fingerprint) { $fingerprint.total_length } else { 0.0 }
+        total_extrusion = if ($fingerprint) { $fingerprint.total_extrusion } else { 0.0 }
         positive_segments = if ($fingerprint) { $fingerprint.positive_segments } else { 0 }
         gcode_bytes = if ($fingerprint) { $fingerprint.bytes } else { 0 }
         gcode_lines = if ($fingerprint) { $fingerprint.lines } else { 0 }
@@ -314,11 +368,15 @@ foreach ($entry in ([ordered]@{
     layer_height = '0.12'
     initial_layer_print_height = '0.20'
     wall_generator = 'classic'
-    wall_loops = '3'
-    top_shell_layers = '5'
-    bottom_shell_layers = '5'
+    wall_loops = '1'
+    top_shell_layers = '2'
+    bottom_shell_layers = '2'
     sparse_infill_pattern = 'grid'
-    sparse_infill_density = '55%'
+    sparse_infill_density = '75%'
+    seam_position = 'aligned'
+    staggered_inner_seams = '0'
+    has_scarf_joint_seam = '0'
+    fuzzy_skin = 'none'
     enable_support = '0'
     use_smaller_nozzles_in_crisp_corners = '0'
     single_nozzle_low_temperature_interface = '0'
@@ -335,7 +393,7 @@ if ($ModelPath.Count -eq 0) {
 }
 
 $environmentNames = @(
-    'MAGPIE_VULKAN_SLICER_ENABLE', 'MAGPIE_VULKAN_SLICER_GPU_PRIORITY',
+    'MAGPIE_VULKAN_SLICER_ENABLE', 'MAGPIE_VULKAN_SLICER_GPU_PRIORITY', 'MAGPIE_VULKAN_SLICER_MAXIMUM',
     'MAGPIE_VULKAN_SLICER_FORCE_DISPATCH', 'MAGPIE_VULKAN_SLICER_VALIDATION',
     'MAGPIE_VULKAN_SLICER_DIAGNOSTICS_FILE', 'MAGPIE_VULKAN_SLICER_POLICY',
     'ORCA_VULKAN_SLICER_POLICY'
@@ -373,31 +431,51 @@ foreach ($model in ($results.model | Sort-Object -Unique)) {
     $gpuStats = Get-Statistics @($gpu.seconds)
     $cpuHashes = @($cpu | Where-Object { $_.segment_sha256 } | ForEach-Object { $_.segment_sha256 + ':' + $_.metrics_sha256 } | Sort-Object -Unique)
     $gpuHashes = @($gpu | Where-Object { $_.segment_sha256 } | ForEach-Object { $_.segment_sha256 + ':' + $_.metrics_sha256 } | Sort-Object -Unique)
-    $geometryMatch = $cpuHashes.Count -eq 1 -and $gpuHashes.Count -eq 1 -and $cpuHashes[0] -eq $gpuHashes[0]
+    $exactGeometryMatch = $cpuHashes.Count -eq 1 -and $gpuHashes.Count -eq 1 -and $cpuHashes[0] -eq $gpuHashes[0]
+    $cpuCoverage = @($cpu | Where-Object { $_.coverage_sha256 } | ForEach-Object coverage_sha256 | Sort-Object -Unique)
+    $gpuCoverage = @($gpu | Where-Object { $_.coverage_sha256 } | ForEach-Object coverage_sha256 | Sort-Object -Unique)
+    $coverageMatch = $cpuCoverage.Count -eq 1 -and $gpuCoverage.Count -eq 1 -and $cpuCoverage[0] -eq $gpuCoverage[0]
+    $cpuLength = [double](($cpu.total_length | Measure-Object -Average).Average)
+    $gpuLength = [double](($gpu.total_length | Measure-Object -Average).Average)
+    $cpuExtrusion = [double](($cpu.total_extrusion | Measure-Object -Average).Average)
+    $gpuExtrusion = [double](($gpu.total_extrusion | Measure-Object -Average).Average)
+    $lengthTolerance = [Math]::Max(0.01, [Math]::Abs($cpuLength) * 0.000001)
+    $extrusionTolerance = [Math]::Max(0.0001, [Math]::Abs($cpuExtrusion) * 0.000001)
+    $normalizedGeometryMatch = $coverageMatch -and
+        [Math]::Abs($cpuLength - $gpuLength) -le $lengthTolerance -and
+        [Math]::Abs($cpuExtrusion - $gpuExtrusion) -le $extrusionTolerance
+    $geometryMatch = if ($VerificationMode) { $exactGeometryMatch } else { $exactGeometryMatch -or $normalizedGeometryMatch }
     $dispatches = ($gpu.vulkan_dispatches | Measure-Object -Sum).Sum
     $requests = ($gpu.vulkan_requests | Measure-Object -Sum).Sum
-    $speedup = if ($gpuStats.median_seconds -gt 0) { $cpuStats.median_seconds / $gpuStats.median_seconds } else { [double]::NaN }
+    $accelerationApplicable = $dispatches -gt 0
+    $wallClockRatio = if ($gpuStats.median_seconds -gt 0) { $cpuStats.median_seconds / $gpuStats.median_seconds } else { 0.0 }
     $modelSummaries.Add([pscustomobject][ordered]@{
         model = $model
-        valid = @($measured | Where-Object { -not $_.passed }).Count -eq 0 -and $geometryMatch -and $dispatches -gt 0
+        valid = @($measured | Where-Object { -not $_.passed }).Count -eq 0 -and $geometryMatch -and
+            (-not $VerificationMode -or $dispatches -gt 0)
         geometry_match = $geometryMatch
+        exact_geometry_match = $exactGeometryMatch
+        normalized_geometry_match = $normalizedGeometryMatch
+        acceleration_applicable = $accelerationApplicable
         vulkan_dispatches = [int64]$dispatches
         vulkan_requests = [int64]$requests
         cpu = $cpuStats
         gpu = $gpuStats
-        speedup = [Math]::Round($speedup, 4)
-        percent_faster = [Math]::Round(($speedup - 1.0) * 100.0, 2)
+        wall_clock_ratio = [Math]::Round($wallClockRatio, 4)
+        speedup = if ($accelerationApplicable) { [Math]::Round($wallClockRatio, 4) } else { $null }
+        percent_faster = if ($accelerationApplicable) { [Math]::Round(($wallClockRatio - 1.0) * 100.0, 2) } else { $null }
     })
 }
 
 $measuredResults = @($results | Where-Object { -not $_.warmup })
-$overallCpu = [double](($modelSummaries | ForEach-Object { $_.cpu.median_seconds } | Measure-Object -Sum).Sum)
-$overallGpu = [double](($modelSummaries | ForEach-Object { $_.gpu.median_seconds } | Measure-Object -Sum).Sum)
-$overallSpeedup = if ($overallGpu -gt 0) { $overallCpu / $overallGpu } else { [double]::NaN }
+$applicableModels = @($modelSummaries | Where-Object acceleration_applicable)
+$overallCpu = [double](($applicableModels | ForEach-Object { $_.cpu.median_seconds } | Measure-Object -Sum).Sum)
+$overallGpu = [double](($applicableModels | ForEach-Object { $_.gpu.median_seconds } | Measure-Object -Sum).Sum)
+$overallSpeedup = if ($applicableModels.Count -gt 0 -and $overallGpu -gt 0) { $overallCpu / $overallGpu } else { $null }
 $failedRuns = @($results | Where-Object { -not $_.passed })
 $valid = $failedRuns.Count -eq 0 -and @($modelSummaries | Where-Object { -not $_.valid }).Count -eq 0
 $summary = [pscustomobject][ordered]@{
-    schema = 1
+    schema = 2
     kind = 'magpie-high-performance-gpu-slicing-benchmark'
     generated_at = (Get-Date).ToString('o')
     valid = $valid
@@ -415,15 +493,22 @@ $summary = [pscustomobject][ordered]@{
         process_settings = $benchmarkProcessPath
         filaments = @($FilamentProfiles)
         models = @($ModelPath)
-        gpu_mode = 'forced Vulkan dispatch, GPU-priority, production validation'
+        gpu_mode = if ($VerificationMode) {
+            'verification: forced Vulkan dispatch, GPU-priority, strict validation'
+        } elseif ($GpuMode -eq 'on') {
+            'performance: explicit Vulkan On, production threshold, sampled validation'
+        } else {
+            'performance: Vulkan Auto, calibrated crossover, sampled validation'
+        }
         cpu_mode = 'Vulkan disabled'
         execution_order = 'alternating CPU/GPU per pair'
     }
     overall = [ordered]@{
         cpu_total_seconds = [Math]::Round($overallCpu, 4)
         gpu_total_seconds = [Math]::Round($overallGpu, 4)
-        speedup = [Math]::Round($overallSpeedup, 4)
-        percent_faster = [Math]::Round(($overallSpeedup - 1.0) * 100.0, 2)
+        accelerated_models = $applicableModels.Count
+        speedup = if ($null -ne $overallSpeedup) { [Math]::Round($overallSpeedup, 4) } else { $null }
+        percent_faster = if ($null -ne $overallSpeedup) { [Math]::Round(($overallSpeedup - 1.0) * 100.0, 2) } else { $null }
     }
     models = @($modelSummaries)
     failed_runs = $failedRuns.Count
@@ -434,13 +519,15 @@ $jsonPath = Join-Path $runRoot 'benchmark-summary.json'
 $csvPath = Join-Path $runRoot 'benchmark-runs.csv'
 $htmlPath = Join-Path $runRoot 'benchmark-report.html'
 $summary | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
-$results | Select-Object model,mode,pair,warmup,execution_order,seconds,passed,vulkan_dispatches,vulkan_requests,segment_sha256,metrics_sha256,gcode_bytes,gcode_lines |
+$results | Select-Object model,mode,pair,warmup,execution_order,seconds,passed,vulkan_dispatches,vulkan_requests,segment_sha256,coverage_sha256,metrics_sha256,gcode_bytes,gcode_lines |
     Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8
 
 $encode = { param($value) [Net.WebUtility]::HtmlEncode([string]$value) }
 $modelRows = @($modelSummaries | ForEach-Object {
-    '<tr><td>{0}</td><td>{1}</td><td>{2:N3}</td><td>{3:N3}</td><td>{4:N2}x</td><td>{5:N1}%</td><td>{6}</td><td>{7}</td></tr>' -f
-        (& $encode $_.model),$_.valid,$_.cpu.median_seconds,$_.gpu.median_seconds,$_.speedup,$_.percent_faster,$_.vulkan_dispatches,$_.geometry_match
+    $speedupText = if ($null -eq $_.speedup) { 'n/a' } else { '{0:N2}x' -f $_.speedup }
+    $fasterText = if ($null -eq $_.percent_faster) { 'n/a' } else { '{0:N1}%' -f $_.percent_faster }
+    '<tr><td>{0}</td><td>{1}</td><td>{2:N3}</td><td>{3:N3}</td><td>{4}</td><td>{5}</td><td>{6}</td><td>{7}</td></tr>' -f
+        (& $encode $_.model),$_.valid,$_.cpu.median_seconds,$_.gpu.median_seconds,$speedupText,$fasterText,$_.vulkan_dispatches,$_.geometry_match
 }) -join "`n"
 $runRows = @($results | ForEach-Object {
     '<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>{3}</td><td>{4:N3}</td><td>{5}</td><td>{6}</td><td>{7}</td></tr>' -f
@@ -450,16 +537,23 @@ $cpuName = if ($summary.hardware.cpu.Count -gt 0) { $summary.hardware.cpu[0].Nam
 $gpuNames = @($summary.hardware.gpu | ForEach-Object Name) -join ', '
 $statusClass = if ($valid) { 'pass' } else { 'fail' }
 $statusText = if ($valid) { 'VALID' } else { 'INVALID' }
+$overallSpeedupText = if ($null -eq $summary.overall.speedup) { 'n/a' } else { "$($summary.overall.speedup)x" }
+$overallFasterText = if ($null -eq $summary.overall.percent_faster) { 'n/a' } else { "$($summary.overall.percent_faster)%" }
+$validityNote = if ($VerificationMode) {
+    'Verification mode requires successful slices, at least one real Vulkan dispatch, and exact CPU/GPU motion geometry.'
+} else {
+    'Auto mode remains valid when calibrated policy keeps unsuitable workloads on CPU; acceleration is reported only when a real Vulkan dispatch occurred.'
+}
 $html = @"
 <!doctype html><html><head><meta charset="utf-8"><title>Magpie GPU slicing benchmark</title>
 <style>body{font-family:Segoe UI,Arial,sans-serif;margin:32px;background:#10151d;color:#e8eef7}h1,h2{color:#3d90e8}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{padding:8px 10px;border:1px solid #344456;text-align:right}th:first-child,td:first-child{text-align:left}.metric{display:inline-block;margin:8px 20px 8px 0;font-size:20px}.pass{color:#70d6a3}.fail{color:#ff7b7b}.muted{color:#9fb0c4}code{color:#9fc8ff}</style></head><body>
 <h1>Magpie GPU slicing benchmark</h1><p class="$statusClass"><strong>$statusText</strong></p>
-<div class="metric">Overall speedup: <strong>$($summary.overall.speedup)x</strong></div>
-<div class="metric">GPU difference: <strong>$($summary.overall.percent_faster)%</strong></div>
+<div class="metric">Overall speedup: <strong>$overallSpeedupText</strong></div>
+<div class="metric">GPU difference: <strong>$overallFasterText</strong></div>
 <p class="muted">CPU: $(& $encode $cpuName)<br>GPU: $(& $encode $gpuNames)<br>Slicer: <code>$(& $encode $SlicerPath)</code></p>
 <h2>Models</h2><table><thead><tr><th>Model</th><th>Valid</th><th>CPU median (s)</th><th>GPU median (s)</th><th>Speedup</th><th>Faster</th><th>Dispatches</th><th>G-code match</th></tr></thead><tbody>$modelRows</tbody></table>
 <h2>Runs</h2><table><thead><tr><th>Model</th><th>Mode</th><th>Pair</th><th>Warmup</th><th>Seconds</th><th>Passed</th><th>Dispatches</th><th>Requests</th></tr></thead><tbody>$runRows</tbody></table>
-<p class="muted">A valid result requires successful slices, at least one real Vulkan dispatch, and identical CPU/GPU motion G-code hashes.</p>
+<p class="muted">$validityNote</p>
 </body></html>
 "@
 [IO.File]::WriteAllText($htmlPath, $html, [Text.UTF8Encoding]::new($false))

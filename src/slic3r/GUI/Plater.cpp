@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <array>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <numeric>
 #include <limits>
@@ -4548,6 +4549,9 @@ struct Plater::priv
     bool m_ignore_event{false};
     bool m_slice_all{false};
     bool m_is_slicing {false};
+    bool m_slice_timer_running{false};
+    std::chrono::steady_clock::time_point m_slice_started_at;
+    std::string m_slice_duration_label;
     bool auto_reslice_pending {false};
     bool auto_reslice_after_cancel {false};
     bool m_is_publishing {false};
@@ -4867,6 +4871,7 @@ struct Plater::priv
     void on_process_completed(SlicingProcessCompletedEvent&);
     void on_export_began(wxCommandEvent&);
     void on_export_finished(wxCommandEvent&);
+    void begin_slice_timing();
     void on_slicing_began();
 
     void clear_warnings();
@@ -8370,6 +8375,7 @@ bool Plater::priv::restart_background_process(unsigned int state)
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", Line %1%: print is valid, try to start it now")%__LINE__;
         // The print is valid and it can be started.
         if (this->background_process.start()) {
+            begin_slice_timing();
             if (!show_warning_dialog)
                 on_slicing_began();
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", Line %1%: start successfully")%__LINE__;
@@ -8380,6 +8386,7 @@ bool Plater::priv::restart_background_process(unsigned int state)
         PartPlate* cur_plate = background_process.get_current_plate();
         if (cur_plate->is_slice_result_valid() && ((state & UPDATE_BACKGROUND_PROCESS_FORCE_RESTART) != 0)) {
             if (this->background_process.start()) {
+                begin_slice_timing();
                 if (!show_warning_dialog)
                     on_slicing_began();
                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", Line %1%: start successfully")%__LINE__;
@@ -9970,6 +9977,24 @@ void Plater::priv::on_slicing_completed(wxCommandEvent & evt)
         return;
     }
 
+    if (m_slice_timer_running) {
+        const auto elapsed = std::chrono::steady_clock::now() - m_slice_started_at;
+        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+        if (elapsed_ms < 60'000) {
+            m_slice_duration_label = (boost::format("%.1f s") % (static_cast<double>(elapsed_ms) / 1000.0)).str();
+        } else {
+            const auto total_seconds = (elapsed_ms + 500) / 1000;
+            const auto hours = total_seconds / 3600;
+            const auto minutes = (total_seconds % 3600) / 60;
+            const auto seconds = total_seconds % 60;
+            m_slice_duration_label = hours > 0
+                ? (boost::format("%d:%02d:%02d") % hours % minutes % seconds).str()
+                : (boost::format("%d:%02d") % minutes % seconds).str();
+        }
+        m_slice_timer_running = false;
+        set_current_canvas_as_dirty();
+    }
+
     if (view3D->is_dragging()) // updating scene now would interfere with the gizmo dragging
         delayed_scene_refresh = true;
     else {
@@ -10001,6 +10026,18 @@ void Plater::priv::on_export_finished(wxCommandEvent& evt)
         q->export_3mf(gcode_path.replace_extension(".3mf"), SaveStrategy::Silence); // BBS: silence
     }
 #endif
+}
+
+void Plater::priv::begin_slice_timing()
+{
+    const bool continues_slice_all = m_slice_timer_running && m_slice_all && m_cur_slice_plate > 0;
+    if (continues_slice_all)
+        return;
+
+    m_slice_started_at = std::chrono::steady_clock::now();
+    m_slice_timer_running = true;
+    m_slice_duration_label.clear();
+    set_current_canvas_as_dirty();
 }
 
 void Plater::priv::on_slicing_began()
@@ -18690,6 +18727,16 @@ const GLToolbar& Plater::get_collapse_toolbar() const
 GLToolbar& Plater::get_collapse_toolbar()
 {
     return p->collapse_toolbar;
+}
+
+std::string Plater::get_slice_duration_label() const
+{
+    return p->m_slice_duration_label;
+}
+
+bool Plater::is_slice_timer_running() const
+{
+    return p->m_slice_timer_running;
 }
 
 void Plater::update_preview_bottom_toolbar()

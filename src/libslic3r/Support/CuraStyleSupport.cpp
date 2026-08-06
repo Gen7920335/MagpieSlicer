@@ -1,7 +1,9 @@
 #include "CuraStyleSupport.hpp"
 
+#include "../BoundingBox.hpp"
 #include "../ClipperUtils.hpp"
 #include "../Geometry.hpp"
+#include "../Gpu/VulkanSlicer.hpp"
 #include "../Layer.hpp"
 #include "../Print.hpp"
 #include "SupportCommon.hpp"
@@ -9,13 +11,58 @@
 #include "SupportParameters.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
-#include <limits>
+#include <chrono>
+#include <iterator>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 #include <boost/log/trivial.hpp>
 
 namespace Slic3r {
 
 #define SUPPORT_SURFACES_OFFSET_PARAMETERS ClipperLib::jtSquare, 0.
+
+template<class Function>
+static void parallel_for_layers(size_t begin_idx, size_t end_idx, Function &&function)
+{
+    if (begin_idx >= end_idx)
+        return;
+
+    tbb::parallel_for(
+        tbb::blocked_range<size_t>(begin_idx, end_idx, 4),
+        [&](const tbb::blocked_range<size_t> &range) {
+            for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++layer_idx)
+                function(layer_idx);
+        });
+}
+
+static bool bounding_boxes_may_overlap(const BoundingBox &first, const BoundingBox &second)
+{
+    return !first.defined || !second.defined || first.overlap(second);
+}
+
+static bool polygons_may_overlap(const Polygons &first, const Polygons &second)
+{
+    if (first.empty() || second.empty())
+        return false;
+    return bounding_boxes_may_overlap(get_extents(first), get_extents(second));
+}
+
+static bool polygons_may_overlap(const Polygons &polygons, const BoundingBox &bounds)
+{
+    return !polygons.empty() && bounding_boxes_may_overlap(get_extents(polygons), bounds);
+}
+
+static bool polygons_may_overlap_after_offset(const Polygons &first, const Polygons &second, coord_t second_offset)
+{
+    if (first.empty() || second.empty())
+        return false;
+    BoundingBox second_bounds = get_extents(second);
+    if (second_bounds.defined && second_offset > 0)
+        second_bounds.offset(second_offset);
+    return bounding_boxes_may_overlap(get_extents(first), second_bounds);
+}
 
 CuraStyleSupportGenerator::CuraStyleSupportGenerator(const PrintObject *object, const SlicingParameters &slicing_params)
     : m_object(object)
@@ -23,10 +70,50 @@ CuraStyleSupportGenerator::CuraStyleSupportGenerator(const PrintObject *object, 
 {
 }
 
-static Polygons layer_polygons(const PrintObject &object, size_t layer_idx)
+struct CuraLayerGeometry
 {
-    return layer_idx < object.layer_count() ? to_polygons(object.layers()[layer_idx]->lslices) : Polygons{};
-}
+    CuraLayerGeometry(const PrintObject &object, coord_t xy_gap)
+        : outlines(object.layer_count())
+        , outline_bounds(object.layer_count())
+        , outlines_with_xy_gap(object.layer_count())
+        , xy_gap_bounds(object.layer_count())
+        , xy_gap_ready(object.layer_count(), uint8_t(0))
+        , print_z(object.layer_count())
+        , bottom_z(object.layer_count())
+        , xy_gap(xy_gap)
+    {
+        parallel_for_layers(0, object.layer_count(), [&](size_t layer_idx) {
+            const Layer &layer = *object.layers()[layer_idx];
+            outlines[layer_idx] = to_polygons(layer.lslices);
+            if (!outlines[layer_idx].empty())
+                outline_bounds[layer_idx] = get_extents(outlines[layer_idx]);
+            print_z[layer_idx] = layer.print_z;
+            bottom_z[layer_idx] = layer.bottom_z();
+        });
+    }
+
+    const Polygons &with_xy_gap(size_t layer_idx) const
+    {
+        if (!xy_gap_ready[layer_idx]) {
+            if (!outlines[layer_idx].empty())
+                outlines_with_xy_gap[layer_idx] = offset(
+                    outlines[layer_idx], float(xy_gap), SUPPORT_SURFACES_OFFSET_PARAMETERS);
+            if (!outlines_with_xy_gap[layer_idx].empty())
+                xy_gap_bounds[layer_idx] = get_extents(outlines_with_xy_gap[layer_idx]);
+            xy_gap_ready[layer_idx] = uint8_t(1);
+        }
+        return outlines_with_xy_gap[layer_idx];
+    }
+
+    std::vector<Polygons> outlines;
+    std::vector<BoundingBox> outline_bounds;
+    mutable std::vector<Polygons> outlines_with_xy_gap;
+    mutable std::vector<BoundingBox> xy_gap_bounds;
+    mutable std::vector<uint8_t> xy_gap_ready;
+    std::vector<coordf_t> print_z;
+    std::vector<coordf_t> bottom_z;
+    coord_t xy_gap;
+};
 
 static coord_t cura_style_overhang_offset(const PrintObject &object, const SupportParameters &support_params, size_t layer_idx)
 {
@@ -55,12 +142,15 @@ struct CuraSupportAnnotations
         object.project_and_append_custom_facets(false, EnforcerBlockerType::ENFORCER, enforcers);
         object.project_and_append_custom_facets(false, EnforcerBlockerType::BLOCKER, blockers);
 
-        for (Polygons &layer : enforcers)
-            if (!layer.empty())
-                layer = union_(layer);
-        for (Polygons &layer : blockers)
-            if (!layer.empty())
-                layer = offset(union_(layer), float(SCALED_EPSILON), SUPPORT_SURFACES_OFFSET_PARAMETERS);
+        parallel_for_layers(0, enforcers.size(), [&](size_t layer_idx) {
+            Polygons &enforcer = enforcers[layer_idx];
+            if (!enforcer.empty())
+                enforcer = union_(enforcer);
+
+            Polygons &blocker = blockers[layer_idx];
+            if (!blocker.empty())
+                blocker = offset(union_(blocker), float(SCALED_EPSILON), SUPPORT_SURFACES_OFFSET_PARAMETERS);
+        });
     }
 
     std::vector<Polygons> enforcers;
@@ -75,14 +165,14 @@ struct CuraOverhangs
     std::vector<Polygons> combined() const
     {
         std::vector<Polygons> result(automatic.size());
-        for (size_t layer_idx = 0; layer_idx < result.size(); ++layer_idx) {
+        parallel_for_layers(0, result.size(), [&](size_t layer_idx) {
             if (automatic[layer_idx].empty())
                 result[layer_idx] = enforced[layer_idx];
             else if (enforced[layer_idx].empty())
                 result[layer_idx] = automatic[layer_idx];
             else
                 result[layer_idx] = union_(automatic[layer_idx], enforced[layer_idx]);
-        }
+        });
         return result;
     }
 };
@@ -91,6 +181,7 @@ static CuraOverhangs compute_cura_style_full_overhangs(
     const PrintObject            &object,
     const SupportParameters      &support_params,
     const CuraSupportAnnotations &annotations,
+    const CuraLayerGeometry      &geometry,
     bool                          automatic_support)
 {
     CuraOverhangs overhangs{
@@ -100,10 +191,10 @@ static CuraOverhangs compute_cura_style_full_overhangs(
 
     // Translated from CuraEngine AreaSupport::computeBasicAndFullOverhang().
     constexpr coordf_t smooth_height = 0.4;
-    for (size_t layer_idx = 1; layer_idx < object.layer_count(); ++layer_idx) {
-        Polygons current = layer_polygons(object, layer_idx);
+    parallel_for_layers(1, object.layer_count(), [&](size_t layer_idx) {
+        const Polygons &current = geometry.outlines[layer_idx];
         if (current.empty())
-            continue;
+            return;
 
         const coord_t max_dist_from_lower_layer = cura_style_overhang_offset(object, support_params, layer_idx);
         const size_t layers_below = std::max<size_t>(
@@ -111,7 +202,7 @@ static CuraOverhangs compute_cura_style_full_overhangs(
 
         Polygons outlines_below;
         for (size_t layer_offset = 1; layer_offset <= layers_below && layer_offset <= layer_idx; ++layer_offset) {
-            Polygons lower = layer_polygons(object, layer_idx - layer_offset);
+            const Polygons &lower = geometry.outlines[layer_idx - layer_offset];
             if (!lower.empty())
                 append(outlines_below, offset(
                     lower, float(max_dist_from_lower_layer * coord_t(layer_offset)),
@@ -123,7 +214,8 @@ static CuraOverhangs compute_cura_style_full_overhangs(
         auto full_overhang = [&](Polygons basic) {
             if (basic.empty())
                 return Polygons{};
-            if (!annotations.blockers[layer_idx].empty())
+            if (!annotations.blockers[layer_idx].empty() &&
+                polygons_may_overlap(basic, annotations.blockers[layer_idx]))
                 basic = diff(basic, annotations.blockers[layer_idx]);
             if (basic.empty())
                 return Polygons{};
@@ -131,13 +223,17 @@ static CuraOverhangs compute_cura_style_full_overhangs(
             return intersection(offset(basic, float(extension), SUPPORT_SURFACES_OFFSET_PARAMETERS), current);
         };
 
-        if (automatic_support)
-            overhangs.automatic[layer_idx] = full_overhang(diff(current, outlines_below));
+        if (automatic_support) {
+            Polygons basic = !outlines_below.empty() && polygons_may_overlap(current, outlines_below) ?
+                diff(current, outlines_below) : current;
+            overhangs.automatic[layer_idx] = full_overhang(std::move(basic));
+        }
 
-        if (!annotations.enforcers[layer_idx].empty())
+        if (!annotations.enforcers[layer_idx].empty() &&
+            polygons_may_overlap(current, annotations.enforcers[layer_idx]))
             overhangs.enforced[layer_idx] = full_overhang(
                 intersection(current, annotations.enforcers[layer_idx]));
-    }
+    });
 
     return overhangs;
 }
@@ -211,42 +307,59 @@ static Polygons expand_support_away_from_model(
         const coord_t amount = std::min(step, expansion - expanded);
         horizontal_expansion = offset(horizontal_expansion, float(amount), SUPPORT_SURFACES_OFFSET_PARAMETERS);
         if (!model_outline.empty()) {
-            model_outline = diff(model_outline, horizontal_expansion);
+            if (polygons_may_overlap(model_outline, horizontal_expansion))
+                model_outline = diff(model_outline, horizontal_expansion);
             model_outline = offset(model_outline, float(amount), SUPPORT_SURFACES_OFFSET_PARAMETERS);
-            horizontal_expansion = diff(horizontal_expansion, model_outline);
+            if (polygons_may_overlap(horizontal_expansion, model_outline))
+                horizontal_expansion = diff(horizontal_expansion, model_outline);
         }
         expanded += amount;
     }
     return union_(support, horizontal_expansion);
 }
 
-static size_t closest_top_contact_layer(const PrintObject &object, size_t overhang_layer_idx, coordf_t gap)
+static size_t closest_sorted_layer(
+    const std::vector<coordf_t> &z_values,
+    size_t begin_idx,
+    size_t end_idx,
+    coordf_t target_z)
 {
-    if (overhang_layer_idx == 0 || overhang_layer_idx >= object.layer_count())
+    if (begin_idx >= end_idx || end_idx > z_values.size())
         return size_t(-1);
 
-    const coordf_t target_z = object.layers()[overhang_layer_idx]->bottom_z() - gap;
-    size_t best_idx = size_t(-1);
-    coordf_t best_distance = std::numeric_limits<coordf_t>::max();
-    for (size_t layer_idx = 0; layer_idx < overhang_layer_idx; ++layer_idx) {
-        const coordf_t distance = std::abs(object.layers()[layer_idx]->print_z - target_z);
-        if (distance < best_distance) {
-            best_idx = layer_idx;
-            best_distance = distance;
-        }
-    }
-    return best_idx;
+    const auto begin = z_values.begin() + begin_idx;
+    const auto end = z_values.begin() + end_idx;
+    const auto upper = std::lower_bound(begin, end, target_z);
+    if (upper == begin)
+        return begin_idx;
+    if (upper == end)
+        return end_idx - 1;
+
+    const auto lower = std::prev(upper);
+    return target_z - *lower <= *upper - target_z ?
+        size_t(std::distance(z_values.begin(), lower)) :
+        size_t(std::distance(z_values.begin(), upper));
+}
+
+static size_t closest_top_contact_layer(const CuraLayerGeometry &geometry, size_t overhang_layer_idx, coordf_t gap)
+{
+    if (overhang_layer_idx == 0 || overhang_layer_idx >= geometry.outlines.size())
+        return size_t(-1);
+
+    return closest_sorted_layer(
+        geometry.print_z, 0, overhang_layer_idx,
+        geometry.bottom_z[overhang_layer_idx] - gap);
 }
 
 static std::vector<size_t> make_top_contact_map(
-    const PrintObject &object,
+    const CuraLayerGeometry &geometry,
     const std::vector<Polygons> &overhangs,
     coordf_t gap)
 {
     std::vector<size_t> contact_for_overhang(overhangs.size(), size_t(-1));
     for (size_t overhang_layer_idx = 1; overhang_layer_idx < overhangs.size(); ++overhang_layer_idx)
         if (!overhangs[overhang_layer_idx].empty())
-            contact_for_overhang[overhang_layer_idx] = closest_top_contact_layer(object, overhang_layer_idx, gap);
+            contact_for_overhang[overhang_layer_idx] = closest_top_contact_layer(geometry, overhang_layer_idx, gap);
     return contact_for_overhang;
 }
 
@@ -261,9 +374,10 @@ static std::vector<Polygons> seed_overhangs_at_contacts(
             continue;
         append(seeds[contact_idx], overhangs[overhang_layer_idx]);
     }
-    for (Polygons &seed : seeds)
-        if (!seed.empty())
-            seed = union_(seed);
+    parallel_for_layers(0, seeds.size(), [&](size_t layer_idx) {
+        if (!seeds[layer_idx].empty())
+            seeds[layer_idx] = union_(seeds[layer_idx]);
+    });
     return seeds;
 }
 
@@ -271,6 +385,7 @@ static std::vector<Polygons> propagate_cura_style_support_channel(
     const PrintObject              &object,
     const SupportParameters        &support_params,
     const CuraSupportAnnotations   &annotations,
+    const CuraLayerGeometry        &geometry,
     const std::vector<Polygons>    &overhangs,
     coordf_t                        top_gap,
     bool                            keep_buildplate_only)
@@ -282,16 +397,20 @@ static std::vector<Polygons> propagate_cura_style_support_channel(
     if (layer_count < 2)
         return support_by_layer;
 
-    const std::vector<size_t> contact_map = make_top_contact_map(object, overhangs, top_gap);
+    const std::vector<size_t> contact_map = make_top_contact_map(geometry, overhangs, top_gap);
     std::vector<Polygons> seeds = seed_overhangs_at_contacts(overhangs, contact_map);
     const coord_t support_expansion = scale_(config.support_expansion.value);
-    const coord_t xy_gap = scale_(support_params.gap_xy);
     const coord_t half_min_feature = std::max<coord_t>(support_params.support_material_flow.scaled_width() / 2, scale_(0.05));
+    const auto highest_seed = std::find_if(
+        seeds.rbegin(), seeds.rend(), [](const Polygons &polygons) { return !polygons.empty(); });
+    if (highest_seed == seeds.rend())
+        return support_by_layer;
+    const size_t highest_active_layer = size_t(std::distance(seeds.begin(), highest_seed.base())) - 1;
 
-    for (int layer_idx = int(layer_count) - 1; layer_idx >= 0; --layer_idx) {
+    for (int layer_idx = int(highest_active_layer); layer_idx >= 0; --layer_idx) {
         Polygons layer_this = std::move(seeds[size_t(layer_idx)]);
 
-        const Polygons model_on_layer = layer_polygons(object, size_t(layer_idx));
+        const Polygons &model_on_layer = geometry.outlines[size_t(layer_idx)];
         if (!layer_this.empty() && support_expansion > 0)
             layer_this = expand_support_away_from_model(
                 std::move(layer_this), model_on_layer, support_expansion,
@@ -307,26 +426,57 @@ static std::vector<Polygons> propagate_cura_style_support_channel(
         }
 
         if (!layer_this.empty()) {
-            if (!annotations.blockers[size_t(layer_idx)].empty())
+            if (!annotations.blockers[size_t(layer_idx)].empty() &&
+                polygons_may_overlap(layer_this, annotations.blockers[size_t(layer_idx)]))
                 layer_this = diff(layer_this, annotations.blockers[size_t(layer_idx)]);
-            if (!model_on_layer.empty())
+            if (!model_on_layer.empty() &&
+                polygons_may_overlap(layer_this, geometry.outline_bounds[size_t(layer_idx)]))
                 layer_this = diff(layer_this, model_on_layer);
         }
 
         support_by_layer[size_t(layer_idx)] = std::move(layer_this);
     }
 
-    for (size_t layer_idx = 0; layer_idx < layer_count; ++layer_idx) {
+    std::vector<uint8_t> vulkan_xy_gap_overlap(layer_count, uint8_t(1));
+    {
+        std::vector<Gpu::VulkanAabb> support_bounds;
+        std::vector<Gpu::VulkanAabb> xy_gap_bounds;
+        support_bounds.reserve(layer_count);
+        xy_gap_bounds.reserve(layer_count);
+        for (size_t layer_idx = 0; layer_idx < layer_count; ++layer_idx) {
+            const BoundingBox support_box = support_by_layer[layer_idx].empty() ? BoundingBox() : get_extents(support_by_layer[layer_idx]);
+            geometry.with_xy_gap(layer_idx);
+            const BoundingBox &gap_box = geometry.xy_gap_bounds[layer_idx];
+            const Point support_min = support_box.defined ? support_box.min : Point(0, 0);
+            const Point support_max = support_box.defined ? support_box.max : Point(0, 0);
+            const Point gap_min = gap_box.defined ? gap_box.min : Point(0, 0);
+            const Point gap_max = gap_box.defined ? gap_box.max : Point(0, 0);
+            support_bounds.push_back({ { support_min.x(), support_min.y() }, { support_max.x(), support_max.y() } });
+            xy_gap_bounds.push_back({ { gap_min.x(), gap_min.y() }, { gap_max.x(), gap_max.y() } });
+        }
+        const auto batch = Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+            support_bounds, xy_gap_bounds, support_params.support_material_flow.scaled_width(),
+            Gpu::VulkanAabbOperation::CuraSupport);
+        if (batch.resolved) {
+            std::fill(vulkan_xy_gap_overlap.begin(), vulkan_xy_gap_overlap.end(), uint8_t(0));
+            for (const auto &pair : batch.overlap_pairs)
+                if (pair.query == pair.target)
+                    vulkan_xy_gap_overlap[pair.query] = uint8_t(1);
+        }
+    }
+
+    parallel_for_layers(0, highest_active_layer + 1, [&](size_t layer_idx) {
         Polygons &support = support_by_layer[layer_idx];
         if (support.empty())
-            continue;
+            return;
 
-        const Polygons model_on_layer = layer_polygons(object, layer_idx);
-        if (!model_on_layer.empty())
-            support = diff(support, offset(model_on_layer, float(xy_gap), SUPPORT_SURFACES_OFFSET_PARAMETERS));
+        const Polygons &model_with_xy_gap = geometry.with_xy_gap(layer_idx);
+        if (vulkan_xy_gap_overlap[layer_idx] != 0 && !model_with_xy_gap.empty() &&
+            polygons_may_overlap(support, geometry.xy_gap_bounds[layer_idx]))
+            support = diff(support, model_with_xy_gap);
 
         support = close_unprintable_parts(support, half_min_feature);
-    }
+    });
 
     if (keep_buildplate_only)
         keep_buildplate_connected_support(support_by_layer, support_params);
@@ -338,8 +488,15 @@ static std::vector<Polygons> propagate_cura_style_support_channel(
         Polygons adjacent = support_by_layer[layer_idx - 1];
         if (!support_by_layer[layer_idx + 1].empty())
             adjacent = adjacent.empty() ? support_by_layer[layer_idx + 1] : union_(adjacent, support_by_layer[layer_idx + 1]);
-        if (!adjacent.empty())
-            support_by_layer[layer_idx] = intersection(support_by_layer[layer_idx], offset(adjacent, float(support_params.support_material_flow.scaled_width()), SUPPORT_SURFACES_OFFSET_PARAMETERS));
+        if (!adjacent.empty()) {
+            const coord_t adjacency_distance = support_params.support_material_flow.scaled_width();
+            if (polygons_may_overlap_after_offset(support_by_layer[layer_idx], adjacent, adjacency_distance))
+                support_by_layer[layer_idx] = intersection(
+                    support_by_layer[layer_idx],
+                    offset(adjacent, float(adjacency_distance), SUPPORT_SURFACES_OFFSET_PARAMETERS));
+            else
+                support_by_layer[layer_idx].clear();
+        }
     }
 
     return support_by_layer;
@@ -350,13 +507,23 @@ static std::vector<Polygons> propagate_cura_style_support(
     const SlicingParameters       &slicing_params,
     const SupportParameters       &support_params,
     const CuraSupportAnnotations  &annotations,
+    const CuraLayerGeometry       &geometry,
     const CuraOverhangs           &overhangs)
 {
-    std::vector<Polygons> automatic = propagate_cura_style_support_channel(
-        object, support_params, annotations, overhangs.automatic, slicing_params.gap_support_object,
-        object.config().support_on_build_plate_only.value);
-    std::vector<Polygons> enforced = propagate_cura_style_support_channel(
-        object, support_params, annotations, overhangs.enforced, slicing_params.gap_support_object, false);
+    const auto has_support = [](const std::vector<Polygons> &channel) {
+        return std::any_of(channel.begin(), channel.end(), [](const Polygons &polygons) { return !polygons.empty(); });
+    };
+
+    std::vector<Polygons> automatic(object.layer_count());
+    if (has_support(overhangs.automatic))
+        automatic = propagate_cura_style_support_channel(
+            object, support_params, annotations, geometry, overhangs.automatic, slicing_params.gap_support_object,
+            object.config().support_on_build_plate_only.value);
+
+    std::vector<Polygons> enforced(object.layer_count());
+    if (has_support(overhangs.enforced))
+        enforced = propagate_cura_style_support_channel(
+            object, support_params, annotations, geometry, overhangs.enforced, slicing_params.gap_support_object, false);
 
     for (size_t layer_idx = 0; layer_idx < automatic.size(); ++layer_idx) {
         if (automatic[layer_idx].empty())
@@ -375,28 +542,21 @@ struct ContactFootprints
     std::vector<size_t> bottom_object_layers;
 };
 
-static size_t closest_bottom_contact_layer(const PrintObject &object, size_t object_layer_idx, coordf_t gap)
+static size_t closest_bottom_contact_layer(const CuraLayerGeometry &geometry, size_t object_layer_idx, coordf_t gap)
 {
-    if (object_layer_idx + 1 >= object.layer_count())
+    if (object_layer_idx + 1 >= geometry.outlines.size())
         return size_t(-1);
 
-    const coordf_t target_bottom_z = object.layers()[object_layer_idx]->print_z + gap;
-    size_t best_idx = size_t(-1);
-    coordf_t best_distance = std::numeric_limits<coordf_t>::max();
-    for (size_t layer_idx = object_layer_idx + 1; layer_idx < object.layer_count(); ++layer_idx) {
-        const coordf_t distance = std::abs(object.layers()[layer_idx]->bottom_z() - target_bottom_z);
-        if (distance < best_distance) {
-            best_idx = layer_idx;
-            best_distance = distance;
-        }
-    }
-    return best_idx;
+    return closest_sorted_layer(
+        geometry.bottom_z, object_layer_idx + 1, geometry.outlines.size(),
+        geometry.print_z[object_layer_idx] + gap);
 }
 
 static ContactFootprints make_cura_style_contact_footprints(
     const PrintObject           &object,
     const SlicingParameters     &slicing_params,
     const SupportParameters     &support_params,
+    const CuraLayerGeometry     &geometry,
     const std::vector<Polygons> &full_overhangs,
     const std::vector<Polygons> &support_body)
 {
@@ -412,9 +572,8 @@ static ContactFootprints make_cura_style_contact_footprints(
     if (layer_count < 2)
         return out;
 
-    const std::vector<size_t> top_contact_map = make_top_contact_map(object, full_overhangs, slicing_params.gap_support_object);
+    const std::vector<size_t> top_contact_map = make_top_contact_map(geometry, full_overhangs, slicing_params.gap_support_object);
     const coord_t support_expansion = scale_(config.support_expansion.value);
-    const coord_t xy_gap = scale_(support_params.gap_xy);
     double interface_margin_scaled = std::max<double>(
         support_params.support_material_interface_flow.scaled_spacing(),
         support_params.support_material_interface_flow.scaled_width());
@@ -439,6 +598,8 @@ static ContactFootprints make_cura_style_contact_footprints(
         // Use the actual support top as the interface footprint, but limit it to
         // the support island that belongs to this overhang. The raw overhang
         // polygon alone often leaves only a narrow boundary strip.
+        if (!polygons_may_overlap_after_offset(footprint, overhang_seed, interface_margin))
+            continue;
         Polygons interface_envelope = offset(overhang_seed, float(interface_margin), SUPPORT_SURFACES_OFFSET_PARAMETERS);
         if (!interface_envelope.empty())
             footprint = intersection(footprint, interface_envelope);
@@ -449,9 +610,10 @@ static ContactFootprints make_cura_style_contact_footprints(
         if (footprint.empty())
             continue;
 
-        const Polygons model_on_contact_layer = layer_polygons(object, contact_layer_idx);
-        if (!model_on_contact_layer.empty())
-            footprint = diff(footprint, offset(model_on_contact_layer, float(xy_gap), SUPPORT_SURFACES_OFFSET_PARAMETERS));
+        const Polygons &model_with_xy_gap = geometry.with_xy_gap(contact_layer_idx);
+        if (!model_with_xy_gap.empty() &&
+            polygons_may_overlap(footprint, geometry.xy_gap_bounds[contact_layer_idx]))
+            footprint = diff(footprint, model_with_xy_gap);
 
         footprint = close_interface_footprint(footprint, close_distance);
         if (footprint.empty())
@@ -463,17 +625,21 @@ static ContactFootprints make_cura_style_contact_footprints(
     }
 
     for (size_t object_layer_idx = 0; support_params.num_bottom_interface_layers > 0 && object_layer_idx + 1 < layer_count; ++object_layer_idx) {
-        Polygons object_top = layer_polygons(object, object_layer_idx);
-        const Polygons object_above = layer_polygons(object, object_layer_idx + 1);
-        if (!object_above.empty())
-            object_top = diff(object_top, offset(object_above, float(scale_(0.05)), SUPPORT_SURFACES_OFFSET_PARAMETERS));
+        Polygons object_top = geometry.outlines[object_layer_idx];
+        const Polygons &object_above = geometry.outlines[object_layer_idx + 1];
+        const coord_t object_top_clearance = scale_(0.05);
+        if (!object_above.empty() &&
+            polygons_may_overlap_after_offset(object_top, object_above, object_top_clearance))
+            object_top = diff(object_top, offset(object_above, float(object_top_clearance), SUPPORT_SURFACES_OFFSET_PARAMETERS));
         if (object_top.empty())
             continue;
 
-        const size_t contact_layer_idx = closest_bottom_contact_layer(object, object_layer_idx, slicing_params.gap_object_support);
+        const size_t contact_layer_idx = closest_bottom_contact_layer(geometry, object_layer_idx, slicing_params.gap_object_support);
         if (contact_layer_idx == size_t(-1) || support_body[contact_layer_idx].empty())
             continue;
 
+        if (!polygons_may_overlap_after_offset(support_body[contact_layer_idx], object_top, interface_margin))
+            continue;
         Polygons footprint = intersection(
             support_body[contact_layer_idx],
             offset(object_top, float(interface_margin), SUPPORT_SURFACES_OFFSET_PARAMETERS));
@@ -565,17 +731,26 @@ void CuraStyleSupportGenerator::generate(PrintObject &object)
     if (m_object == nullptr || object.layer_count() == 0)
         return;
 
+    using Clock = std::chrono::steady_clock;
+    const auto started_at = Clock::now();
     SupportParameters support_params(object);
     SupportGeneratorLayerStorage layer_storage;
+    const auto parameters_ready_at = Clock::now();
+    const CuraLayerGeometry geometry(object, scale_(support_params.gap_xy));
+    const auto geometry_ready_at = Clock::now();
 
     const CuraSupportAnnotations annotations(object);
+    const auto annotations_ready_at = Clock::now();
     const bool automatic_support = object.config().support_type.value == stNormalCuraAuto;
-    const CuraOverhangs overhangs = compute_cura_style_full_overhangs(object, support_params, annotations, automatic_support);
+    const CuraOverhangs overhangs = compute_cura_style_full_overhangs(object, support_params, annotations, geometry, automatic_support);
     const std::vector<Polygons> full_overhangs = overhangs.combined();
+    const auto overhangs_ready_at = Clock::now();
     std::vector<Polygons> support_body = propagate_cura_style_support(
-        object, m_slicing_params, support_params, annotations, overhangs);
+        object, m_slicing_params, support_params, annotations, geometry, overhangs);
+    const auto propagation_ready_at = Clock::now();
     ContactFootprints contact_footprints = make_cura_style_contact_footprints(
-        object, m_slicing_params, support_params, full_overhangs, support_body);
+        object, m_slicing_params, support_params, geometry, full_overhangs, support_body);
+    const auto contacts_ready_at = Clock::now();
     std::vector<Polygons> non_base_support_by_layer(support_body.size(), Polygons{});
 
     for (size_t layer_idx = 0; layer_idx < support_body.size(); ++layer_idx) {
@@ -602,7 +777,25 @@ void CuraStyleSupportGenerator::generate(PrintObject &object)
         object, contact_footprints.bottom_contacts, contact_footprints.bottom_object_layers,
         SupporLayerType::BottomContact, layer_storage);
     SupportGeneratorLayersPtr base_layers = make_base_layers_from_support_body(object, support_body, non_base_support_by_layer, layer_storage);
+    const auto layers_ready_at = Clock::now();
+    const auto milliseconds = [](const Clock::time_point &begin, const Clock::time_point &end) {
+        return std::chrono::duration<double, std::milli>(end - begin).count();
+    };
+    const auto log_timings = [&](const Clock::time_point &finished_at, const char *status) {
+        BOOST_LOG_TRIVIAL(info)
+            << "Cura-style support timings [" << status << "]: parameters="
+            << milliseconds(started_at, parameters_ready_at) << "ms geometry="
+            << milliseconds(parameters_ready_at, geometry_ready_at) << "ms annotations="
+            << milliseconds(geometry_ready_at, annotations_ready_at) << "ms overhangs="
+            << milliseconds(annotations_ready_at, overhangs_ready_at) << "ms propagation="
+            << milliseconds(overhangs_ready_at, propagation_ready_at) << "ms contacts="
+            << milliseconds(propagation_ready_at, contacts_ready_at) << "ms layers="
+            << milliseconds(contacts_ready_at, layers_ready_at) << "ms toolpaths="
+            << milliseconds(layers_ready_at, finished_at) << "ms total="
+            << milliseconds(started_at, finished_at) << "ms";
+    };
     if (base_layers.empty() && top_contacts.empty() && bottom_contacts.empty()) {
+        log_timings(layers_ready_at, "empty");
         BOOST_LOG_TRIVIAL(info) << "Cura-style normal support generator - No supports generated";
         return;
     }
@@ -624,6 +817,7 @@ void CuraStyleSupportGenerator::generate(PrintObject &object)
         raft_layers, bottom_contacts, top_contacts, base_layers,
         interface_layers, base_interface_layers);
 
+    log_timings(Clock::now(), "complete");
     BOOST_LOG_TRIVIAL(info) << "Cura-style normal support generator - End";
 }
 

@@ -1,10 +1,12 @@
 #include "../ClipperUtils.hpp"
+#include "../Gpu/VulkanSlicer.hpp"
 #include "../MarchingSquares.hpp"
 #include "../ShortestPath.hpp"
 #include "../Surface.hpp"
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <limits>
 #include "FillBase.hpp"
 #include "FillGyroid.hpp"
 
@@ -348,6 +350,54 @@ void FillGyroid::_fill_surface_single(
 
     // Apply multiline offset if needed
     multiline_fill(polylines, params, spacing);
+
+    if (Gpu::VulkanSlicerBackend::compute_enabled() && !polylines.empty()) {
+        std::vector<Gpu::VulkanAabb> boundary_bounds;
+        for (size_t contour_index = 0; contour_index <= expolygon.holes.size(); ++contour_index) {
+            const Polygon &contour = contour_index == 0 ? expolygon.contour : expolygon.holes[contour_index - 1];
+            if (contour.size() < 2)
+                continue;
+            Point previous = contour.points.back();
+            for (const Point &point : contour.points) {
+                boundary_bounds.push_back({
+                    { std::min<int64_t>(previous.x(), point.x()), std::min<int64_t>(previous.y(), point.y()) },
+                    { std::max<int64_t>(previous.x(), point.x()), std::max<int64_t>(previous.y(), point.y()) }
+                });
+                previous = point;
+            }
+        }
+        const bool maximum_gpu =
+            Gpu::VulkanSlicerBackend::compute_mode() == Gpu::VulkanSlicerComputeMode::Maximum;
+        if (!boundary_bounds.empty() &&
+            polylines.size() <= std::numeric_limits<size_t>::max() / boundary_bounds.size() &&
+            (maximum_gpu || polylines.size() * boundary_bounds.size() >= 16 * 1024)) {
+            std::vector<Gpu::VulkanAabb> polyline_bounds;
+            polyline_bounds.reserve(polylines.size());
+            for (const Polyline &polyline : polylines) {
+                const BoundingBox bounds = polyline.bounding_box();
+                polyline_bounds.push_back({
+                    { int64_t(bounds.min.x()), int64_t(bounds.min.y()) },
+                    { int64_t(bounds.max.x()), int64_t(bounds.max.y()) }
+                });
+            }
+            const Gpu::VulkanAabbBatch clipping_candidates =
+                Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+                    polyline_bounds, boundary_bounds, std::max<coord_t>(1, scale_(this->spacing * 4.0)),
+                    Gpu::VulkanAabbOperation::Gyroid);
+            if (clipping_candidates.resolved &&
+                clipping_candidates.may_overlap.size() == polylines.size()) {
+                Polylines retained;
+                retained.reserve(polylines.size());
+                for (size_t index = 0; index < polylines.size(); ++index) {
+                    const Polyline &polyline = polylines[index];
+                    if (clipping_candidates.may_overlap[index] != 0 ||
+                        (!polyline.points.empty() && expolygon.contains(polyline.points.front())))
+                        retained.emplace_back(std::move(polylines[index]));
+                }
+                polylines = std::move(retained);
+            }
+        }
+    }
 
 	polylines = intersection_pl(std::move(polylines), expolygon);
 

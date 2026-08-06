@@ -12,6 +12,7 @@
 #include "EdgeGrid.hpp"
 #include "utils/SparseLineGrid.hpp"
 #include "Geometry.hpp"
+#include "../Gpu/VulkanSlicer.hpp"
 #include "utils/PolylineStitcher.hpp"
 #include "SVG.hpp"
 #include "Utils.hpp"
@@ -857,39 +858,59 @@ WallToolPaths::ExtrusionLineSet WallToolPaths::getRegionOrder(const std::vector<
     // However, higher values are better against the limitations of using a PointGrid rather than a LineGrid.
     constexpr float diagonal_extension = 1.9f;
     const auto      searching_radius   = coord_t(max_line_w * diagonal_extension);
-    using GridT                        = SparsePointGrid<LineLoc, Locator>;
-    GridT grid(searching_radius);
-
+    std::vector<LineLoc> locations;
     for (const ExtrusionLine *line : input)
-        for (const ExtrusionJunction &junction : *line) grid.insert(LineLoc{junction, line});
-    for (const std::pair<const SquareGrid::GridPoint, LineLoc> &pair : grid) {
-        const LineLoc       &lineloc_here = pair.second;
+        for (const ExtrusionJunction &junction : *line)
+            locations.push_back(LineLoc{ junction, line });
+
+    auto add_order_requirement = [&](const LineLoc &lineloc_here, const LineLoc &lineloc_nearby) {
         const ExtrusionLine *here         = lineloc_here.line;
-        Point                loc_here     = pair.second.j.p;
-        std::vector<LineLoc> nearby_verts = grid.getNearby(loc_here, searching_radius);
-        for (const LineLoc &lineloc_nearby : nearby_verts) {
-            const ExtrusionLine *nearby = lineloc_nearby.line;
-            if (nearby == here)
-                continue;
-            if (nearby->inset_idx == here->inset_idx)
-                continue;
-            if (nearby->inset_idx > here->inset_idx + 1)
-                continue; // not directly adjacent
-            if (here->inset_idx > nearby->inset_idx + 1)
-                continue; // not directly adjacent
-            if (!shorter_then(loc_here - lineloc_nearby.j.p, (lineloc_here.j.w + lineloc_nearby.j.w) / 2 * diagonal_extension))
-                continue; // points are too far away from each other
-            if (here->is_odd || nearby->is_odd) {
-                if (here->is_odd && !nearby->is_odd && nearby->inset_idx < here->inset_idx)
-                    order_requirements.emplace(std::make_pair(nearby, here));
-                if (nearby->is_odd && !here->is_odd && here->inset_idx < nearby->inset_idx)
-                    order_requirements.emplace(std::make_pair(here, nearby));
-            } else if ((nearby->inset_idx < here->inset_idx) == outer_to_inner) {
+        const ExtrusionLine *nearby       = lineloc_nearby.line;
+        const Point          loc_here     = lineloc_here.j.p;
+        if (nearby == here || nearby->inset_idx == here->inset_idx)
+            return;
+        if (nearby->inset_idx > here->inset_idx + 1 || here->inset_idx > nearby->inset_idx + 1)
+            return;
+        if (!shorter_then(loc_here - lineloc_nearby.j.p,
+                         (lineloc_here.j.w + lineloc_nearby.j.w) / 2 * diagonal_extension))
+            return;
+        if (here->is_odd || nearby->is_odd) {
+            if (here->is_odd && !nearby->is_odd && nearby->inset_idx < here->inset_idx)
                 order_requirements.emplace(std::make_pair(nearby, here));
-            } else {
-                assert((nearby->inset_idx > here->inset_idx) == outer_to_inner);
+            if (nearby->is_odd && !here->is_odd && here->inset_idx < nearby->inset_idx)
                 order_requirements.emplace(std::make_pair(here, nearby));
-            }
+        } else if ((nearby->inset_idx < here->inset_idx) == outer_to_inner) {
+            order_requirements.emplace(std::make_pair(nearby, here));
+        } else {
+            assert((nearby->inset_idx > here->inset_idx) == outer_to_inner);
+            order_requirements.emplace(std::make_pair(here, nearby));
+        }
+    };
+
+    std::vector<Gpu::VulkanAabb> queries;
+    std::vector<Gpu::VulkanAabb> targets;
+    queries.reserve(locations.size());
+    targets.reserve(locations.size());
+    for (const LineLoc &location : locations) {
+        const Point &point = location.j.p;
+        queries.push_back({ { point.x() - searching_radius, point.y() - searching_radius },
+                            { point.x() + searching_radius, point.y() + searching_radius } });
+        targets.push_back({ { point.x(), point.y() }, { point.x(), point.y() } });
+    }
+    const auto batch = Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+        queries, targets, searching_radius, Gpu::VulkanAabbOperation::ArachneWall);
+    if (batch.resolved) {
+        for (const auto &pair : batch.overlap_pairs)
+            add_order_requirement(locations[pair.query], locations[pair.target]);
+    } else {
+        using GridT = SparsePointGrid<LineLoc, Locator>;
+        GridT grid(searching_radius);
+        for (const LineLoc &location : locations)
+            grid.insert(location);
+        for (const std::pair<const SquareGrid::GridPoint, LineLoc> &pair : grid) {
+            const std::vector<LineLoc> nearby_verts = grid.getNearby(pair.second.j.p, searching_radius);
+            for (const LineLoc &nearby : nearby_verts)
+                add_order_requirement(pair.second, nearby);
         }
     }
     return order_requirements;

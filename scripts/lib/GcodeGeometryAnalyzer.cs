@@ -16,6 +16,12 @@ namespace Magpie.Verification
         public int CoverageCells { get; set; }
         public double TotalLength { get; set; }
         public double TotalExtrusion { get; set; }
+        public int LayerCount { get; set; }
+        public string ToolIds { get; set; }
+        public double MinX { get; set; }
+        public double MinY { get; set; }
+        public double MaxX { get; set; }
+        public double MaxY { get; set; }
         internal HashSet<ulong> Coverage { get; set; }
 
         public double CoverageDifferenceRatio(GcodeGeometryResult other)
@@ -43,6 +49,9 @@ namespace Magpie.Verification
             double x = 0, y = 0, z = 0, e = 0;
             bool xyzAbsolute = true, eAbsolute = true;
             int tool = 0, layer = -1, positiveSegments = 0;
+            var usedTools = new HashSet<int>();
+            double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+            double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
             string role = "unknown";
 
             foreach (string raw in File.ReadLines(path))
@@ -101,6 +110,11 @@ namespace Magpie.Verification
                 if (deltaE > 1e-8 && length > 1e-8)
                 {
                     ++positiveSegments;
+                    usedTools.Add(tool);
+                    minX = Math.Min(minX, Math.Min(x, nx));
+                    minY = Math.Min(minY, Math.Min(y, ny));
+                    maxX = Math.Max(maxX, Math.Max(x, nx));
+                    maxY = Math.Max(maxY, Math.Max(y, ny));
                     string group = string.Format(Invariant, "{0}|{1}|{2}|{3:0.0000}", layer, tool, role, nz);
                     string a = string.Format(Invariant, "{0:0.0000},{1:0.0000}", x, y);
                     string b = string.Format(Invariant, "{0:0.0000},{1:0.0000}", nx, ny);
@@ -136,6 +150,9 @@ namespace Magpie.Verification
                 totalExtrusion += extrusions[group];
             }
 
+            var sortedTools = new List<int>(usedTools);
+            sortedTools.Sort();
+            if (positiveSegments == 0) minX = minY = maxX = maxY = 0.0;
             return new GcodeGeometryResult {
                 SegmentSha256 = HashSorted(segments),
                 CoverageSha256 = includeCoverage ? HashSortedUlong(new List<ulong>(coverage)) : "",
@@ -144,6 +161,12 @@ namespace Magpie.Verification
                 CoverageCells = includeCoverage ? coverage.Count : 0,
                 TotalLength = totalLength,
                 TotalExtrusion = totalExtrusion,
+                LayerCount = Math.Max(0, layer + 1),
+                ToolIds = String.Join(",", sortedTools),
+                MinX = minX,
+                MinY = minY,
+                MaxX = maxX,
+                MaxY = maxY,
                 Coverage = coverage
             };
         }

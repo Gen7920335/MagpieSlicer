@@ -1804,11 +1804,11 @@ void PreferencesDialog::create_items()
         g_sizer->Add(create_item_title(_L("Slicing acceleration")), 1, wxEXPAND);
         auto item_vulkan_slicer_mode = create_item_combobox(
             _L("Vulkan slicing acceleration"),
-            _L("Auto benchmarks the CPU and GPU before slicing and uses Vulkan only when it is expected to be faster. "
-               "On prefers qualified Vulkan hardware, while Off always uses the CPU. Failed workloads automatically use the CPU path."),
+            _L("Auto uses Vulkan only when it is expected to be faster. On prefers qualified Vulkan hardware. "
+               "Max GPU sends every supported non-empty workload to Vulkan and skips live CPU result duplication; final topology, G-code and failed workloads remain on the CPU."),
             "vulkan_slicer_mode",
-            {_L("Auto"), _L("On"), _L("Off")},
-            {"auto", "on", "off"});
+            {_L("Auto"), _L("On"), _L("Max GPU"), _L("Off")},
+            {"auto", "on", "max", "off"});
         g_sizer->Add(item_vulkan_slicer_mode);
     }
 

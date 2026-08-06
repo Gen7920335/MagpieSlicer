@@ -13,6 +13,8 @@ struct Branch {
     int64_t bx;
     int64_t by;
     uint64_t stable_id;
+    uint first_candidate;
+    uint candidate_count;
 };
 
 struct ContourEdge {
@@ -52,7 +54,10 @@ void main()
     barrier();
 
     const Branch branch = branches[branch_index];
-    for (uint edge_index = gl_LocalInvocationIndex; edge_index < contours.length();
+    const uint candidate_end = min(branch.first_candidate + branch.candidate_count,
+                                   uint(contours.length()));
+    for (uint edge_index = branch.first_candidate + gl_LocalInvocationIndex;
+         edge_index < candidate_end;
          edge_index += gl_WorkGroupSize.x) {
         if (boxes_overlap(branch, contours[edge_index]))
             atomicOr(any_overlap, 1u);

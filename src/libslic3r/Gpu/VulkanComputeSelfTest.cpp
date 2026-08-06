@@ -2,8 +2,11 @@
 #include "Utils.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iostream>
+#include <random>
+#include <tuple>
 #include <vector>
 
 int main(int argc, char** argv)
@@ -78,9 +81,97 @@ int main(int argc, char** argv)
         return 4;
     }
 
+    std::mt19937_64 random(0x4d4147504945ULL);
+    std::uniform_int_distribution<int64_t> coordinate(-100'000, 100'000);
+    std::uniform_int_distribution<int64_t> extent(100, 8'000);
+    std::vector<Slic3r::Gpu::VulkanAabb> targets;
+    std::vector<Slic3r::Gpu::VulkanAabb> queries;
+    for (size_t index = 0; index < 384; ++index) {
+        const int64_t x = coordinate(random);
+        const int64_t y = coordinate(random);
+        const int64_t w = extent(random);
+        const int64_t h = extent(random);
+        targets.push_back({ { x, y }, { x + w, y + h } });
+    }
+    for (size_t index = 0; index < 192; ++index) {
+        const int64_t x = coordinate(random);
+        const int64_t y = coordinate(random);
+        const int64_t w = extent(random);
+        const int64_t h = extent(random);
+        queries.push_back({ { x, y }, { x + w, y + h } });
+    }
+    std::vector<uint8_t> expected(queries.size(), uint8_t(0));
+    std::vector<Slic3r::Gpu::VulkanAabbBatch::OverlapPair> expected_pairs;
+    for (size_t query_index = 0; query_index < queries.size(); ++query_index) {
+        const auto& query = queries[query_index];
+        for (size_t target_index = 0; target_index < targets.size(); ++target_index) {
+            const auto& target = targets[target_index];
+            if (query.min.x <= target.max.x && target.min.x <= query.max.x &&
+                query.min.y <= target.max.y && target.min.y <= query.max.y) {
+                expected[query_index] = 1;
+                expected_pairs.push_back({ uint32_t(query_index), uint32_t(target_index) });
+            }
+        }
+    }
+    const std::array<Slic3r::Gpu::VulkanAabbOperation, 8> operations {
+        Slic3r::Gpu::VulkanAabbOperation::Spatial,
+        Slic3r::Gpu::VulkanAabbOperation::TreeSupport,
+        Slic3r::Gpu::VulkanAabbOperation::DistanceField,
+        Slic3r::Gpu::VulkanAabbOperation::Gyroid,
+        Slic3r::Gpu::VulkanAabbOperation::SeamTravel,
+        Slic3r::Gpu::VulkanAabbOperation::ClassicWall,
+        Slic3r::Gpu::VulkanAabbOperation::CuraSupport,
+        Slic3r::Gpu::VulkanAabbOperation::ArachneWall
+    };
+    for (const auto operation : operations) {
+        const auto spatial_batch = Slic3r::Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+            queries, targets, 4'000, operation);
+        if (!spatial_batch.resolved || !spatial_batch.dispatched ||
+            spatial_batch.may_overlap != expected) {
+            std::cerr << "Vulkan indexed AABB self-test failed for operation "
+                      << int(operation) << ": " << spatial_batch.diagnostic << '\n';
+            return 5;
+        }
+        if (int(operation) >= int(Slic3r::Gpu::VulkanAabbOperation::SeamTravel)) {
+            if (spatial_batch.overlap_pairs != expected_pairs) {
+                std::cerr << "Vulkan indexed AABB pair set is incomplete or contains an extra pair for operation "
+                          << int(operation) << ".\n";
+                return 7;
+            }
+            if (!std::is_sorted(spatial_batch.overlap_pairs.begin(), spatial_batch.overlap_pairs.end(),
+                    [](const auto& lhs, const auto& rhs) {
+                        return std::tie(lhs.query, lhs.target) < std::tie(rhs.query, rhs.target);
+                    })) {
+                std::cerr << "Vulkan indexed AABB pair order is not deterministic.\n";
+                return 8;
+            }
+            for (const auto& pair : spatial_batch.overlap_pairs) {
+                const auto& query = queries[pair.query];
+                const auto& target = targets[pair.target];
+                if (!(query.min.x <= target.max.x && target.min.x <= query.max.x &&
+                      query.min.y <= target.max.y && target.min.y <= query.max.y)) {
+                    std::cerr << "Vulkan indexed AABB returned a false overlap pair.\n";
+                    return 9;
+                }
+            }
+        }
+    }
+    const std::vector<Slic3r::Gpu::VulkanAabb> remote_target {
+        { { 1'000'000, 1'000'000 }, { 1'001'000, 1'001'000 } }
+    };
+    const auto index_only_batch = Slic3r::Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+        queries, remote_target, 4'000, Slic3r::Gpu::VulkanAabbOperation::DistanceField);
+    if (!index_only_batch.resolved || index_only_batch.dispatched ||
+        !std::all_of(index_only_batch.may_overlap.begin(), index_only_batch.may_overlap.end(),
+                     [](uint8_t value) { return value == 0; })) {
+        std::cerr << "CPU spatial-index proof self-test failed: " << index_only_batch.diagnostic << '\n';
+        return 6;
+    }
+
     std::cout << "Vulkan exact vertical-intersection self-test passed for "
               << batch.intersections.size() << " requests; tree contour broad phase passed for "
-              << tree_batch.may_intersect.size() << " branches.\n"
+              << tree_batch.may_intersect.size() << " branches; indexed AABB operations passed for "
+              << queries.size() << " randomized queries.\n"
               << Slic3r::Gpu::VulkanSlicerBackend::runtime_diagnostic_report() << '\n';
     return 0;
 }

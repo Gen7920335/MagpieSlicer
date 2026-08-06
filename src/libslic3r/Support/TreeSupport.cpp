@@ -2907,17 +2907,17 @@ void TreeSupport::drop_nodes()
 
 #ifdef SLIC3R_ENABLE_VULKAN_SLICER
         if (Gpu::VulkanSlicerBackend::compute_enabled()) {
-            // Vulkan only proves that AABBs cannot overlap. Possible overlaps
-            // continue through the existing exact contour predicate.
-            std::vector<Gpu::Segment> gpu_contour_edges;
+            std::vector<Gpu::VulkanAabb> gpu_contour_bounds;
             for (const Polygon& contour : layer_contours) {
                 if (contour.size() < 2)
                     continue;
                 for (size_t index = 0; index < contour.size(); ++index) {
                     const Point& a = contour[index];
                     const Point& b = contour[(index + 1) % contour.size()];
-                    gpu_contour_edges.push_back({ { int64_t(a.x()), int64_t(a.y()) },
-                                                  { int64_t(b.x()), int64_t(b.y()) } });
+                    gpu_contour_bounds.push_back({
+                        { std::min<int64_t>(a.x(), b.x()), std::min<int64_t>(a.y(), b.y()) },
+                        { std::max<int64_t>(a.x(), b.x()), std::max<int64_t>(a.y(), b.y()) }
+                    });
                 }
             }
 
@@ -2935,22 +2935,23 @@ void TreeSupport::drop_nodes()
                 }
             }
 
-            std::vector<Gpu::VulkanTreeContourRequest> gpu_tree_requests;
-            gpu_tree_requests.reserve(gpu_tree_lines.size());
-            for (size_t index = 0; index < gpu_tree_lines.size(); ++index) {
-                const Line& line = gpu_tree_lines[index];
-                gpu_tree_requests.push_back({ { { int64_t(line.a.x()), int64_t(line.a.y()) },
-                                                { int64_t(line.b.x()), int64_t(line.b.y()) } },
-                                              uint64_t(index) });
+            std::vector<Gpu::VulkanAabb> gpu_tree_bounds;
+            gpu_tree_bounds.reserve(gpu_tree_lines.size());
+            for (const Line& line : gpu_tree_lines) {
+                gpu_tree_bounds.push_back({
+                    { std::min<int64_t>(line.a.x(), line.b.x()), std::min<int64_t>(line.a.y(), line.b.y()) },
+                    { std::max<int64_t>(line.a.x(), line.b.x()), std::max<int64_t>(line.a.y(), line.b.y()) }
+                });
             }
 
-            const Gpu::VulkanTreeContourBatch gpu_tree_batch =
-                Gpu::VulkanSlicerBackend::dispatch_tree_contour_candidates(
-                    gpu_tree_requests, gpu_contour_edges);
-            if (gpu_tree_batch.dispatched &&
-                gpu_tree_batch.may_intersect.size() == gpu_tree_lines.size()) {
+            const Gpu::VulkanAabbBatch gpu_tree_batch =
+                Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+                    gpu_tree_bounds, gpu_contour_bounds, 0,
+                    Gpu::VulkanAabbOperation::TreeSupport);
+            if (gpu_tree_batch.resolved &&
+                gpu_tree_batch.may_overlap.size() == gpu_tree_lines.size()) {
                 for (size_t index = 0; index < gpu_tree_lines.size(); ++index) {
-                    if (gpu_tree_batch.may_intersect[index] != 0)
+                    if (gpu_tree_batch.may_overlap[index] != 0)
                         continue;
                     const Line& line = gpu_tree_lines[index];
                     mst_line_x_layer_contour_cache.insert({ line, false });
