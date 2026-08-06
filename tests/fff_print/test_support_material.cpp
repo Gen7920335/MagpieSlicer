@@ -1156,6 +1156,21 @@ TEST_CASE("Three raft layers are created", "[SupportMaterial]")
     REQUIRE(print.objects().front()->support_layers().size() == 3);
 }
 
+TEST_CASE("Cura raft does not enable automatic support when support is off", "[SupportMaterial][CuraStyle]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("enable_support", new ConfigOptionBool(false));
+    config.set_key_value("enforce_support_layers", new ConfigOptionInt(0));
+    config.set_key_value("raft_layers", new ConfigOptionInt(1));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormalCuraAuto));
+    config.set_key_value("cura_solid_support_raft", new ConfigOptionBool(true));
+
+    Slic3r::Print print;
+    Slic3r::Test::init_and_process_print({ TestMesh::overhang }, print, config);
+
+    REQUIRE(print.objects().front()->support_layers().size() == 1);
+}
+
 TEST_CASE("Enforced support layers are generated", "[SupportMaterial]")
 {
     // enforce_support_layers forces support on the first N layers even with support off.

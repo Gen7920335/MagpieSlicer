@@ -4872,6 +4872,8 @@ struct Plater::priv
     void on_export_began(wxCommandEvent&);
     void on_export_finished(wxCommandEvent&);
     void begin_slice_timing();
+    void finish_slice_timing();
+    void cancel_slice_timing();
     void on_slicing_began();
 
     void clear_warnings();
@@ -9977,24 +9979,6 @@ void Plater::priv::on_slicing_completed(wxCommandEvent & evt)
         return;
     }
 
-    if (m_slice_timer_running) {
-        const auto elapsed = std::chrono::steady_clock::now() - m_slice_started_at;
-        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-        if (elapsed_ms < 60'000) {
-            m_slice_duration_label = (boost::format("%.1f s") % (static_cast<double>(elapsed_ms) / 1000.0)).str();
-        } else {
-            const auto total_seconds = (elapsed_ms + 500) / 1000;
-            const auto hours = total_seconds / 3600;
-            const auto minutes = (total_seconds % 3600) / 60;
-            const auto seconds = total_seconds % 60;
-            m_slice_duration_label = hours > 0
-                ? (boost::format("%d:%02d:%02d") % hours % minutes % seconds).str()
-                : (boost::format("%d:%02d") % minutes % seconds).str();
-        }
-        m_slice_timer_running = false;
-        set_current_canvas_as_dirty();
-    }
-
     if (view3D->is_dragging()) // updating scene now would interfere with the gizmo dragging
         delayed_scene_refresh = true;
     else {
@@ -10036,6 +10020,38 @@ void Plater::priv::begin_slice_timing()
 
     m_slice_started_at = std::chrono::steady_clock::now();
     m_slice_timer_running = true;
+    m_slice_duration_label.clear();
+    set_current_canvas_as_dirty();
+}
+
+void Plater::priv::finish_slice_timing()
+{
+    if (!m_slice_timer_running)
+        return;
+
+    const auto elapsed = std::chrono::steady_clock::now() - m_slice_started_at;
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+    if (elapsed_ms < 60'000) {
+        m_slice_duration_label = (boost::format("%.1f s") % (static_cast<double>(elapsed_ms) / 1000.0)).str();
+    } else {
+        const auto total_seconds = (elapsed_ms + 500) / 1000;
+        const auto hours = total_seconds / 3600;
+        const auto minutes = (total_seconds % 3600) / 60;
+        const auto seconds = total_seconds % 60;
+        m_slice_duration_label = hours > 0
+            ? (boost::format("%d:%02d:%02d") % hours % minutes % seconds).str()
+            : (boost::format("%d:%02d") % minutes % seconds).str();
+    }
+    m_slice_timer_running = false;
+    set_current_canvas_as_dirty();
+}
+
+void Plater::priv::cancel_slice_timing()
+{
+    if (!m_slice_timer_running)
+        return;
+
+    m_slice_timer_running = false;
     m_slice_duration_label.clear();
     set_current_canvas_as_dirty();
 }
@@ -10187,6 +10203,13 @@ void Plater::priv::on_process_completed(SlicingProcessCompletedEvent &evt)
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", cancel event, status: %1%") % evt.status();
         this->notification_manager->set_slicing_progress_canceled(_u8L("Slicing Canceled"));
         is_finished = true;
+    }
+
+    if (is_finished) {
+        if (evt.success())
+            finish_slice_timing();
+        else
+            cancel_slice_timing();
     }
 
     //BBS: set the current plater's slice result to valid

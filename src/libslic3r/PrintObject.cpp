@@ -4318,7 +4318,8 @@ void PrintObject::_generate_support_material()
         tree_support.throw_on_cancel = [this]() { this->throw_if_canceled(); };
         tree_support.generate();
     }
-    else if (uses_cura_support_geometry(m_config.support_type.value, m_config.support_style.value)) {
+    else if (m_config.enable_support.value &&
+             uses_cura_support_geometry(m_config.support_type.value, m_config.support_style.value)) {
         CuraStyleSupportGenerator support_material(this, m_slicing_params);
         support_material.generate(*this);
     }
