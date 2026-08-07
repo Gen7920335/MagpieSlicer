@@ -530,6 +530,11 @@ if (SLIC3R_PROFILE)
     add_definitions(-DSLIC3R_PROFILE)
 endif ()
 
+if (MAGPIE_SLICING_PROFILER)
+    message(STATUS "Building isolated Magpie Slicer Profiler development version")
+    add_definitions(-DMAGPIE_SLICING_PROFILER=1)
+endif ()
+
 # Disable optimization for RelWithDebInfo
 if(CMAKE_C_FLAGS_RELWITHDEBINFO MATCHES "/O2")
     string(REGEX REPLACE "/O2" "/Od" CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO}")

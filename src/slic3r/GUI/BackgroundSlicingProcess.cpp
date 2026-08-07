@@ -23,6 +23,9 @@
 #include "libslic3r/GCode/PostProcessor.hpp"
 #include "libslic3r/Format/SL1.hpp"
 #include "libslic3r/Gpu/VulkanSlicer.hpp"
+#ifdef MAGPIE_SLICING_PROFILER
+#include "libslic3r/SlicingProfiler.hpp"
+#endif
 #include "libslic3r/Thread.hpp"
 #include "libslic3r/libslic3r.h"
 
@@ -200,8 +203,16 @@ void BackgroundSlicingProcess::process_fff()
     assert(m_print == m_fff_print);
     PresetBundle &preset_bundle = *wxGetApp().preset_bundle;
     m_fff_print->is_BBL_printer() = preset_bundle.is_bbl_vendor();
+    const std::string vulkan_mode = wxGetApp().app_config->get("vulkan_slicer_mode");
+#ifdef MAGPIE_SLICING_PROFILER
+    const bool profile_has_new_slice = !m_print->finished();
+    SlicingProfileSession profile_session(vulkan_mode);
+#endif
 	//BBS: add the logic to process from an existed gcode file
 	if (m_print->finished()) {
+#ifdef MAGPIE_SLICING_PROFILER
+        ScopedSlicingProfileEvent previous_gcode_event("pipeline", "Process previous G-code", SlicingProfileBackend::CPU);
+#endif
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: skip slicing, to process previous gcode file")%__LINE__;
 		m_fff_print->set_status(80, _utf8(L("Processing G-Code from previous file\u2026")));
 		wxCommandEvent evt(m_event_slicing_completed_id);
@@ -230,7 +241,10 @@ void BackgroundSlicingProcess::process_fff()
 		m_gcode_result->reset();
 
         Gpu::VulkanSlicerBackend::begin_slicing_session();
-        const std::string vulkan_mode = wxGetApp().app_config->get("vulkan_slicer_mode");
+#ifdef MAGPIE_SLICING_PROFILER
+        {
+        ScopedSlicingProfileEvent vulkan_prepare_event("pipeline", "Prepare Vulkan backend", SlicingProfileBackend::System);
+#endif
         const bool vulkan_compute_enabled =
             Gpu::VulkanSlicerBackend::compiled_with_vulkan() && vulkan_mode != "off";
         Gpu::VulkanSlicerBackend::set_compute_enabled(vulkan_compute_enabled);
@@ -241,14 +255,24 @@ void BackgroundSlicingProcess::process_fff()
             BOOST_LOG_TRIVIAL(warning) << "[Magpie Vulkan] "
                 << Gpu::VulkanSlicerBackend::query_runtime_stats().last_diagnostic;
         }
+#ifdef MAGPIE_SLICING_PROFILER
+        }
+#endif
 
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: gcode_result reseted, will start print::process")%__LINE__;
+#ifdef MAGPIE_SLICING_PROFILER
+        {
+        ScopedSlicingProfileEvent print_process_event("pipeline", "Print process", SlicingProfileBackend::CPU);
+#endif
         try {
             m_print->process();
         } catch (...) {
             Gpu::VulkanSlicerBackend::release_unused_staging_memory(true);
             throw;
         }
+#ifdef MAGPIE_SLICING_PROFILER
+        }
+#endif
         Gpu::VulkanSlicerBackend::release_unused_staging_memory();
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: after print::process, send slicing complete event to gui...")%__LINE__;
         if (m_current_plate->get_real_filament_map_mode(preset_bundle.project_config) < FilamentMapMode::fmmManual) {
@@ -263,12 +287,31 @@ void BackgroundSlicingProcess::process_fff()
 
 		//BBS: add plate index into render params
 		m_temp_output_path = this->get_current_plate()->get_tmp_gcode_path();
+#ifdef MAGPIE_SLICING_PROFILER
+        {
+        ScopedSlicingProfileEvent gcode_event("pipeline", "Generate G-code and thumbnails", SlicingProfileBackend::CPU);
+#endif
 		m_fff_print->export_gcode(m_temp_output_path, m_gcode_result, [this](const ThumbnailsParams& params) { return this->render_thumbnails(params); });
+#ifdef MAGPIE_SLICING_PROFILER
+        }
+#endif
+
+#ifdef MAGPIE_SLICING_PROFILER
+        {
+        ScopedSlicingProfileEvent post_process_event("pipeline", "Post-process G-code", SlicingProfileBackend::CPU);
+#endif
 		if(m_fff_print->is_BBL_printer())
 			run_post_process_scripts(m_temp_output_path, false, "File", m_temp_output_path, m_fff_print->full_print_config());
+#ifdef MAGPIE_SLICING_PROFILER
+        }
+#endif
 
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": export gcode finished");
 	}
+#ifdef MAGPIE_SLICING_PROFILER
+    {
+    ScopedSlicingProfileEvent finalize_event("pipeline", "Finalize export or upload", SlicingProfileBackend::CPU);
+#endif
 	if (this->set_step_started(bspsGCodeFinalize)) {
 	    if (! m_export_path.empty()) {
 			wxQueueEvent(GUI::wxGetApp().mainframe->m_plater, new wxCommandEvent(m_event_export_began_id));
@@ -284,6 +327,28 @@ void BackgroundSlicingProcess::process_fff()
 	    }
 		this->set_step_done(bspsGCodeFinalize);
 	}
+#ifdef MAGPIE_SLICING_PROFILER
+    }
+    SlicingProfileVulkanStats profile_stats;
+    if (profile_has_new_slice) {
+        const Gpu::VulkanSlicerRuntimeStats runtime = Gpu::VulkanSlicerBackend::query_runtime_stats();
+        profile_stats.selected_device = runtime.selected_device;
+        profile_stats.execution_profile = runtime.execution_profile;
+        profile_stats.validation_mode = runtime.validation_mode;
+        profile_stats.last_diagnostic = runtime.last_diagnostic;
+        profile_stats.dispatch_calls = runtime.dispatch_calls;
+        profile_stats.queue_submissions = runtime.queue_submissions;
+        profile_stats.submitted_work_items = runtime.submitted_intersections;
+        profile_stats.accepted_gpu_items = runtime.accepted_gpu_intersections;
+        profile_stats.cpu_validation_checks = runtime.cpu_validation_checks;
+        profile_stats.validation_failures = runtime.validation_failures;
+        profile_stats.skipped_workloads = runtime.skipped_small_workloads;
+        profile_stats.total_gpu_ms = runtime.total_gpu_ms;
+        profile_stats.total_host_ms = runtime.total_host_ms;
+    }
+    SlicingProfiler::instance().set_vulkan_stats(profile_stats);
+    profile_session.finish();
+#endif
 }
 
 static void write_thumbnail(Zipper& zipper, const ThumbnailData& data)

@@ -488,6 +488,13 @@ set(lisbslic3r_sources
     FlushVolPredictor.cpp
 )
 
+if (MAGPIE_SLICING_PROFILER)
+    list(APPEND lisbslic3r_sources
+        SlicingProfiler.hpp
+        SlicingProfiler.cpp
+    )
+endif ()
+
 if (APPLE)
     list(APPEND lisbslic3r_sources
             MacUtils.mm

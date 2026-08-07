@@ -13,6 +13,9 @@
 #include "Model.hpp"
 #include "PlaceholderParser.hpp"
 #include "PrintConfig.hpp"
+#ifdef MAGPIE_SLICING_PROFILER
+#include "SlicingProfiler.hpp"
+#endif
 
 namespace Slic3r {
 
@@ -596,22 +599,53 @@ public:
             this->status_update_warnings(static_cast<int>(active_step.first), warning_level, message, nullptr, message_id);
     }
 protected:
-    bool            set_started(PrintStepEnum step) { return m_state.set_started(step, this->state_mutex(), [this](){ this->throw_if_canceled(); }); }
+    bool            set_started(PrintStepEnum step) {
+        const bool started = m_state.set_started(step, this->state_mutex(), [this](){ this->throw_if_canceled(); });
+#ifdef MAGPIE_SLICING_PROFILER
+        if (started)
+            SlicingProfiler::instance().begin_state_step(false, static_cast<int>(step), this);
+#endif
+        return started;
+    }
 	PrintStateBase::TimeStamp set_done(PrintStepEnum step) {
 		std::pair<PrintStateBase::TimeStamp, bool> status = m_state.set_done(step, this->state_mutex(), [this](){ this->throw_if_canceled(); });
+#ifdef MAGPIE_SLICING_PROFILER
+        if (status.second)
+            SlicingProfiler::instance().finish_state_step(false, static_cast<int>(step), this);
+#endif
         if (status.second)
             this->status_update_warnings(static_cast<int>(step), PrintStateBase::WarningLevel::NON_CRITICAL, std::string());
         return status.first;
 	}
-    bool            invalidate_step(PrintStepEnum step)
-		{ return m_state.invalidate(step, this->cancel_callback()); }
+    bool            invalidate_step(PrintStepEnum step) {
+        const bool invalidated = m_state.invalidate(step, this->cancel_callback());
+#ifdef MAGPIE_SLICING_PROFILER
+        if (invalidated)
+            SlicingProfiler::instance().cancel_state_step(false, static_cast<int>(step), this);
+#endif
+        return invalidated;
+    }
     template<typename StepTypeIterator>
-    bool            invalidate_steps(StepTypeIterator step_begin, StepTypeIterator step_end)
-        { return m_state.invalidate_multiple(step_begin, step_end, this->cancel_callback()); }
+    bool            invalidate_steps(StepTypeIterator step_begin, StepTypeIterator step_end) {
+        const bool invalidated = m_state.invalidate_multiple(step_begin, step_end, this->cancel_callback());
+#ifdef MAGPIE_SLICING_PROFILER
+        if (invalidated)
+            for (auto it = step_begin; it != step_end; ++it)
+                SlicingProfiler::instance().cancel_state_step(false, static_cast<int>(*it), this);
+#endif
+        return invalidated;
+    }
     bool            invalidate_steps(std::initializer_list<PrintStepEnum> il)
-        { return m_state.invalidate_multiple(il.begin(), il.end(), this->cancel_callback()); }
-    bool            invalidate_all_steps()
-        { return m_state.invalidate_all(this->cancel_callback()); }
+        { return invalidate_steps(il.begin(), il.end()); }
+    bool            invalidate_all_steps() {
+        const bool invalidated = m_state.invalidate_all(this->cancel_callback());
+#ifdef MAGPIE_SLICING_PROFILER
+        if (invalidated)
+            for (size_t step = 0; step < COUNT; ++step)
+                SlicingProfiler::instance().cancel_state_step(false, static_cast<int>(step), this);
+#endif
+        return invalidated;
+    }
 
 	bool            is_step_started_unguarded(PrintStepEnum step) const { return m_state.is_started_unguarded(step); }
 	bool            is_step_done_unguarded(PrintStepEnum step) const { return m_state.is_done_unguarded(step); }
@@ -636,26 +670,63 @@ public:
 protected:
 	PrintObjectBaseWithState(PrintType *print, ModelObject *model_object) : PrintObjectBase(model_object), m_print(print) {}
 
-    bool            set_started(PrintObjectStepEnum step)
-        { return m_state.set_started(step, PrintObjectBase::state_mutex(m_print), [this](){ this->throw_if_canceled(); }); }
+    bool            set_started(PrintObjectStepEnum step) {
+        const bool started = m_state.set_started(step, PrintObjectBase::state_mutex(m_print), [this](){ this->throw_if_canceled(); });
+#ifdef MAGPIE_SLICING_PROFILER
+        if (started)
+            SlicingProfiler::instance().begin_state_step(true, static_cast<int>(step), this);
+#endif
+        return started;
+    }
 	PrintStateBase::TimeStamp set_done(PrintObjectStepEnum step) {
 		std::pair<PrintStateBase::TimeStamp, bool> status = m_state.set_done(step, PrintObjectBase::state_mutex(m_print), [this](){ this->throw_if_canceled(); });
+#ifdef MAGPIE_SLICING_PROFILER
+        if (status.second)
+            SlicingProfiler::instance().finish_state_step(true, static_cast<int>(step), this);
+#endif
         if (status.second)
             this->status_update_warnings(m_print, static_cast<int>(step), PrintStateBase::WarningLevel::NON_CRITICAL, std::string());
         return status.first;
 	}
 
-    bool            invalidate_step(PrintObjectStepEnum step)
-        { return m_state.invalidate(step, PrintObjectBase::cancel_callback(m_print)); }
+    bool            invalidate_step(PrintObjectStepEnum step) {
+        const bool invalidated = m_state.invalidate(step, PrintObjectBase::cancel_callback(m_print));
+#ifdef MAGPIE_SLICING_PROFILER
+        if (invalidated)
+            SlicingProfiler::instance().cancel_state_step(true, static_cast<int>(step), this);
+#endif
+        return invalidated;
+    }
     template<typename StepTypeIterator>
-    bool            invalidate_steps(StepTypeIterator step_begin, StepTypeIterator step_end)
-        { return m_state.invalidate_multiple(step_begin, step_end, PrintObjectBase::cancel_callback(m_print)); }
+    bool            invalidate_steps(StepTypeIterator step_begin, StepTypeIterator step_end) {
+        const bool invalidated = m_state.invalidate_multiple(step_begin, step_end, PrintObjectBase::cancel_callback(m_print));
+#ifdef MAGPIE_SLICING_PROFILER
+        if (invalidated)
+            for (auto it = step_begin; it != step_end; ++it)
+                SlicingProfiler::instance().cancel_state_step(true, static_cast<int>(*it), this);
+#endif
+        return invalidated;
+    }
     bool            invalidate_steps(std::initializer_list<PrintObjectStepEnum> il)
-        { return m_state.invalidate_multiple(il.begin(), il.end(), PrintObjectBase::cancel_callback(m_print)); }
-    bool            invalidate_all_steps()
-        { return m_state.invalidate_all(PrintObjectBase::cancel_callback(m_print)); }
-    bool            invalidate_all_steps_without_cancel()
-        { return m_state.invalidate_all([](){}); }
+        { return invalidate_steps(il.begin(), il.end()); }
+    bool            invalidate_all_steps() {
+        const bool invalidated = m_state.invalidate_all(PrintObjectBase::cancel_callback(m_print));
+#ifdef MAGPIE_SLICING_PROFILER
+        if (invalidated)
+            for (size_t step = 0; step < COUNT; ++step)
+                SlicingProfiler::instance().cancel_state_step(true, static_cast<int>(step), this);
+#endif
+        return invalidated;
+    }
+    bool            invalidate_all_steps_without_cancel() {
+        const bool invalidated = m_state.invalidate_all([](){});
+#ifdef MAGPIE_SLICING_PROFILER
+        if (invalidated)
+            for (size_t step = 0; step < COUNT; ++step)
+                SlicingProfiler::instance().cancel_state_step(true, static_cast<int>(step), this);
+#endif
+        return invalidated;
+    }
 
     bool            is_step_started_unguarded(PrintObjectStepEnum step) const { return m_state.is_started_unguarded(step); }
     bool            is_step_done_unguarded(PrintObjectStepEnum step) const { return m_state.is_done_unguarded(step); }

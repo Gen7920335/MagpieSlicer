@@ -1,4 +1,7 @@
 #include "VulkanSlicer.hpp"
+#ifdef MAGPIE_SLICING_PROFILER
+#include "../SlicingProfiler.hpp"
+#endif
 
 #include "Utils.hpp"
 #include "nlohmann/json.hpp"
@@ -1943,7 +1946,15 @@ VulkanVerticalIntersectionBatch VulkanSlicerBackend::dispatch_vertical_intersect
         batch.diagnostic = "Vulkan infill compute is disabled in Preferences.";
         return batch;
     }
+#ifdef MAGPIE_SLICING_PROFILER
+    ScopedSlicingProfileEvent profile_event("vulkan", "Exact vertical intersections",
+                                            SlicingProfileBackend::GPU, requests.size());
+#endif
     VulkanVerticalIntersectionBatch batch = vulkan_intersection_context().dispatch(requests);
+#ifdef MAGPIE_SLICING_PROFILER
+    profile_event.set_result(batch.dispatched ? SlicingProfileBackend::GPU : SlicingProfileBackend::CPUFallback,
+                             batch.gpu_elapsed_ms, requests.size(), batch.diagnostic);
+#endif
     if (!requests.empty())
         runtime_stats_registry().record_dispatch(requests.size(), batch);
     if (batch.dispatched)
@@ -1966,7 +1977,15 @@ VulkanTreeContourBatch VulkanSlicerBackend::dispatch_tree_contour_candidates(
         batch.diagnostic = "Vulkan tree contour compute is disabled in Preferences.";
         return batch;
     }
+#ifdef MAGPIE_SLICING_PROFILER
+    ScopedSlicingProfileEvent profile_event("vulkan", "Tree contour broad phase",
+                                            SlicingProfileBackend::GPU, requests.size());
+#endif
     VulkanTreeContourBatch batch = vulkan_intersection_context().dispatch_tree_contours(requests, contour_edges);
+#ifdef MAGPIE_SLICING_PROFILER
+    profile_event.set_result(batch.dispatched ? SlicingProfileBackend::Hybrid : SlicingProfileBackend::CPUFallback,
+                             -1.0, requests.size(), batch.diagnostic);
+#endif
     if (batch.dispatched)
         record_automated_verification_dispatch("tree", requests.size());
     return batch;
@@ -2124,20 +2143,28 @@ VulkanAabbBatch VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
         return batch;
     }
     VulkanTreeContourBatch indexed;
+    const char* operation_name = "spatial";
+    switch (operation) {
+    case VulkanAabbOperation::TreeSupport: operation_name = "tree-spatial"; break;
+    case VulkanAabbOperation::DistanceField: operation_name = "distance-spatial"; break;
+    case VulkanAabbOperation::Gyroid: operation_name = "gyroid-spatial"; break;
+    case VulkanAabbOperation::SeamTravel: operation_name = "seam-travel-spatial"; break;
+    case VulkanAabbOperation::ClassicWall: operation_name = "classic-wall-spatial"; break;
+    case VulkanAabbOperation::CuraSupport: operation_name = "cura-support-spatial"; break;
+    case VulkanAabbOperation::ArachneWall: operation_name = "arachne-wall-spatial"; break;
+    case VulkanAabbOperation::Spatial: break;
+    }
 #ifdef SLIC3R_ENABLE_VULKAN_SLICER
+#ifdef MAGPIE_SLICING_PROFILER
+    ScopedSlicingProfileEvent profile_event("vulkan", operation_name,
+                                            SlicingProfileBackend::GPU, compact_targets.size());
+#endif
     indexed = vulkan_intersection_context().dispatch_tree_contours(compact_queries, compact_targets);
+#ifdef MAGPIE_SLICING_PROFILER
+    profile_event.set_result(indexed.dispatched ? SlicingProfileBackend::Hybrid : SlicingProfileBackend::CPUFallback,
+                             -1.0, compact_targets.size(), indexed.diagnostic);
+#endif
     if (indexed.dispatched) {
-        const char* operation_name = "spatial";
-        switch (operation) {
-        case VulkanAabbOperation::TreeSupport: operation_name = "tree-spatial"; break;
-        case VulkanAabbOperation::DistanceField: operation_name = "distance-spatial"; break;
-        case VulkanAabbOperation::Gyroid: operation_name = "gyroid-spatial"; break;
-        case VulkanAabbOperation::SeamTravel: operation_name = "seam-travel-spatial"; break;
-        case VulkanAabbOperation::ClassicWall: operation_name = "classic-wall-spatial"; break;
-        case VulkanAabbOperation::CuraSupport: operation_name = "cura-support-spatial"; break;
-        case VulkanAabbOperation::ArachneWall: operation_name = "arachne-wall-spatial"; break;
-        case VulkanAabbOperation::Spatial: break;
-        }
         record_automated_verification_dispatch(operation_name, compact_targets.size());
     }
 #else

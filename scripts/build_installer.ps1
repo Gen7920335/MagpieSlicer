@@ -1,14 +1,15 @@
 param(
     [int]$Parallel = [Math]::Max(1, [Environment]::ProcessorCount),
     [string]$ShortStageRoot = "C:\MagpiePkg",
-    [string]$BuildDirectory = ""
+    [string]$BuildDirectory = "",
+    [switch]$DevelopmentProfiler
 )
 
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
-    $BuildDirectory = Join-Path $root "build-vulkan"
+    $BuildDirectory = Join-Path $root $(if ($DevelopmentProfiler) { "build-profiler-dev" } else { "build-vulkan" })
 }
 $buildDir = [IO.Path]::GetFullPath($BuildDirectory)
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -28,14 +29,24 @@ if ($cacheText -notmatch '(?m)^SLIC3R_ENABLE_VULKAN_SLICER:BOOL=ON\r?$') {
 if ($cacheText -match '(?m)^MAGPIE_VULKAN_TEST_BRANDING:BOOL=ON\r?$') {
     throw "Installer packaging rejects MAGPIE_VULKAN_TEST_BRANDING=ON: $cachePath"
 }
+$profilerEnabled = $cacheText -match '(?m)^MAGPIE_SLICING_PROFILER:BOOL=ON\r?$'
+if ($DevelopmentProfiler -and -not $profilerEnabled) {
+    throw "Development profiler packaging requires MAGPIE_SLICING_PROFILER=ON: $cachePath"
+}
+if (-not $DevelopmentProfiler -and $profilerEnabled) {
+    throw "Stable installer packaging rejects MAGPIE_SLICING_PROFILER=ON. Pass -DevelopmentProfiler for the isolated development package."
+}
 
 if ($resolvedStageRoot.Length -gt 80) {
     throw "NSIS staging root is too long ($($resolvedStageRoot.Length) characters). Use a short path such as C:\MagpiePkg."
 }
 
-$releaseExe = Join-Path $buildDir "src\Release\magpie-slicer.exe"
+$appKey = if ($DevelopmentProfiler) { "MagpieSlicerProfiler" } else { "MagpieSlicer" }
+$appName = if ($DevelopmentProfiler) { "Magpie Slicer Profiler" } else { "Magpie Slicer" }
+$appCommand = if ($DevelopmentProfiler) { "magpie-slicer-profiler" } else { "magpie-slicer" }
+$releaseExe = Join-Path $buildDir "src\Release\$appCommand.exe"
 $lockingProcesses = @(
-    Get-CimInstance Win32_Process -Filter "Name = 'magpie-slicer.exe'" -ErrorAction SilentlyContinue |
+    Get-CimInstance Win32_Process -Filter "Name = '$appCommand.exe'" -ErrorAction SilentlyContinue |
         Where-Object {
             -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
             [IO.Path]::GetFullPath($_.ExecutablePath) -eq [IO.Path]::GetFullPath($releaseExe)
@@ -43,15 +54,17 @@ $lockingProcesses = @(
 )
 if ($lockingProcesses.Count -gt 0) {
     $lockingPids = ($lockingProcesses | ForEach-Object ProcessId) -join ", "
-    throw "The build-tree Magpie Slicer is running and locks the Release DLL. Close process ID(s): $lockingPids."
+    throw "The build-tree $appName is running and locks the Release DLL. Close process ID(s): $lockingPids."
 }
 
 $started = Get-Date
 Write-Output "Installer build started: $($started.ToString('s'))"
 Write-Output "Parallel jobs: $Parallel"
 Write-Output "Build directory: $buildDir"
+Write-Output "Package identity: $appName ($appKey)"
 Write-Output "Vulkan slicer: ON"
 Write-Output "Vulkan test branding: OFF"
+Write-Output "Slicing profiler: $($DevelopmentProfiler.IsPresent)"
 Write-Output "Short staging directory: $stageDir"
 
 & cmake --build $buildDir --config Release --target OrcaSlicer_app_gui --parallel $Parallel
@@ -76,12 +89,12 @@ if ($LASTEXITCODE -ne 0) {
 $installers = @(
     Get-ChildItem -LiteralPath $stageDir -File -ErrorAction SilentlyContinue |
         Where-Object {
-            $_.Name -match '^MagpieSlicer_Windows_Installer_.*_x64\.exe$'
+            $_.Name -match "^$($appKey)_Windows_Installer_.*_x64\.exe$"
         } |
         Sort-Object LastWriteTime -Descending
 )
 if ($installers.Count -eq 0) {
-    throw "Package target succeeded but no Magpie Slicer installer was found."
+    throw "Package target succeeded but no $appName installer was found."
 }
 
 $stageInstaller = $installers[0]

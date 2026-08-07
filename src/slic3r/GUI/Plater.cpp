@@ -1,4 +1,7 @@
 #include "Plater.hpp"
+#ifdef MAGPIE_SLICING_PROFILER
+#include "libslic3r/SlicingProfiler.hpp"
+#endif
 #include "libslic3r/Config.hpp"
 #include "libslic3r_version.h"
 
@@ -18761,6 +18764,42 @@ bool Plater::is_slice_timer_running() const
 {
     return p->m_slice_timer_running;
 }
+
+#ifdef MAGPIE_SLICING_PROFILER
+std::string Plater::get_slicing_profile_status_label() const
+{
+    const SlicingProfileStatus status = SlicingProfiler::instance().status();
+    if (!status.active && !status.has_report)
+        return {};
+
+    std::string mode = status.requested_mode.empty() ? "auto" : status.requested_mode;
+    if (mode[0] >= 'a' && mode[0] <= 'z')
+        mode[0] = static_cast<char>(mode[0] - 'a' + 'A');
+    std::string label = "Vulkan " + mode + " | " +
+        (status.effective_backend.empty() ? "CPU" : status.effective_backend);
+    if (!status.current_step.empty())
+        label += " | " + status.current_step;
+    return label;
+}
+
+bool Plater::has_slicing_profile_report() const
+{
+    return SlicingProfiler::instance().has_report();
+}
+
+void Plater::export_slicing_profile()
+{
+    wxFileDialog dialog(this, _L("Export slicing timing log"), wxEmptyString,
+        "magpie-slicing-profile.json", "JSON files (*.json)|*.json",
+        wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+    if (dialog.ShowModal() != wxID_OK)
+        return;
+
+    std::string error;
+    if (!SlicingProfiler::instance().export_json(dialog.GetPath().ToUTF8().data(), &error))
+        GUI::show_error(this, from_u8(error));
+}
+#endif
 
 void Plater::update_preview_bottom_toolbar()
 {

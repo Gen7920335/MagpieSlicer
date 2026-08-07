@@ -35,6 +35,10 @@ add_executable(${_TEST_NAME}_tests
     ../libnest2d/printer_parts.cpp
     )
 
+if (MAGPIE_SLICING_PROFILER)
+    target_sources(${_TEST_NAME}_tests PRIVATE test_slicing_profiler.cpp)
+endif ()
+
 if (TARGET OpenVDB::openvdb)
     target_sources(${_TEST_NAME}_tests PRIVATE test_hollowing.cpp)
 endif()

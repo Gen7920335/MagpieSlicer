@@ -1928,10 +1928,19 @@ float GLCanvas3D::get_collapse_toolbar_height() const
 float GLCanvas3D::get_slice_duration_overlay_width() const
 {
     const Plater* plater = wxGetApp().plater();
+#ifdef MAGPIE_SLICING_PROFILER
+    if (plater == nullptr || (!plater->is_slice_timer_running() &&
+        plater->get_slice_duration_label().empty() &&
+        plater->get_slicing_profile_status_label().empty()))
+        return 0.0f;
+
+    return 430.0f * get_scale();
+#else
     if (plater == nullptr || (!plater->is_slice_timer_running() && plater->get_slice_duration_label().empty()))
         return 0.0f;
 
     return 186.0f * get_scale();
+#endif
 }
 
 bool GLCanvas3D::make_current_for_postinit() {
@@ -9565,7 +9574,12 @@ void GLCanvas3D::_render_collapse_toolbar() const
     collapse_toolbar.render(*this);
 
     const std::string duration = plater.get_slice_duration_label();
+#ifdef MAGPIE_SLICING_PROFILER
+    const std::string profile_status = plater.get_slicing_profile_status_label();
+    if (!plater.is_slice_timer_running() && duration.empty() && profile_status.empty())
+#else
     if (!plater.is_slice_timer_running() && duration.empty())
+#endif
         return;
 
     ImGuiWrapper& imgui = *wxGetApp().imgui();
@@ -9582,17 +9596,25 @@ void GLCanvas3D::_render_collapse_toolbar() const
     ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(label_width, 0.0f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.82f);
-    imgui.begin(
-        std::string("###slice_duration_overlay"),
+    ImGuiWindowFlags overlay_flags =
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoTitleBar |
         ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoInputs);
+        ImGuiWindowFlags_NoSavedSettings;
+#ifndef MAGPIE_SLICING_PROFILER
+    overlay_flags |= ImGuiWindowFlags_NoInputs;
+#endif
+    imgui.begin(std::string("###slice_duration_overlay"), overlay_flags);
     imgui.text(plater.is_slice_timer_running()
         ? into_u8(_L("Slicing..."))
         : into_u8(_L("Slice time")) + ": " + duration);
+#ifdef MAGPIE_SLICING_PROFILER
+    if (!profile_status.empty())
+        imgui.text(profile_status);
+    if (plater.has_slicing_profile_report() && ImGui::Button("Export timing log"))
+        plater.export_slicing_profile();
+#endif
     imgui.end();
 }
 
