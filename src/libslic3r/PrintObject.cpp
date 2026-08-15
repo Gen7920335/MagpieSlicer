@@ -15,6 +15,7 @@
 #include "Support/CuraStyleSupport.hpp"
 #include "Support/SupportSpotsGenerator.hpp"
 #include "Support/TreeSupport.hpp"
+#include "Support/TsunamiSupport.hpp"
 #include "Surface.hpp"
 #include "Slicing.hpp"
 #include "Tesselate.hpp"
@@ -1275,7 +1276,17 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "tree_support_branch_angle"
             || opt_key == "tree_support_branch_angle_organic"
             || opt_key == "tree_support_angle_slow"
-            || opt_key == "tree_support_wall_count") {
+            || opt_key == "tree_support_wall_count"
+            || opt_key == "tsunami_branch_angle"
+            || opt_key == "tsunami_micro_branch_enabled"
+            || opt_key == "tsunami_micro_branch_angle"
+            || opt_key == "tsunami_micro_branch_size"
+            || opt_key == "tsunami_trunk_height"
+            || opt_key == "tsunami_rib_spacing"
+            || opt_key == "tsunami_trunk_thickness"
+            || opt_key == "tsunami_min_bed_contact_area"
+            || opt_key == "tsunami_max_bed_contact_area"
+            || opt_key == "tsunami_branch_minimum_spacing") {
             steps.emplace_back(posSupportMaterial);
         } else if (
                opt_key == "bottom_shell_layers"
@@ -1583,7 +1594,7 @@ void PrintObject::detect_surfaces_type()
                 // 2. for normal(auto), bridge_no_support is off
                 // 3. for tree(auto), interface top layers=0, max bridge length=0, support_critical_regions_only=false (only in this way the bridge is fully supported)
                 bool bottom_is_fully_supported = this->has_support() && m_config.support_top_z_distance.value == 0 && is_auto(m_config.support_type.value);
-                if (m_config.support_type.value == stNormalAuto)
+                if (m_config.support_type.value == stNormalAuto || is_tsunami(m_config.support_type.value))
                     bottom_is_fully_supported &= !m_config.bridge_no_support.value;
                 else if (m_config.support_type.value == stTreeAuto) {
                     bottom_is_fully_supported &= (m_config.support_interface_top_layers.value > 0 && m_config.max_bridge_length.value == 0 && m_config.support_critical_regions_only.value==false);
@@ -4313,7 +4324,12 @@ void PrintObject::combine_infill()
 
 void PrintObject::_generate_support_material()
 {
-    if (is_tree(m_config.support_type.value)) {
+    if (m_config.enable_support.value && is_tsunami(m_config.support_type.value)) {
+        TsunamiSupport tsunami_support(*this, m_slicing_params);
+        tsunami_support.throw_on_cancel = [this]() { this->throw_if_canceled(); };
+        tsunami_support.generate();
+    }
+    else if (is_tree(m_config.support_type.value)) {
         TreeSupport tree_support(*this, m_slicing_params);
         tree_support.throw_on_cancel = [this]() { this->throw_if_canceled(); };
         tree_support.generate();

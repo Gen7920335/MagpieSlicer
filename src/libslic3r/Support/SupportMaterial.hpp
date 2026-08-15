@@ -36,6 +36,11 @@ public:
 	// with extrusion paths and islands filled in for each support layer.
 	void 		generate(PrintObject &object);
 
+	// Detect the same top-contact demand used by the normal support pipeline without
+	// generating support paths. Returned pointers remain valid while layer_storage lives.
+	SupportGeneratorLayersPtr detect_top_contact_layers(
+		SupportGeneratorLayerStorage &layer_storage, bool apply_buildplate_only = true) const;
+
 private:
 	std::vector<Polygons> buildplate_covered(const PrintObject &object) const;
 

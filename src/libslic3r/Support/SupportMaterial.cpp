@@ -1296,6 +1296,15 @@ namespace SupportMaterialInternal {
     }
 }
 
+SupportGeneratorLayersPtr PrintObjectSupportMaterial::detect_top_contact_layers(
+    SupportGeneratorLayerStorage &layer_storage, bool apply_buildplate_only) const
+{
+    std::vector<Polygons> buildplate_covered;
+    if (apply_buildplate_only)
+        buildplate_covered = this->buildplate_covered(*m_object);
+    return this->top_contact_layers(*m_object, buildplate_covered, layer_storage);
+}
+
 std::vector<Polygons> PrintObjectSupportMaterial::buildplate_covered(const PrintObject &object) const
 {
     // Build support on a build plate only? If so, then collect and union all the surfaces below the current layer.
@@ -1385,7 +1394,8 @@ static inline ExPolygons detect_overhangs(
 
     // BBS.
     const bool   auto_normal_support = is_auto(object_config.support_type.value) &&
-                                       is_normal_support(object_config.support_type.value);
+                                       (is_normal_support(object_config.support_type.value) ||
+                                        is_tsunami(object_config.support_type.value));
     const bool   buildplate_only = ! annotations.buildplate_covered.empty();
     // If user specified a custom angle threshold, convert it to radians.
     // Zero means automatic overhang detection.
@@ -1571,7 +1581,8 @@ static inline std::tuple<Polygons, Polygons, double> detect_contacts(
 
     // BBS.
     const bool   auto_normal_support = is_auto(object_config.support_type.value) &&
-                                       is_normal_support(object_config.support_type.value);
+                                       (is_normal_support(object_config.support_type.value) ||
+                                        is_tsunami(object_config.support_type.value));
     const bool   buildplate_only = !annotations.buildplate_covered.empty();
     float        no_interface_offset = 0.f;
 
@@ -2105,7 +2116,8 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
 
     // BBS: tree support is selected so normal supports need not be generated.
     // Note we still need to go through the following steps if support is disabled but raft is enabled.
-    if (m_object_config->enable_support.value && !is_normal_support(m_object_config->support_type.value)) {
+    if (m_object_config->enable_support.value && !is_normal_support(m_object_config->support_type.value) &&
+        !is_tsunami(m_object_config->support_type.value)) {
         return SupportGeneratorLayersPtr();
     }
 

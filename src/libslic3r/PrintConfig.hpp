@@ -204,11 +204,15 @@ enum SupportMaterialInterfacePattern {
 
 // BBS
 enum SupportType {
-    stNormalAuto, stNormalCuraAuto, stTreeAuto, stNormal, stNormalCura, stTree
+    stNormalAuto, stNormalCuraAuto, stTreeAuto, stNormal, stNormalCura, stTree, stTsunamiAuto
 };
 inline bool is_tree(SupportType stype)
 {
     return std::set<SupportType>{stTreeAuto, stTree}.count(stype) != 0;
+};
+inline bool is_tsunami(SupportType stype)
+{
+    return stype == stTsunamiAuto;
 };
 inline bool is_normal_cura(SupportType stype)
 {
@@ -235,7 +239,7 @@ inline bool is_tree_slim(SupportType type, SupportMaterialStyle style)
 };
 inline bool is_auto(SupportType stype)
 {
-    return std::set<SupportType>{stNormalAuto, stTreeAuto, stNormalCuraAuto}.count(stype) != 0;
+    return std::set<SupportType>{stNormalAuto, stTreeAuto, stNormalCuraAuto, stTsunamiAuto}.count(stype) != 0;
 };
 
 enum SeamPosition {
@@ -1096,6 +1100,16 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionPercent,            tree_support_top_rate))
     ((ConfigOptionFloat,              tree_support_branch_diameter_organic))
     ((ConfigOptionFloat,              tree_support_branch_angle_organic))
+    ((ConfigOptionFloat,              tsunami_branch_angle))
+    ((ConfigOptionBool,               tsunami_micro_branch_enabled))
+    ((ConfigOptionFloat,              tsunami_micro_branch_angle))
+    ((ConfigOptionFloat,              tsunami_micro_branch_size))
+    ((ConfigOptionFloat,              tsunami_trunk_height))
+    ((ConfigOptionFloat,              tsunami_rib_spacing))
+    ((ConfigOptionFloat,              tsunami_trunk_thickness))
+    ((ConfigOptionFloat,              tsunami_min_bed_contact_area))
+    ((ConfigOptionFloat,              tsunami_max_bed_contact_area))
+    ((ConfigOptionFloat,              tsunami_branch_minimum_spacing))
     ((ConfigOptionEnum<GapFillTarget>,gap_fill_target))
     ((ConfigOptionFloat,              min_length_factor))
 

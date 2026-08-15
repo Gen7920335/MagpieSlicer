@@ -345,7 +345,8 @@ static t_config_enum_values s_keys_map_SupportType{
     { "tree(auto)", stTreeAuto },
     { "normal(manual)", stNormal },
     { "normal_cura(manual)", stNormalCura },
-    { "tree(manual)", stTree }
+    { "tree(manual)", stTree },
+    { "tsunami(auto)", stTsunamiAuto }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SupportType)
 
@@ -6334,7 +6335,7 @@ void PrintConfigDef::init_fff_params()
     def = this->add("support_type", coEnum);
     def->label = L("Type");
     def->category = L("Support");
-    def->tooltip = L("Normal (Prusa style, auto), Normal (Cura style, auto), and Tree (auto) are used to generate support automatically. "
+    def->tooltip = L("Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), and Tsunami (auto) are used to generate support automatically. "
                      "If a manual style is selected, only support enforcers are generated. "
                      "Normal (Cura style) is an experimental OrcaProject support-area generator.");
     def->enum_keys_map = &ConfigOptionEnum<SupportType>::get_enum_values();
@@ -6344,12 +6345,14 @@ void PrintConfigDef::init_fff_params()
     def->enum_values.push_back("normal(manual)");
     def->enum_values.push_back("normal_cura(manual)");
     def->enum_values.push_back("tree(manual)");
+    def->enum_values.push_back("tsunami(auto)");
     def->enum_labels.push_back(L("Normal (Prusa style, auto)"));
     def->enum_labels.push_back(L("Normal (Cura style, auto)"));
     def->enum_labels.push_back(L("Tree (auto)"));
     def->enum_labels.push_back(L("Normal (Prusa style, manual)"));
     def->enum_labels.push_back(L("Normal (Cura style, manual)"));
     def->enum_labels.push_back(L("Tree (manual)"));
+    def->enum_labels.push_back(L("Tsunami (auto)"));
     def->mode = comSimple;
     def->set_default_value(new ConfigOptionEnum<SupportType>(stNormalAuto));
 
@@ -6844,6 +6847,114 @@ void PrintConfigDef::init_fff_params()
     def->max = 60;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(40.));
+
+    def = this->add("tsunami_branch_angle", coFloat);
+    def->label = L("Tsunami branch angle");
+    def->category = L("Support");
+    def->tooltip = L("Target angle from vertical. Lateral growth is applied only at the active U-turn frontier.");
+    def->sidetext = u8"°"; // degrees, don't need translation
+    def->min = 0;
+    def->max = 60;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(40.));
+
+    def = this->add("tsunami_micro_branch_enabled", coBool);
+    def->label = L("Tsunami micro branch");
+    def->category = L("Support");
+    def->tooltip = L("Closes a completed Tsunami branch U-turn into a vertical terminal ring used as the base for a local tree support tip.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("tsunami_micro_branch_angle", coFloat);
+    def->label = L("Tsunami micro branch angle");
+    def->category = L("Support");
+    def->tooltip = L("Maximum angle from vertical used only by the local tree tips above a Tsunami terminal ring.");
+    def->sidetext = u8"°"; // degrees, don't need translation
+    def->min = 0;
+    def->max = 60;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(25.));
+
+    def = this->add("tsunami_micro_branch_size", coFloat);
+    def->label = L("Tsunami micro branch size");
+    def->category = L("Support");
+    def->tooltip = L("Nominal spacing of the local tree contact tips above a Tsunami terminal ring. Tip diameter is calculated automatically from this value and the extrusion width.");
+    def->sidetext = L("mm");
+    def->min = 0.8;
+    def->max = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(2.));
+
+    def = this->add("tsunami_trunk_height", coFloat);
+    def->label = L("Tsunami trunk height");
+    def->category = L("Support");
+    def->tooltip = L("Height printed with an unchanged XY toolpath before U-turn growth begins.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 100;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(5.));
+
+    def = this->add("tsunami_rib_spacing", coFloat);
+    def->label = L("Tsunami rib spacing");
+    def->category = L("Support");
+    def->tooltip = L("Distance between immutable vertical straight ribs. This is the trunk's wave pitch "
+                     "along the model outline, and also the width of a branch module.");
+    def->sidetext = L("mm");
+    def->min = 0.4;
+    def->max = 20;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(2.5));
+
+    def = this->add("tsunami_trunk_thickness", coFloat);
+    def->label = L("Tsunami trunk thickness");
+    def->category = L("Support");
+    def->tooltip = L("Total radial width of the trunk band measured across the model outline it follows, "
+                     "including the U-turns at both ends. Together with the rib spacing this determines "
+                     "the straight rib depth, which is not set directly.");
+    def->sidetext = L("mm");
+    def->min = 0.8;
+    def->max = 50;
+    def->mode = comAdvanced;
+    // Keeps a typical trunk's first-layer footprint inside the default maximum
+    // bed contact area, and leaves roughly 2.75 mm of straight rib at the default
+    // rib spacing. The width actually needed for anchoring and overturning
+    // resistance has NOT been measured. Treat as uncalibrated.
+    def->set_default_value(new ConfigOptionFloat(4.));
+
+    def = this->add("tsunami_min_bed_contact_area", coFloat);
+    def->label = L("Minimum Tsunami bed contact area");
+    def->category = L("Support");
+    def->tooltip = L("Rejects Tsunami root candidates whose estimated first-layer extrusion area is smaller than this value.");
+    def->sidetext = L("mm²");
+    def->min = 0;
+    def->max = 1000;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1.));
+
+    def = this->add("tsunami_max_bed_contact_area", coFloat);
+    def->label = L("Maximum Tsunami bed contact area");
+    def->category = L("Support");
+    def->tooltip = L("Limits the estimated first-layer extrusion area used by a Tsunami root.");
+    def->sidetext = L("mm²");
+    def->min = 0;
+    def->max = 10000;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(100.));
+
+    def = this->add("tsunami_branch_minimum_spacing", coFloat);
+    def->label = L("Tsunami branch minimum spacing");
+    def->category = L("Support");
+    def->tooltip = L("Minimum clear XY distance between the actual extrusion exteriors of non-connected Tsunami branches, "
+                     "not their centerlines. Applies to straight ribs, U-turns, inter-branch connectors, terminal rings, "
+                     "and planned future growth on every layer where their swept footprints coexist. "
+                     "Branches closer than this may fuse together or become difficult to remove.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 5;
+    def->mode = comAdvanced;
+    //Same removability rationale as support_object_xy_distance: spacing too small lets branches touch/fuse and become hard to remove.
+    def->set_default_value(new ConfigOptionFloat(0.35));
 
     def = this->add("tree_support_branch_angle_organic", coFloat);
     def->label = L("Tree support branch angle");
@@ -11484,7 +11595,7 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli_params = "level";
     def->set_default_value(new ConfigOptionInt(1));
 
-    def = this->add("logfile", coInt);
+    def = this->add("logfile", coString);
     def->label = L("Log file");
     def->tooltip = L("Redirects debug logging to file.\n");
     def->cli_params = "file";

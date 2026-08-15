@@ -7912,11 +7912,12 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
         return false;
 
     const unsigned int filament_id = m_writer.filament()->id();
+    const size_t physical_extruder_id = this->cur_extruder_index();
     if (m_config.nozzle_diameter.values.empty() ||
         m_config.nozzle_temperature.values.empty() ||
         m_config.nozzle_temperature_initial_layer.values.empty())
         return false;
-    const float nozzle_diameter = float(m_config.nozzle_diameter.get_at(filament_id));
+    const float nozzle_diameter = float(m_config.nozzle_diameter.get_at(physical_extruder_id));
     const float layer_height = float(m_layer->height);
     if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
         return false;
@@ -8058,10 +8059,10 @@ bool GCode::build_temperature_drop_tower_brim_paths(std::vector<ExtrusionPath> &
         m_writer.filament() == nullptr || m_temperature_drop_tower_spacing <= 0.0)
         return false;
 
-    const unsigned int filament_id = m_writer.filament()->id();
+    const size_t physical_extruder_id = this->cur_extruder_index();
     if (m_config.nozzle_diameter.values.empty())
         return false;
-    const float nozzle_diameter = float(m_config.nozzle_diameter.get_at(filament_id));
+    const float nozzle_diameter = float(m_config.nozzle_diameter.get_at(physical_extruder_id));
     const float layer_height = float(m_layer->height);
     if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
         return false;

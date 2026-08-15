@@ -3311,6 +3311,18 @@ void TabPrint::build()
         optgroup->append_single_option_line("tree_support_auto_brim", "support_settings_tree");
         optgroup->append_single_option_line("tree_support_brim_width", "support_settings_tree");
 
+        optgroup = page->new_optgroup(L("Tsunami supports"), L"param_support");
+        optgroup->append_single_option_line("tsunami_branch_angle");
+        optgroup->append_single_option_line("tsunami_micro_branch_enabled");
+        optgroup->append_single_option_line("tsunami_micro_branch_angle");
+        optgroup->append_single_option_line("tsunami_micro_branch_size");
+        optgroup->append_single_option_line("tsunami_trunk_height");
+        optgroup->append_single_option_line("tsunami_rib_spacing");
+        optgroup->append_single_option_line("tsunami_trunk_thickness");
+        optgroup->append_single_option_line("tsunami_min_bed_contact_area");
+        optgroup->append_single_option_line("tsunami_max_bed_contact_area");
+        optgroup->append_single_option_line("tsunami_branch_minimum_spacing");
+
     page = add_options_page(L("Multimaterial"), "custom-gcode_multi_material"); // ORCA: icon only visible on placeholders
         optgroup = page->new_optgroup(L("Prime tower"), L"param_tower");
         optgroup->append_single_option_line("enable_prime_tower", "multimaterial_settings_prime_tower");
@@ -3548,6 +3560,18 @@ void TabPrint::toggle_options()
         m_config->opt_int("support_interface_top_layers") > 1 ||
         m_config->opt_int("support_interface_bottom_layers") > 1;
     const bool sublayer_enabled = sublayer_available && optional_bool("support_interface_sublayer_pattern");
+    const bool tsunami_enabled = m_config->opt_bool("enable_support") && is_tsunami(support_type);
+    const bool tsunami_micro_enabled = tsunami_enabled && optional_bool("tsunami_micro_branch_enabled");
+    toggle_option("tsunami_branch_angle", tsunami_enabled);
+    toggle_option("tsunami_micro_branch_enabled", tsunami_enabled);
+    toggle_option("tsunami_micro_branch_angle", tsunami_micro_enabled);
+    toggle_option("tsunami_micro_branch_size", tsunami_micro_enabled);
+    toggle_option("tsunami_trunk_height", tsunami_enabled);
+    toggle_option("tsunami_rib_spacing", tsunami_enabled);
+    toggle_option("tsunami_trunk_thickness", tsunami_enabled);
+    toggle_option("tsunami_min_bed_contact_area", tsunami_enabled);
+    toggle_option("tsunami_max_bed_contact_area", tsunami_enabled);
+    toggle_option("tsunami_branch_minimum_spacing", tsunami_enabled);
     toggle_option("support_interface_sublayer_pattern", sublayer_available);
     toggle_option("support_interface_sublayer_start_layer", sublayer_enabled);
     toggle_option("support_interface_sublayer_end_layer", sublayer_enabled);
