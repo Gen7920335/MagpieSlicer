@@ -3071,7 +3071,18 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
         Tsunami::ClosedMacroBranchPlan branch;
         ExPolygons bridgeable_region;
     };
-    constexpr size_t maximum_branches_per_source_turn = 1;
+    // One branch per source turn leaves a source occupied by whichever branch won
+    // it, and the winner is usually a long one that only completes high up. Its
+    // terminal ring is then born late and has little height left for a micro tree,
+    // which measured as residue 4.19 mm from the nearest ring against a 3.8 mm
+    // reach. A second branch on the same turn completes lower and puts a ring
+    // where the tree can still grow: on the hollow gear it takes the residue
+    // outside micro reach from 1.50 mm2 to zero, and a third changes nothing.
+    //
+    // Only when micro is on. The payoff is the lower ring, so with micro off the
+    // extra branch has no job -- measured, it adds two branches to hollow gear
+    // target 1 and moves the uncovered area by nothing at all.
+    const size_t maximum_branches_per_source_turn = micro_branch_enabled ? 2 : 1;
     std::map<size_t, size_t> source_turn_use_count;
     Tsunami::BranchId next_branch_id = 1;
     // Base and tip of each accepted branch, keyed by source segment so adjacent
