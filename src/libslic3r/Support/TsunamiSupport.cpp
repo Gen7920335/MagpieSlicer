@@ -3419,7 +3419,22 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
                     break;
                 }
             }
-            if (best == nullptr || best_gain <= 0.) {
+            // A branch is a structure spanning every layer from its source turn
+            // up. Requiring only a positive gain is not a threshold at all: the
+            // comparison is in scaled area, where 1 mm2 is about 1e12, so a gain
+            // of 5e-13 mm2 passed. Measured at two branches per source turn, that
+            // built two whole branches on hollow gear target 1 for 2.05e-05 and
+            // 1.23e-06 mm2, which is why the uncovered area did not visibly move.
+            //
+            // One extrusion square is the floor of meaning -- below the contact a
+            // single deposited segment leaves, a branch cannot change whether the
+            // overhang prints. It is a lower bound on meaningful, not a judgement
+            // about optimal. The branches micro genuinely needs clear it: the
+            // smallest kept gain measured is 0.247 mm2 against a 0.176 mm2 floor,
+            // while the rejected ones sit four orders of magnitude below.
+            const double minimum_useful_gain =
+                double(scale_(extrusion_width)) * double(scale_(extrusion_width));
+            if (best == nullptr || best_gain < minimum_useful_gain) {
                 // Every branch has grown as far as its source turn allows. What is
                 // left between adjacent radial modules is the fan gap: their angular
                 // pitch grows with radius while the module width does not, so
@@ -3537,6 +3552,16 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
                 }
                 // PERMANENT DIAGNOSTIC -- see the counter declarations above.
                 const double to_mm2 = SCALING_FACTOR * SCALING_FACTOR;
+                // `branches` counts every branch this trunk has placed so far,
+                // across targets, while `uncovered` is this target's remainder
+                // alone. Reading the pair as if both described one target invites
+                // the conclusion that branches were added without changing the
+                // outcome, so report the per-target count next to it.
+                const size_t branches_for_target = size_t(std::count_if(
+                    result.branches.begin(), result.branches.end(),
+                    [&](const Tsunami::ClosedMacroBranchPlan &branch) {
+                        return branch.target_id == target->id;
+                    }));
                 BOOST_LOG_TRIVIAL(warning)
                     << "Tsunami coverage stall:"
                     << " target=" << target->id
@@ -3544,6 +3569,7 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
                     << " root_rib_length_mm=" << trunk.root.rib_length
                     << " root_bed_area_mm2=" << trunk.root.bed_contact_area
                     << " branches=" << result.branches.size()
+                    << " branches_for_target=" << branches_for_target
                     << " demand_mm2=" << std::abs(area(support_demand.region)) * to_mm2
                     << " uncovered_mm2=" << std::abs(area(uncovered)) * to_mm2
                     << " evaluated=" << coverage_evaluated
