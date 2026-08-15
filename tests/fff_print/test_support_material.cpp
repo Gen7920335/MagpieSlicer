@@ -897,6 +897,106 @@ TEST_CASE("Tsunami covers every quadrant of a hollow gear overhang",
     const std::string output = gcode(print);
     CHECK(output.find("support_type = tsunami(auto)") != std::string::npos);
     CHECK(output.find(";TYPE:Support") != std::string::npos);
+
+    // How much of each quadrant is within bridging distance of support. The
+    // non-emptiness check above cannot tell adequate support from a collapse:
+    // it passed on a plan that left 93 % of a target uncovered. This one is a
+    // number, and the dilation is the test's own rib spacing rather than the
+    // planner's internal bridge constant, so the planner is not grading itself.
+    //
+    // Measured 2026-08-15, macro-only: 0.983 0.983 0.958 0.941. The gate is set
+    // below the worst of those with room, and a collapsed plan scores far under
+    // it -- the two-branch plan that motivated this covered under a tenth.
+    for (size_t quadrant_index = 0; quadrant_index < quadrants.size(); ++quadrant_index) {
+        INFO("hollow gear quadrant " << quadrant_index);
+        const ExPolygons quadrant_target = intersection_ex(ExPolygons { target }, quadrants[quadrant_index]);
+        const ExPolygons reachable = offset_ex(contact_layer->support_islands, scale_(1.5));
+        const double missed = std::abs(area(diff_ex(quadrant_target, reachable)));
+        CHECK(1. - missed / std::abs(area(quadrant_target)) > 0.90);
+    }
+}
+
+TEST_CASE("Tsunami micro branch reaches the hollow gear overhang",
+          "[SupportMaterial][TsunamiSupport][ComplexModel][MicroBranch]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
+    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
+    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
+    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+    config.set_key_value("support_threshold_angle", new ConfigOptionInt(30));
+    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
+    config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(45.));
+    config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(0.));
+    config.set_key_value("tsunami_rib_spacing", new ConfigOptionFloat(1.5));
+    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(true));
+    config.set_key_value("tsunami_min_bed_contact_area", new ConfigOptionFloat(0.));
+    config.set_key_value("tsunami_max_bed_contact_area", new ConfigOptionFloat(400.));
+    config.set_key_value("support_object_xy_distance", new ConfigOptionFloat(0.));
+    config.set_key_value("printable_area", new ConfigOptionPoints {
+        Vec2d(-60., -60.), Vec2d(60., -60.), Vec2d(60., 60.), Vec2d(-60., 60.) });
+
+    Print print;
+    init_and_process_print({ tsunami_test_hollow_gear_overhang() }, print, config);
+    const PrintObject *object = print.objects().front();
+
+    size_t target_layer = 0;
+    ExPolygon target;
+    double target_area = 0.;
+    for (size_t layer_index = 1; layer_index < object->layers().size(); ++layer_index) {
+        const double height = object->layers()[layer_index]->print_z
+                            - object->layers()[layer_index - 1]->print_z;
+        const ExPolygons supported = offset_ex(
+            object->layers()[layer_index - 1]->lslices, scale_(height / std::tan(M_PI / 6.)));
+        for (const ExPolygon &overhang : diff_ex(object->layers()[layer_index]->lslices, supported)) {
+            const double area_value = std::abs(overhang.area());
+            if (area_value > target_area) {
+                target_area = area_value;
+                target_layer = layer_index;
+                target = overhang;
+            }
+        }
+    }
+    REQUIRE(target_area > 1.);
+    REQUIRE(target_layer > 0);
+
+    const auto support_layers = object->support_layers();
+    REQUIRE_FALSE(support_layers.empty());
+    const SupportLayer *root_layer = support_layers.front();
+    const SupportLayer *contact_layer = support_layers.back();
+    CHECK(intersection_ex(root_layer->support_islands, object->layers().front()->lslices).empty());
+
+    // The macro-only fixture requires the root and contact layers to carry the
+    // same number of extrusions. Micro trees add contact-layer geometry, so the
+    // relation here is the opposite one, and that difference is the evidence the
+    // trees were emitted at all rather than silently skipped.
+    CHECK(contact_layer->support_fills.entities.size()
+          > root_layer->support_fills.entities.size());
+
+    // Micro's whole purpose is reaching what the macro branches leave, so it is
+    // held to a higher bar than the macro-only fixture's 0.90. Measured
+    // 2026-08-15: 0.998 0.997 0.990 0.976 against macro-only's 0.983 0.983 0.958
+    // 0.941 -- better in every quadrant, which is the evidence that micro trees
+    // improve the result rather than merely being emitted.
+    const std::array<Polygons, 4> quadrants {{
+        support_test_rectangle(-30., -30., 0., 0.),
+        support_test_rectangle(0., -30., 30., 0.),
+        support_test_rectangle(-30., 0., 0., 30.),
+        support_test_rectangle(0., 0., 30., 30.)
+    }};
+    for (size_t quadrant_index = 0; quadrant_index < quadrants.size(); ++quadrant_index) {
+        INFO("hollow gear micro quadrant " << quadrant_index);
+        const ExPolygons quadrant_target = intersection_ex(ExPolygons { target }, quadrants[quadrant_index]);
+        REQUIRE_FALSE(quadrant_target.empty());
+        const ExPolygons reachable = offset_ex(contact_layer->support_islands, scale_(1.5));
+        const double missed = std::abs(area(diff_ex(quadrant_target, reachable)));
+        CHECK(1. - missed / std::abs(area(quadrant_target)) > 0.95);
+    }
+
+    const std::string output = gcode(print);
+    CHECK(output.find("support_type = tsunami(auto)") != std::string::npos);
+    CHECK(output.find(";TYPE:Support") != std::string::npos);
 }
 
 TEST_CASE("Tsunami slices a corpus of complex upstream test models",
