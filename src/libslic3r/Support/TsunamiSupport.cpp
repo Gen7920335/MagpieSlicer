@@ -1646,6 +1646,50 @@ std::optional<std::vector<Point>> sample_target_contact_points(
     return contact_points;
 }
 
+// Lateral distance a micro tree gains between two layers, accumulated to the
+// target. Shared with the coverage loop so that what a branch is credited with
+// and what its micro tree can actually reach are computed the same way.
+double micro_tree_reach_from(size_t start_layer, size_t target_layer, double target_print_z,
+                             const std::vector<double> &print_z_by_layer, double branch_angle,
+                             double extrusion_width, double support_ratio)
+{
+    if (start_layer >= print_z_by_layer.size() || target_layer >= print_z_by_layer.size() ||
+        start_layer >= target_layer)
+        return -1.;
+    const double maximum_angle = std::clamp(branch_angle, 0., 89.);
+    const double ratio = std::clamp(support_ratio, 0., 1.);
+    double reach = 0.;
+    double previous_z = print_z_by_layer[start_layer];
+    for (size_t layer_index = start_layer + 1; layer_index <= target_layer; ++layer_index) {
+        const double current_z = layer_index == target_layer
+            ? target_print_z : print_z_by_layer[layer_index];
+        if (current_z <= previous_z + 1e-9)
+            return -1.;
+        reach += std::min(maximum_lateral_growth(current_z - previous_z, maximum_angle),
+                          extrusion_width * (1. - ratio));
+        previous_z = current_z;
+    }
+    return reach;
+}
+
+// Lowest layer a tree may start on: the terminal ring needs its riser first.
+// Reach is greatest from this layer, so it also bounds what the branch below can
+// be credited with covering.
+size_t micro_tree_first_start_layer(size_t base_layer, size_t target_layer,
+                                    const std::vector<double> &print_z_by_layer,
+                                    double extrusion_width)
+{
+    if (base_layer >= print_z_by_layer.size())
+        return size_t(-1);
+    const double minimum_riser_height = std::max(1., 2. * extrusion_width);
+    const double base_z = print_z_by_layer[base_layer];
+    for (size_t candidate = base_layer + 1;
+         candidate < target_layer && candidate < print_z_by_layer.size(); ++candidate)
+        if (print_z_by_layer[candidate] - base_z + 1e-9 >= minimum_riser_height)
+            return candidate;
+    return size_t(-1);
+}
+
 std::optional<SeededMicroTreePlan> plan_seeded_micro_tree(const SeededMicroTreeInput &input)
 {
     if (input.target.region.empty() || input.target.layer_index <= input.base_layer + 1 ||
@@ -1666,44 +1710,23 @@ std::optional<SeededMicroTreePlan> plan_seeded_micro_tree(const SeededMicroTreeI
         return std::nullopt;
     const std::vector<Point> &contact_points = *sampled_contacts;
 
-    const double maximum_angle = std::clamp(input.branch_angle, 0., 89.);
     const double support_ratio_limit = std::clamp(input.minimum_layer_support_ratio, 0., 1.);
     const Vec2d seed_center = to_mm(provisional_ring->center);
     double maximum_contact_distance = 0.;
     for (const Point &contact : contact_points)
         maximum_contact_distance = std::max(maximum_contact_distance, (to_mm(contact) - seed_center).norm());
 
-    const auto maximum_reach_from = [&](size_t start_layer) {
-        double reach = 0.;
-        double previous_z = input.print_z_by_layer[start_layer];
-        for (size_t layer_index = start_layer + 1; layer_index <= input.target.layer_index; ++layer_index) {
-            const double current_z = layer_index == input.target.layer_index
-                ? input.target.print_z : input.print_z_by_layer[layer_index];
-            if (current_z <= previous_z + 1e-9)
-                return -1.;
-            reach += std::min(
-                maximum_lateral_growth(current_z - previous_z, maximum_angle),
-                input.extrusion_width * (1. - support_ratio_limit));
-            previous_z = current_z;
-        }
-        return reach;
-    };
-
-    size_t tree_start_layer = size_t(-1);
-    const double minimum_riser_height = std::max(1., 2. * input.extrusion_width);
-    const double base_z = input.print_z_by_layer[input.base_layer];
-    for (size_t candidate = input.base_layer + 1; candidate < input.target.layer_index; ++candidate) {
-        if (input.print_z_by_layer[candidate] - base_z + 1e-9 < minimum_riser_height)
-            continue;
-        const double reach = maximum_reach_from(candidate);
-        if (reach + 1e-9 >= maximum_contact_distance) {
-            tree_start_layer = candidate;
-            break;
-        }
-    }
-    if (tree_start_layer == size_t(-1)) {
+    // Reach shrinks as the start layer rises, so the first layer clearing the
+    // riser is the only one that can succeed.
+    const size_t tree_start_layer = micro_tree_first_start_layer(
+        input.base_layer, input.target.layer_index, input.print_z_by_layer, input.extrusion_width);
+    if (tree_start_layer == size_t(-1))
         return std::nullopt;
-    }
+    const double tree_reach = micro_tree_reach_from(
+        tree_start_layer, input.target.layer_index, input.target.print_z, input.print_z_by_layer,
+        input.branch_angle, input.extrusion_width, support_ratio_limit);
+    if (tree_reach + 1e-9 < maximum_contact_distance)
+        return std::nullopt;
 
     std::optional<TerminalRingPlan> seed_ring =
         plan_terminal_ring(input.source_turn, input.base_layer, tree_start_layer);
@@ -3271,6 +3294,37 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
                 ExPolygons supported = bridgeable(runtime_path_footprint(
                     top_layer->detour, extrusion_width));
                 supported = intersection_ex(support_demand.region, supported);
+                // bridgeable() credits by distance alone, but the micro tree that
+                // has to span the gap grows from this branch's terminal ring and
+                // only has the height above it to do so. Credit no more than that
+                // tree can actually reach, or the branch is assigned demand its
+                // own micro stage will reject.
+                if (micro_branch_enabled && !supported.empty()) {
+                    const Tsunami::ClosedMacroBranchLayer *ring_layer =
+                        planned->first_target_layer == size_t(-1)
+                            ? nullptr : layer_for(*planned, planned->first_target_layer);
+                    const std::optional<Tsunami::TerminalRingPlan> ring =
+                        ring_layer == nullptr ? std::nullopt
+                            : Tsunami::plan_terminal_ring(
+                                ring_layer->active_turn, planned->first_target_layer,
+                                planned->first_target_layer);
+                    const size_t start_layer = ring
+                        ? Tsunami::micro_tree_first_start_layer(
+                            planned->first_target_layer, support_end->layer_index,
+                            print_z_by_layer, extrusion_width)
+                        : size_t(-1);
+                    const double reach = start_layer == size_t(-1) ? -1.
+                        : Tsunami::micro_tree_reach_from(
+                            start_layer, support_end->layer_index, support_end->print_z,
+                            print_z_by_layer, micro_branch_angle, extrusion_width, 0.5);
+                    if (reach <= 0.) {
+                        supported.clear();
+                    } else {
+                        Polygon disc = make_circle_num_segments(scale_(reach), 64);
+                        disc.translate(ring->center);
+                        supported = intersection_ex(supported, ExPolygons { ExPolygon(disc) });
+                    }
+                }
                 if (supported.empty()) {
                     ++coverage_support_empty;
                     return nullptr;

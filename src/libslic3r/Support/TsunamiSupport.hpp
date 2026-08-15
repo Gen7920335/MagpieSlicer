@@ -274,6 +274,19 @@ std::optional<TrunkRibExtensionPlan> plan_trunk_rib_extension(
 std::optional<TerminalRingPlan> plan_terminal_ring(
     const PathSegment &source_turn, size_t base_layer, size_t tree_start_layer);
 
+// Lateral distance a micro tree gains from start_layer up to target_layer.
+// Negative when the layer range is degenerate.
+double micro_tree_reach_from(size_t start_layer, size_t target_layer, double target_print_z,
+                             const std::vector<double> &print_z_by_layer, double branch_angle,
+                             double extrusion_width, double support_ratio);
+
+// Lowest layer a micro tree may start on, once its terminal ring has room for a
+// riser. Reach is greatest there, so this layer bounds what the branch below may
+// be credited with. size_t(-1) when no layer qualifies.
+size_t micro_tree_first_start_layer(size_t base_layer, size_t target_layer,
+                                    const std::vector<double> &print_z_by_layer,
+                                    double extrusion_width);
+
 struct SeededMicroTreeLayer {
     size_t layer_index { 0 };
     std::vector<Point> branch_centers;
