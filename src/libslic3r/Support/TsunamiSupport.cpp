@@ -3494,12 +3494,33 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
                 // the caller should try another one. Do not delete.
                 if (micro_branch_enabled && !accept_residue && branch_spans.size() >= 2) {
                     const double to_mm2 = SCALING_FACTOR * SCALING_FACTOR;
+                    // The largest piece says which kind of failure this is, and
+                    // guessing it cost a build cycle once. A long thin piece between
+                    // two rings is a fan gap the micro angle can still close; a
+                    // compact blob whose half-width is well inside the reach is a
+                    // sector with no branch at all, which belongs to the branch
+                    // stage and cannot be fixed by anything micro does.
+                    const ExPolygon *largest = nullptr;
+                    for (const ExPolygon &piece : beyond_reach)
+                        if (largest == nullptr ||
+                            std::abs(piece.area()) > std::abs(largest->area()))
+                            largest = &piece;
+                    const Vec2d centroid = largest == nullptr
+                        ? Vec2d::Zero() : runtime_to_mm(largest->contour.centroid());
+                    const BoundingBox bounds = largest == nullptr
+                        ? BoundingBox() : largest->contour.bounding_box();
                     BOOST_LOG_TRIVIAL(warning)
                         << "Tsunami micro reach rejection:"
                         << " target=" << target->id
                         << " branches=" << result.branches.size()
                         << " uncovered_mm2=" << std::abs(area(uncovered)) * to_mm2
                         << " beyond_reach_mm2=" << std::abs(area(beyond_reach)) * to_mm2
+                        << " pieces=" << beyond_reach.size()
+                        << " largest_mm2="
+                        << (largest == nullptr ? 0. : std::abs(largest->area()) * to_mm2)
+                        << " largest_centroid_mm=(" << centroid.x() << "," << centroid.y() << ")"
+                        << " largest_size_mm=(" << unscale<double>(bounds.size().x())
+                        << "," << unscale<double>(bounds.size().y()) << ")"
                         << " -- residue lies outside every terminal ring's micro reach;"
                            " rejecting so root selection can retry.";
                 }
