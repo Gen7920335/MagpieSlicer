@@ -6873,7 +6873,14 @@ void PrintConfigDef::init_fff_params()
     def->min = 0;
     def->max = 60;
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(25.));
+    // Per-layer growth is the smaller of tan(angle) * layer_height and the
+    // printability cap extrusion_width * (1 - minimum_layer_support_ratio). Below
+    // the angle where those cross the angle is the binding constraint and buys no
+    // printability; above it nothing changes. For 0.2 mm layers at 0.42 mm width
+    // they cross near 46 deg, and a measured sweep on the hollow gear fixture gave
+    // identical geometry at 45 and 60 deg while 25 deg left 52.95 mm2 of overhang
+    // outside every micro tip's reach. Not calibrated against printed parts.
+    def->set_default_value(new ConfigOptionFloat(45.));
 
     def = this->add("tsunami_micro_branch_size", coFloat);
     def->label = L("Tsunami micro branch size");

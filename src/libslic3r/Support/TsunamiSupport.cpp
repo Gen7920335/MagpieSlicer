@@ -3032,6 +3032,39 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
         return layer != branch.layers.end() && layer->layer_index == layer_index ? &*layer : nullptr;
     };
 
+    // Everything a micro tree grown from this branch's terminal ring can touch on
+    // the target layer. A tree only has the height above the ring, so this is a
+    // disc of that reach about the ring centre. Two callers share it so that what
+    // a branch is credited with and what its residue is judged against cannot
+    // drift apart: the coverage loop clips credit to it, and the residue gate
+    // asks whether the leftover falls inside it.
+    const auto micro_reach_disc = [&](const Tsunami::ClosedMacroBranchPlan &branch,
+                                      size_t target_layer, double target_print_z)
+        -> std::optional<ExPolygon> {
+        if (branch.first_target_layer == size_t(-1))
+            return std::nullopt;
+        const Tsunami::ClosedMacroBranchLayer *ring_layer =
+            layer_for(branch, branch.first_target_layer);
+        if (ring_layer == nullptr)
+            return std::nullopt;
+        const std::optional<Tsunami::TerminalRingPlan> ring = Tsunami::plan_terminal_ring(
+            ring_layer->active_turn, branch.first_target_layer, branch.first_target_layer);
+        if (!ring)
+            return std::nullopt;
+        const size_t start_layer = Tsunami::micro_tree_first_start_layer(
+            branch.first_target_layer, target_layer, print_z_by_layer, extrusion_width);
+        if (start_layer == size_t(-1))
+            return std::nullopt;
+        const double reach = Tsunami::micro_tree_reach_from(
+            start_layer, target_layer, target_print_z, print_z_by_layer,
+            micro_branch_angle, extrusion_width, 0.5);
+        if (reach <= 0.)
+            return std::nullopt;
+        Polygon disc = make_circle_num_segments(scale_(reach), 64);
+        disc.translate(ring->center);
+        return ExPolygon(disc);
+    };
+
     struct CoverageCandidate {
         size_t source_segment_index { 0 };
         Point endpoint;
@@ -3300,30 +3333,12 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
                 // tree can actually reach, or the branch is assigned demand its
                 // own micro stage will reject.
                 if (micro_branch_enabled && !supported.empty()) {
-                    const Tsunami::ClosedMacroBranchLayer *ring_layer =
-                        planned->first_target_layer == size_t(-1)
-                            ? nullptr : layer_for(*planned, planned->first_target_layer);
-                    const std::optional<Tsunami::TerminalRingPlan> ring =
-                        ring_layer == nullptr ? std::nullopt
-                            : Tsunami::plan_terminal_ring(
-                                ring_layer->active_turn, planned->first_target_layer,
-                                planned->first_target_layer);
-                    const size_t start_layer = ring
-                        ? Tsunami::micro_tree_first_start_layer(
-                            planned->first_target_layer, support_end->layer_index,
-                            print_z_by_layer, extrusion_width)
-                        : size_t(-1);
-                    const double reach = start_layer == size_t(-1) ? -1.
-                        : Tsunami::micro_tree_reach_from(
-                            start_layer, support_end->layer_index, support_end->print_z,
-                            print_z_by_layer, micro_branch_angle, extrusion_width, 0.5);
-                    if (reach <= 0.) {
+                    const std::optional<ExPolygon> reach_disc = micro_reach_disc(
+                        *planned, support_end->layer_index, support_end->print_z);
+                    if (!reach_disc)
                         supported.clear();
-                    } else {
-                        Polygon disc = make_circle_num_segments(scale_(reach), 64);
-                        disc.translate(ring->center);
-                        supported = intersection_ex(supported, ExPolygons { ExPolygon(disc) });
-                    }
+                    else
+                        supported = intersection_ex(supported, ExPolygons { *reach_disc });
                 }
                 if (supported.empty()) {
                     ++coverage_support_empty;
@@ -3401,12 +3416,36 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
                 // those gaps is Micro Branch's job in the contract and is not
                 // implemented yet.
                 //
-                // Until it is, accept a plan whose branches already span the demand:
-                // join each adjacent pair base-to-base and tip-to-tip and require the
-                // demand to lie inside that envelope. This is deliberately not a
-                // blanket pass -- a plan that failed to reach part of the target at
-                // all still leaves demand outside the envelope and still fails.
-                if (branch_spans.size() >= 2) {
+                // Until it is, a plan with at least two branches is accepted and the
+                // residue is reported split into the part between the branches and
+                // the part beyond their tips. Note what this does NOT do: with micro
+                // off, the split is logged but not enforced, so two branches are
+                // enough to pass whatever the split says. That is the temporary
+                // relaxation, and it is why removing it is Micro Branch's exit
+                // criterion rather than a cleanup.
+                // With micro enabled the claim "Micro Branch will fill this" is
+                // checkable, so check it instead of counting branches: the residue
+                // has to lie inside the reach of some branch's terminal ring. This
+                // is the same predicate the coverage loop clips credit with. A
+                // plan that scraped together two branches on a bad root leaves its
+                // residue far outside every disc and is now rejected, which lets
+                // root selection retry instead of rubber-stamping the plan.
+                ExPolygons beyond_reach;
+                bool accept_residue = branch_spans.size() >= 2;
+                if (accept_residue && micro_branch_enabled) {
+                    ExPolygons reach_region;
+                    for (const Tsunami::ClosedMacroBranchPlan &branch : result.branches) {
+                        if (branch.target_id != target->id)
+                            continue;
+                        if (std::optional<ExPolygon> disc = micro_reach_disc(
+                                branch, support_end->layer_index, support_end->print_z))
+                            reach_region.emplace_back(std::move(*disc));
+                    }
+                    beyond_reach = diff_ex(uncovered, union_ex(reach_region));
+                    remove_numerical_slivers(beyond_reach);
+                    accept_residue = beyond_reach.empty();
+                }
+                if (accept_residue) {
                     std::vector<BranchSpan> ordered = branch_spans;
                     std::sort(ordered.begin(), ordered.end(),
                         [](const BranchSpan &left, const BranchSpan &right) {
@@ -3448,6 +3487,21 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
                         << " beyond_tips_mm2=" << beyond_mm2
                         << " -- branches exhausted their source turns; residue accepted"
                            " pending Micro Branch. NOT a coverage guarantee.";
+                }
+                // PERMANENT DIAGNOSTIC -- the rejection is as informative as the
+                // acceptance: it says the residue is out of every terminal ring's
+                // micro reach, so this root cannot be rescued by Micro Branch and
+                // the caller should try another one. Do not delete.
+                if (micro_branch_enabled && !accept_residue && branch_spans.size() >= 2) {
+                    const double to_mm2 = SCALING_FACTOR * SCALING_FACTOR;
+                    BOOST_LOG_TRIVIAL(warning)
+                        << "Tsunami micro reach rejection:"
+                        << " target=" << target->id
+                        << " branches=" << result.branches.size()
+                        << " uncovered_mm2=" << std::abs(area(uncovered)) * to_mm2
+                        << " beyond_reach_mm2=" << std::abs(area(beyond_reach)) * to_mm2
+                        << " -- residue lies outside every terminal ring's micro reach;"
+                           " rejecting so root selection can retry.";
                 }
                 // PERMANENT DIAGNOSTIC -- see the counter declarations above.
                 const double to_mm2 = SCALING_FACTOR * SCALING_FACTOR;
