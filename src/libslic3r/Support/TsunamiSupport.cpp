@@ -3004,19 +3004,46 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
         candidate.printable = candidate.print_z + 1e-9 >= std::max(0., trunk_height);
     const ExPolygons trunk_footprint = runtime_path_footprint(
         result.trunk.root.path, extrusion_width);
-    // This constant does three jobs at once: it dilates the model before the
-    // demand is cut from the target, it dilates branch footprints when crediting
-    // coverage, and it spaces the contact sampling. Widening it under micro
-    // therefore shrinks the demand itself -- 90.84 to 85.50 mm2 on the snug
-    // overhang -- and measurement on 2026-08-15 says that costs real coverage:
-    // the snug residue against an independent analytic sector is 6.04 mm2 wide
-    // against 2.59 mm2 narrow, where macro-only manages 1.84 mm2. Narrowing it
-    // is a candidate fix but not sufficient, so it is left alone for now.
+    // One constant used to answer three different questions, which is why
+    // widening it under micro changed the problem rather than the solution.
+    // They are separated here.
+    //
+    // How much of the target the model already holds up. Our support strategy
+    // cannot change that, so this never widens under micro. It used to, because
+    // one constant answered this and the question below at once, and shrinking
+    // the demand this way is what made micro look like it solved the snug
+    // overhang while covering less of it.
+    const double model_clearance = 0.5 * rib_spacing + 0.5 * extrusion_width;
+    // How far a support footprint carries, for crediting coverage and for
+    // spacing the contact sampling. This one does widen under micro, and
+    // measurement is the reason: a micro tree genuinely extends what its branch
+    // holds up. The reach disc bounds how far a tree grows from its ring; this
+    // is how far the overhang spans from what the tree leaves behind.
+    //
+    // Measured 2026-08-15 on the snug overhang against an independent analytic
+    // sector, uncovered mm2, macro-only being 1.84:
+    //
+    //   model wide,   credit wide     6.04    terminal ring passes
+    //   model narrow, credit narrow   2.59    terminal ring fails
+    //   model wide,   credit narrow   6.76    terminal ring fails
+    //   model narrow, credit wide     0.78    terminal ring passes
+    //
+    // The two act in opposite directions on the two fixtures, which is why one
+    // constant could not serve both and why splitting them was the fix rather
+    // than picking a better single value.
     const double maximum_bridge_distance =
         (micro_branch_enabled
              ? 0.75 * std::max(micro_branch_distance, micro_tip_diameter)
              : 0.5 * rib_spacing) +
         0.5 * extrusion_width;
+    const auto model_supported = [model_clearance](const ExPolygons &footprint) {
+        return model_clearance > 0.
+            ? offset_ex(
+                footprint,
+                float(scale_(model_clearance) + SCALED_EPSILON),
+                ClipperLib::jtRound)
+            : footprint;
+    };
     const auto bridgeable = [maximum_bridge_distance](const ExPolygons &footprint) {
         return maximum_bridge_distance > 0.
             ? offset_ex(
@@ -3113,7 +3140,7 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
             return runtime_failure(RuntimePlanFailureCode::MissingTarget, target_plan.target_id);
 
         const ExPolygons model_coverage = support_end->layer_index < model_by_layer.size()
-            ? bridgeable(model_by_layer[support_end->layer_index]) : ExPolygons {};
+            ? model_supported(model_by_layer[support_end->layer_index]) : ExPolygons {};
         Tsunami::SupportTargetSpec support_demand = *support_end;
         support_demand.region = diff_ex(target->region, model_coverage);
         remove_numerical_slivers(support_demand.region);
