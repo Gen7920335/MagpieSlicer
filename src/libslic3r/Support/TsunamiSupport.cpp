@@ -3004,6 +3004,14 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
         candidate.printable = candidate.print_z + 1e-9 >= std::max(0., trunk_height);
     const ExPolygons trunk_footprint = runtime_path_footprint(
         result.trunk.root.path, extrusion_width);
+    // This constant does three jobs at once: it dilates the model before the
+    // demand is cut from the target, it dilates branch footprints when crediting
+    // coverage, and it spaces the contact sampling. Widening it under micro
+    // therefore shrinks the demand itself -- 90.84 to 85.50 mm2 on the snug
+    // overhang -- and measurement on 2026-08-15 says that costs real coverage:
+    // the snug residue against an independent analytic sector is 6.04 mm2 wide
+    // against 2.59 mm2 narrow, where macro-only manages 1.84 mm2. Narrowing it
+    // is a candidate fix but not sufficient, so it is left alone for now.
     const double maximum_bridge_distance =
         (micro_branch_enabled
              ? 0.75 * std::max(micro_branch_distance, micro_tip_diameter)

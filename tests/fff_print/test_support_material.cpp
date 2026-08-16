@@ -659,6 +659,121 @@ TEST_CASE("Tsunami routes from snug overhang demand instead of expanded contact-
     CHECK(output.find(";TYPE:Support") != std::string::npos);
 }
 
+// The macro-only case above cannot reach the snug demand behind the column at
+// (15.5, 0): rigid parallel branches have no permitted detour around it, and it
+// is 1.84 mm2 short of its own 99.9 % check. Measured 2026-08-15, enabling micro
+// takes that residue to 0.267 mm2 and puts all of it inside a terminal ring's
+// micro reach, so the demand is Micro Branch's to serve rather than evidence
+// that a second trunk is needed.
+//
+// This is a separate case because the macro-only one is a contract section 5
+// test: it tracks each root rib across layers and so requires exactly one
+// extrusion entity per support layer, which a micro tree breaks by construction.
+TEST_CASE("Tsunami micro branch serves the snug overhang behind the column",
+          "[SupportMaterial][TsunamiSupport][MicroBranch][SnugOverhang]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
+    config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
+    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
+    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
+    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+    config.set_key_value("support_threshold_angle", new ConfigOptionInt(30));
+    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
+    config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(0.45, false));
+    config.set_key_value("wall_loops", new ConfigOptionInt(6));
+    config.set_key_value("sparse_infill_density", new ConfigOptionPercent(0.));
+    config.set_key_value("wall_generator",
+                         new ConfigOptionEnum<PerimeterGeneratorType>(PerimeterGeneratorType::Classic));
+    config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(45.));
+    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(true));
+    config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(4.));
+    config.set_key_value("tsunami_rib_spacing", new ConfigOptionFloat(1.5));
+    config.set_key_value("tsunami_min_bed_contact_area", new ConfigOptionFloat(1.));
+    config.set_key_value("tsunami_max_bed_contact_area", new ConfigOptionFloat(100.));
+    config.set_key_value("support_object_xy_distance", new ConfigOptionFloat(0.));
+    config.set_key_value("printable_area", new ConfigOptionPoints {
+        Vec2d(-60., -60.), Vec2d(60., -60.), Vec2d(60., 60.), Vec2d(-60., 60.) });
+
+    constexpr double probe_rotation = M_PI + 0.0620709604047737;
+    TriangleMesh probe = tsunami_test_circular_overhang(140, 125);
+    probe.rotate_z(float(probe_rotation));
+    // The OBJ round-trip is not incidental: it reproduces the placement the CLI
+    // path produces, and feeding the mesh straight in yields no support layers
+    // at all. Measured, not assumed -- the first version of this case did skip it
+    // and failed on an empty support stack.
+    ScopedTemporaryFile probe_file(".obj");
+    probe.WriteOBJFile(probe_file.string().c_str());
+    TriangleMesh imported_probe;
+    ObjInfo obj_info;
+    std::string import_message;
+    REQUIRE(load_obj(probe_file.string().c_str(), &imported_probe, obj_info, import_message));
+
+    Print print;
+    init_and_process_print({ imported_probe }, print, config);
+
+    const PrintObject *object = print.objects().front();
+    const auto support_layers = object->support_layers();
+    REQUIRE_FALSE(support_layers.empty());
+
+    const SupportLayer *last_active_layer = nullptr;
+    size_t last_active_layer_index = 0;
+    size_t layers_with_multiple_entities = 0;
+    for (size_t layer_index = 0; layer_index < support_layers.size(); ++layer_index) {
+        const SupportLayer *support_layer = support_layers[layer_index];
+        if (support_layer->support_fills.empty())
+            continue;
+        last_active_layer = support_layer;
+        last_active_layer_index = layer_index;
+        if (support_layer->support_fills.entities.size() > 1)
+            ++layers_with_multiple_entities;
+    }
+    REQUIRE(last_active_layer != nullptr);
+    // A micro tree is a second entity on the layers it occupies. Without this the
+    // case would pass on a plan that quietly emitted no trees at all.
+    CHECK(layers_with_multiple_entities > 0);
+
+    Polygon required_contact_polygon =
+        tsunami_test_annular_sector(12., 18., -1.2, 0.05);
+    required_contact_polygon.rotate(probe_rotation);
+    Polygon supported_column = tsunami_test_circle(2.5, 48);
+    supported_column.translate(Point(scale_(15.5), scale_(0.)));
+    supported_column.rotate(probe_rotation);
+    const ExPolygons required_contact = diff_ex(
+        ExPolygons { ExPolygon(std::move(required_contact_polygon)) },
+        ExPolygons { ExPolygon(std::move(supported_column)) });
+    REQUIRE_FALSE(required_contact.empty());
+
+    const auto *last_multipath = dynamic_cast<const ExtrusionMultiPath *>(
+        last_active_layer->support_fills.entities.front());
+    REQUIRE(last_multipath != nullptr);
+    REQUIRE_FALSE(last_multipath->paths.empty());
+    const double maximum_unsupported_span =
+        0.5 * config.option<ConfigOptionFloat>("tsunami_rib_spacing")->value +
+        0.5 * last_multipath->paths.front().width;
+    ExPolygons load_bearing_footprint = last_active_layer->support_islands;
+    expolygons_append(load_bearing_footprint, object->layers()[last_active_layer_index]->lslices);
+    load_bearing_footprint = union_ex(load_bearing_footprint);
+    ExPolygons uncovered_contact = diff_ex(
+        required_contact,
+        offset_ex(load_bearing_footprint,
+                  float(scale_(maximum_unsupported_span) + SCALED_EPSILON),
+                  ClipperLib::jtRound));
+    remove_small_and_small_holes(
+        uncovered_contact, double(SCALED_EPSILON) * double(SCALED_EPSILON));
+    CAPTURE(std::abs(area(required_contact)) * SCALING_FACTOR * SCALING_FACTOR);
+    CAPTURE(std::abs(area(uncovered_contact)) * SCALING_FACTOR * SCALING_FACTOR);
+    // The same analytic sector and the same 99.9 % bar the macro-only case uses,
+    // so the two are directly comparable and this one records that micro clears
+    // what rigid parallel branches alone cannot.
+    CHECK(std::abs(area(uncovered_contact)) <= 0.001 * std::abs(area(required_contact)));
+
+    const std::string output = gcode(print);
+    CHECK(output.find("support_type = tsunami(auto)") != std::string::npos);
+    CHECK(output.find(";TYPE:Support") != std::string::npos);
+}
+
 TEST_CASE("Tsunami terminal ring feeds local tree tips into a separate interface stack",
           "[SupportMaterial][TsunamiSupport][MicroTree][Interface]")
 {
