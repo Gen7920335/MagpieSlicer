@@ -3159,8 +3159,21 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
 
         const std::optional<std::vector<Point>> sampled = Tsunami::sample_target_contact_points(
             support_demand, std::max(extrusion_width, maximum_bridge_distance), 512);
-        if (!sampled)
+        if (!sampled) {
+            // PERMANENT DIAGNOSTIC -- this path and the final gate below both
+            // returned IncompleteTargetCoverage with no log, so a target that
+            // could not be sampled was indistinguishable from branches that
+            // could not cover it. That is why the zero-angle fixture sat
+            // undiagnosed for the whole session. Do not delete.
+            BOOST_LOG_TRIVIAL(warning)
+                << "Tsunami contact sampling failed:"
+                << " target=" << target->id
+                << " demand_mm2=" << std::abs(area(support_demand.region)) * SCALING_FACTOR * SCALING_FACTOR
+                << " spacing_mm=" << std::max(extrusion_width, maximum_bridge_distance)
+                << " -- the target could not be sampled, which is not the same"
+                   " as branches failing to cover it.";
             return runtime_failure(RuntimePlanFailureCode::IncompleteTargetCoverage, target->id);
+        }
 
         struct RankedEndpoint {
             Point point;
@@ -3266,6 +3279,25 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
         size_t coverage_evaluated = 0;
         size_t coverage_no_turn = 0;
         size_t coverage_no_plan = 0;
+        // PERMANENT DIAGNOSTIC -- no_plan lumped every geometric refusal into one
+        // number, so a stall where the branch planner never succeeds looked the
+        // same whatever the reason. ClosedMacroBranchResult already carries the
+        // reason, so count it: on the zero-angle fixture all 244 refusals turned
+        // out to be a single reason, which no amount of staring at no_plan could
+        // have said. Do not delete.
+        std::map<Tsunami::MacroBranchGeometryFailureReason, size_t> coverage_no_plan_reasons;
+        const auto branch_failure_name = [](Tsunami::MacroBranchGeometryFailureReason reason) {
+            switch (reason) {
+            case Tsunami::MacroBranchGeometryFailureReason::InvalidSourceTurn:       return "invalid_source_turn";
+            case Tsunami::MacroBranchGeometryFailureReason::InsufficientAnchor:      return "insufficient_anchor";
+            case Tsunami::MacroBranchGeometryFailureReason::TargetOutsideConvexSide: return "target_outside_convex_side";
+            case Tsunami::MacroBranchGeometryFailureReason::InsufficientHeight:      return "insufficient_height";
+            case Tsunami::MacroBranchGeometryFailureReason::BranchAngleExceeded:     return "branch_angle_exceeded";
+            case Tsunami::MacroBranchGeometryFailureReason::Collision:               return "collision";
+            case Tsunami::MacroBranchGeometryFailureReason::PrintabilityLimited:     return "printability_limited";
+            }
+            return "unknown";
+        };
         size_t coverage_no_top_layer = 0;
         size_t coverage_support_empty = 0;
         // Whether a single trunk turn can serve an endpoint within the branch
@@ -3354,6 +3386,8 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
                         Tsunami::plan_closed_macro_branch(branch_input);
                     // Accept shorter branches too: what matters downstream is the
                     // demand the branch actually supports, which is measured below.
+                    if (!branch_result.plan && branch_result.failure)
+                        ++coverage_no_plan_reasons[*branch_result.failure];
                     if (branch_result.plan) {
                         planned = std::move(*branch_result.plan);
                         break;
@@ -3610,6 +3644,16 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
                     << " evaluated=" << coverage_evaluated
                     << " no_turn=" << coverage_no_turn
                     << " no_plan=" << coverage_no_plan
+                    << " no_plan_reasons=[" << [&]() {
+                           std::string out;
+                           for (const auto &[reason, count] : coverage_no_plan_reasons) {
+                               if (!out.empty()) out += " ";
+                               out += branch_failure_name(reason);
+                               out += "=";
+                               out += std::to_string(count);
+                           }
+                           return out;
+                       }() << "]"
                     << " no_top_layer=" << coverage_no_top_layer
                     << " support_empty=" << coverage_support_empty;
                 if (fan_gap_accepted_targets.count(target->id) != 0)
@@ -3760,6 +3804,14 @@ RuntimeTsunamiTrunkResult plan_runtime_trunk(
         remove_numerical_slivers(final_uncovered);
         if (!final_uncovered.empty() && fan_gap_accepted_targets.count(target->id) == 0)
         {
+            // PERMANENT DIAGNOSTIC -- see the sampling failure above. Do not delete.
+            BOOST_LOG_TRIVIAL(warning)
+                << "Tsunami final coverage gate:"
+                << " target=" << target->id
+                << " target_mm2=" << std::abs(area(target->region)) * SCALING_FACTOR * SCALING_FACTOR
+                << " uncovered_mm2=" << std::abs(area(final_uncovered)) * SCALING_FACTOR * SCALING_FACTOR
+                << " -- planning completed but the built support does not reach"
+                   " all of the target.";
             return runtime_failure(
                 RuntimePlanFailureCode::IncompleteTargetCoverage,
                 target->id, size_t(-1), support_end->layer_index);
