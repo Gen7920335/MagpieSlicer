@@ -369,6 +369,7 @@ TEST_CASE("Tsunami keeps unobstructed zero-angle support vertically aligned",
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_key_value("enable_support", new ConfigOptionBool(true));
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
+    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
     config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
     config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(0.));
     config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(0.));
@@ -419,6 +420,7 @@ TEST_CASE("Tsunami falls back for independent support-layer heights",
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_key_value("enable_support", new ConfigOptionBool(true));
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
+    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
     config.set_key_value("independent_support_layer_height", new ConfigOptionBool(true));
     config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
     config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
@@ -453,6 +455,7 @@ TEST_CASE("Selecting Tsunami does not generate support while support is disabled
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_key_value("enable_support", new ConfigOptionBool(false));
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
+    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
 
     Print print;
     init_and_process_print({ TestMesh::overhang }, print, config);
@@ -467,6 +470,7 @@ TEST_CASE("Tsunami slices a solid circular footprint with an external contour ro
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_key_value("enable_support", new ConfigOptionBool(true));
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
+    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
     config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
     config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
     config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
@@ -833,6 +837,7 @@ TEST_CASE("Tsunami covers every overhang of a multi-column model with complex cr
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_key_value("enable_support", new ConfigOptionBool(true));
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
+    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
     config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
     config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
     config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
@@ -920,6 +925,7 @@ TEST_CASE("Tsunami covers every quadrant of a hollow gear overhang",
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_key_value("enable_support", new ConfigOptionBool(true));
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
+    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
     config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
     config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
     config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
@@ -1120,6 +1126,7 @@ TEST_CASE("Tsunami slices a corpus of complex upstream test models",
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_key_value("enable_support", new ConfigOptionBool(true));
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
+    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
     config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
     config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
     config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
