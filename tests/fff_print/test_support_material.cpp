@@ -896,14 +896,30 @@ TEST_CASE("Tsunami covers every overhang of a multi-column model with complex cr
                     detected_overhangs.push_back({ layer_index, std::move(overhang) });
         }
         REQUIRE(detected_overhangs.size() >= fixture.target_regions.size());
-        CHECK(root_layer->support_fills.entities.size() >= detected_overhangs.size());
+        // Removed: one entity per detected overhang. detected_overhangs counts
+        // every overhang fragment on every layer, and one trunk legitimately
+        // serves many of them, so the inequality had no reason to hold -- it read
+        // 2 against 5 here. What it was standing in for is checked directly by
+        // the per-overhang loop below.
         for (size_t target_index = 0; target_index < detected_overhangs.size(); ++target_index) {
             INFO("detected complex overhang " << target_index);
             const DetectedOverhang &target = detected_overhangs[target_index];
             REQUIRE(target.layer_index > 0);
-            REQUIRE(target.layer_index <= support_layers.size());
+            // Find the support layer that actually serves this overhang by print_z
+            // rather than by index arithmetic. Support stops one object layer below
+            // the overhang because of the Z gap, so `layer_index - 1` runs off the
+            // end for the topmost overhang -- it read 60 against 59 support layers.
+            // The same index bug was fixed in the hollow gear fixture earlier.
+            const double target_print_z = object->layers()[target.layer_index]->print_z;
+            const SupportLayer *serving_layer = nullptr;
+            for (const SupportLayer *candidate : support_layers) {
+                if (candidate->print_z >= target_print_z - EPSILON)
+                    break;
+                serving_layer = candidate;
+            }
+            REQUIRE(serving_layer != nullptr);
             CHECK_FALSE(intersection_ex(
-                support_layers[target.layer_index - 1]->support_islands, ExPolygons { target.region }).empty());
+                serving_layer->support_islands, ExPolygons { target.region }).empty());
         }
         CHECK(root_layer->support_islands.size() >= fixture.target_regions.size());
 
