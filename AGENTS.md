@@ -126,6 +126,8 @@ A step passes only when all applicable conditions hold:
 4. The smallest relevant regression, unit, or reproduction case passes when execution is authorized.
 5. No new unexplained failure or regression remains.
 6. The next step can safely use this result as an input.
+7. Every threshold the step introduced or moved names its quantity and units at its declaration (§8, Comparisons Carry Their Units).
+8. Every cause the step records anywhere was toggled and observed, or is labelled `UNKNOWN` with the measurement that would settle it (§8, Attribution Requires A Counterfactual).
 
 If a gate fails:
 
@@ -250,6 +252,119 @@ State causal claims as `KNOWN` (observed), `ASSUMED` (current hypothesis), or `U
 
 Before proposing any iterative recovery loop, state its progress invariant: what decreases each iteration, by at least how much, and the mechanism that forces it. If the mechanism cannot be named, the loop does not converge.
 
+### Why The Rules Below Are Phrased As Artifacts
+
+The three rules above this line were written after real failures and then broken by
+the sessions that wrote them. `Bound Versus Outcome` was authored and violated twice
+in its own session. The fault is the form, not the discipline: a principle states
+what is true and leaves you to remember it at the one moment it applies.
+
+Each rule below is therefore attached to something the work already has to produce --
+a declaration, a commit message, a handoff entry, a test. Skipping the rule leaves a
+visible hole in that artifact rather than a thought you failed to have.
+
+### Comparisons Carry Their Units
+
+At every threshold, tolerance, or epsilon, the declaration states the physical
+quantity and its units. When the comparison happens in scaled coordinates, say so and
+give the millimetre equivalent.
+
+```cpp
+// Minimum useful gain: one extrusion square, in scaled area (1 mm2 ~ 1e12).
+const double minimum_useful_gain =
+    double(scale_(extrusion_width)) * double(scale_(extrusion_width));
+```
+
+A bare literal in a comparison is a defect until it carries this. Two separate bugs
+came from the same hole: `best_gain <= 0.` compared scaled area and admitted gains of
+5e-13 mm2, and `DefaultLineMiterLimit` reached Clipper as an unscaled `ArcTolerance`
+and produced ~2000-segment arcs. Both are visible the instant the units are written
+next to the number, and invisible otherwise.
+
+### One Quantity, One Function
+
+When an estimating stage and a building stage answer the same physical question, they
+call **one function**. Two implementations of one quantity drift, and the drift lands
+as coverage credited but not delivered.
+
+Before adding any estimate, name the code that will later do the real thing. If that
+code computes the same quantity, extract it and call it from both. If it cannot be
+extracted, write in the commit message why, and what keeps the two in step.
+
+This is the single largest defect class in this project: rib depth, reachability, the
+trunk arc, the coverage estimate, micro credit, and the residue gate were all one
+stage measuring a proxy while the next stage required the whole thing.
+
+A constant is subject to the same rule in reverse. One constant answering two
+different questions is two quantities sharing a name, and tuning it for one silently
+moves the other -- `maximum_bridge_distance` was model clearance and bridging span at
+once, so widening it for micro did one right thing and one wrong thing together.
+Split on the question asked, not on the value that happens to fit.
+
+### Attribution Requires A Counterfactual
+
+A cause may not be written into a comment, commit message, or handoff entry unless
+the suspected cause was **toggled** and the effect was observed to appear or
+disappear. Measuring a symptom and reasoning to a cause is not attribution.
+
+The counterfactual belongs in the same artifact as the claim:
+
+> Compiling the clip out brings `micro_tree_geometry` back identically, which is the
+> attribution.
+
+Without that sentence the claim is `ASSUMED` and must be labelled so. Three wrong
+causes were recorded as fact in one session for want of this: an angular-pitch
+calculation became "a sector with no branch" when the residue was inside an occupied
+segment's band; a list of micro couplings named three that measurement showed were
+one no-op and two necessities; and a terminal ring regression was blamed on model
+clearance when forcing model clearance back still failed.
+
+When a toggle is not cheap, the honest output is `UNKNOWN` plus the measurement that
+would settle it. `UNKNOWN` with a named next measurement is a finished step. A
+plausible story is not.
+
+### Fixtures Do Not Borrow The Constants They Judge
+
+A test's pass criterion is computed from the test's own values. A fixture that
+dilates by the planner's `maximum_bridge_distance`, or compares the planner's own
+`uncovered_mm2`, lets the code under test choose its own grade -- when the planner
+redefines the quantity, the number improves while the part gets worse.
+
+Measured: enabling micro moved the planner's snug residue from 1.84 to 0.267 mm2
+while the emitted geometry covered **less** of an independent analytic sector, 6.04
+against 1.84 mm2, because the same flag shrank the demand the residue was measured
+against. The fixture caught it only because its sector and its dilation were its own.
+
+Two consequences:
+
+- Never compare a planner-internal number across a configuration change that alters
+  that number's definition. Say which region a demand figure is over, or do not quote
+  it.
+- Assert an outcome fraction, not a structural property. Non-emptiness, entity
+  counts, and polyline identity all pass while coverage collapses: the hollow gear
+  fixture passed with 93 % of a target uncovered. Gate a measured fraction, record
+  the measured values in a comment, and set the bar below the worst with room.
+
+### Defect Root Causes And Their Rules
+
+Every defect this project has diagnosed falls in one of four classes. A new defect
+that fits none of them is worth a new rule; one that fits is a rule that was skipped.
+
+| Class | What it looks like | Rule |
+| --- | --- | --- |
+| Proxy for the whole | An early stage validates a point, a bound, or a count; a later stage needs the built thing | One Quantity, One Function; Bound Versus Outcome |
+| Unitless comparison | A literal threshold in scaled coordinates, or a value passed into an argument measured in different units | Comparisons Carry Their Units |
+| Story for a cause | A cause inferred from arithmetic or from one measurement, recorded as fact | Attribution Requires A Counterfactual |
+| Self-graded outcome | A fixture, or a report, built from the constants of the thing it judges | Fixtures Do Not Borrow The Constants They Judge |
+
+Known instances, for recognising the shapes: rib depth (bound versus selected), branch
+reachability (endpoint versus source pairing), trunk arc (approach point versus built
+arc), coverage estimate (aimed centreline versus fixed normal), micro credit
+(bridgeable distance versus remaining height), residue gate (branch count versus
+actual reach), micro reach disc (filled disc versus a built tree's discrete contacts),
+Clipper arc tolerance (miter limit as unscaled tolerance), acceptance threshold
+(scaled area read as mm2), shared bridge constant (two questions, one number).
+
 ## 9. Context and Tool Efficiency
 
 Use this investigation ladder:
@@ -340,7 +455,7 @@ If execution was not authorized, report the code change as statically reviewed b
 Report only decision-relevant evidence:
 
 ### Root Cause / Design Decision
-Confirmed cause or selected design.
+Confirmed cause or selected design. State the **counterfactual** that confirmed it -- what was toggled and what changed -- or label the cause `ASSUMED` or `UNKNOWN`. A cause with no counterfactual is not a root cause, whatever else supports it.
 
 ### Changed
 Files/components and purpose.
@@ -368,3 +483,9 @@ Do not provide a chronological command diary.
 - Do not compensate for an unverified earlier stage in a later stage.
 - Do not save tokens by omitting evidence required for correctness.
 - Do not continue exploring after decision-relevant uncertainty is resolved.
+- Do not write a bare numeric literal into a comparison without its quantity and units at the declaration.
+- Do not let an estimating stage and the stage that builds the thing compute the same quantity twice.
+- Do not give one constant two different questions to answer; split on the question, not on the value that fits.
+- Do not record a cause that was not toggled and observed.
+- Do not build a fixture's pass criterion from the constants of the code it judges.
+- Do not compare a planner-internal figure across a configuration change that redefines it.
