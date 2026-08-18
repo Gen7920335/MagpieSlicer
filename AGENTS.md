@@ -232,6 +232,17 @@ After implementation:
 - review the final diff for ownership, lifetime, unit, index-domain, coordinate-space, epsilon, ordering, cache, feature-off, and regression errors;
 - remove or gate diagnostics.
 
+### Temporary Probes Live On Their Own Lines
+
+A probe never shares a line with code that must survive it, and it is never removed by
+deleting lines that match a marker. Restore the file from the last commit and re-apply
+what should stay.
+
+Twice in one session a marker-based strip destroyed working code: nine `return`
+statements in one instance and a sampling call in the other, both because the marker
+had been appended to an existing line. The damage is silent until the build breaks,
+and it breaks far from the edit.
+
 ### Permanent Failure Diagnostics
 
 A diagnostic that reports **why a failure path was taken** is not temporary instrumentation and must not be deleted with it. Keep one when all of these hold:
@@ -322,6 +333,19 @@ clearance when forcing model clearance back still failed.
 When a toggle is not cheap, the honest output is `UNKNOWN` plus the measurement that
 would settle it. `UNKNOWN` with a named next measurement is a finished step. A
 plausible story is not.
+
+**Judge a counterfactual by the mechanism, not by the test result.** Toggling the
+suspected cause must move a number that names that mechanism -- a counter, a flag, a
+printed measurement. A test that still fails proves nothing when several causes are
+stacked, and stacking is normal: the zero-angle fixture had three, so raising the
+sampling cap left the same 2 of 4 failing and the cap was wrongly dismissed as
+irrelevant. If no observable names the mechanism, add one before running the
+experiment. `UNKNOWN` is the honest result when the toggle changes nothing observable.
+
+**A refusal counter needs its reasons.** When a stage can decline for several distinct
+reasons, count them separately from the start. `no_plan` stood for seven different
+geometric refusals; splitting it showed all 244 were a single reason, which no amount
+of reading the aggregate could have said.
 
 ### Fixtures Do Not Borrow The Constants They Judge
 
