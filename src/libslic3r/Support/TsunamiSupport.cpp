@@ -2064,19 +2064,52 @@ std::optional<RootCandidate> select_root_candidate(const RootSelectionInput &inp
         validity_input.blocked_region = union_ex(validity_input.blocked_region);
     }
     std::optional<RootCandidate> best;
+    // PERMANENT DIAGNOSTIC -- root selection had no observable of any kind, and
+    // three separate failures (zero-angle, multi-column, the ipadstand timeout)
+    // all dead-end here. Nine mechanisms were proposed for undersized roots in
+    // one session and every one was refuted, because each was reasoned out
+    // rather than read. Report what the search actually did. Do not delete.
+    size_t probe_direct_candidates = 0;
+    size_t probe_contour_regions = 0;
+    size_t probe_contour_far = 0;
+    size_t probe_contour_candidates = 0;
+    const auto report_root_selection = [&](const char *path) {
+        // Quiet when the search found a root that spans its target; a healthy
+        // selection needs no line. Anything less is the interesting case.
+        if (best && best->target_coverage >= 0.999)
+            return;
+        BOOST_LOG_TRIVIAL(warning)
+            << "Tsunami root selection:"
+            << " path=" << path
+            << " direct_candidates=" << probe_direct_candidates
+            << " contour_regions=" << probe_contour_regions
+            << " contour_too_far=" << probe_contour_far
+            << " contour_candidates=" << probe_contour_candidates
+            << " rib_length_mm=" << input.rib_length
+            << " max_xy_distance_mm=" << input.maximum_xy_distance
+            << " chosen_ribs=" << (best ? best->physical_ribs.size() : size_t(0))
+            << " chosen_coverage=" << (best ? best->target_coverage : -1.)
+            << " chosen_bed_mm2=" << (best ? best->bed_contact_area : -1.)
+            << " chosen_score=" << (best ? best->score : -1.);
+    };
     if (input.allow_direct_projection) {
         for (RootCandidate &candidate : make_direct_root_candidates(validity_input, maximum_area)) {
+            ++probe_direct_candidates;
             if (!best || candidate.score > best->score + 1e-9 ||
                 (std::abs(candidate.score - best->score) <= 1e-9 &&
                  std::tie(candidate.position.x(), candidate.position.y()) <
                      std::tie(best->position.x(), best->position.y())))
                 best = std::move(candidate);
         }
-        if (best)
+        if (best) {
+            report_root_selection("direct");
             return best;
+        }
     }
-    if (input.blocked_region.empty())
+    if (input.blocked_region.empty()) {
+        report_root_selection("no_blocked_region");
         return std::nullopt;
+    }
 
     const ExPolygons centerline_forbidden = offset_ex(
         input.blocked_region,
@@ -2087,15 +2120,19 @@ std::optional<RootCandidate> select_root_candidate(const RootSelectionInput &inp
     const double depth_step = std::max(input.extrusion_width, 0.25);
     const int depth_steps = std::max(1, int(std::ceil((input.rib_length - minimum_depth) / depth_step)) + 1);
     for (const ExPolygon &region : centerline_forbidden) {
+        ++probe_contour_regions;
         const double distance = std::sqrt(locate_on_contour(region.contour, input.target).squared_distance);
-        if (distance > input.maximum_xy_distance + 1e-9)
+        if (distance > input.maximum_xy_distance + 1e-9) {
+            ++probe_contour_far;
             continue;
+        }
         for (int depth_index = 0; depth_index < depth_steps; ++depth_index) {
             const double depth = depth_index + 1 == depth_steps ? input.rib_length
                 : std::min(input.rib_length, minimum_depth + double(depth_index) * depth_step);
             std::vector<RootCandidate> candidates = make_contour_root_candidates(
                 validity_input, region.contour, depth, maximum_area);
             for (RootCandidate &candidate : candidates) {
+                ++probe_contour_candidates;
                 if (!best || candidate.score > best->score + 1e-9 ||
                     (std::abs(candidate.score - best->score) <= 1e-9 &&
                      std::tie(candidate.position.x(), candidate.position.y()) <
@@ -2104,6 +2141,7 @@ std::optional<RootCandidate> select_root_candidate(const RootSelectionInput &inp
             }
         }
     }
+    report_root_selection("contour");
     return best;
 }
 
