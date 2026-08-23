@@ -17,7 +17,7 @@ An OrcaSlicer-based fork integrating mixed nozzle sizes, extended supports, and 
 - Platform: **Windows x64**
 - Status: **Pre-release**
 - Commit: `7b2ce903085f9722e2493d0ca3ba9c32e16cea10`
-- [Download the Windows installer](https://github.com/Gen7920335/MagpieSlicer/releases/download/v2.5.0-modified-vulkan-preview-1/MagpieSlicer_Windows_Installer_V2.5.0-modified_x64.exe)
+- [Go to the latest release](https://github.com/Gen7920335/MagpieSlicer/releases)
 
 ```text
 SHA-256: 3CD4469DC7DAE1B93AE4FDCE81B11A2981B75DA9A6C1CF8AD2F0E90921C436F0
