@@ -361,6 +361,33 @@ TEST_CASE("Snapmaker U1 incomplete start code uses native sequence", "[Snapmaker
     CHECK(Slic3r::snapmaker_u1_start_gcode_template(customized_native) == customized_native);
 }
 
+TEST_CASE("Snapmaker U1 stale inherited toolchanger start code is replaced", "[SnapmakerMonitor][GCode]")
+{
+    const std::string stale_toolchanger_start =
+        "PRINT_START TOOL_TEMP=220 T0_TEMP=220 BED_TEMP=55 TOOL=0\n"
+        "M83\n"
+        "M109 T0 S220\n"
+        "T0\n"
+        "G92 E0\n"
+        "G0 X0 Y0 Z10 F12000\n";
+
+    CHECK(Slic3r::is_snapmaker_u1_model("Snapmaker U1"));
+    CHECK(Slic3r::is_snapmaker_u1_model("797581801"));
+    CHECK_FALSE(Slic3r::is_snapmaker_u1_model("MyToolChanger"));
+    CHECK_FALSE(Slic3r::snapmaker_u1_has_native_start(stale_toolchanger_start));
+    CHECK_FALSE(Slic3r::snapmaker_u1_has_safe_homing(stale_toolchanger_start));
+
+    const std::string selected = Slic3r::machine_start_gcode_template_for_printer(
+        "Snapmaker U1", stale_toolchanger_start);
+    CHECK(selected != stale_toolchanger_start);
+    CHECK(Slic3r::snapmaker_u1_has_native_start(selected));
+    CHECK(Slic3r::snapmaker_u1_has_safe_homing(selected));
+    CHECK(selected.find("G0 X0 Y0 Z10 F12000") == std::string::npos);
+
+    CHECK(Slic3r::machine_start_gcode_template_for_printer(
+        "MyToolChanger", stale_toolchanger_start) == stale_toolchanger_start);
+}
+
 TEST_CASE("Snapmaker control availability follows printer state", "[SnapmakerMonitor][Control]")
 {
     using Slic3r::GUI::snapmaker_control_availability;

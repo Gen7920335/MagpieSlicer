@@ -113,6 +113,11 @@ inline SnapmakerHomingScan scan_snapmaker_u1_homing(std::string_view gcode)
 
 } // namespace detail
 
+inline bool is_snapmaker_u1_model(std::string_view printer_model)
+{
+    return printer_model == "797581801" || printer_model == "Snapmaker U1";
+}
+
 inline constexpr std::string_view SNAPMAKER_U1_NATIVE_START_GCODE = R"SNAPMAKER(
 ; Snapmaker U1 native pre-print sequence
 
@@ -233,6 +238,14 @@ inline std::string snapmaker_u1_start_gcode_template(std::string_view configured
 {
     return std::string(snapmaker_u1_has_native_start(configured_gcode) ?
         configured_gcode : SNAPMAKER_U1_NATIVE_START_GCODE);
+}
+
+inline std::string machine_start_gcode_template_for_printer(
+    std::string_view printer_model, std::string_view configured_gcode)
+{
+    return is_snapmaker_u1_model(printer_model) ?
+        snapmaker_u1_start_gcode_template(configured_gcode) :
+        std::string(configured_gcode);
 }
 
 inline bool snapmaker_u1_has_safe_homing(std::string_view gcode)

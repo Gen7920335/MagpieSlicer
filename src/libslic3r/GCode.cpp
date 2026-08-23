@@ -4123,8 +4123,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         int  probe_count_y = std::max(3, (int) std::ceil(mesh_bbox.size().y() / probe_dist_y) + 1);
         auto bed_mesh_algo = "bicubic";
         const std::string &mesh_printer_model = print.config().printer_model.value;
-        const bool is_snapmaker_u1_mesh =
-            mesh_printer_model == "797581801" || mesh_printer_model == "Snapmaker U1";
+        const bool is_snapmaker_u1_mesh = is_snapmaker_u1_model(mesh_printer_model);
         if (probe_count_x * probe_count_y <= 6) { // lagrange needs up to a total of 6 mesh points
             bed_mesh_algo = "lagrange";
         }
@@ -4256,10 +4255,9 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     this->placeholder_parser().set("used_filament_length", new ConfigOptionString(GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Used_Filament_Length_Placeholder)));
 
     const std::string &printer_model = print.config().printer_model.value;
-    const bool is_snapmaker_u1 = printer_model == "797581801" || printer_model == "Snapmaker U1";
-    const std::string machine_start_template = is_snapmaker_u1 ?
-        snapmaker_u1_start_gcode_template(print.config().machine_start_gcode.value) :
-        print.config().machine_start_gcode.value;
+    const bool is_snapmaker_u1 = is_snapmaker_u1_model(printer_model);
+    const std::string machine_start_template = machine_start_gcode_template_for_printer(
+        printer_model, print.config().machine_start_gcode.value);
     std::string machine_start_gcode = this->placeholder_parser_process(
         "machine_start_gcode", machine_start_template, initial_extruder_id);
     if (is_snapmaker_u1 && !snapmaker_u1_has_native_start(machine_start_gcode))
