@@ -16,9 +16,9 @@ An OrcaSlicer-based fork integrating mixed nozzle sizes, extended supports, and 
 - Tag: `v2.5.0.0.1`
 - Platform: **Windows x64**
 - Status: **Pre-release**
-- [Go to the latest release](https://github.com/Gen7920335/MagpieSlicer/releases)
+- [Go directly to the latest GitHub release](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.1)
 
-The source commit and SHA-256 for each installer are recorded in its GitHub release notes.
+The source commit and SHA-256 are recorded in the GitHub release notes.
 
 This release fixes Cura-style automatic support being generated while support was disabled. With no raft, no support is generated. Requesting one raft layer creates only that raft layer without enabling automatic support. The slicing timer now includes G-code generation and post-processing.
 
