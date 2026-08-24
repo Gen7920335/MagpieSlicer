@@ -302,15 +302,25 @@ public:
 
         scale_font(m_font_version, 1.65f); // only scale this one since it hasnt a preloaded font like Label::Body_24;
 
-        m_bg_color = StateColor::darkModeColorFor(wxColour("#FFFFFF"));
-        m_fg_color = StateColor::darkModeColorFor(wxColour("#6B6A6A"));
-        m_progress_bg_color = StateColor::darkModeColorFor(wxColour("#DFDFDF"));
-        m_progress_fg_color = StateColor::darkModeColorFor(wxColour("#398FF4"));
+        // The branded splash uses a transparent PNG. Keep its backdrop light so
+        // the dark Magpie mark remains visible independently of the UI theme.
+        m_bg_color = wxColour("#FFFFFF");
+        m_fg_color = wxColour("#6B6A6A");
+        m_progress_bg_color = wxColour("#DFDFDF");
+        m_progress_fg_color = wxColour("#398FF4");
         m_progress_h = FromDIP(6);
-        bool dark_mode = m_fg_color != wxColour("#6B6A6A");
-        wxSize sz  = m_window->GetClientSize();
-        BitmapCache bmp_cache;
-        m_logo_bmp = *bmp_cache.load_svg(dark_mode ? "splash_logo_dark" : "splash_logo", sz.GetWidth(), sz.GetHeight());
+
+        const std::string logo_path = Slic3r::var("MagpieSlicer_192px_transparent.png");
+        wxImage logo_image(from_u8(logo_path), wxBITMAP_TYPE_PNG);
+        if (logo_image.IsOk()) {
+            const int logo_size = FromDIP(240);
+            m_logo_bmp = wxBitmap(logo_image.Scale(logo_size, logo_size, wxIMAGE_QUALITY_HIGH));
+            BOOST_LOG_TRIVIAL(info) << "Loaded splash logo: " << logo_path
+                                    << " (" << m_logo_bmp.GetWidth() << "x"
+                                    << m_logo_bmp.GetHeight() << ")";
+        } else {
+            BOOST_LOG_TRIVIAL(error) << "Failed to load splash logo: " << logo_path;
+        }
 
         m_window->Bind(wxEVT_PAINT, &SplashScreen::OnPaint, this);
         m_window->Refresh();
@@ -324,8 +334,11 @@ public:
 
         dc.SetBackground(wxBrush(m_bg_color));
         dc.Clear();
-        if (m_logo_bmp.IsOk())
-            dc.DrawBitmap(m_logo_bmp, 0, 0, true);
+        if (m_logo_bmp.IsOk()) {
+            const int logo_x = (c_sz.GetWidth() - m_logo_bmp.GetWidth()) / 2;
+            const int logo_y = static_cast<int>(c_sz.GetHeight() * 0.08);
+            dc.DrawBitmap(m_logo_bmp, logo_x, logo_y, true);
+        }
 
         wxRect rc = wxRect(0, 0, c_sz.GetWidth(), 0);
         dc.SetTextForeground(m_fg_color);

@@ -4,6 +4,16 @@
 option(MAGPIE_VULKAN_TEST_BRANDING "Use an isolated identity for Vulkan test builds" OFF)
 option(MAGPIE_SLICING_PROFILER "Build the isolated Magpie slicing profiler development version" OFF)
 
+# Public Magpie releases append a two-field Magpie sequence to the Orca base
+# version. For Orca 2.5.0, Magpie line 0 revision 1 is therefore 2.5.0.0.1.
+set(MAGPIE_ORCA_BASE_VERSION "2.5.0")
+set(MAGPIE_RELEASE_LINE 0)
+set(MAGPIE_RELEASE_REVISION 1)
+set(MAGPIE_RELEASE_VERSION
+    "${MAGPIE_ORCA_BASE_VERSION}.${MAGPIE_RELEASE_LINE}.${MAGPIE_RELEASE_REVISION}")
+math(EXPR MAGPIE_WINDOWS_BUILD_VERSION
+     "${MAGPIE_RELEASE_LINE} * 1000 + ${MAGPIE_RELEASE_REVISION}")
+
 if(MAGPIE_SLICING_PROFILER)
     set(SLIC3R_APP_NAME "Magpie Slicer Profiler" CACHE STRING "Application display name" FORCE)
     set(SLIC3R_APP_KEY "MagpieSlicerProfiler" CACHE STRING "Application key for config/data isolation" FORCE)
@@ -26,13 +36,14 @@ endif()
 
 set(SLIC3R_GCODE_GENERATOR_NAME "OrcaSlicer" CACHE STRING "Machine-compatible G-code producer name" FORCE)
 set(SLIC3R_PACKAGE_VENDOR "MagpieSlicer" CACHE STRING "Application package vendor" FORCE)
-set(SLIC3R_DISPLAY_VERSION "2.5.0 (modified)" CACHE STRING "User-visible application version" FORCE)
-set(SLIC3R_FILE_VERSION "2.5.0.0" CACHE STRING "Numeric Windows file version" FORCE)
+set(SLIC3R_DISPLAY_VERSION "${MAGPIE_RELEASE_VERSION}" CACHE STRING "User-visible application version" FORCE)
+set(SLIC3R_FILE_VERSION "${MAGPIE_ORCA_BASE_VERSION}.${MAGPIE_WINDOWS_BUILD_VERSION}" CACHE STRING "Numeric Windows file version" FORCE)
+set(SLIC3R_FILE_VERSION_COMMA "2,5,0,${MAGPIE_WINDOWS_BUILD_VERSION}" CACHE STRING "Windows resource numeric file version" FORCE)
 
 if(NOT DEFINED BBL_INTERNAL_TESTING)
 set(BBL_INTERNAL_TESTING "0")
 endif()
-set(SoftFever_VERSION "2.5.0-modified")
+set(SoftFever_VERSION "${MAGPIE_ORCA_BASE_VERSION}-modified.${MAGPIE_RELEASE_LINE}.${MAGPIE_RELEASE_REVISION}")
 string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)"
        SoftFever_VERSION_MATCH ${SoftFever_VERSION})
 set(ORCA_VERSION_MAJOR ${CMAKE_MATCH_1})

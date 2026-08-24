@@ -937,8 +937,8 @@ set (CPACK_PACKAGE_VENDOR "${SLIC3R_PACKAGE_VENDOR}")
 set (CPACK_PACKAGE_VERSION_MAJOR "${ORCA_VERSION_MAJOR}")
 set (CPACK_PACKAGE_VERSION_MINOR "${ORCA_VERSION_MINOR}")
 set (CPACK_PACKAGE_VERSION_PATCH "${ORCA_VERSION_PATCH}")
-set (CPACK_PACKAGE_VERSION "${SLIC3R_DISPLAY_VERSION}")
-set (CPACK_PACKAGE_FILE_NAME "${SLIC3R_APP_KEY}_Windows_Installer_V${SoftFever_VERSION}")
+set (CPACK_PACKAGE_VERSION "${MAGPIE_RELEASE_VERSION}")
+set (CPACK_PACKAGE_FILE_NAME "${SLIC3R_APP_KEY}_Windows_Installer_V${MAGPIE_RELEASE_VERSION}")
 # Suffix the Windows installer with its target arch so the x64 and arm64 builds
 # produce distinct filenames (matches ARCH_SUFFIX in build_orca.yml). Same
 # CMAKE_SYSTEM_PROCESSOR mapping used by orcaslicer_copy_dlls() above.
