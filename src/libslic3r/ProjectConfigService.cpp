@@ -330,6 +330,38 @@ void erase_temperature_drop_tower_plate(
     }
 }
 
+void transfer_temperature_drop_tower_plate(
+    DynamicConfig &config, size_t source_plate_index, size_t destination_plate_index,
+    size_t plate_count, bool reset_source)
+{
+    if (source_plate_index == destination_plate_index ||
+        source_plate_index >= plate_count || destination_plate_index >= plate_count)
+        return;
+
+    normalize_temperature_drop_tower_positions(config, plate_count);
+    auto *tower_x = config.option<ConfigOptionFloats>(temperature_drop_tower_position_keys[0]);
+    auto *tower_y = config.option<ConfigOptionFloats>(temperature_drop_tower_position_keys[1]);
+    if (tower_x == nullptr || tower_y == nullptr)
+        return;
+
+    const double source_x = temperature_drop_tower_position_at(tower_x, source_plate_index);
+    const double source_y = temperature_drop_tower_position_at(tower_y, source_plate_index);
+    const double destination_x = temperature_drop_tower_position_at(tower_x, destination_plate_index);
+    const double destination_y = temperature_drop_tower_position_at(tower_y, destination_plate_index);
+
+    const bool source_is_manual = source_x >= 0.0 && source_y >= 0.0;
+    const bool destination_is_automatic = destination_x < 0.0 || destination_y < 0.0;
+    if (source_is_manual && destination_is_automatic) {
+        tower_x->values[destination_plate_index] = source_x;
+        tower_y->values[destination_plate_index] = source_y;
+    }
+
+    if (reset_source) {
+        tower_x->values[source_plate_index] = TEMPERATURE_DROP_TOWER_AUTOMATIC_POSITION;
+        tower_y->values[source_plate_index] = TEMPERATURE_DROP_TOWER_AUTOMATIC_POSITION;
+    }
+}
+
 double temperature_drop_tower_position_at(
     const ConfigOptionFloats *positions, size_t plate_index, double fallback)
 {

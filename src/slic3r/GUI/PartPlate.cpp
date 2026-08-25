@@ -5043,6 +5043,8 @@ int PartPlateList::find_instance_belongs(int obj_id, int instance_id)
 int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_new)
 {
 	int ret = 0, index;
+	int previous_plate_index = -1;
+	bool previous_plate_became_empty = false;
 	PartPlate* plate = NULL;
 	ModelObject* object = NULL;
 
@@ -5070,6 +5072,7 @@ int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_n
 	index = find_instance(obj_id, instance_id);
 	if (index != -1)
 	{
+		previous_plate_index = index;
 		//found it added before
 		BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": found it in previous plate %1%") % index;
 		plate = m_plate_list[index];
@@ -5078,6 +5081,7 @@ int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_n
 			//not include anymore, remove it from original plate
 			BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": not in plate %1% anymore, remove it") % index;
 			plate->remove_instance(obj_id, instance_id);
+			previous_plate_became_empty = plate->empty();
 		}
 		else
 		{
@@ -5139,6 +5143,12 @@ int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_n
 		{
 			//found a new plate, add it to plate
 			plate->add_instance(obj_id, instance_id, false, &boundingbox);
+			if (m_plater != nullptr && previous_plate_index >= 0 && previous_plate_index != int(i)) {
+				DynamicConfig &project_config = wxGetApp().preset_bundle->project_config;
+				transfer_temperature_drop_tower_plate(
+					project_config, size_t(previous_plate_index), size_t(i),
+					m_plate_list.size(), previous_plate_became_empty);
+			}
 
 			// spiral mode, update object setting
 			if (plate->config()->has("spiral_mode") && plate->config()->opt_bool("spiral_mode") && !is_object_config_compatible_with_spiral_vase(object)) {

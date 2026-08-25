@@ -7881,6 +7881,13 @@ bool GCode::temperature_drop_tower_enabled() const
         this->has_configured_low_temperature_nozzle_wiper())
         return false;
 
+    if (m_print == nullptr || std::none_of(
+            m_print->objects().begin(), m_print->objects().end(),
+            [](const PrintObject *object) {
+                return object != nullptr && !object->support_layers().empty();
+            }))
+        return false;
+
     const int interface_temperature = m_config.support_interface_temperature.value;
     if (interface_temperature <= 0)
         return false;

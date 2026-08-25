@@ -62,6 +62,13 @@ std::vector<std::string> normalize_project_filament_map(
 void erase_temperature_drop_tower_plate(
     DynamicConfig &config, size_t plate_index, size_t plate_count_before_erase);
 
+// Carries a manually placed tower to a destination plate when an instance
+// changes plates. An existing manual destination position wins. The source is
+// reset only when its plate no longer contains printable instances.
+void transfer_temperature_drop_tower_plate(
+    DynamicConfig &config, size_t source_plate_index, size_t destination_plate_index,
+    size_t plate_count, bool reset_source);
+
 double temperature_drop_tower_position_at(
     const ConfigOptionFloats *positions, size_t plate_index,
     double fallback = TEMPERATURE_DROP_TOWER_AUTOMATIC_POSITION);

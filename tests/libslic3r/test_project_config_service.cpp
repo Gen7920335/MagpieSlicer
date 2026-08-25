@@ -49,6 +49,55 @@ TEST_CASE("Temperature drop tower positions survive plate deletion by index", "[
         "support_interface_temperature_drop_tower_y")->values == std::vector<double>{40.0, 60.0});
 }
 
+TEST_CASE("Temperature drop tower follows an instance to an automatic destination plate",
+          "[ProjectConfigService][TemperatureDropTower]")
+{
+    DynamicPrintConfig config;
+    config.set_key_value("support_interface_temperature_drop_tower_x",
+        new ConfigOptionFloats({10.0, -1.0, 70.0}));
+    config.set_key_value("support_interface_temperature_drop_tower_y",
+        new ConfigOptionFloats({20.0, -1.0, 80.0}));
+
+    SECTION("moving the final source instance moves the manual position") {
+        transfer_temperature_drop_tower_plate(config, 0, 1, 3, true);
+        CHECK(config.option<ConfigOptionFloats>(
+            "support_interface_temperature_drop_tower_x")->values ==
+            std::vector<double>{-1.0, 10.0, 70.0});
+        CHECK(config.option<ConfigOptionFloats>(
+            "support_interface_temperature_drop_tower_y")->values ==
+            std::vector<double>{-1.0, 20.0, 80.0});
+    }
+
+    SECTION("a source plate with other instances keeps its position") {
+        transfer_temperature_drop_tower_plate(config, 0, 1, 3, false);
+        CHECK(config.option<ConfigOptionFloats>(
+            "support_interface_temperature_drop_tower_x")->values ==
+            std::vector<double>{10.0, 10.0, 70.0});
+        CHECK(config.option<ConfigOptionFloats>(
+            "support_interface_temperature_drop_tower_y")->values ==
+            std::vector<double>{20.0, 20.0, 80.0});
+    }
+}
+
+TEST_CASE("Temperature drop tower transfer preserves an existing destination position",
+          "[ProjectConfigService][TemperatureDropTower]")
+{
+    DynamicPrintConfig config;
+    config.set_key_value("support_interface_temperature_drop_tower_x",
+        new ConfigOptionFloats({10.0, 30.0}));
+    config.set_key_value("support_interface_temperature_drop_tower_y",
+        new ConfigOptionFloats({20.0, 40.0}));
+
+    transfer_temperature_drop_tower_plate(config, 0, 1, 2, true);
+
+    CHECK(config.option<ConfigOptionFloats>(
+        "support_interface_temperature_drop_tower_x")->values ==
+        std::vector<double>{-1.0, 30.0});
+    CHECK(config.option<ConfigOptionFloats>(
+        "support_interface_temperature_drop_tower_y")->values ==
+        std::vector<double>{-1.0, 40.0});
+}
+
 TEST_CASE("Temperature drop tower reads are safe for legacy short vectors", "[ProjectConfigService]")
 {
     const ConfigOptionFloats positions({12.5});

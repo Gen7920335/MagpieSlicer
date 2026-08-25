@@ -1483,6 +1483,7 @@ struct TemperatureDropTowerSettings {
     int interface_filament { 0 };
     PrintSequence print_sequence { PrintSequence::ByLayer };
     bool configured_wiper { false };
+    bool support_enabled { true };
     double tower_x { -1.0 };
     double tower_y { -1.0 };
     double nozzle_diameter { 0.4 };
@@ -1499,7 +1500,7 @@ static DynamicPrintConfig temperature_drop_tower_config(const TemperatureDropTow
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({
-        { "enable_support", true },
+        { "enable_support", settings.support_enabled },
         { "support_interface_top_layers", 2 },
         { "support_interface_filament", settings.interface_filament },
         { "single_nozzle_low_temperature_interface", settings.low_temperature_interface_enabled },
@@ -2127,6 +2128,9 @@ TEST_CASE("Temperature drop tower honors every activation guard",
     settings = {};
     settings.normal_temperature = settings.interface_temperature;
     disabled_cases.emplace_back("no temperature drop", settings);
+    settings = {};
+    settings.support_enabled = false;
+    disabled_cases.emplace_back("support disabled", settings);
 
     for (const auto &[name, disabled] : disabled_cases) {
         CAPTURE(name);

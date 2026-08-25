@@ -3007,8 +3007,38 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                 const auto *tower_y = project_config.option<ConfigOptionFloats>(
                     "support_interface_temperature_drop_tower_y");
 
+                const bool global_support_enabled =
+                    m_config->opt_bool("enable_support") ||
+                    m_config->opt_int("raft_layers") > 0 ||
+                    m_config->opt_int("enforce_support_layers") > 0;
+                const auto plate_has_support_enabled = [global_support_enabled](PartPlate *part_plate) {
+                    if (part_plate == nullptr || !part_plate->has_printable_instances())
+                        return false;
+                    for (ModelObject *object : part_plate->get_objects_on_this_plate()) {
+                        if (object == nullptr)
+                            continue;
+                        const ConfigOption *support_option = object->config.option("enable_support");
+                        const ConfigOption *raft_option = object->config.option("raft_layers");
+                        const ConfigOption *enforced_option = object->config.option("enforce_support_layers");
+                        const bool has_override = support_option != nullptr || raft_option != nullptr ||
+                            enforced_option != nullptr;
+                        bool support_enabled = has_override ? false : global_support_enabled;
+                        if (support_option != nullptr)
+                            support_enabled |= support_option->getBool();
+                        if (raft_option != nullptr)
+                            support_enabled |= raft_option->getInt() > 0;
+                        if (enforced_option != nullptr)
+                            support_enabled |= enforced_option->getInt() > 0;
+                        if (support_enabled)
+                            return true;
+                    }
+                    return false;
+                };
+
                 for (int plate_id = 0; plate_id < n_plates; ++plate_id) {
                     PartPlate *part_plate = ppl.get_plate(plate_id);
+                    if (!plate_has_support_enabled(part_plate))
+                        continue;
                     const Vec3d plate_origin = part_plate->get_origin();
                     const BoundingBoxf3 plate_bbox = part_plate->get_bounding_box();
                     const float min_x = float(plate_bbox.min.x() - plate_origin.x());
