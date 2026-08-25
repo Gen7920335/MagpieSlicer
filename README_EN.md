@@ -12,15 +12,15 @@ An OrcaSlicer-based fork integrating mixed nozzle sizes, extended supports, and 
 
 ## Latest Release
 
-- Version: **2.5.0.0.3**
-- Tag: `v2.5.0.0.3`
+- Version: **2.5.0.0.6**
+- Tag: `v2.5.0.0.6`
 - Platform: **Windows x64**
 - Status: **Pre-release**
-- [Go directly to the latest GitHub release](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.3)
+- [Go directly to the latest GitHub release](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.6)
 
 The source commit and SHA-256 are recorded in the GitHub release notes.
 
-This release adds `Mixed (auto)`, allowing normal and tree supports in one print. The normal generator can be Prusa or Cura, and the tree style can be Organic, Slim, Strong, or Tree Hybrid. With Selective merge enabled, build-plate-reachable demand uses normal support while the remaining demand uses tree support, with overlapping extrusion removed during the merge.
+This release connects the FFF overhang threshold to Resin-style automatic contact generation and prevents value-edit crashes when legacy presets omit newly introduced Resin options. It also completes the Korean Resin-setting translations, hides Tsunami-only controls in other modes, and caches repeated polygon work in `Mixed (auto)` to keep complex slicing responsive.
 
 > This fork is under active development. Inspect the preview and generated G-code before printing on real hardware.
 
@@ -34,6 +34,7 @@ This release adds `Mixed (auto)`, allowing normal and tree supports in one print
 | `Nozzle used` preview | Show the actual nozzle used independently of material color |
 | Cura-style normal support | Provide continuous Cura-style support paths while preserving the original support modes |
 | Mixed automatic support | Split build-plate-reachable demand to normal support and the remainder to tree support in one print |
+| Resin-style automatic support | Use current PrusaSlicer SLA Default/Branching trees through the FFF material and interface pipeline |
 | Triangle interfaces and sublayers | Control pattern, angle, and temperature for selected interface layers |
 | Low-temperature interface | Print model and interface at different temperatures with one nozzle |
 | Tree wall count | Reinforce tree branches with up to ten walls |

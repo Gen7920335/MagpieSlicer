@@ -21,6 +21,11 @@ InfillPattern interface_pattern_to_fill_pattern(
 bool support_interface_sublayer_selected(
     bool enabled, int start_layer, int end_layer, int interface_number, int interface_total);
 
+// Convert a non-zero user threshold (degrees from horizontal) to the maximum
+// XY distance that the layer below may support. Zero keeps the generator's
+// native automatic detector and therefore returns zero.
+coord_t support_overhang_offset_from_threshold(double layer_height_mm, double threshold_angle_degrees);
+
 // Keep each contact-derived XY footprint through its full top-interface stack.
 // Expansion is limited to printable support plus a small bridgeable tolerance.
 void stabilize_top_interface_footprints(

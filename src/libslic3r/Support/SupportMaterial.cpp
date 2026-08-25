@@ -1434,12 +1434,7 @@ static inline ExPolygons detect_overhangs(
                                         is_tsunami(object_config.support_type.value) ||
                                         is_mixed(object_config.support_type.value));
     const bool   buildplate_only = ! annotations.buildplate_covered.empty();
-    // If user specified a custom angle threshold, convert it to radians.
     // Zero means automatic overhang detection.
-    // +1 makes the threshold inclusive
-    double thresh_angle = object_config.support_threshold_angle.value > 0 ? object_config.support_threshold_angle.value + 1 : 0;
-    thresh_angle = std::min(thresh_angle, 89.); // BBS should be smaller than 90
-    const double threshold_rad = Geometry::deg2rad(thresh_angle);
     const bool bridge_no_support = object_config.bridge_no_support.value;
     const coordf_t xy_expansion = scale_(object_config.support_expansion.value);
     float lower_layer_offset = 0;
@@ -1483,9 +1478,10 @@ static inline ExPolygons detect_overhangs(
                 (layer_id < (size_t)object_config.enforce_support_layers.value) ? 
                     // Enforce a full possible support, ignore the overhang angle.
                     0.f :
-                (threshold_rad > 0. ? 
+                (object_config.support_threshold_angle.value > 0 ?
                     // Overhang defined by an angle.
-                    float(scale_(lower_layer.height / tan(threshold_rad))) :
+                    float(support_overhang_offset_from_threshold(
+                        lower_layer.height, object_config.support_threshold_angle.value)) :
                     // Overhang defined by overlap.
                     fw - float(scale_(object_config.support_threshold_overlap.get_abs_value(unscale_(fw)))));
             // Overhang polygons for this layer and region.

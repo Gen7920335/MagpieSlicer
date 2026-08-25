@@ -498,6 +498,7 @@ private:
     std::function<void(bool)> m_enable_large_nozzle_override_editor;
     std::function<void()> m_refresh_interface_density_spacing_editor;
     std::function<void(bool)> m_enable_interface_density_spacing_editor;
+    ConfigOptionsGroupShp m_tsunami_support_group;
 };
 
 class TabPrintModel : public TabPrint

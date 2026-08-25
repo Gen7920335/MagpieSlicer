@@ -71,6 +71,16 @@ bool support_interface_sublayer_selected(
     return interface_number >= first && interface_number <= last;
 }
 
+coord_t support_overhang_offset_from_threshold(double layer_height_mm, double threshold_angle_degrees)
+{
+    if (layer_height_mm <= 0. || threshold_angle_degrees <= 0.)
+        return 0;
+
+    // Preserve Orca's inclusive threshold convention and avoid tan(90 deg).
+    const double inclusive_angle = std::min(threshold_angle_degrees + 1., 89.);
+    return coord_t(scale_(layer_height_mm / std::tan(Geometry::deg2rad(inclusive_angle))));
+}
+
 void stabilize_top_interface_footprints(
     SupportGeneratorLayersPtr          &intermediate_layers,
     SupportGeneratorLayersPtr          &interface_layers,

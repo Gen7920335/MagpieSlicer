@@ -3339,6 +3339,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("tree_support_brim_width", "support_settings_tree");
 
         optgroup = page->new_optgroup(L("Tsunami supports"), L"param_support");
+        m_tsunami_support_group = optgroup;
         optgroup->append_single_option_line("tsunami_branch_angle");
         optgroup->append_single_option_line("tsunami_micro_branch_enabled");
         optgroup->append_single_option_line("tsunami_micro_branch_angle");
@@ -3585,22 +3586,13 @@ void TabPrint::toggle_options()
         return option != nullptr && option->value;
     };
 
+    if (m_tsunami_support_group)
+        m_tsunami_support_group->Show(is_tsunami(support_type));
+
     const bool sublayer_available =
         m_config->opt_int("support_interface_top_layers") > 1 ||
         m_config->opt_int("support_interface_bottom_layers") > 1;
     const bool sublayer_enabled = sublayer_available && optional_bool("support_interface_sublayer_pattern");
-    const bool tsunami_enabled = m_config->opt_bool("enable_support") && is_tsunami(support_type);
-    const bool tsunami_micro_enabled = tsunami_enabled && optional_bool("tsunami_micro_branch_enabled");
-    toggle_option("tsunami_branch_angle", tsunami_enabled);
-    toggle_option("tsunami_micro_branch_enabled", tsunami_enabled);
-    toggle_option("tsunami_micro_branch_angle", tsunami_micro_enabled);
-    toggle_option("tsunami_micro_branch_size", tsunami_micro_enabled);
-    toggle_option("tsunami_trunk_height", tsunami_enabled);
-    toggle_option("tsunami_rib_spacing", tsunami_enabled);
-    toggle_option("tsunami_trunk_thickness", tsunami_enabled);
-    toggle_option("tsunami_min_bed_contact_area", tsunami_enabled);
-    toggle_option("tsunami_max_bed_contact_area", tsunami_enabled);
-    toggle_option("tsunami_branch_minimum_spacing", tsunami_enabled);
     toggle_option("support_interface_sublayer_pattern", sublayer_available);
     toggle_option("support_interface_sublayer_start_layer", sublayer_enabled);
     toggle_option("support_interface_sublayer_end_layer", sublayer_enabled);
@@ -3718,6 +3710,7 @@ void TabPrint::clear_pages()
     m_enable_large_nozzle_override_editor = {};
     m_refresh_interface_density_spacing_editor = {};
     m_enable_interface_density_spacing_editor = {};
+    m_tsunami_support_group.reset();
     Tab::clear_pages();
 
     m_recommended_thin_wall_thickness_description_line = nullptr;

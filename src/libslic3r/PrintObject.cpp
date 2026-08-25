@@ -39,6 +39,7 @@
 #include <oneapi/tbb/concurrent_vector.h>
 #include <oneapi/tbb/parallel_for.h>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 #include <boost/log/trivial.hpp>
@@ -4401,7 +4402,9 @@ static void install_support_layer(SupportLayerPtrs &destination, std::unique_ptr
 }
 
 static void append_mixed_residual_path(
-    const ExtrusionPath &path, const ExPolygons &owner_coverage, ExtrusionEntityCollection &destination)
+    const ExtrusionPath &path, const ExPolygons &owner_coverage,
+    std::unordered_map<coord_t, ExPolygons> &exclusion_cache,
+    ExtrusionEntityCollection &destination)
 {
     if (owner_coverage.empty()) {
         destination.append(path);
@@ -4410,24 +4413,29 @@ static void append_mixed_residual_path(
     // owner_coverage already contains the physical width of the owner paths. Add the residual
     // path radius so the two extrusion envelopes meet without being printed on top of each other.
     const coord_t residual_radius = path.width > 0.f ? scale_(0.5 * path.width) : SCALED_EPSILON;
-    const ExPolygons exclusion = offset_ex(owner_coverage, std::max<coord_t>(SCALED_EPSILON, residual_radius));
-    path.subtract_expolygons(exclusion, &destination);
+    const coord_t exclusion_radius = std::max<coord_t>(SCALED_EPSILON, residual_radius);
+    auto [it, inserted] = exclusion_cache.try_emplace(exclusion_radius);
+    if (inserted)
+        it->second = offset_ex(owner_coverage, exclusion_radius);
+    path.subtract_expolygons(it->second, &destination);
 }
 
 static void append_mixed_residual(
-    const ExtrusionEntity &entity, const ExPolygons &owner_coverage, ExtrusionEntityCollection &destination)
+    const ExtrusionEntity &entity, const ExPolygons &owner_coverage,
+    std::unordered_map<coord_t, ExPolygons> &exclusion_cache,
+    ExtrusionEntityCollection &destination)
 {
     if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
         for (const ExtrusionEntity *child : collection->entities)
-            append_mixed_residual(*child, owner_coverage, destination);
+            append_mixed_residual(*child, owner_coverage, exclusion_cache, destination);
     } else if (const auto *path = dynamic_cast<const ExtrusionPath *>(&entity)) {
-        append_mixed_residual_path(*path, owner_coverage, destination);
+        append_mixed_residual_path(*path, owner_coverage, exclusion_cache, destination);
     } else if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath *>(&entity)) {
         for (const ExtrusionPath &path : multipath->paths)
-            append_mixed_residual_path(path, owner_coverage, destination);
+            append_mixed_residual_path(path, owner_coverage, exclusion_cache, destination);
     } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(&entity)) {
         for (const ExtrusionPath &path : loop->paths)
-            append_mixed_residual_path(path, owner_coverage, destination);
+            append_mixed_residual_path(path, owner_coverage, exclusion_cache, destination);
     } else {
         throw SlicingError(_u8L("Mixed support encountered an unsupported extrusion entity while merging channels."));
     }
@@ -4477,8 +4485,9 @@ static void merge_mixed_support_layers(
             // protects raft and classic-tree layers from duplicate extrusion.
             const ExPolygons owner_coverage = union_ex(
                 normal->support_fills.polygons_covered_by_width(float(SCALED_EPSILON)));
+            std::unordered_map<coord_t, ExPolygons> exclusion_cache;
             for (const ExtrusionEntity *entity : tree->support_fills.entities)
-                append_mixed_residual(*entity, owner_coverage, normal->support_fills);
+                append_mixed_residual(*entity, owner_coverage, exclusion_cache, normal->support_fills);
             normal->support_fills.no_sort = normal->support_fills.no_sort || tree->support_fills.no_sort;
             append(normal->support_islands, std::move(tree->support_islands));
             if (!normal->support_islands.empty())

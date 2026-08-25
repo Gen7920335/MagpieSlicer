@@ -119,22 +119,30 @@ MixedSupportPlan MixedSupportPlan::build(const PrintObject &object, const std::v
         SCALED_EPSILON, scale_(support_parameters.support_extrusion_width));
     std::vector<Polygons> painted_normal(object.layer_count());
     std::vector<Polygons> painted_tree(object.layer_count());
-    std::vector<Polygons> painted_support(object.layer_count());
-    object.project_and_append_mixed_support_facets(EnforcerBlockerType::ENFORCER, painted_normal);
-    object.project_and_append_mixed_support_facets(EnforcerBlockerType::BLOCKER, painted_tree);
-    object.project_and_append_custom_facets(false, EnforcerBlockerType::ENFORCER, painted_support);
-    for (size_t layer_id = 0; layer_id < painted_support.size(); ++layer_id) {
-        // A channel annotation is meaningful only while the same surface is
-        // still explicitly painted as a support enforcer. This also makes old
-        // or externally edited files with stale channel data harmless.
-        painted_normal[layer_id] = to_polygons(intersection_ex(painted_normal[layer_id], painted_support[layer_id]));
-        painted_tree[layer_id] = to_polygons(intersection_ex(painted_tree[layer_id], painted_support[layer_id]));
+    const bool has_mixed_paint = std::any_of(
+        object.model_object()->volumes.begin(), object.model_object()->volumes.end(),
+        [](const ModelVolume *volume) {
+            return volume->is_model_part() && !volume->mixed_support_facets.empty();
+        });
+    if (has_mixed_paint) {
+        std::vector<Polygons> painted_support(object.layer_count());
+        object.project_and_append_mixed_support_facets(EnforcerBlockerType::ENFORCER, painted_normal);
+        object.project_and_append_mixed_support_facets(EnforcerBlockerType::BLOCKER, painted_tree);
+        object.project_and_append_custom_facets(false, EnforcerBlockerType::ENFORCER, painted_support);
+        for (size_t layer_id = 0; layer_id < painted_support.size(); ++layer_id) {
+            // A channel annotation is meaningful only while the same surface is
+            // still explicitly painted as a support enforcer. This also makes old
+            // or externally edited files with stale channel data harmless.
+            painted_normal[layer_id] = to_polygons(intersection_ex(painted_normal[layer_id], painted_support[layer_id]));
+            painted_tree[layer_id] = to_polygons(intersection_ex(painted_tree[layer_id], painted_support[layer_id]));
+        }
     }
     return build_for_geometry(
         support_demand, buildplate_covered_by_object(object), connection_offset,
         object.config().mixed_normal_coverage_threshold.value,
         object.config().mixed_selective_merge.value,
-        &painted_normal, &painted_tree);
+        has_mixed_paint ? &painted_normal : nullptr,
+        has_mixed_paint ? &painted_tree : nullptr);
 }
 
 MixedSupportPlan MixedSupportPlan::build_for_geometry(
@@ -273,9 +281,10 @@ MixedSupportPlan MixedSupportPlan::build_for_geometry(
                                  decision.channel == MixedSupportChannel::Tree ? "tree" : "selective-mixed");
     }
 
+    const bool has_painted_annotations = painted_normal != nullptr || painted_tree != nullptr;
     for (size_t layer_id = 0; layer_id < layer_count; ++layer_id) {
-        const Polygons demand = layer_id < support_demand.size() ? union_(support_demand[layer_id]) : Polygons{};
-        if (!demand.empty()) {
+        if (has_painted_annotations && layer_id < support_demand.size() && !support_demand[layer_id].empty()) {
+            const Polygons demand = union_(support_demand[layer_id]);
             const Polygons normal_paint = painted_normal != nullptr && layer_id < painted_normal->size() ?
                 to_polygons(intersection_ex(demand, (*painted_normal)[layer_id])) : Polygons{};
             const Polygons tree_paint = painted_tree != nullptr && layer_id < painted_tree->size() ?

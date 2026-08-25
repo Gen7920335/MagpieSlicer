@@ -113,8 +113,16 @@ const std::string& shortkey_alt_prefix()
 void change_opt_value(DynamicPrintConfig& config, const t_config_option_key& opt_key, const boost::any& value, int opt_index /*= 0*/)
 {
 	try{
+        const ConfigOptionDef *opt_def = config.def() != nullptr ? config.def()->get(opt_key) : nullptr;
+        if (opt_def == nullptr)
+            throw UnknownOptionException(opt_key);
 
-        if (config.def()->get(opt_key)->type == coBools && config.def()->get(opt_key)->nullable) {
+        // Old process presets may not contain options introduced by a newer
+        // build. All mutation paths below expect the option to exist, so
+        // materialize its schema default before applying the edited value.
+        config.option_throw(opt_key, true);
+
+        if (opt_def->type == coBools && opt_def->nullable) {
             const auto v = boost::any_cast<unsigned char>(value);
             auto vec_new = std::make_unique<ConfigOptionBoolsNullable>(1, v);
             if (v == ConfigOptionBoolsNullable::nil_value()) {
@@ -125,7 +133,6 @@ void change_opt_value(DynamicPrintConfig& config, const t_config_option_key& opt
             return;
         }
 
-        const ConfigOptionDef *opt_def = config.def()->get(opt_key);
 		switch (opt_def->type) {
 		case coFloatOrPercent:{
 			std::string str = boost::any_cast<std::string>(value);

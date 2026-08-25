@@ -4,6 +4,7 @@
 #include "../Exception.hpp"
 #include "../Layer.hpp"
 #include "../Print.hpp"
+#include "SupportCommon.hpp"
 #include "SupportMaterial.hpp"
 #include "../SLA/SupportIslands/SampleConfigFactory.hpp"
 #include "../SLA/SupportPointGenerator.hpp"
@@ -162,6 +163,25 @@ void ResinStyleSupport::generate()
         heights.emplace_back(float(layer->slice_z + m_slicing_parameters.object_print_z_min));
     }
 
+    // A non-zero FFF threshold narrows the SLA generator's automatic point
+    // candidates to areas that the preceding layer cannot support at that
+    // angle. Zero deliberately preserves the native SLA island/peninsula
+    // detector for backward compatibility.
+    std::vector<Polygons> threshold_demand;
+    if (cfg.support_threshold_angle.value > 0) {
+        threshold_demand.resize(model_slices.size());
+        threshold_demand.front() = to_polygons(model_slices.front());
+        for (size_t layer_id = 1; layer_id < model_slices.size(); ++layer_id) {
+            const coord_t supported_offset = support_overhang_offset_from_threshold(
+                m_object.layers()[layer_id - 1]->height,
+                cfg.support_threshold_angle.value);
+            Polygons supported = offset(
+                to_polygons(model_slices[layer_id - 1]), float(supported_offset),
+                ClipperLib::jtSquare, 0.);
+            threshold_demand[layer_id] = diff(to_polygons(model_slices[layer_id]), supported);
+        }
+    }
+
     sla::ThrowOnCancel cancel = [this]() {
         if (m_object.print()->canceled())
             throw CanceledException();
@@ -214,7 +234,9 @@ void ResinStyleSupport::generate()
         const Point point = Point::new_scale(support_point.pos.x(), support_point.pos.y());
         const bool enforced = contains_point(enforcers[layer_id], point);
         const bool blocked  = contains_point(blockers[layer_id], point);
-        if (enforced || (!blocked && !cfg.resin_support_enforcers_only.value))
+        const bool passes_threshold = threshold_demand.empty() ||
+            contains_point(threshold_demand[layer_id], point);
+        if (enforced || (!blocked && !cfg.resin_support_enforcers_only.value && passes_threshold))
             filtered_points.emplace_back(std::move(support_point));
     }
 

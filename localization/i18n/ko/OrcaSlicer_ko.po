@@ -21962,3 +21962,84 @@ msgstr "최대 기둥 연결 거리"
 
 msgid "Object elevation"
 msgstr "출력물 띄우기"
+
+msgid "Selects the current PrusaSlicer resin support-tree strategy used by Resin style (auto)."
+msgstr "레진 스타일(자동)에서 사용할 최신 PrusaSlicer 레진 서포트 트리 방식을 선택합니다."
+
+msgid "Relative density of automatically generated resin-style support points."
+msgstr "자동으로 생성되는 레진 스타일 서포트 접점의 상대 밀도입니다."
+
+msgid "Only creates automatic support points inside support enforcers."
+msgstr "서포트 강제 지정 영역 안에만 자동 서포트 접점을 생성합니다."
+
+msgid "Diameter of the pointing side of the support head. Values below the active FFF line width are clamped at generation time."
+msgstr "서포트 헤드 끝부분의 직경입니다. 현재 FFF 선 너비보다 작은 값은 생성 시 선 너비로 제한됩니다."
+
+msgid "Width from the back sphere center to the front sphere center."
+msgstr "서포트 헤드의 뒤쪽 구 중심부터 앞쪽 구 중심까지의 폭입니다."
+
+msgid "Pillar diameter"
+msgstr "기둥 직경"
+
+msgid "Diameter of the support pillars. Values below the active FFF line width are clamped at generation time."
+msgstr "서포트 기둥의 직경입니다. 현재 FFF 선 너비보다 작은 값은 생성 시 선 너비로 제한됩니다."
+
+msgid "Diameter of fallback pillars as a percentage of the normal pillar diameter."
+msgstr "보조 기둥 직경을 일반 기둥 직경에 대한 백분율로 지정합니다."
+
+msgid "Max bridges on a pillar"
+msgstr "기둥당 최대 연결 가지 수"
+
+msgid "Maximum number of branches that may connect to one pillar."
+msgstr "하나의 기둥에 연결할 수 있는 최대 가지 수입니다."
+
+msgid "Max weight on model"
+msgstr "모델 위 최대 지지 하중"
+
+msgid "Maximum summed branch length of a support subtree that may terminate on the model instead of the build plate."
+msgstr "빌드 플레이트 대신 모델 위에서 끝날 수 있는 서포트 하위 트리의 가지 길이 합계 최댓값입니다."
+
+msgid "Controls whether neighboring pillars use Zig-Zag, Cross, or distance-dependent Dynamic links."
+msgstr "인접한 기둥을 지그재그, 십자 또는 거리에 따라 바뀌는 동적 방식으로 연결할지 정합니다."
+
+msgid "Zig-Zag"
+msgstr "지그재그"
+
+msgid "Cross"
+msgstr "십자"
+
+msgid "Dynamic"
+msgstr "동적"
+
+msgid "Support on build plate only"
+msgstr "빌드 플레이트에만 서포트"
+
+msgid "Routes support pillars only to the build plate, not onto the model."
+msgstr "서포트 기둥을 모델 위가 아닌 빌드 플레이트로만 연결합니다."
+
+msgid "Controls radius growth when branches or pillars merge."
+msgstr "가지나 기둥이 합쳐질 때 반지름이 증가하는 정도를 조절합니다."
+
+msgid "Diameter of the conical pillar base."
+msgstr "원뿔형 기둥 베이스의 직경입니다."
+
+msgid "Height of the conical pillar base."
+msgstr "원뿔형 기둥 베이스의 높이입니다."
+
+msgid "Minimum clearance between a pillar base and the model."
+msgstr "기둥 베이스와 모델 사이의 최소 이격 거리입니다."
+
+msgid "Critical angle"
+msgstr "연결 임계각"
+
+msgid "Default angle for connecting support sticks and junctions."
+msgstr "서포트 막대와 분기점을 연결할 때 사용하는 기본 각도입니다."
+
+msgid "Maximum length of a support-tree bridge."
+msgstr "서포트 트리 연결 브릿지의 최대 길이입니다."
+
+msgid "Maximum distance between pillars that may be linked. Zero disables pillar cascading."
+msgstr "서로 연결할 수 있는 기둥 사이의 최대 거리입니다. 0이면 기둥 연쇄 연결을 사용하지 않습니다."
+
+msgid "Raises the entire FFF object by this amount. This remains active and visible even when support generation is disabled."
+msgstr "FFF 출력물 전체를 이 높이만큼 띄웁니다. 서포트 생성을 꺼도 이 설정은 계속 적용되고 표시됩니다."

@@ -123,14 +123,8 @@ static coord_t cura_style_overhang_offset(const PrintObject &object, const Suppo
 {
     const PrintObjectConfig &config = object.config();
     const Layer             &layer  = *object.layers()[layer_idx];
-    const double threshold_deg = config.support_threshold_angle.value > 0 ?
-        std::min<double>(config.support_threshold_angle.value + 1, 89.) :
-        0.;
-
-    if (threshold_deg > 0.) {
-        const double threshold_rad = Geometry::deg2rad(threshold_deg);
-        return coord_t(scale_(layer.height / std::tan(threshold_rad)));
-    }
+    if (config.support_threshold_angle.value > 0)
+        return support_overhang_offset_from_threshold(layer.height, config.support_threshold_angle.value);
 
     return std::max<coord_t>(0, support_params.support_material_flow.scaled_width() / 2);
 }
