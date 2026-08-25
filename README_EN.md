@@ -12,15 +12,15 @@ An OrcaSlicer-based fork integrating mixed nozzle sizes, extended supports, and 
 
 ## Latest Release
 
-- Version: **2.5.0.0.1**
-- Tag: `v2.5.0.0.1`
+- Version: **2.5.0.0.2**
+- Tag: `v2.5.0.0.2`
 - Platform: **Windows x64**
 - Status: **Pre-release**
-- [Go directly to the latest GitHub release](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.1)
+- [Go directly to the latest GitHub release](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.2)
 
 The source commit and SHA-256 are recorded in the GitHub release notes.
 
-This release fixes Cura-style automatic support being generated while support was disabled. With no raft, no support is generated. Requesting one raft layer creates only that raft layer without enabling automatic support. The slicing timer now includes G-code generation and post-processing.
+This release makes the temperature drop tower follow a model when it moves to another plate. The preview no longer remains on empty or non-printable plates, and tower G-code is not generated when support is disabled or no support layers actually exist. A manually assigned position on the destination plate is preserved.
 
 > This fork is under active development. Inspect the preview and generated G-code before printing on real hardware.
 
