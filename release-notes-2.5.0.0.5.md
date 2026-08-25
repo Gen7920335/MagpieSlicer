@@ -15,14 +15,18 @@ This is the fifth Magpie release on the OrcaSlicer 2.5.0 base: Orca `2.5.0` + Ma
 - Replayed Tree, Normal, Tsunami, Mixed, and Resin support selections after the fix without a crash.
 - Switched the Resin tree strategy between Default and Branching without a crash.
 - Resin/Mixed FFF suite: 14 test cases and 633 assertions passed.
-- Packaged-application and installer verification pending.
+- The packaged application loaded an isolated copy containing 454 legacy process presets, selected `Resin style (auto)`, switched to `Branching (experimental)`, and remained responsive.
+- Packaged Cura support-geometry slicing: 3/3 checks passed.
+- NSIS archive integrity passed; 15,250 payload files (402,466,819 bytes) were extracted successfully.
+- The packaged EXE and DLL SHA-256 values match the verified build outputs.
+- Resource-guard preflight passed with two CMake/MSVC workers and BelowNormal priority; an unsafe `-Parallel 8` request was rejected before build startup.
 
 ## Installer
 
 `MagpieSlicer_Windows_Installer_V2.5.0.0.5_x64.exe`
 
-Size: pending
+Size: 142,233,974 bytes
 
-SHA-256: pending
+SHA-256: `FA36EE0FC5BDF94F653D0027B7C56D80DE5843423CE910D60E30E0ACEDF1306D`
 
-Payload commit: pending
+Payload commit: `a41875d38197159d142848c20a8f4b0a4a5c6eb0`
