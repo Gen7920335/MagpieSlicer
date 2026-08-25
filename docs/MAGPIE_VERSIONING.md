@@ -14,15 +14,15 @@ Orca base version or the Magpie line changes.
 
 ## Representation rules
 
-- Public application, installer, release, and Git tag version: `2.5.0.0.2`
-- Git tag: `v2.5.0.0.2`
-- Installer: `MagpieSlicer_Windows_Installer_V2.5.0.0.2_x64.exe`
-- Internal SemVer-compatible Orca version: `2.5.0-modified.0.2`
-- Windows numeric file version: `2.5.0.2`
+- Public application, installer, release, and Git tag version: `2.5.0.0.3`
+- Git tag: `v2.5.0.0.3`
+- Installer: `MagpieSlicer_Windows_Installer_V2.5.0.0.3_x64.exe`
+- Internal SemVer-compatible Orca version: `2.5.0-modified.0.3`
+- Windows numeric file version: `2.5.0.3`
 
 Windows executable metadata permits four numeric fields, so its final field
-encodes `Magpie line * 1000 + Magpie revision`. This gives `2` for Magpie
-sequence `0.2` while the public version remains the full five-field value.
+encodes `Magpie line * 1000 + Magpie revision`. This gives `3` for Magpie
+sequence `0.3` while the public version remains the full five-field value.
 
 The version owner is `version.inc`. Packaging must consume
 `MAGPIE_RELEASE_VERSION`; release names must not invent separate feature-based
