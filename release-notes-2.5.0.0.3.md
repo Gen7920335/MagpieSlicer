@@ -21,10 +21,13 @@ This is the third Magpie release on the OrcaSlicer 2.5.0 base: Orca `2.5.0` + Ma
 - 0.2/0.4/0.6/0.8 mm nozzle × four tree styles passed with support-layer and G-code verification.
 - Non-Tsunami support regression suite: 33 test cases and 5,840 assertions passed.
 - Release application target built and linked successfully.
-- Final release-readiness, installed-payload, installer integrity, commit, and SHA-256 details are recorded below after packaging.
+- Final release-readiness gate: 10/10 jobs passed.
+- NSIS integrity check: 15,101 files passed; extracted payload size 400,917,002 bytes.
+- Extracted installer payload matched the build EXE/DLL hashes, launched a responsive GUI window, and passed three Mixed plus three Cura geometry slicing cases.
+- Installer payload build commit: `ef48efb830`.
 
 ## Installer
 
 `MagpieSlicer_Windows_Installer_V2.5.0.0.3_x64.exe`
 
-SHA-256: `PENDING`
+SHA-256: `A7C6420E66AF8EAFF7E971ABFA8B9EE6A0FFF427F4887416ECBE61B3691CF1C7`
