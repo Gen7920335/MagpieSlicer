@@ -21,14 +21,14 @@ This is the sixth Magpie release on the OrcaSlicer 2.5.0 base: Orca `2.5.0` + Ma
 - Dense-path Mixed stress fixture completed in 0.73 seconds and remained below the 15-second responsiveness limit.
 - Korean PO format and header validation passed.
 - Release GUI DLL build passed with CMake and MSVC parallelism limited to two workers.
-- Packaged application and installer verification pending.
+- The packaged installer deployed 15,242 files (402,386,576 bytes), and the installed executable completed all three Cura-style support geometry cases: curved, stepped, and narrow.
 
 ## Installer
 
 `MagpieSlicer_Windows_Installer_V2.5.0.0.6_x64.exe`
 
-Size: pending
+Size: 142,242,422 bytes
 
-SHA-256: pending
+SHA-256: `3C8F60462D579A68AABDB88F4E98FCA086943E334755589E052E2B80CCD40715`
 
-Payload commit: pending
+Payload commit: `2fbcd4dc86`
