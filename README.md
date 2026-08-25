@@ -12,15 +12,15 @@
 
 ## 최신 릴리스
 
-- 버전: **2.5.0.0.4**
-- 태그: `v2.5.0.0.4`
+- 버전: **2.5.0.0.5**
+- 태그: `v2.5.0.0.5`
 - 플랫폼: **Windows x64**
 - 상태: **Pre-release**
-- [GitHub 최신 릴리스 바로가기](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.4)
+- [GitHub 최신 릴리스 바로가기](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.5)
 
 기준 커밋과 SHA-256은 GitHub 릴리스 본문에서 확인할 수 있습니다.
 
-이번 릴리스에서는 최신 PrusaSlicer SLA 서포트를 FFF용 `Resin style (자동)`으로 통합하고 Default/Branching 전략과 세부 설정을 노출했습니다. `Mixed (자동)` 서포트 색칠 채널과 Bambu Lab A2L의 0.2/0.4/0.6/0.8 mm 기기·공정·재질 프로파일도 추가했습니다.
+이번 릴리스에서는 기존 공정 프리셋에서 `Resin style (자동)`을 선택할 때 즉시 종료되던 문제를 수정했습니다. 최신 PrusaSlicer SLA 기반 Resin 서포트, `Mixed (자동)` 서포트 색칠 채널, Bambu Lab A2L의 0.2/0.4/0.6/0.8 mm 기기·공정·재질 프로파일은 그대로 포함됩니다.
 
 > 개발 중인 포크입니다. 실제 장비에서 출력하기 전에 미리보기와 생성된 G-code를 확인하십시오.
 
