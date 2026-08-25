@@ -32,20 +32,25 @@ public:
         const std::vector<Polygons> &buildplate_shadow,
         coord_t connection_offset,
         double normal_coverage_threshold_percent,
-        bool selective_merge = false);
+        bool selective_merge = false,
+        const std::vector<Polygons> *painted_normal = nullptr,
+        const std::vector<Polygons> *painted_tree = nullptr);
 
     const std::vector<Polygons>& normal_mask() const { return m_normal_mask; }
     const std::vector<Polygons>& tree_mask() const { return m_tree_mask; }
     const std::vector<Polygons>& buildplate_shadow() const { return m_buildplate_shadow; }
+    const std::vector<Polygons>& normal_paint_fallback() const { return m_normal_paint_fallback; }
     const std::vector<MixedSupportComponentDecision>& decisions() const { return m_decisions; }
 
     bool has_normal_demand() const;
     bool has_tree_demand() const;
+    bool has_normal_paint_fallback() const;
 
 private:
     std::vector<Polygons>                      m_normal_mask;
     std::vector<Polygons>                      m_tree_mask;
     std::vector<Polygons>                      m_buildplate_shadow;
+    std::vector<Polygons>                      m_normal_paint_fallback;
     std::vector<MixedSupportComponentDecision> m_decisions;
 };
 

@@ -74,6 +74,8 @@ static inline void model_volume_list_copy_configs(ModelObject &model_object_dst,
 		mv_dst.config.assign_config(mv_src.config);
         assert(mv_dst.supported_facets.id() == mv_src.supported_facets.id());
         mv_dst.supported_facets.assign(mv_src.supported_facets);
+        assert(mv_dst.mixed_support_facets.id() == mv_src.mixed_support_facets.id());
+        mv_dst.mixed_support_facets.assign(mv_src.mixed_support_facets);
         assert(mv_dst.seam_facets.id() == mv_src.seam_facets.id());
         mv_dst.seam_facets.assign(mv_src.seam_facets);
         assert(mv_dst.mmu_segmentation_facets.id() == mv_src.mmu_segmentation_facets.id());

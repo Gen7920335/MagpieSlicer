@@ -1,11 +1,20 @@
+///|/ Copyright (c) Prusa Research 2019 - 2022 Tomáš Mészáros @tamasmeszaros, Lukáš Hejl @hejllukas, Vojtěch Bubník @bubnikv, Lukáš Matěna @lukasmatena
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #ifndef PRUSASLICER_AABBMESH_H
 #define PRUSASLICER_AABBMESH_H
 
-#include <memory>
-#include <vector>
-
 #include <libslic3r/Point.hpp>
 #include <libslic3r/TriangleMesh.hpp>
+#include <assert.h>
+#include <stddef.h>
+#include <memory>
+#include <vector>
+#include <cmath>
+#include <limits>
+#include <cassert>
+#include <cstddef>
 
 // There is an implementation of a hole-aware raycaster that was eventually
 // not used in production version. It is now hidden under following define
@@ -31,7 +40,7 @@ class AABBMesh {
 
     std::unique_ptr<AABBImpl> m_aabb;
     VertexFaceIndex m_vfidx;    // vertex-face index
-    std::vector<Vec3i32> m_fnidx; // face-neighbor index
+    std::vector<Vec3i> m_fnidx; // face-neighbor index
 
 #ifdef SLIC3R_HOLE_RAYCASTER
     // This holds a copy of holes in the mesh. Initialized externally
@@ -57,9 +66,9 @@ public:
     ~AABBMesh();
 
     const std::vector<Vec3f>& vertices() const;
-    const std::vector<Vec3i32>& indices()  const;
+    const std::vector<Vec3i>& indices()  const;
     const Vec3f& vertices(size_t idx) const;
-    const Vec3i32& indices(size_t idx) const;
+    const Vec3i& indices(size_t idx) const;
 
     // Result of a raycast
     class hit_result {
@@ -133,7 +142,7 @@ public:
     const indexed_triangle_set * get_triangle_mesh() const { return m_tm; }
 
     const VertexFaceIndex &vertex_face_index() const { return m_vfidx; }
-    const std::vector<Vec3i32> &face_neighbor_index() const { return m_fnidx; }
+    const std::vector<Vec3i> &face_neighbor_index() const { return m_fnidx; }
 };
 
 

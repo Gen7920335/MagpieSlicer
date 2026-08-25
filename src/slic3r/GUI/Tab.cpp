@@ -3177,6 +3177,29 @@ void TabPrint::build()
         optgroup->append_single_option_line("support_remove_small_overhang", "support_settings_support#ignore-small-overhangs");
         //optgroup->append_single_option_line("enforce_support_layers", "support_settings_support");
 
+        optgroup = page->new_optgroup(L("Resin style supports"), L"param_support");
+        optgroup->append_single_option_line("resin_support_tree_type");
+        optgroup->append_single_option_line("resin_support_points_density_relative");
+        optgroup->append_single_option_line("resin_support_enforcers_only");
+        for (const std::string &key : {
+                 "resin_support_head_front_diameter", "resin_support_head_width",
+                 "resin_support_pillar_diameter", "resin_support_small_pillar_diameter_percent",
+                 "resin_support_max_bridges_on_pillar", "resin_support_max_weight_on_model",
+                 "resin_support_pillar_connection_mode", "resin_support_buildplate_only",
+                 "resin_support_pillar_widening_factor", "resin_support_base_diameter",
+                 "resin_support_base_height", "resin_support_base_safety_distance",
+                 "resin_support_critical_angle", "resin_support_max_bridge_length",
+                 "resin_support_max_pillar_link_distance", "resin_support_object_elevation",
+                 "resin_branching_support_head_front_diameter", "resin_branching_support_head_width",
+                 "resin_branching_support_pillar_diameter", "resin_branching_support_small_pillar_diameter_percent",
+                 "resin_branching_support_max_bridges_on_pillar", "resin_branching_support_max_weight_on_model",
+                 "resin_branching_support_pillar_connection_mode", "resin_branching_support_buildplate_only",
+                 "resin_branching_support_pillar_widening_factor", "resin_branching_support_base_diameter",
+                 "resin_branching_support_base_height", "resin_branching_support_base_safety_distance",
+                 "resin_branching_support_critical_angle", "resin_branching_support_max_bridge_length",
+                 "resin_branching_support_max_pillar_link_distance", "resin_branching_support_object_elevation" })
+            optgroup->append_single_option_line(key);
+
         optgroup = page->new_optgroup(L("Raft"), L"param_raft");
         optgroup->append_single_option_line("raft_layers", "support_settings_raft");
         optgroup->append_single_option_line("raft_contact_distance", "support_settings_raft");

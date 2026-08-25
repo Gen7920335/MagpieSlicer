@@ -2675,8 +2675,10 @@ void ObjectList::del_info_item(const int obj_idx, InfoItemType type)
     case InfoItemType::CustomSupports:
         cnv->get_gizmos_manager().reset_all_states();
         Plater::TakeSnapshot(plater, "Remove support painting");
-        for (ModelVolume* mv : (*m_objects)[obj_idx]->volumes)
+        for (ModelVolume* mv : (*m_objects)[obj_idx]->volumes) {
             mv->supported_facets.reset();
+            mv->mixed_support_facets.reset();
+        }
         break;
 
     // BBS: remove CustomSeam
@@ -3948,7 +3950,7 @@ void ObjectList::update_info_items(size_t obj_idx, wxDataViewItemArray *selectio
         bool should_show = printer_technology() == ptFFF
             && std::any_of(model_object->volumes.begin(), model_object->volumes.end(),
                 [](const ModelVolume* mv) {
-                    return !mv->supported_facets.empty();
+                    return !mv->supported_facets.empty() || !mv->mixed_support_facets.empty();
                 });
         if (shows && !should_show) {
             m_objects_model->SetSupportPaintState(false, item_obj);
@@ -3999,7 +4001,7 @@ void ObjectList::update_info_items(size_t obj_idx, wxDataViewItemArray *selectio
         bool should_show = false;
         for (ModelObject* mo : *m_objects) {
             for (ModelVolume* mv : mo->volumes) {
-                if (!mv->supported_facets.empty()) {
+                if (!mv->supported_facets.empty() || !mv->mixed_support_facets.empty()) {
                     should_show = true;
                     break;
                 }

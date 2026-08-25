@@ -204,7 +204,8 @@ enum SupportMaterialInterfacePattern {
 
 // BBS
 enum SupportType {
-    stNormalAuto, stNormalCuraAuto, stTreeAuto, stNormal, stNormalCura, stTree, stTsunamiAuto, stMixedAuto
+    stNormalAuto, stNormalCuraAuto, stTreeAuto, stNormal, stNormalCura, stTree,
+    stTsunamiAuto, stMixedAuto, stResinAuto
 };
 inline bool is_mixed(SupportType stype)
 {
@@ -217,6 +218,10 @@ inline bool is_tree(SupportType stype)
 inline bool is_tsunami(SupportType stype)
 {
     return stype == stTsunamiAuto;
+};
+inline bool is_resin(SupportType stype)
+{
+    return stype == stResinAuto;
 };
 inline bool is_normal_cura(SupportType stype)
 {
@@ -236,7 +241,7 @@ inline bool uses_tree_channel(SupportType stype)
 };
 inline bool uses_normal_channel(SupportType stype)
 {
-    return is_normal_support(stype) || is_mixed(stype);
+    return is_normal_support(stype) || is_mixed(stype) || is_resin(stype);
 };
 inline bool uses_cura_support_geometry(SupportType stype, SupportMaterialStyle style)
 {
@@ -251,7 +256,12 @@ inline bool is_tree_slim(SupportType type, SupportMaterialStyle style)
 };
 inline bool is_auto(SupportType stype)
 {
-    return std::set<SupportType>{stNormalAuto, stTreeAuto, stNormalCuraAuto, stTsunamiAuto, stMixedAuto}.count(stype) != 0;
+    return std::set<SupportType>{stNormalAuto, stTreeAuto, stNormalCuraAuto, stTsunamiAuto, stMixedAuto, stResinAuto}.count(stype) != 0;
+};
+
+enum ResinSupportTreeType {
+    rstDefault,
+    rstBranching
 };
 
 enum MixedNormalSupportGenerator {
@@ -615,6 +625,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportMaterialInterfacePattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(MixedNormalSupportGenerator)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(MixedTreeSupportStyle)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(ResinSupportTreeType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SeamPosition)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SeamScarfType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SLADisplayOrientation)
@@ -1038,6 +1049,44 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionEnum<MixedTreeSupportStyle>, mixed_tree_support_style))
     ((ConfigOptionPercent,             mixed_normal_coverage_threshold))
     ((ConfigOptionBool,                mixed_selective_merge))
+    // FFF port of PrusaSlicer's current resin support-tree strategies.
+    // Penetration is deliberately not exposed: FFF contact gaps and interface
+    // layers define the model boundary instead.
+    ((ConfigOptionEnum<ResinSupportTreeType>, resin_support_tree_type))
+    ((ConfigOptionInt,                 resin_support_points_density_relative))
+    ((ConfigOptionBool,                resin_support_enforcers_only))
+    ((ConfigOptionFloat,               resin_support_head_front_diameter))
+    ((ConfigOptionFloat,               resin_support_head_width))
+    ((ConfigOptionFloat,               resin_support_pillar_diameter))
+    ((ConfigOptionPercent,             resin_support_small_pillar_diameter_percent))
+    ((ConfigOptionInt,                 resin_support_max_bridges_on_pillar))
+    ((ConfigOptionFloat,               resin_support_max_weight_on_model))
+    ((ConfigOptionEnum<SLAPillarConnectionMode>, resin_support_pillar_connection_mode))
+    ((ConfigOptionBool,                resin_support_buildplate_only))
+    ((ConfigOptionFloat,               resin_support_pillar_widening_factor))
+    ((ConfigOptionFloat,               resin_support_base_diameter))
+    ((ConfigOptionFloat,               resin_support_base_height))
+    ((ConfigOptionFloat,               resin_support_base_safety_distance))
+    ((ConfigOptionFloat,               resin_support_critical_angle))
+    ((ConfigOptionFloat,               resin_support_max_bridge_length))
+    ((ConfigOptionFloat,               resin_support_max_pillar_link_distance))
+    ((ConfigOptionFloat,               resin_support_object_elevation))
+    ((ConfigOptionFloat,               resin_branching_support_head_front_diameter))
+    ((ConfigOptionFloat,               resin_branching_support_head_width))
+    ((ConfigOptionFloat,               resin_branching_support_pillar_diameter))
+    ((ConfigOptionPercent,             resin_branching_support_small_pillar_diameter_percent))
+    ((ConfigOptionInt,                 resin_branching_support_max_bridges_on_pillar))
+    ((ConfigOptionFloat,               resin_branching_support_max_weight_on_model))
+    ((ConfigOptionEnum<SLAPillarConnectionMode>, resin_branching_support_pillar_connection_mode))
+    ((ConfigOptionBool,                resin_branching_support_buildplate_only))
+    ((ConfigOptionFloat,               resin_branching_support_pillar_widening_factor))
+    ((ConfigOptionFloat,               resin_branching_support_base_diameter))
+    ((ConfigOptionFloat,               resin_branching_support_base_height))
+    ((ConfigOptionFloat,               resin_branching_support_base_safety_distance))
+    ((ConfigOptionFloat,               resin_branching_support_critical_angle))
+    ((ConfigOptionFloat,               resin_branching_support_max_bridge_length))
+    ((ConfigOptionFloat,               resin_branching_support_max_pillar_link_distance))
+    ((ConfigOptionFloat,               resin_branching_support_object_elevation))
     // Direction of the support pattern (in XY plane).`
     ((ConfigOptionFloat,               support_angle))
     ((ConfigOptionBool,                support_on_build_plate_only))

@@ -1,6 +1,8 @@
 #ifndef slic3r_SupportMaterial_hpp_
 #define slic3r_SupportMaterial_hpp_
 
+#include <functional>
+
 #include "Flow.hpp"
 #include "PrintConfig.hpp"
 #include "Slicing.hpp"
@@ -40,6 +42,11 @@ public:
 	// New support layers will be added to the object,
 	// with extrusion paths and islands filled in for each support layer.
 	void 		generate(PrintObject &object);
+	// Generate native FFF contacts, interfaces, raft and extrusion paths while
+	// taking the sparse support body from an external 3D strategy.
+	void        generate_from_resin_body(
+		PrintObject &object,
+		const std::function<ExPolygons(coordf_t)> &slice_body_at_z);
 
 	// Detect the same top-contact demand used by the normal support pipeline without
 	// generating support paths. Returned pointers remain valid while layer_storage lives.
@@ -47,6 +54,9 @@ public:
 		SupportGeneratorLayerStorage &layer_storage, bool apply_buildplate_only = true) const;
 
 private:
+	void generate_impl(
+		PrintObject &object,
+		const std::function<ExPolygons(coordf_t)> *slice_body_at_z);
 	std::vector<Polygons> buildplate_covered(const PrintObject &object) const;
 
 	// Generate top contact layers supporting overhangs.

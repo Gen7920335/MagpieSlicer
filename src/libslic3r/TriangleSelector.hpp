@@ -351,6 +351,12 @@ public:
     // Orca: remap the state of triangles according to the state_map
     void remap_triangle_state(const EnforcerBlockerStateMap& state_map);
 
+    // Overlay non-NONE states from painting data created for the same mesh.
+    // The state map is applied before overlaying. Unlike remap_painting(), this
+    // keeps the original facet correspondence and is intended for combining
+    // independent annotation channels on an unchanged mesh.
+    void overlay_painting(const TriangleSplittingData& painting, const EnforcerBlockerStateMap& state_map);
+
 
     // Store the division trees in compact form (a long stream of bits for each triangle of the original mesh).
     // First vector contains pairs of (triangle index, first bit in the second vector).
@@ -377,6 +383,7 @@ public:
     struct SavedPainting {
         TriangleMesh          mesh;  // Original mesh
         TriangleSplittingData supported;
+        TriangleSplittingData mixed_support;
         TriangleSplittingData seam;
         TriangleSplittingData mmu;
         TriangleSplittingData fuzzy;

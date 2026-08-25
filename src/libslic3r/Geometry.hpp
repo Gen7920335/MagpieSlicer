@@ -548,6 +548,28 @@ inline bool is_rotation_ninety_degrees(const Vec3d &rotation)
 Transformation mat_around_a_point_rotate(const Transformation& innMat, const Vec3d &pt, const Vec3d &axis, float rotate_theta_radian);
 Transformation generate_transform(const Vec3d &x_dir, const Vec3d &y_dir, const Vec3d &z_dir, const Vec3d &origin);
 
+template <class Tout = double, class Tin>
+std::pair<Tout, Tout> dir_to_spheric(const Vec<3, Tin> &direction, Tout norm = 1.)
+{
+    const Tout polar   = std::acos(Tout(direction.z()) / norm);
+    const Tout azimuth = std::atan2(Tout(direction.y()), Tout(direction.x()));
+    return {polar, azimuth};
+}
+
+template <class T = double>
+Vec<3, T> spheric_to_dir(double polar, double azimuth)
+{
+    return {T(std::cos(azimuth) * std::sin(polar)),
+            T(std::sin(azimuth) * std::sin(polar)),
+            T(std::cos(polar))};
+}
+
+template <class T = double, class Pair>
+Vec<3, T> spheric_to_dir(const Pair &angles)
+{
+    return spheric_to_dir<T>(std::get<0>(angles), std::get<1>(angles));
+}
+
 /**
  * Checks if a given point is inside a corner of a polygon.
  *

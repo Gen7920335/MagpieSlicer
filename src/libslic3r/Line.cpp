@@ -50,6 +50,15 @@ double Line::perp_distance_to(const Point &point) const
     return std::abs(cross2(v, va)) / v.norm();
 }
 
+double Line::perp_signed_distance_to(const Point &point) const
+{
+    const Vec2d v  = (this->b - this->a).cast<double>();
+    const Vec2d va = (point - this->a).cast<double>();
+    if (this->a == this->b)
+        return va.norm();
+    return cross2(v, va) / v.norm();
+}
+
 double Line::orientation() const
 {
     double angle = this->atan2_();

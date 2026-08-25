@@ -1,7 +1,9 @@
 
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Format/3mf.hpp"
+#include "libslic3r/Format/bbs_3mf.hpp"
 #include "libslic3r/Format/STL.hpp"
+#include "libslic3r/Preset.hpp"
 
 #include <boost/filesystem/operations.hpp>
 
@@ -131,6 +133,96 @@ SCENARIO("Export+Import geometry to/from 3mf file cycle", "[3mf]") {
             }
         }
     }
+}
+
+TEST_CASE("Mixed support paint survives a 3MF round trip", "[3mf][Mixed][Painting]")
+{
+    Model source;
+    const std::string source_file = std::string(TEST_DATA_DIR) + "/test_3mf/Prusa.stl";
+    REQUIRE(load_stl(source_file.c_str(), &source));
+    source.add_default_instances();
+
+    ModelVolume *volume = source.objects.front()->volumes.front();
+    TriangleSelector support_selector(volume->mesh());
+    support_selector.set_facet(0, EnforcerBlockerType::ENFORCER);
+    support_selector.set_facet(1, EnforcerBlockerType::ENFORCER);
+    REQUIRE(volume->supported_facets.set(support_selector));
+
+    TriangleSelector channel_selector(volume->mesh());
+    channel_selector.set_facet(0, EnforcerBlockerType::ENFORCER);
+    channel_selector.set_facet(1, EnforcerBlockerType::BLOCKER);
+    REQUIRE(volume->mixed_support_facets.set(channel_selector));
+
+    const boost::filesystem::path output =
+        boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("mixed-support-paint-%%%%-%%%%.3mf");
+    REQUIRE(store_3mf(output.string().c_str(), &source, nullptr, false));
+
+    Model restored;
+    DynamicPrintConfig config;
+    ConfigSubstitutionContext substitutions{ForwardCompatibilitySubstitutionRule::Disable};
+    REQUIRE(load_3mf(output.string().c_str(), config, substitutions, &restored, false));
+    boost::filesystem::remove(output);
+
+    REQUIRE(restored.objects.size() == 1);
+    REQUIRE(restored.objects.front()->volumes.size() == 1);
+    const ModelVolume *restored_volume = restored.objects.front()->volumes.front();
+    REQUIRE(restored_volume->supported_facets.equals(volume->supported_facets));
+    REQUIRE(restored_volume->mixed_support_facets.equals(volume->mixed_support_facets));
+}
+
+TEST_CASE("Mixed support paint survives a Bambu-Orca 3MF round trip", "[3mf][bbs_3mf][Mixed][Painting]")
+{
+    Model source;
+    const std::string source_file = std::string(TEST_DATA_DIR) + "/test_3mf/Prusa.stl";
+    REQUIRE(load_stl(source_file.c_str(), &source));
+    source.add_default_instances();
+
+    ModelVolume *volume = source.objects.front()->volumes.front();
+    TriangleSelector support_selector(volume->mesh());
+    support_selector.set_facet(0, EnforcerBlockerType::ENFORCER);
+    support_selector.set_facet(1, EnforcerBlockerType::ENFORCER);
+    REQUIRE(volume->supported_facets.set(support_selector));
+
+    TriangleSelector channel_selector(volume->mesh());
+    channel_selector.set_facet(0, EnforcerBlockerType::ENFORCER);
+    channel_selector.set_facet(1, EnforcerBlockerType::BLOCKER);
+    REQUIRE(volume->mixed_support_facets.set(channel_selector));
+
+    const boost::filesystem::path output =
+        boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("mixed-support-paint-bbs-%%%%-%%%%.3mf");
+    DynamicPrintConfig source_config;
+    StoreParams store_params;
+    const std::string output_string = output.string();
+    std::set<std::pair<int, int>> object_instances{{0, 0}};
+    PlateData source_plate(0, object_instances, false);
+    store_params.path = output_string.c_str();
+    store_params.model = &source;
+    store_params.plate_data_list = {&source_plate};
+    store_params.config = &source_config;
+    store_params.strategy = SaveStrategy::Silence | SaveStrategy::Zip64 | SaveStrategy::SplitModel;
+    REQUIRE(store_bbs_3mf(store_params));
+
+    Model restored;
+    DynamicPrintConfig restored_config;
+    ConfigSubstitutionContext substitutions{ForwardCompatibilitySubstitutionRule::Disable};
+    PlateDataPtrs plates;
+    std::vector<Preset *> presets;
+    bool is_bambu = false;
+    bool is_orca = false;
+    Semver version;
+    REQUIRE(load_bbs_3mf(output_string.c_str(), &restored_config, &substitutions, &restored,
+                         &plates, &presets, &is_bambu, &is_orca, &version, nullptr,
+                         LoadStrategy::LoadModel | LoadStrategy::LoadConfig | LoadStrategy::AddDefaultInstances));
+    release_PlateData_list(plates);
+    for (Preset *preset : presets)
+        delete preset;
+    boost::filesystem::remove(output);
+
+    REQUIRE(restored.objects.size() == 1);
+    REQUIRE(restored.objects.front()->volumes.size() == 1);
+    const ModelVolume *restored_volume = restored.objects.front()->volumes.front();
+    REQUIRE(restored_volume->supported_facets.equals(volume->supported_facets));
+    REQUIRE(restored_volume->mixed_support_facets.equals(volume->mixed_support_facets));
 }
 
 SCENARIO("2D convex hull of sinking object", "[3mf][.]") {

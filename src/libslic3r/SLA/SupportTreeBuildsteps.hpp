@@ -6,6 +6,8 @@
 
 #include <libslic3r/SLA/SupportTreeBuilder.hpp>
 #include <libslic3r/SLA/Clustering.hpp>
+#include <libslic3r/SLA/Concurrency.hpp>
+#include <libslic3r/SLA/IndexedMesh.hpp>
 #include <libslic3r/SLA/SpatIndex.hpp>
 
 namespace Slic3r {

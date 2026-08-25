@@ -18318,7 +18318,7 @@ msgstr ""
 msgid "Avoid warping\nDid you know that when printing materials that are prone to warping such as ABS, appropriately increasing the heatbed temperature can reduce the probability of warping?"
 msgstr ""
 
-msgid "Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), and Tsunami (auto) are used to generate support automatically. If a manual style is selected, only support enforcers are generated. Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. Normal (Cura style) is an experimental OrcaProject support-area generator."
+msgid "Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), Tsunami (auto), and Resin style (auto) are used to generate support automatically. If a manual style is selected, only support enforcers are generated. Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. Resin style (auto) uses the current PrusaSlicer resin point and tree strategies through the FFF support pipeline. Normal (Cura style) is an experimental OrcaProject support-area generator."
 msgstr ""
 
 msgid "Mixed (auto)"
@@ -18346,4 +18346,71 @@ msgid "Selective merge"
 msgstr ""
 
 msgid "When a support-demand region is below the normal coverage threshold, use build-plate-origin normal support for its reachable portion and tree support for only the remaining portion. When disabled, the whole region uses tree support."
+msgstr ""
+#: src/slic3r/GUI/Gizmos/GLGizmoFdmSupports.cpp
+msgid "Paint support as"
+msgstr ""
+
+#: src/slic3r/GUI/Gizmos/GLGizmoFdmSupports.cpp
+msgid "Paint normal support"
+msgstr ""
+
+#: src/slic3r/GUI/Gizmos/GLGizmoFdmSupports.cpp
+msgid "Paint tree support"
+msgstr ""
+
+#: src/slic3r/GUI/Gizmos/GLGizmoFdmSupports.cpp
+msgid "Left-click paints the selected Mixed support channel. Right-click blocks support. Shift+left-click returns the area to automatic assignment."
+msgstr ""
+
+#: src/libslic3r/PrintObject.cpp
+msgid "Some areas painted for normal support are not reachable from the build plate and were assigned to tree support."
+msgstr ""
+
+msgid "Resin style (auto)"
+msgstr ""
+
+msgid "Resin style supports"
+msgstr ""
+
+msgid "Resin support tree type"
+msgstr ""
+
+msgid "Branching (experimental)"
+msgstr ""
+
+msgid "Support points density"
+msgstr ""
+
+msgid "Support only in enforced regions"
+msgstr ""
+
+msgid "Pinhead front diameter"
+msgstr ""
+
+msgid "Pinhead width"
+msgstr ""
+
+msgid "Small pillar diameter percent"
+msgstr ""
+
+msgid "Pillar connection mode"
+msgstr ""
+
+msgid "Pillar widening factor"
+msgstr ""
+
+msgid "Support base diameter"
+msgstr ""
+
+msgid "Support base height"
+msgstr ""
+
+msgid "Support base safety distance"
+msgstr ""
+
+msgid "Max pillar linking distance"
+msgstr ""
+
+msgid "Object elevation"
 msgstr ""

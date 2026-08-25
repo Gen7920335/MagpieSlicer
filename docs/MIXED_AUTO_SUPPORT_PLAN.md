@@ -767,10 +767,39 @@ layer_merge
 ## 17. 실행 검증 결과
 
 - Release `fff_print_tests` 타깃 빌드 성공.
-- `[Mixed]`: 8 test cases, 480 assertions 통과.
+- `[Mixed]`: 9 test cases, 486 assertions 통과.
 - 실제 선택적 분할 fixture에서 Prusa/Cura × Organic/Slim/Strong/Tree Hybrid 8개 조합의 support layer와 G-code 생성 통과.
 - Prusa+Organic 및 Cura+Strong 대표 조합에서 2-layer raft 설정, 부분 겹침 raft 병합, 유일한 Z 순서, 각 raft 레이어 extrusion, G-code 생성 통과.
 - 0.2/0.4/0.6/0.8 mm nozzle × Organic/Slim/Strong/Tree Hybrid 16개 조합에서 양 채널 support layer와 G-code 생성, 112 assertions 통과.
 - `[SupportMaterial]~[TsunamiSupport]`: 기존 Normal/Cura/Tree/인터페이스/raft/온도 드롭 타워 포함 33 test cases, 5,840 assertions 통과.
 - Release 애플리케이션 타깃 `OrcaSlicer` 전체 빌드 및 `MagpieSlicer.dll` 링크 성공.
 - 전체 `[SupportMaterial]` 실행에서 기존 Tsunami 전용 테스트 실패가 재현되어 해당 폐기 예정 기능은 Mixed 회귀 판정에서 제외했다. Mixed가 아닌 기존 실패이며 이 작업에서 수정하지 않았다.
+
+## 18. Mixed 서포트 페인팅 설계와 구현
+
+Mixed에서 수동 페인트는 기존 support enforcer/blocker 데이터에 생성기 종류를 억지로 인코딩하지 않고 두 annotation으로 분리한다.
+
+- `supported_facets`: 기존 의미를 그대로 유지한다. ENFORCER는 해당 면에 서포트 수요를 강제하고 BLOCKER는 서포트를 막는다.
+- `mixed_support_facets`: Mixed 전용 생성기 배정만 저장한다. NONE은 자동 판정, ENFORCER는 일반, BLOCKER는 트리를 뜻한다.
+- 이전 버전은 새 attribute를 무시하더라도 `supported_facets`의 ENFORCER를 읽으므로 수동 서포트 수요 자체는 사라지지 않는다.
+- Mixed가 아닌 모드의 페인터와 생성기는 기존 경로를 그대로 사용한다. 숨은 channel annotation은 실제 `supported_facets` ENFORCER 투영과 교집합을 취한 뒤에만 planner에 들어가므로 stale 데이터가 자동 overhang 배정을 덮어쓰지 않는다.
+
+Mixed 페인터 UI는 다음 상태를 사용한다.
+
+- 미도색: 자동 component 판정;
+- 초록: 일반 서포트 강제;
+- 파랑: 트리 서포트 강제;
+- 빨강: 서포트 차단;
+- 노랑: 새 채널 값이 없는 기존 generic enforcer. 서포트는 강제하지만 생성기 선택은 자동이다.
+
+입력은 기존 페인터 제스처를 보존한다. 좌클릭은 UI에서 선택한 일반/트리 채널을 칠하고, 우클릭은 차단하며, Shift+좌클릭은 자동 상태로 지운다. 일반으로 칠한 투영 중 build plate에서 수직으로 도달할 수 없는 부분은 누락시키지 않고 트리 채널로 폴백하며 non-critical warning을 남긴다. 투영 중 일반과 트리가 겹치면 build-plate-only 불변식을 지키기 위해 트리가 우선한다. 전체 우선순위는 blocker > tree > normal > automatic이다.
+
+편집 시 화면 내부에서는 자동/기존 강제/차단/일반/트리의 5상태 selector로 합치고, 저장할 때 두 annotation으로 다시 분리한다. 동일 topology의 두 annotation은 상태만 직접 overlay하여 반복해서 페인터를 열고 저장해도 삼각형 분할 수가 늘거나 경계가 이동하지 않게 했다. topology가 다른 외부/과거 데이터에만 기하 overlay fallback을 사용한다.
+
+영속 경로는 standard 3MF의 `slic3rpe:mixed_supports`와 Bambu/Orca 3MF의 `paint_mixed_supports`를 사용한다. volume copy, unit conversion, split/remap, reload/repair, undo/redo, background invalidation과 shared-mesh 판정에도 별도 annotation을 포함한다.
+
+검증 결과:
+
+- `libslic3r_tests [Mixed]`: selector 합성/분리, standard 3MF와 Bambu/Orca 3MF round-trip을 포함해 3 cases, 28 assertions 통과;
+- `fff_print_tests [Mixed]`: 수동 normal/tree 우선순위, projected overlap에서 tree 우선, 도달 불가 normal의 tree 폴백을 포함해 9 cases, 486 assertions 통과;
+- Release `libslic3r`, `libslic3r_gui`, 두 테스트 타깃 빌드 성공.

@@ -1442,6 +1442,33 @@ TEST_CASE("Mixed selective merge partitions only below-threshold components", "[
     CHECK(zero.tree_mask()[1].empty());
 }
 
+TEST_CASE("Mixed painted channels override automatic assignment safely", "[SupportMaterial][Mixed][Planner][Paint]")
+{
+    std::vector<Polygons> demand(2);
+    demand[1] = support_test_rectangle(0., 0., 10., 10.);
+    std::vector<Polygons> shadow(2);
+    shadow[1] = support_test_rectangle(0., 0., 4., 10.);
+    std::vector<Polygons> painted_normal(2);
+    painted_normal[1] = support_test_rectangle(0., 0., 8., 10.);
+    std::vector<Polygons> painted_tree(2);
+    painted_tree[1] = support_test_rectangle(7., 0., 10., 10.);
+    const coord_t connection_width = scale_(0.4); // Support-demand connection distance in XY millimetres.
+
+    const MixedSupportPlan plan = MixedSupportPlan::build_for_geometry(
+        demand, shadow, connection_width, 100., false, &painted_normal, &painted_tree);
+
+    CHECK(same_polygon_set(plan.normal_mask()[1], support_test_rectangle(4., 0., 7., 10.)));
+    Polygons expected_tree = support_test_rectangle(0., 0., 4., 10.);
+    append(expected_tree, support_test_rectangle(7., 0., 10., 10.));
+    CHECK(same_polygon_set(plan.tree_mask()[1], expected_tree));
+    CHECK(same_polygon_set(plan.normal_paint_fallback()[1], support_test_rectangle(0., 0., 4., 10.)));
+    CHECK(plan.has_normal_paint_fallback());
+    CHECK(intersection_ex(plan.normal_mask()[1], plan.tree_mask()[1]).empty());
+    Polygons recombined = plan.normal_mask()[1];
+    append(recombined, plan.tree_mask()[1]);
+    CHECK(same_polygon_set(union_(recombined), demand[1]));
+}
+
 TEST_CASE("Mixed selective merge generates both support channels", "[SupportMaterial][Mixed][Integration]")
 {
     const auto make_fixture = []() {
@@ -1607,6 +1634,221 @@ TEST_CASE("Mixed selective merge supports common nozzle diameters", "[SupportMat
             CHECK(output.find("support_type = mixed(auto)") != std::string::npos);
         }
     }
+}
+
+TEST_CASE("Resin style exposes current support controls without penetration",
+          "[SupportMaterial][Resin][Config]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "support_type", "resin(auto)" },
+        { "resin_support_tree_type", "branching" },
+        { "resin_support_points_density_relative", "125" },
+        { "resin_support_pillar_connection_mode", "cross" },
+        { "resin_support_object_elevation", "7.5" },
+        { "resin_branching_support_pillar_connection_mode", "zigzag" },
+        { "resin_branching_support_object_elevation", "6.5" }
+    });
+    const std::array<const char *, 35> keys {
+        "resin_support_tree_type",
+        "resin_support_points_density_relative",
+        "resin_support_enforcers_only",
+        "resin_support_head_front_diameter",
+        "resin_support_head_width",
+        "resin_support_pillar_diameter",
+        "resin_support_small_pillar_diameter_percent",
+        "resin_support_max_bridges_on_pillar",
+        "resin_support_max_weight_on_model",
+        "resin_support_pillar_connection_mode",
+        "resin_support_buildplate_only",
+        "resin_support_pillar_widening_factor",
+        "resin_support_base_diameter",
+        "resin_support_base_height",
+        "resin_support_base_safety_distance",
+        "resin_support_critical_angle",
+        "resin_support_max_bridge_length",
+        "resin_support_max_pillar_link_distance",
+        "resin_support_object_elevation",
+        "resin_branching_support_head_front_diameter",
+        "resin_branching_support_head_width",
+        "resin_branching_support_pillar_diameter",
+        "resin_branching_support_small_pillar_diameter_percent",
+        "resin_branching_support_max_bridges_on_pillar",
+        "resin_branching_support_max_weight_on_model",
+        "resin_branching_support_pillar_connection_mode",
+        "resin_branching_support_buildplate_only",
+        "resin_branching_support_pillar_widening_factor",
+        "resin_branching_support_base_diameter",
+        "resin_branching_support_base_height",
+        "resin_branching_support_base_safety_distance",
+        "resin_branching_support_critical_angle",
+        "resin_branching_support_max_bridge_length",
+        "resin_branching_support_max_pillar_link_distance",
+        "resin_branching_support_object_elevation"
+    };
+    for (const char *key : keys) {
+        CAPTURE(key);
+        CHECK(config.option(key) != nullptr);
+    }
+    CHECK(config.option("resin_support_head_penetration") == nullptr);
+    CHECK(config.option("resin_branching_support_head_penetration") == nullptr);
+
+    CHECK(config.opt_enum<SupportType>("support_type") == stResinAuto);
+    CHECK(config.opt_enum<ResinSupportTreeType>("resin_support_tree_type") == rstBranching);
+    CHECK(config.opt_int("resin_support_points_density_relative") == 125);
+    CHECK(config.opt_enum<SLAPillarConnectionMode>("resin_support_pillar_connection_mode") == slapcmCross);
+    CHECK(config.opt_float("resin_support_object_elevation") == Catch::Approx(7.5));
+    CHECK(config.opt_enum<SLAPillarConnectionMode>("resin_branching_support_pillar_connection_mode") == slapcmZigZag);
+    CHECK(config.opt_float("resin_branching_support_object_elevation") == Catch::Approx(6.5));
+    CHECK(config.option<ConfigOptionEnum<SupportType>>("support_type")->serialize() == "resin(auto)");
+    CHECK(is_auto(stResinAuto));
+    CHECK(is_resin(stResinAuto));
+    CHECK(uses_normal_channel(stResinAuto));
+    CHECK_FALSE(uses_tree_channel(stResinAuto));
+
+    DynamicPrintConfig restored = DynamicPrintConfig::full_print_config();
+    restored.set_deserialize_strict("support_type", config.opt_serialize("support_type"));
+    for (const char *key : keys)
+        restored.set_deserialize_strict(key, config.opt_serialize(key));
+    CHECK(restored.opt_enum<SupportType>("support_type") == stResinAuto);
+    CHECK(restored.opt_enum<ResinSupportTreeType>("resin_support_tree_type") == rstBranching);
+    CHECK(restored.opt_float("resin_support_object_elevation") == Catch::Approx(7.5));
+    CHECK(restored.opt_float("resin_branching_support_object_elevation") == Catch::Approx(6.5));
+}
+
+TEST_CASE("Resin style elevation remains active with support disabled",
+          "[SupportMaterial][Resin][Elevation]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("enable_support", new ConfigOptionBool(false));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stResinAuto));
+    config.set_key_value("resin_support_tree_type",
+        new ConfigOptionEnum<ResinSupportTreeType>(rstDefault));
+    config.set_key_value("resin_support_object_elevation", new ConfigOptionFloat(5.));
+
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({ make_cube(20., 20., 10.) }, print, config));
+    REQUIRE(print.objects().size() == 1);
+    const PrintObject *object = print.objects().front();
+    CHECK(object->slicing_parameters().object_print_z_min == Catch::Approx(5.));
+    CHECK(object->support_layers().empty());
+}
+
+TEST_CASE("Resin style Default and Branching generate printable FFF support",
+          "[SupportMaterial][Resin][Integration][Nozzle]")
+{
+    const auto make_fixture = []() {
+        TriangleMesh fixture = make_cube(8., 8., 18.);
+        TriangleMesh ceiling = make_cube(28., 20., 2.);
+        ceiling.translate(-10.f, -6.f, 18.f);
+        fixture.merge(ceiling);
+        return fixture;
+    };
+
+    for (const ResinSupportTreeType strategy : { rstDefault, rstBranching }) {
+      for (const double nozzle : { 0.2, 0.4, 0.6, 0.8 }) {
+        CAPTURE(int(strategy), nozzle);
+        const double layer_height = std::min(0.2, 0.5 * nozzle);
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stResinAuto));
+        config.set_key_value("resin_support_tree_type",
+            new ConfigOptionEnum<ResinSupportTreeType>(strategy));
+        config.set_key_value("resin_support_points_density_relative", new ConfigOptionInt(50));
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ nozzle }));
+        config.set_key_value("layer_height", new ConfigOptionFloat(layer_height));
+        config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(layer_height));
+        config.set_key_value("support_interface_top_layers", new ConfigOptionInt(2));
+        config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+
+        Print print;
+        REQUIRE_NOTHROW(init_and_process_print({ make_fixture() }, print, config));
+        REQUIRE(print.objects().size() == 1);
+        const PrintObject *object = print.objects().front();
+        CHECK(object->config().enable_support.value);
+        CHECK(object->config().support_type.value == stResinAuto);
+        CHECK(object->is_step_done(posSupportMaterial));
+        const auto support_layers = object->support_layers();
+        REQUIRE_FALSE(support_layers.empty());
+        CHECK(std::any_of(support_layers.begin(), support_layers.end(), [](const SupportLayer *layer) {
+            return layer->print_z < 15. && layer->has_extrusions();
+        }));
+
+        const std::string output = gcode(print);
+        CHECK_FALSE(output.empty());
+        CHECK(output.find("support_type = resin(auto)") != std::string::npos);
+        CHECK(output.find("support material interface") != std::string::npos);
+      }
+    }
+}
+
+TEST_CASE("Resin style zero elevation omits bed-face points but keeps overhang support",
+          "[SupportMaterial][Resin][Integration][Elevation]")
+{
+    TriangleMesh fixture = make_cube(8., 8., 8.);
+    TriangleMesh ceiling = make_cube(28., 20., 2.);
+    ceiling.translate(-10.f, -6.f, 18.f);
+    fixture.merge(ceiling);
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stResinAuto));
+    config.set_key_value("resin_support_tree_type",
+        new ConfigOptionEnum<ResinSupportTreeType>(rstDefault));
+    config.set_key_value("resin_support_object_elevation", new ConfigOptionFloat(0.));
+    config.set_key_value("resin_support_points_density_relative", new ConfigOptionInt(50));
+    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(1));
+
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({ fixture }, print, config));
+    REQUIRE(print.objects().size() == 1);
+    const PrintObject *object = print.objects().front();
+    CHECK(object->slicing_parameters().object_print_z_min == Catch::Approx(0.));
+    CHECK_FALSE(object->support_layers().empty());
+}
+
+TEST_CASE("Resin style preserves dedicated body and interface filaments",
+          "[SupportMaterial][Resin][Integration][MultiMaterial]")
+{
+    TriangleMesh fixture = make_cube(8., 8., 18.);
+    TriangleMesh ceiling = make_cube(28., 20., 2.);
+    ceiling.translate(-10.f, -6.f, 18.f);
+    fixture.merge(ceiling);
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_num_extruders(3);
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stResinAuto));
+    config.set_key_value("support_filament", new ConfigOptionInt(2));
+    config.set_key_value("support_interface_filament", new ConfigOptionInt(3));
+    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(2));
+    config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+    config.set_key_value("resin_support_points_density_relative", new ConfigOptionInt(50));
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4, 0.4, 0.4 }));
+    config.set_key_value("printer_extruder_id", new ConfigOptionInts({ 1, 2, 3 }));
+    config.set_key_value("printer_extruder_variant", new ConfigOptionStrings({
+        "Direct Drive Standard", "Direct Drive Standard", "Direct Drive Standard" }));
+    config.set_key_value("filament_diameter", new ConfigOptionFloats({ 1.75, 1.75, 1.75 }));
+    config.set_key_value("filament_type", new ConfigOptionStrings({ "PLA", "PLA", "PLA" }));
+    config.set_key_value("filament_colour",
+        new ConfigOptionStrings({ "#808080", "#00AAFF", "#FFAA00" }));
+    config.set_key_value("default_filament_colour",
+        new ConfigOptionStrings({ "#808080", "#00AAFF", "#FFAA00" }));
+    config.set_key_value("flush_multiplier", new ConfigOptionFloats({ 1. }));
+    config.set_key_value("flush_volumes_matrix",
+        new ConfigOptionFloats({ 0., 0., 0., 0., 0., 0., 0., 0., 0. }));
+    config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+    config.set_key_value("filament_map", new ConfigOptionInts({ 1, 2, 3 }));
+    config.set_key_value("gcode_comments", new ConfigOptionBool(true));
+
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({ fixture }, print, config));
+    CHECK(print.support_material_extruders() == std::vector<unsigned int>{ 1, 2 });
+    const std::string output = gcode(print);
+    CHECK(output.find("support_type = resin(auto)") != std::string::npos);
+    CHECK(output.find("\nT1") != std::string::npos);
+    CHECK(output.find("\nT2 ; change extruder\n") != std::string::npos);
+    CHECK(output.find("support material interface") != std::string::npos);
 }
 
 TEST_CASE("Mixed support preserves dedicated body and interface filaments",

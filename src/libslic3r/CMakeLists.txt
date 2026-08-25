@@ -26,6 +26,11 @@ set(lisbslic3r_sources
     AABBMesh.hpp
     AABBTreeIndirect.hpp
     AABBTreeLines.hpp
+    BoostAdapter.hpp
+    BranchingTree/BranchingTree.cpp
+    BranchingTree/BranchingTree.hpp
+    BranchingTree/PointCloud.cpp
+    BranchingTree/PointCloud.hpp
     Algorithm/LineSplit.cpp
     Algorithm/LineSplit.hpp
     Algorithm/RegionExpansion.cpp
@@ -315,6 +320,8 @@ set(lisbslic3r_sources
     MutablePolygon.cpp
     MutablePolygon.hpp
     MutablePriorityQueue.hpp
+    MeshNormals.cpp
+    MeshNormals.hpp
     NormalUtils.cpp
     NormalUtils.hpp
     NSVGUtils.cpp
@@ -379,6 +386,8 @@ set(lisbslic3r_sources
     ShortestPath.cpp
     ShortestPath.hpp
     SLA/AGGRaster.hpp
+    SLA/BranchingTreeSLA.cpp
+    SLA/BranchingTreeSLA.hpp
     SLA/BoostAdapter.hpp
     SLA/Clustering.cpp
     SLA/Clustering.hpp
@@ -390,6 +399,8 @@ set(lisbslic3r_sources
     SLA/IndexedMesh.cpp
     SLA/IndexedMesh.hpp
     SLA/JobController.hpp
+    SLA/DefaultSupportTree.cpp
+    SLA/DefaultSupportTree.hpp
     SLA/Pad.cpp
     SLA/Pad.hpp
     SLAPrint.cpp
@@ -405,18 +416,54 @@ set(lisbslic3r_sources
     SLA/Rotfinder.hpp
     SLA/SpatIndex.cpp
     SLA/SpatIndex.hpp
+    SLA/SupportIslands/EvaluateNeighbor.cpp
+    SLA/SupportIslands/EvaluateNeighbor.hpp
+    SLA/SupportIslands/ExpandNeighbor.cpp
+    SLA/SupportIslands/ExpandNeighbor.hpp
+    SLA/SupportIslands/IStackFunction.hpp
+    SLA/SupportIslands/LineUtils.cpp
+    SLA/SupportIslands/LineUtils.hpp
+    SLA/SupportIslands/NodeDataWithResult.hpp
+    SLA/SupportIslands/Parabola.hpp
+    SLA/SupportIslands/ParabolaUtils.cpp
+    SLA/SupportIslands/ParabolaUtils.hpp
+    SLA/SupportIslands/PointUtils.cpp
+    SLA/SupportIslands/PointUtils.hpp
+    SLA/SupportIslands/PolygonUtils.cpp
+    SLA/SupportIslands/PolygonUtils.hpp
+    SLA/SupportIslands/PostProcessNeighbor.cpp
+    SLA/SupportIslands/PostProcessNeighbor.hpp
+    SLA/SupportIslands/PostProcessNeighbors.cpp
+    SLA/SupportIslands/PostProcessNeighbors.hpp
+    SLA/SupportIslands/SampleConfig.hpp
+    SLA/SupportIslands/SampleConfigFactory.cpp
+    SLA/SupportIslands/SampleConfigFactory.hpp
+    SLA/SupportIslands/SupportIslandPoint.cpp
+    SLA/SupportIslands/SupportIslandPoint.hpp
+    SLA/SupportIslands/UniformSupportIsland.cpp
+    SLA/SupportIslands/UniformSupportIsland.hpp
+    SLA/SupportIslands/VectorUtils.hpp
+    SLA/SupportIslands/VoronoiDiagramCGAL.cpp
+    SLA/SupportIslands/VoronoiDiagramCGAL.hpp
+    SLA/SupportIslands/VoronoiGraph.hpp
+    SLA/SupportIslands/VoronoiGraphUtils.cpp
+    SLA/SupportIslands/VoronoiGraphUtils.hpp
     SLA/SupportPointGenerator.cpp
     SLA/SupportPointGenerator.hpp
     SLA/SupportPoint.hpp
     SLA/SupportTreeBuilder.cpp
     SLA/SupportTreeBuilder.hpp
-    SLA/SupportTreeBuildsteps.cpp
-    SLA/SupportTreeBuildsteps.hpp
     SLA/SupportTree.cpp
     SLA/SupportTree.hpp
     #SLA/SupportTreeIGL.cpp
     SLA/SupportTreeMesher.cpp
     SLA/SupportTreeMesher.hpp
+    SLA/SupportTreeSlicer.cpp
+    SLA/SupportTreeSlicer.hpp
+    SLA/SupportTreeStrategies.hpp
+    SLA/SupportTreeTypes.hpp
+    SLA/SupportTreeUtils.hpp
+    SLA/SupportTreeUtilsLegacy.hpp
     SlicesToTriangleMesh.cpp
     SlicesToTriangleMesh.hpp
     SlicingAdaptive.cpp
@@ -432,6 +479,8 @@ set(lisbslic3r_sources
     Support/SupportLayer.hpp
     Support/SupportMaterial.cpp
     Support/SupportMaterial.hpp
+    Support/ResinStyleSupport.cpp
+    Support/ResinStyleSupport.hpp
     Support/SupportParameters.hpp
     Support/SupportSpotsGenerator.cpp
     Support/SupportSpotsGenerator.hpp

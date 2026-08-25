@@ -40,9 +40,9 @@ template<int N, class T> using Vec = Mat<N, 1, T>;
 // Vector types with a fixed point coordinate base type.
 using Vec2crd = Eigen::Matrix<coord_t,  2, 1, Eigen::DontAlign>;
 using Vec3crd = Eigen::Matrix<coord_t,  3, 1, Eigen::DontAlign>;
-// using Vec2i   = Eigen::Matrix<int,      2, 1, Eigen::DontAlign>;
-// using Vec3i   = Eigen::Matrix<int,      3, 1, Eigen::DontAlign>;
-// using Vec4i   = Eigen::Matrix<int,      4, 1, Eigen::DontAlign>;
+using Vec2i   = Eigen::Matrix<int,      2, 1, Eigen::DontAlign>;
+using Vec3i   = Eigen::Matrix<int,      3, 1, Eigen::DontAlign>;
+using Vec4i   = Eigen::Matrix<int,      4, 1, Eigen::DontAlign>;
 using Vec2i32 = Eigen::Matrix<int32_t,  2, 1, Eigen::DontAlign>;
 using Vec2i64 = Eigen::Matrix<int64_t,  2, 1, Eigen::DontAlign>;
 using Vec3i32 = Eigen::Matrix<int32_t,  3, 1, Eigen::DontAlign>;

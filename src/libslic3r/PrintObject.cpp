@@ -14,6 +14,7 @@
 #include "Support/SupportMaterial.hpp"
 #include "Support/CuraStyleSupport.hpp"
 #include "Support/MixedSupportPlan.hpp"
+#include "Support/ResinStyleSupport.hpp"
 #include "Support/SupportSpotsGenerator.hpp"
 #include "Support/TreeSupport.hpp"
 #include "Support/TsunamiSupport.hpp"
@@ -1223,6 +1224,12 @@ bool PrintObject::invalidate_state_by_config_options(
             	// See GH #1482 for details.
 	            steps.emplace_back(posSlice);
 	        }
+        } else if (opt_key.rfind("resin_", 0) == 0) {
+            steps.emplace_back(posSupportMaterial);
+            if (opt_key == "resin_support_tree_type" ||
+                opt_key == "resin_support_object_elevation" ||
+                opt_key == "resin_branching_support_object_elevation")
+                steps.emplace_back(posSlice);
         } else if (
 	       opt_key == "support_type"
             || opt_key == "mixed_normal_support_generator"
@@ -4495,12 +4502,20 @@ static void merge_mixed_support_layers(
 
 void PrintObject::_generate_support_material()
 {
-    if (m_config.enable_support.value && is_mixed(m_config.support_type.value)) {
+    if (m_config.enable_support.value && is_resin(m_config.support_type.value)) {
+        ResinStyleSupport support(*this, m_slicing_params);
+        support.generate();
+    }
+    else if (m_config.enable_support.value && is_mixed(m_config.support_type.value)) {
         OwnedSupportLayers normal_layers;
         OwnedSupportLayers tree_layers;
         try {
             const std::vector<Polygons> demand = detect_mixed_support_demand(*this);
             const MixedSupportPlan plan = MixedSupportPlan::build(*this, demand);
+            if (plan.has_normal_paint_fallback())
+                this->active_step_add_warning(
+                    PrintStateBase::WarningLevel::NON_CRITICAL,
+                    _u8L("Some areas painted for normal support are not reachable from the build plate and were assigned to tree support."));
 
             if (plan.has_normal_demand() || m_slicing_params.has_raft()) {
                 if (m_config.mixed_normal_support_generator.value == mnsgCura) {
@@ -4934,6 +4949,26 @@ void PrintObject::project_and_append_custom_facets(
                         for (size_t i = 0; i < out.size(); ++ i)
                             append(out[i], std::move(projected[i]));
                 }
+            }
+        }
+}
+
+void PrintObject::project_and_append_mixed_support_facets(
+        EnforcerBlockerType type, std::vector<Polygons>& out) const
+{
+    for (const ModelVolume *mv : this->model_object()->volumes)
+        if (mv->is_model_part()) {
+            const indexed_triangle_set facets = mv->mixed_support_facets.get_facets_strict(*mv, type);
+            if (!facets.indices.empty()) {
+                std::vector<Polygons> projected;
+                slice_mesh_slabs(facets, zs_from_layers(this->layers()), this->trafo_centered() * mv->get_matrix(), nullptr, &projected, nullptr, [](){});
+                assert(!projected.empty());
+                assert(out.empty() || out.size() == projected.size());
+                if (out.empty())
+                    out = std::move(projected);
+                else
+                    for (size_t layer_id = 0; layer_id < out.size(); ++layer_id)
+                        append(out[layer_id], std::move(projected[layer_id]));
             }
         }
 }

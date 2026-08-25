@@ -447,6 +447,7 @@ public:
 
     // Helpers to project custom facets on slices
     void project_and_append_custom_facets(bool seam, EnforcerBlockerType type, std::vector<Polygons>& expolys, std::vector<std::pair<Vec3f,Vec3f>>* vertical_points=nullptr) const;
+    void project_and_append_mixed_support_facets(EnforcerBlockerType type, std::vector<Polygons>& expolys) const;
 
     //BBS
     BoundingBox get_first_layer_bbox(float& area, float& layer_height, std::string& name);

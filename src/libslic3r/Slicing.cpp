@@ -225,6 +225,18 @@ SlicingParameters SlicingParameters::create_from_config(
         params.object_print_z_uncompensated_max += print_z;
     }
 
+    // Resin-style object elevation is an object placement parameter, not a
+    // support enablement side effect. Keep it active when supports are off so
+    // presets and project files retain the requested floating Z placement.
+    if (is_resin(object_config.support_type.value)) {
+        const coordf_t elevation = object_config.resin_support_tree_type.value == rstBranching ?
+            object_config.resin_branching_support_object_elevation.value :
+            object_config.resin_support_object_elevation.value;
+        params.object_print_z_min += elevation;
+        params.object_print_z_max += elevation;
+        params.object_print_z_uncompensated_max += elevation;
+    }
+
     params.valid = true;
     return params;
 }

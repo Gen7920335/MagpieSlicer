@@ -793,7 +793,9 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
 
     SupportType support_type = config->opt_enum<SupportType>("support_type");
     const bool support_type_is_mixed = is_mixed(support_type);
+    const bool support_type_is_resin = is_resin(support_type);
     const bool support_is_mixed = config->opt_bool("enable_support") && support_type_is_mixed;
+    const bool support_is_resin = config->opt_bool("enable_support") && support_type_is_resin;
     const MixedNormalSupportGenerator mixed_normal_generator =
         config->opt_enum<MixedNormalSupportGenerator>("mixed_normal_support_generator");
     const MixedTreeSupportStyle mixed_tree_style =
@@ -810,8 +812,10 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
         toggle_field(el, have_support_material);
     toggle_field("cura_solid_support_raft", have_support_material &&
         (is_normal_cura(support_type) || (support_is_mixed && mixed_normal_generator == mnsgCura)));
-    toggle_field("support_threshold_angle", support_type == stTreeAuto || (have_support_material && is_auto(support_type)));
-    toggle_field("support_threshold_overlap", config->opt_int("support_threshold_angle") == 0 && have_support_material && is_auto(support_type));
+    toggle_field("support_threshold_angle", !support_type_is_resin &&
+        (support_type == stTreeAuto || (have_support_material && is_auto(support_type))));
+    toggle_field("support_threshold_overlap", !support_type_is_resin &&
+        config->opt_int("support_threshold_angle") == 0 && have_support_material && is_auto(support_type));
     //toggle_field("support_closing_radius", have_support_material && support_style == smsSnug);
 
     bool support_is_tree = config->opt_bool("enable_support") && is_tree(support_type);
@@ -825,7 +829,41 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("mixed_tree_support_style", support_type_is_mixed);
     toggle_line("mixed_normal_coverage_threshold", support_type_is_mixed);
     toggle_line("mixed_selective_merge", support_type_is_mixed);
-    toggle_line("support_style", !support_type_is_mixed);
+    toggle_line("support_style", !support_type_is_mixed && !support_type_is_resin);
+
+    const bool resin_branching = support_type_is_resin &&
+        config->opt_enum<ResinSupportTreeType>("resin_support_tree_type") == rstBranching;
+    for (const char *key : { "resin_support_tree_type", "resin_support_points_density_relative",
+                            "resin_support_enforcers_only" }) {
+        toggle_line(key, support_type_is_resin);
+        toggle_field(key, support_is_resin);
+    }
+    for (const char *key : {
+             "resin_support_head_front_diameter", "resin_support_head_width",
+             "resin_support_pillar_diameter", "resin_support_small_pillar_diameter_percent",
+             "resin_support_max_bridges_on_pillar", "resin_support_max_weight_on_model",
+             "resin_support_pillar_connection_mode", "resin_support_buildplate_only",
+             "resin_support_pillar_widening_factor", "resin_support_base_diameter",
+             "resin_support_base_height", "resin_support_base_safety_distance",
+             "resin_support_critical_angle", "resin_support_max_bridge_length",
+             "resin_support_max_pillar_link_distance", "resin_support_object_elevation" }) {
+        toggle_line(key, support_type_is_resin && !resin_branching);
+        // Elevation is an object-placement control and intentionally remains
+        // editable even when Enable support is off.
+        toggle_field(key, support_is_resin || std::string(key) == "resin_support_object_elevation");
+    }
+    for (const char *key : {
+             "resin_branching_support_head_front_diameter", "resin_branching_support_head_width",
+             "resin_branching_support_pillar_diameter", "resin_branching_support_small_pillar_diameter_percent",
+             "resin_branching_support_max_bridges_on_pillar", "resin_branching_support_max_weight_on_model",
+             "resin_branching_support_pillar_connection_mode", "resin_branching_support_buildplate_only",
+             "resin_branching_support_pillar_widening_factor", "resin_branching_support_base_diameter",
+             "resin_branching_support_base_height", "resin_branching_support_base_safety_distance",
+             "resin_branching_support_critical_angle", "resin_branching_support_max_bridge_length",
+             "resin_branching_support_max_pillar_link_distance", "resin_branching_support_object_elevation" }) {
+        toggle_line(key, support_type_is_resin && resin_branching);
+        toggle_field(key, support_is_resin || std::string(key) == "resin_branching_support_object_elevation");
+    }
 
     // hide settings that are not used by tree supports
     toggle_line("support_threshold_overlap", !support_is_tree); // Mixed classification uses its selected normal detector.

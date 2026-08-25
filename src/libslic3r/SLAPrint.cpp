@@ -1076,7 +1076,7 @@ const SliceRecord SliceRecord::EMPTY(0, std::nanf(""), 0.f);
 
 const std::vector<sla::SupportPoint>& SLAPrintObject::get_support_points() const
 {
-    return m_supportdata? m_supportdata->pts : EMPTY_SUPPORT_POINTS;
+    return m_supportdata ? m_supportdata->input.pts : EMPTY_SUPPORT_POINTS;
 }
 
 const std::vector<ExPolygons> &SLAPrintObject::get_support_slices() const

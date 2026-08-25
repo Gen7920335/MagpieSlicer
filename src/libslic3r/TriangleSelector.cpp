@@ -2403,6 +2403,50 @@ private:
 };
 const double TriangleCursor::facet_angle_limit = cos(Geometry::deg2rad(5.0));
 
+void TriangleSelector::overlay_painting(
+    const TriangleSplittingData &painting,
+    const EnforcerBlockerStateMap &state_map)
+{
+    if (painting.bitstream.empty())
+        return;
+
+    TriangleSelector source_selector(m_mesh, m_edge_limit);
+    source_selector.deserialize(painting, false);
+    source_selector.remap_triangle_state(state_map);
+
+    // Annotations split out of the same combined selector (the normal case for
+    // Mixed support painting) have identical topology. Overlay those states
+    // directly so opening and saving the gizmo repeatedly cannot introduce
+    // additional subdivisions or geometric drift.
+    bool same_topology = m_vertices.size() == source_selector.m_vertices.size() &&
+                         m_triangles.size() == source_selector.m_triangles.size();
+    for (size_t vertex_id = 0; same_topology && vertex_id < m_vertices.size(); ++vertex_id)
+        same_topology = m_vertices[vertex_id].v.isApprox(source_selector.m_vertices[vertex_id].v);
+    for (size_t triangle_id = 0; same_topology && triangle_id < m_triangles.size(); ++triangle_id) {
+        const Triangle &target = m_triangles[triangle_id];
+        const Triangle &source = source_selector.m_triangles[triangle_id];
+        same_topology = target.valid() == source.valid() &&
+                        target.is_split() == source.is_split() &&
+                        target.source_triangle == source.source_triangle &&
+                        target.verts_idxs == source.verts_idxs;
+    }
+    if (same_topology) {
+        for (size_t triangle_id = 0; triangle_id < m_triangles.size(); ++triangle_id) {
+            const Triangle &source = source_selector.m_triangles[triangle_id];
+            if (source.valid() && !source.is_split() && source.get_state() != EnforcerBlockerType::NONE)
+                m_triangles[triangle_id].set_state(source.get_state());
+        }
+        return;
+    }
+
+    for (const Triangle &triangle : source_selector.m_triangles)
+        if (triangle.valid() && !triangle.is_split() && triangle.get_state() != EnforcerBlockerType::NONE)
+            select_patch(
+                triangle.source_triangle,
+                TriangleCursor::build_cursor(source_selector, triangle),
+                triangle.get_state(), Transform3d::Identity(), true, 0.f, true);
+}
+
 
 // Remap painting data from source mesh to target mesh using spatial mapping.
 TriangleSelector::TriangleSplittingData TriangleSelector::remap_painting(

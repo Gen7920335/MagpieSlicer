@@ -11,6 +11,7 @@
 #include <libslic3r/SLA/Concurrency.hpp>
 #include <libslic3r/SLA/Pad.hpp>
 #include <libslic3r/SLA/SupportPointGenerator.hpp>
+#include <libslic3r/SLA/SupportIslands/SampleConfigFactory.hpp>
 
 #include <libslic3r/ElephantFootCompensation.hpp>
 #include <libslic3r/AABBTreeIndirect.hpp>
@@ -571,6 +572,8 @@ void SLAPrint::Steps::slice_model(SLAPrintObject &po)
 // support points. Then we sprinkle the rest of the mesh.
 void SLAPrint::Steps::support_points(SLAPrintObject &po)
 {
+    using namespace sla;
+
     // If supports are disabled, we can skip the model scan.
     if(!po.m_config.supports_enable.getBool()) return;
 
@@ -582,82 +585,71 @@ void SLAPrint::Steps::support_points(SLAPrintObject &po)
     BOOST_LOG_TRIVIAL(debug) << "Support point count "
                              << mo.sla_support_points.size();
 
-    // Unless the user modified the points or we already did the calculation,
-    // we will do the autoplacement. Otherwise we will just blindly copy the
-    // frontend data into the backend cache.
-    if (mo.sla_points_status != sla::PointsStatus::UserModified) {
-
-        // calculate heights of slices (slices are calculated already)
-        const std::vector<float>& heights = po.m_model_height_levels;
-
-        // Tell the mesh where drain holes are. Although the points are
-        // calculated on slices, the algorithm then raycasts the points
-        // so they actually lie on the mesh.
-//        po.m_supportdata->emesh.load_holes(po.transformed_drainhole_points());
-
-        throw_if_canceled();
-        sla::SupportPointGenerator::Config config;
-        const SLAPrintObjectConfig& cfg = po.config();
-
-        // the density config value is in percents:
-        config.density_relative = float(cfg.support_points_density_relative / 100.f);
-        config.minimal_distance = float(cfg.support_points_minimal_distance);
-        config.head_diameter    = float(cfg.support_head_front_diameter);
-
-        // scaling for the sub operations
-        double d = objectstep_scale * OBJ_STEP_LEVELS[slaposSupportPoints] / 100.0;
-        double init = current_status();
-
-        auto statuscb = [this, d, init](unsigned st)
-        {
-            double current = init + st * d;
-            if(std::round(current_status()) < std::round(current))
-                report_status(current, OBJ_STEP_LABELS(slaposSupportPoints));
-        };
-
-        // Construction of this object does the calculation.
-        throw_if_canceled();
-        sla::SupportPointGenerator auto_supports(
-            po.m_supportdata->emesh, po.get_model_slices(), heights, config,
-            [this]() { throw_if_canceled(); }, statuscb);
-
-        // Now let's extract the result.
-        const std::vector<sla::SupportPoint>& points = auto_supports.output();
-        throw_if_canceled();
-        po.m_supportdata->pts = points;
-
-        BOOST_LOG_TRIVIAL(debug) << "Automatic support points: "
-                                 << po.m_supportdata->pts.size();
-
-        // Using RELOAD_SLA_SUPPORT_POINTS to tell the Plater to pass
-        // the update status to GLGizmoSlaSupports
-        report_status(-1, L("Generating support points"),
-                      SlicingStatus::RELOAD_SLA_SUPPORT_POINTS);
-    } else {
+    if (mo.sla_points_status == sla::PointsStatus::UserModified) {
         // There are either some points on the front-end, or the user
         // removed them on purpose. No calculation will be done.
-        po.m_supportdata->pts = po.transformed_support_points();
+        po.m_supportdata->input.pts = po.transformed_support_points();
+        return;
     }
+
+    const std::vector<float> &heights = po.m_model_height_levels;
+    if (heights.empty())
+        return;
+
+    throw_if_canceled();
+    SupportPointGeneratorConfig config;
+    const SLAPrintObjectConfig &cfg = po.config();
+    config.density_relative = float(cfg.support_points_density_relative / 100.f);
+    config.head_diameter    = float(cfg.support_head_front_diameter);
+    config.island_configuration = SampleConfigFactory::apply_density(
+        SampleConfigFactory::create(config.head_diameter), config.density_relative);
+
+    double d = objectstep_scale * OBJ_STEP_LEVELS[slaposSupportPoints] / 100.0;
+    double init = current_status();
+    StatusFunction statuscb = [this, d, init](int st) {
+        double current = init + st * d;
+        if (std::round(current_status()) < std::round(current))
+            report_status(current, OBJ_STEP_LABELS(slaposSupportPoints));
+    };
+    ThrowOnCancel cancel = [this]() { throw_if_canceled(); };
+
+    // The latest generator separates topology preparation from sampling.
+    // Rebuild here because this legacy SLA pipeline has no dedicated prepare
+    // step; the FFF Resin style adapter reuses this same public API.
+    po.m_support_point_generator_data = prepare_generator_data(
+        std::vector<ExPolygons>(po.get_model_slices()), heights,
+        PrepareSupportConfig{}, cancel, statuscb);
+
+    LayerSupportPoints layer_points = generate_support_points(
+        po.m_support_point_generator_data, config, cancel, statuscb);
+    double allowed_move = heights.size() > 1 ?
+        double(heights[1] - heights[0]) + std::numeric_limits<float>::epsilon() :
+        std::max(0.01, cfg.layer_height.getFloat());
+    po.m_supportdata->input.pts = move_on_mesh_surface(
+        layer_points, po.m_supportdata->input.emesh, allowed_move, cancel);
+
+    BOOST_LOG_TRIVIAL(debug) << "Automatic support points: "
+                             << po.m_supportdata->input.pts.size();
+    report_status(-1, L("Generating support points"),
+                  SlicingStatus::RELOAD_SLA_SUPPORT_POINTS);
 }
 
 void SLAPrint::Steps::support_tree(SLAPrintObject &po)
 {
     if(!po.m_supportdata) return;
 
-    sla::PadConfig pcfg = make_pad_cfg(po.m_config);
-
-    if (pcfg.embed_object)
-        po.m_supportdata->emesh.ground_level_offset(pcfg.wall_thickness_mm);
-
     // If the zero elevation mode is engaged, we have to filter out all the
     // points that are on the bottom of the object
     if (is_zero_elevation(po.config())) {
-        remove_bottom_points(po.m_supportdata->pts,
-                             float(po.m_supportdata->emesh.ground_level() + EPSILON));
+        auto &pts = po.m_supportdata->input.pts;
+        const float ground = float(po.m_supportdata->input.zoffset + EPSILON);
+        pts.erase(std::remove_if(pts.begin(), pts.end(),
+            [ground](const sla::SupportPoint &point) { return point.pos.z() <= ground; }),
+            pts.end());
     }
 
-    po.m_supportdata->cfg = make_support_cfg(po.m_config);
-//    po.m_supportdata->emesh.load_holes(po.transformed_drainhole_points());
+    po.m_supportdata->input.cfg = make_support_cfg(po.m_config);
+    po.m_supportdata->input.pad_cfg = make_pad_cfg(po.m_config);
 
     // scaling for the sub operations
     double d = objectstep_scale * OBJ_STEP_LEVELS[slaposSupportTree] / 100.0;
@@ -686,7 +678,7 @@ void SLAPrint::Steps::support_tree(SLAPrintObject &po)
     report_status(-1, L("Visualizing supports"));
 
     BOOST_LOG_TRIVIAL(debug) << "Processed support point count "
-                             << po.m_supportdata->pts.size();
+                             << po.m_supportdata->input.pts.size();
 
     // Check the mesh for later troubleshooting.
     if(po.support_mesh().empty())
@@ -704,29 +696,19 @@ void SLAPrint::Steps::generate_pad(SLAPrintObject &po) {
         // Get the distilled pad configuration from the config
         sla::PadConfig pcfg = make_pad_cfg(po.m_config);
 
-        ExPolygons bp; // This will store the base plate of the pad.
-        double   pad_h             = pcfg.full_height();
-        const TriangleMesh &trmesh = po.transformed_mesh();
+        po.m_supportdata->input.pad_cfg = pcfg;
+        sla::JobController ctl;
+        ctl.stopcondition = [this]() { return canceled(); };
+        ctl.cancelfn = [this]() { throw_if_canceled(); };
+        po.m_supportdata->create_pad(ctl);
 
-        if (!po.m_config.supports_enable.getBool() || pcfg.embed_object) {
-            // No support (thus no elevation) or zero elevation mode
-            // we sometimes call it "builtin pad" is enabled so we will
-            // get a sample from the bottom of the mesh and use it for pad
-            // creation.
-            sla::pad_blueprint(trmesh.its, bp, float(pad_h),
-                               float(po.m_config.layer_height.getFloat()),
-                               [this](){ throw_if_canceled(); });
-        }
-
-        po.m_supportdata->create_pad(bp, pcfg);
-
-        if (!validate_pad(po.m_supportdata->support_tree_ptr->retrieve_mesh(sla::MeshType::Pad), pcfg))
+        if (!validate_pad(po.m_supportdata->pad_mesh.its, pcfg))
             throw Slic3r::SlicingError(
                     L("No pad can be generated for this model with the "
                       "current configuration"));
 
-    } else if(po.m_supportdata && po.m_supportdata->support_tree_ptr) {
-        po.m_supportdata->support_tree_ptr->remove_pad();
+    } else if(po.m_supportdata) {
+        po.m_supportdata->pad_mesh = {};
     }
 
     throw_if_canceled();
@@ -745,13 +727,17 @@ void SLAPrint::Steps::slice_supports(SLAPrintObject &po) {
     if (!po.m_config.supports_enable.getBool() && !po.m_config.pad_enable.getBool())
         return;
 
-    if(sd && sd->support_tree_ptr) {
+    if(sd) {
         auto heights = reserve_vector<float>(po.m_slice_index.size());
 
         for(auto& rec : po.m_slice_index) heights.emplace_back(rec.slice_level());
 
-        sd->support_slices = sd->support_tree_ptr->slice(
-            heights, float(po.config().slice_closing_radius.value));
+        sla::JobController ctl;
+        ctl.stopcondition = [this]() { return canceled(); };
+        ctl.cancelfn = [this]() { throw_if_canceled(); };
+        sd->support_slices = sla::slice(
+            sd->tree_mesh.its, sd->pad_mesh.its, heights,
+            float(po.config().slice_closing_radius.value), ctl);
     }
 
     for (size_t i = 0; i < sd->support_slices.size() && i < po.m_slice_index.size(); ++i)

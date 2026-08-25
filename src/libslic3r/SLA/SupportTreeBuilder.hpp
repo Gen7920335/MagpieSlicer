@@ -1,12 +1,30 @@
+///|/ Copyright (c) Prusa Research 2019 - 2022 Tomáš Mészáros @tamasmeszaros
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #ifndef SLA_SUPPORTTREEBUILDER_HPP
 #define SLA_SUPPORTTREEBUILDER_HPP
 
-#include <libslic3r/SLA/Concurrency.hpp>
+#include <libslic3r/Execution/ExecutionTBB.hpp>
 #include <libslic3r/SLA/SupportTree.hpp>
-//#include <libslic3r/SLA/Contour3D.hpp>
+#include <libslic3r/SLA/SupportTreeTypes.hpp>
 #include <libslic3r/TriangleMesh.hpp>
 #include <libslic3r/SLA/Pad.hpp>
 #include <libslic3r/MTUtils.hpp>
+#include <assert.h>
+#include <oneapi/tbb/spin_mutex.h>
+#include <stddef.h>
+#include <algorithm>
+#include <mutex>
+#include <utility>
+#include <vector>
+#include <cassert>
+#include <cstddef>
+
+#include "admesh/stl.h"
+#include "libslic3r/Point.hpp"
+#include "libslic3r/SLA/JobController.hpp"
+#include "libslic3r/libslic3r.h"
 
 namespace Slic3r {
 namespace sla {
@@ -50,174 +68,29 @@ namespace sla {
  * nearby pillar.
  */
 
-template<class Vec> double distance(const Vec& p) {
-    return std::sqrt(p.transpose() * p);
+template<class T, int I> T distance(const Vec<I, T>& p) {
+    return p.norm();
 }
 
-template<class Vec> double distance(const Vec& pp1, const Vec& pp2) {
-    auto p = pp2 - pp1;
-    return distance(p);
+template<class T, int I>
+T distance(const Vec<I, T>& pp1, const Vec<I, T>& pp2) {
+    return (pp1 - pp2).norm();
 }
 
-const Vec3d DOWN = {0.0, 0.0, -1.0};
 
-struct SupportTreeNode
-{
-    static const constexpr long ID_UNSET = -1;
-
-    long id = ID_UNSET; // For identification withing a tree.
-};
-
-// A pinhead originating from a support point
-struct Head: public SupportTreeNode {
-    Vec3d dir = DOWN;
-    Vec3d pos = {0, 0, 0};
-    
-    double r_back_mm = 1;
-    double r_pin_mm = 0.5;
-    double width_mm = 2;
-    double penetration_mm = 0.5;
-
-    
-    // If there is a pillar connecting to this head, then the id will be set.
-    long pillar_id = ID_UNSET;
-    
-    long bridge_id = ID_UNSET;
-    
-    inline void invalidate() { id = ID_UNSET; }
-    inline bool is_valid() const { return id >= 0; }
-    
-    Head(double r_big_mm,
-         double r_small_mm,
-         double length_mm,
-         double penetration,
-         const Vec3d &direction = DOWN,  // direction (normal to the dull end)
-         const Vec3d &offset = {0, 0, 0}      // displacement
-         );
-
-    inline double real_width() const
-    {
-        return 2 * r_pin_mm + width_mm + 2 * r_back_mm ;
-    }
-
-    inline double fullwidth() const
-    {
-        return real_width() - penetration_mm;
-    }
-    
-    inline Vec3d junction_point() const
-    {
-        return pos + (fullwidth() - r_back_mm) * dir;
-    }
-    
-    inline double request_pillar_radius(double radius) const
-    {
-        const double rmax = r_back_mm;
-        return radius > 0 && radius < rmax ? radius : rmax;
-    }
-};
-
-// A junction connecting bridges and pillars
-struct Junction: public SupportTreeNode {
-    double r = 1;
-    Vec3d pos;
-
-    Junction(const Vec3d &tr, double r_mm) : r(r_mm), pos(tr) {}
-};
-
-struct Pillar: public SupportTreeNode {
-    double height, r;
-    Vec3d endpt;
-    
-    // If the pillar connects to a head, this is the id of that head
-    bool starts_from_head = true; // Could start from a junction as well
-    long start_junction_id = ID_UNSET;
-    
-    // How many bridges are connected to this pillar
-    unsigned bridges = 0;
-    
-    // How many pillars are cascaded with this one
-    unsigned links = 0;
-
-    Pillar(const Vec3d &endp, double h, double radius = 1.):
-        height{h}, r(radius), endpt(endp), starts_from_head(false) {}
-
-    Vec3d startpoint() const
-    {
-        return {endpt.x(), endpt.y(), endpt.z() + height};
-    }
-    
-    const Vec3d& endpoint() const { return endpt; }
-};
-
-// A base for pillars or bridges that end on the ground
-struct Pedestal: public SupportTreeNode {
-    Vec3d pos;
-    double height, r_bottom, r_top;
-
-    Pedestal(const Vec3d &p, double h, double rbottom, double rtop)
-        : pos{p}, height{h}, r_bottom{rbottom}, r_top{rtop}
-    {}
-};
-
-// This is the thing that anchors a pillar or bridge to the model body.
-// It is actually a reverse pinhead.
-struct Anchor: public Head { using Head::Head; };
-
-// A Bridge between two pillars (with junction endpoints)
-struct Bridge: public SupportTreeNode {
-    double r = 0.8;
-    Vec3d startp = Vec3d::Zero(), endp = Vec3d::Zero();
-    
-    Bridge(const Vec3d &j1,
-           const Vec3d &j2,
-           double       r_mm  = 0.8): r{r_mm}, startp{j1}, endp{j2}
-    {}
-
-    double get_length() const { return (endp - startp).norm(); }
-    Vec3d  get_dir() const { return (endp - startp).normalized(); }
-};
-
-struct DiffBridge: public Bridge {
-    double end_r;
-
-    DiffBridge(const Vec3d &p_s, const Vec3d &p_e, double r_s, double r_e)
-        : Bridge{p_s, p_e, r_s}, end_r{r_e}
-    {}
-};
-
-// A wrapper struct around the pad
-struct Pad {
-    indexed_triangle_set tmesh;
-    PadConfig cfg;
-    double zlevel = 0;
-    
-    Pad() = default;
-
-    Pad(const indexed_triangle_set &support_mesh,
-        const ExPolygons &          model_contours,
-        double                      ground_level,
-        const PadConfig &           pcfg,
-        ThrowOnCancel               thr);
-
-    bool empty() const { return tmesh.indices.size() == 0; }
-};
-
-// This class will hold the support tree meshes with some additional
-// bookkeeping as well. Various parts of the support geometry are stored
-// separately and are merged when the caller queries the merged mesh. The
-// merged result is cached for fast subsequent delivery of the merged mesh
-// which can be quite complex. The support tree creation algorithm can use an
-// instance of this class as a somewhat higher level tool for crafting the 3D
-// support mesh. Parts can be added with the appropriate methods such as
-// add_head or add_pillar which forwards the constructor arguments and fills
-// the IDs of these substructures. The IDs are basically indices into the
-// arrays of the appropriate type (heads, pillars, etc...). One can later query
-// e.g. a pillar for a specific head...
-//
-// The support pad is considered an auxiliary geometry and is not part of the
-// merged mesh. It can be retrieved using a dedicated method (pad())
-class SupportTreeBuilder: public SupportTree {
+// This class will hold the support tree parts (not meshes, but logical parts)
+// with some additional bookkeeping as well. Various parts of the support
+// geometry are stored separately and are merged when the caller queries the
+// merged mesh (for every part, there is a meshing routine, see
+// SupportTreeMesher.hpp). The merged result is cached for fast subsequent
+// delivery of the merged mesh which can be quite complex. The support tree
+// creation algorithm can use an instance of this class as a somewhat higher
+// level tool for crafting the 3D support mesh. Parts can be added with the
+// appropriate methods such as add_head or add_pillar which forwards the
+// constructor arguments and fills the IDs of these substructures. The IDs are
+// basically indices into the arrays of the appropriate type (heads, pillars,
+// etc...). One can later query e.g. a pillar for a specific head...
+class SupportTreeBuilder {
     // For heads it is beneficial to use the same IDs as for the support points.
     std::vector<Head>       m_heads;
     std::vector<size_t>     m_head_indices;
@@ -229,9 +102,9 @@ class SupportTreeBuilder: public SupportTree {
     std::vector<Pedestal>   m_pedestals;
     std::vector<Anchor>     m_anchors;
 
-    Pad m_pad;
+    JobController m_ctl;
     
-    using Mutex = ccr::SpinningMutex;
+    using Mutex = tbb::spin_mutex;
     
     mutable indexed_triangle_set m_meshcache;
     mutable Mutex m_mutex;
@@ -249,13 +122,14 @@ class SupportTreeBuilder: public SupportTree {
     }
     
 public:
-    double ground_level = 0;
     
-    SupportTreeBuilder() = default;
+    explicit SupportTreeBuilder(const JobController &ctl = {}) : m_ctl{ctl} {}
     SupportTreeBuilder(SupportTreeBuilder &&o);
     SupportTreeBuilder(const SupportTreeBuilder &o);
     SupportTreeBuilder& operator=(SupportTreeBuilder &&o);
     SupportTreeBuilder& operator=(const SupportTreeBuilder &o);
+
+    const JobController &ctl() const { return m_ctl; }
 
     template<class...Args> Head& add_head(unsigned id, Args&&... args)
     {
@@ -270,7 +144,7 @@ public:
         return m_heads.back();
     }
     
-    template<class...Args> long add_pillar(long headid, double length)
+    long add_pillar(long headid, double length)
     {
         std::lock_guard<Mutex> lk(m_mutex);
         if (m_pillars.capacity() < m_heads.size())
@@ -415,34 +289,20 @@ public:
         
         return m_pillars[size_t(id)];
     }
-    
-    const Pad& pad() const { return m_pad; }
-    
+
     // WITHOUT THE PAD!!!
     const indexed_triangle_set &merged_mesh(size_t steps = 45) const;
     
-    // WITH THE PAD
-    double full_height() const;
-    
-    // WITHOUT THE PAD!!!
-    inline double mesh_height() const
+    const indexed_triangle_set& retrieve_mesh(
+        MeshType meshtype = MeshType::Support) const;
+
+    SupportTreeOutput retrieve_output();
+
+    void retrieve_full_mesh(indexed_triangle_set &outmesh) const
     {
-        if (!m_meshcache_valid) merged_mesh();
-        return m_model_height;
+        its_merge(outmesh, retrieve_mesh(MeshType::Support));
+        its_merge(outmesh, retrieve_mesh(MeshType::Pad));
     }
-    
-    // Intended to be called after the generation is fully complete
-    const indexed_triangle_set & merge_and_cleanup();
-    
-    // Implement SupportTree interface:
-
-    const indexed_triangle_set &add_pad(const ExPolygons &modelbase,
-                                        const PadConfig & pcfg) override;
-
-    void remove_pad() override { m_pad = Pad(); }
-
-    virtual const indexed_triangle_set &retrieve_mesh(
-        MeshType meshtype = MeshType::Support) const override;
 };
 
 }} // namespace Slic3r::sla

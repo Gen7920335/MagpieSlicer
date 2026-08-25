@@ -869,6 +869,11 @@ public:
     // List of mesh facets to be supported/unsupported.
     FacetsAnnotation    supported_facets;
 
+    // Optional Mixed(auto) generator assignment for supported facets.
+    // NONE leaves channel selection automatic, ENFORCER selects normal support,
+    // and BLOCKER selects tree support. Support demand remains owned by supported_facets.
+    FacetsAnnotation    mixed_support_facets;
+
     // List of seam enforcers/blockers.
     FacetsAnnotation    seam_facets;
 
@@ -1004,12 +1009,13 @@ public:
         ObjectBase::set_new_unique_id();
         this->config.set_new_unique_id();
         this->supported_facets.set_new_unique_id();
+        this->mixed_support_facets.set_new_unique_id();
         this->seam_facets.set_new_unique_id();
         this->mmu_segmentation_facets.set_new_unique_id();
         this->fuzzy_skin_facets.set_new_unique_id();
     }
 
-    bool is_fdm_support_painted() const { return !this->supported_facets.empty(); }
+    bool is_fdm_support_painted() const { return !this->supported_facets.empty() || !this->mixed_support_facets.empty(); }
     bool is_seam_painted() const { return !this->seam_facets.empty(); }
     bool is_mm_painted() const { return !this->mmu_segmentation_facets.empty(); }
     bool is_fuzzy_skin_painted() const { return !this->fuzzy_skin_facets.empty(); }
@@ -1063,11 +1069,13 @@ private:
 		assert(this->id().valid());
         assert(this->config.id().valid());
         assert(this->supported_facets.id().valid());
+        assert(this->mixed_support_facets.id().valid());
         assert(this->seam_facets.id().valid());
         assert(this->mmu_segmentation_facets.id().valid());
         assert(this->fuzzy_skin_facets.id().valid());
         assert(this->id() != this->config.id());
         assert(this->id() != this->supported_facets.id());
+        assert(this->id() != this->mixed_support_facets.id());
         assert(this->id() != this->seam_facets.id());
         assert(this->id() != this->mmu_segmentation_facets.id());
         assert(this->id() != this->fuzzy_skin_facets.id());
@@ -1079,11 +1087,13 @@ private:
 		assert(this->id().valid());
         assert(this->config.id().valid());
         assert(this->supported_facets.id().valid());
+        assert(this->mixed_support_facets.id().valid());
         assert(this->seam_facets.id().valid());
         assert(this->mmu_segmentation_facets.id().valid());
         assert(this->fuzzy_skin_facets.id().valid());
         assert(this->id() != this->config.id());
         assert(this->id() != this->supported_facets.id());
+        assert(this->id() != this->mixed_support_facets.id());
         assert(this->id() != this->seam_facets.id());
         assert(this->id() != this->mmu_segmentation_facets.id());
         assert(this->id() != this->fuzzy_skin_facets.id());
@@ -1093,11 +1103,13 @@ private:
 		assert(this->id().valid());
         assert(this->config.id().valid());
         assert(this->supported_facets.id().valid());
+        assert(this->mixed_support_facets.id().valid());
         assert(this->seam_facets.id().valid());
         assert(this->mmu_segmentation_facets.id().valid());
         assert(this->fuzzy_skin_facets.id().valid());
         assert(this->id() != this->config.id());
         assert(this->id() != this->supported_facets.id());
+        assert(this->id() != this->mixed_support_facets.id());
         assert(this->id() != this->seam_facets.id());
         assert(this->id() != this->mmu_segmentation_facets.id());
         assert(this->id() != this->fuzzy_skin_facets.id());
@@ -1108,22 +1120,25 @@ private:
         ObjectBase(other),
         name(other.name), source(other.source), m_mesh(other.m_mesh), m_convex_hull(other.m_convex_hull),
         config(other.config), m_type(other.m_type), object(object), m_transformation(other.m_transformation),
-        supported_facets(other.supported_facets), seam_facets(other.seam_facets), mmu_segmentation_facets(other.mmu_segmentation_facets),
+        supported_facets(other.supported_facets), mixed_support_facets(other.mixed_support_facets), seam_facets(other.seam_facets), mmu_segmentation_facets(other.mmu_segmentation_facets),
         fuzzy_skin_facets(other.fuzzy_skin_facets), cut_info(other.cut_info), text_configuration(other.text_configuration), emboss_shape(other.emboss_shape)
     {
 		assert(this->id().valid()); 
         assert(this->config.id().valid()); 
         assert(this->supported_facets.id().valid());
+        assert(this->mixed_support_facets.id().valid());
         assert(this->seam_facets.id().valid());
         assert(this->mmu_segmentation_facets.id().valid());
         assert(this->fuzzy_skin_facets.id().valid());
         assert(this->id() != this->config.id());
         assert(this->id() != this->supported_facets.id());
+        assert(this->id() != this->mixed_support_facets.id());
         assert(this->id() != this->seam_facets.id());
         assert(this->id() != this->mmu_segmentation_facets.id());
 		assert(this->id() == other.id());
         assert(this->config.id() == other.config.id());
         assert(this->supported_facets.id() == other.supported_facets.id());
+        assert(this->mixed_support_facets.id() == other.mixed_support_facets.id());
         assert(this->seam_facets.id() == other.seam_facets.id());
         assert(this->mmu_segmentation_facets.id() == other.mmu_segmentation_facets.id());
         assert(this->fuzzy_skin_facets.id() == other.fuzzy_skin_facets.id());
@@ -1137,11 +1152,13 @@ private:
 		assert(this->id().valid()); 
         assert(this->config.id().valid()); 
         assert(this->supported_facets.id().valid());
+        assert(this->mixed_support_facets.id().valid());
         assert(this->seam_facets.id().valid());
         assert(this->mmu_segmentation_facets.id().valid());
         assert(this->fuzzy_skin_facets.id().valid());
         assert(this->id() != this->config.id());
         assert(this->id() != this->supported_facets.id());
+        assert(this->id() != this->mixed_support_facets.id());
         assert(this->id() != this->seam_facets.id());
         assert(this->id() != this->mmu_segmentation_facets.id());
         assert(this->id() != this->fuzzy_skin_facets.id());
@@ -1154,11 +1171,13 @@ private:
 		assert(this->config.id().valid()); 
         assert(this->config.id() != other.config.id()); 
         assert(this->supported_facets.id() != other.supported_facets.id());
+        assert(this->mixed_support_facets.id() != other.mixed_support_facets.id());
         assert(this->seam_facets.id() != other.seam_facets.id());
         assert(this->mmu_segmentation_facets.id() != other.mmu_segmentation_facets.id());
         assert(this->fuzzy_skin_facets.id() != other.fuzzy_skin_facets.id());
         assert(this->id() != this->config.id());
         assert(this->supported_facets.empty());
+        assert(this->mixed_support_facets.empty());
         assert(this->seam_facets.empty());
         assert(this->mmu_segmentation_facets.empty());
         assert(this->fuzzy_skin_facets.empty());
@@ -1169,10 +1188,11 @@ private:
 	friend class cereal::access;
 	friend class UndoRedo::StackImpl;
 	// Used for deserialization, therefore no IDs are allocated.
-	ModelVolume() : ObjectBase(-1), config(-1), supported_facets(-1), seam_facets(-1), mmu_segmentation_facets(-1), fuzzy_skin_facets(-1), object(nullptr) {
+	ModelVolume() : ObjectBase(-1), config(-1), supported_facets(-1), mixed_support_facets(-1), seam_facets(-1), mmu_segmentation_facets(-1), fuzzy_skin_facets(-1), object(nullptr) {
 		assert(this->id().invalid());
         assert(this->config.id().invalid());
         assert(this->supported_facets.id().invalid());
+        assert(this->mixed_support_facets.id().invalid());
         assert(this->seam_facets.id().invalid());
         assert(this->mmu_segmentation_facets.id().invalid());
         assert(this->fuzzy_skin_facets.id().invalid());
@@ -1187,6 +1207,9 @@ private:
         auto t = supported_facets.timestamp();
         cereal::load_by_value(ar, supported_facets);
         mesh_changed |= t != supported_facets.timestamp();
+        t = mixed_support_facets.timestamp();
+        cereal::load_by_value(ar, mixed_support_facets);
+        mesh_changed |= t != mixed_support_facets.timestamp();
         t = seam_facets.timestamp();
         cereal::load_by_value(ar, seam_facets);
         mesh_changed |= t != seam_facets.timestamp();
@@ -1213,6 +1236,7 @@ private:
 		bool has_convex_hull = m_convex_hull.get() != nullptr;
         ar(name, source, m_mesh, m_type, m_material_id, m_transformation, m_is_splittable, has_convex_hull, cut_info);
         cereal::save_by_value(ar, supported_facets);
+        cereal::save_by_value(ar, mixed_support_facets);
         cereal::save_by_value(ar, seam_facets);
         cereal::save_by_value(ar, mmu_segmentation_facets);
         cereal::save_by_value(ar, fuzzy_skin_facets);

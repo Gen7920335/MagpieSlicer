@@ -1821,6 +1821,7 @@ void ModelObject::convert_units(ModelObjectPtrs& new_objects, ConversionType con
             vol->source.is_from_builtin_objects = volume->source.is_from_builtin_objects;
 
             vol->supported_facets.assign(volume->supported_facets);
+            vol->mixed_support_facets.assign(volume->mixed_support_facets);
             vol->seam_facets.assign(volume->seam_facets);
             vol->mmu_segmentation_facets.assign(volume->mmu_segmentation_facets);
             vol->fuzzy_skin_facets.assign(volume->fuzzy_skin_facets);
@@ -1933,6 +1934,7 @@ bool ModelVolume::is_the_only_one_part() const
 void ModelVolume::reset_extra_facets()
 {
     this->supported_facets.reset();
+    this->mixed_support_facets.reset();
     this->seam_facets.reset();
     this->mmu_segmentation_facets.reset();
     this->fuzzy_skin_facets.reset();
@@ -1944,6 +1946,7 @@ std::optional<TriangleSelector::SavedPainting> ModelVolume::save_painting() cons
         TriangleSelector::SavedPainting sp;
         sp.mesh      = mesh();
         sp.supported = supported_facets.get_data();
+        sp.mixed_support = mixed_support_facets.get_data();
         sp.seam      = seam_facets.get_data();
         sp.mmu       = mmu_segmentation_facets.get_data();
         sp.fuzzy     = fuzzy_skin_facets.get_data();
@@ -1976,6 +1979,7 @@ void ModelVolume::restore_painting(const std::optional<TriangleSelector::SavedPa
             target_facets.set_data(std::move(result));
     };
     remap_one(saved->supported, supported_facets);
+    remap_one(saved->mixed_support, mixed_support_facets);
     remap_one(saved->seam,      seam_facets);
     remap_one(saved->mmu,       mmu_segmentation_facets);
     remap_one(saved->fuzzy,     fuzzy_skin_facets);
@@ -2088,6 +2092,7 @@ void ModelObject::split(ModelObjectPtrs* new_objects, const bool remap_paint)
 #define COPY_FACETS(f)                 if (new_vol->f.timestamp() == volume->f.timestamp())                     new_vol->f.reset(); /* BBS: let next assign take effect */                 new_vol->f.assign(volume->f)
 
                 COPY_FACETS(supported_facets);
+                COPY_FACETS(mixed_support_facets);
                 COPY_FACETS(seam_facets);
                 COPY_FACETS(mmu_segmentation_facets);
                 COPY_FACETS(fuzzy_skin_facets);
@@ -2800,6 +2805,7 @@ void ModelVolume::assign_new_unique_ids_recursive()
     ObjectBase::set_new_unique_id();
     config.set_new_unique_id();
     supported_facets.set_new_unique_id();
+    mixed_support_facets.set_new_unique_id();
     seam_facets.set_new_unique_id();
     mmu_segmentation_facets.set_new_unique_id();
     fuzzy_skin_facets.set_new_unique_id();
@@ -3658,7 +3664,10 @@ bool model_custom_supports_data_changed(const ModelObject& mo, const ModelObject
 {
     return model_property_changed(mo, mo_new,
         [](const ModelVolumeType t) { return t == ModelVolumeType::MODEL_PART; },
-        [](const ModelVolume &mv_old, const ModelVolume &mv_new){ return mv_old.supported_facets.timestamp_matches(mv_new.supported_facets); });
+        [](const ModelVolume &mv_old, const ModelVolume &mv_new){
+            return mv_old.supported_facets.timestamp_matches(mv_new.supported_facets) &&
+                   mv_old.mixed_support_facets.timestamp_matches(mv_new.mixed_support_facets);
+        });
 }
 
 bool model_custom_seam_data_changed(const ModelObject& mo, const ModelObject& mo_new)

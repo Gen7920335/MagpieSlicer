@@ -6,6 +6,7 @@
 #include <libslic3r/TriangleMeshSlicer.hpp>
 #include <libslic3r/SLA/Hollowing.hpp>
 #include <libslic3r/SLA/IndexedMesh.hpp>
+#include <libslic3r/SLA/Concurrency.hpp>
 #include <libslic3r/ClipperUtils.hpp>
 #include <libslic3r/QuadricEdgeCollapse.hpp>
 #include <libslic3r/SLA/SupportTreeMesher.hpp>

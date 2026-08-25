@@ -1,10 +1,16 @@
+///|/ Copyright (c) Prusa Research 2019 - 2022 Tomáš Mészáros @tamasmeszaros, Vojtěch Bubník @bubnikv, Lukáš Matěna @lukasmatena
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #include "AABBMesh.hpp"
-#include <Execution/ExecutionTBB.hpp>
 
 #include <libslic3r/AABBTreeIndirect.hpp>
 #include <libslic3r/TriangleMesh.hpp>
+#include <igl/Hit.h>
+#include <algorithm>
 
-#include <numeric>
+#include "admesh/stl.h"
+#include "libslic3r/Point.hpp"
 
 #ifdef SLIC3R_HOLE_RAYCASTER
 #include <libslic3r/SLA/Hollowing.hpp>
@@ -34,7 +40,7 @@ public:
     void intersect_ray(const indexed_triangle_set &its,
                        const Vec3d &               s,
                        const Vec3d &               dir,
-                       igl::Hit<float> &                  hit)
+                       igl::Hit<float> &           hit)
     {
         AABBTreeIndirect::intersect_ray_first_hit(its.vertices, its.indices,
                                                   m_tree, s, dir, hit, m_triangle_ray_epsilon);
@@ -43,7 +49,7 @@ public:
     void intersect_ray(const indexed_triangle_set &its,
                        const Vec3d &               s,
                        const Vec3d &               dir,
-                       std::vector<igl::Hit<float>> &     hits)
+                       std::vector<igl::Hit<float>> &hits)
     {
         AABBTreeIndirect::intersect_ray_all_hits(its.vertices, its.indices,
                                                  m_tree, s, dir, hits, m_triangle_ray_epsilon);
@@ -122,7 +128,7 @@ const std::vector<Vec3f>& AABBMesh::vertices() const
 
 
 
-const std::vector<Vec3i32>& AABBMesh::indices()  const
+const std::vector<Vec3i>& AABBMesh::indices()  const
 {
     return m_tm->indices;
 }
@@ -136,7 +142,7 @@ const Vec3f& AABBMesh::vertices(size_t idx) const
 
 
 
-const Vec3i32& AABBMesh::indices(size_t idx) const
+const Vec3i& AABBMesh::indices(size_t idx) const
 {
     return m_tm->indices[idx];
 }
@@ -195,7 +201,7 @@ AABBMesh::query_ray_hits(const Vec3d &s, const Vec3d &dir) const
                            { return a.t == b.t; }),
                hits.end());
 
-    //  Convert the igl::Hit<float> into hit_result
+    //  Convert the igl::Hit into hit_result
     outs.reserve(hits.size());
     for (const igl::Hit<float>& hit : hits) {
         outs.emplace_back(AABBMesh::hit_result(*this));

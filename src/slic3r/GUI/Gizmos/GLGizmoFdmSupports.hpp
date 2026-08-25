@@ -36,6 +36,7 @@ protected:
     void on_set_state() override;
     void render_tooltip_button(float x, float y);
     wxString handle_snapshot_action_name(bool shift_down, Button button_down) const override;
+    EnforcerBlockerType get_left_button_state_type() const override;
 
     std::string get_gizmo_entering_text() const override { return _u8L("Entering Paint-on supports"); }
     std::string get_gizmo_leaving_text() const override { return _u8L("Leaving Paint-on supports"); }
@@ -60,6 +61,12 @@ private:
     void select_facets_by_angle(float threshold, bool block);
     // BBS
     int get_selection_support_threshold_angle();
+    SupportType get_selection_support_type() const;
+    bool is_mixed_mode() const { return get_selection_support_type() == stMixedAuto; }
+
+    static constexpr EnforcerBlockerType MixedNormalState = EnforcerBlockerType::Extruder3;
+    static constexpr EnforcerBlockerType MixedTreeState   = EnforcerBlockerType::Extruder4;
+    EnforcerBlockerType m_mixed_paint_state = MixedNormalState;
 
     int m_support_threshold_angle = -1;
 
@@ -80,6 +87,7 @@ private:
     bool m_cancel = false;
     size_t m_object_id;
     std::vector<ObjectBase::Timestamp> m_volume_timestamps;
+    std::vector<ObjectBase::Timestamp> m_mixed_volume_timestamps;
     PrintInstance m_print_instance;
     mutable EditState m_edit_state;
     //thread

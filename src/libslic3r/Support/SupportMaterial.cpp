@@ -377,6 +377,20 @@ static constexpr const std::initializer_list<SupporLayerType> support_types_inte
 
 void PrintObjectSupportMaterial::generate(PrintObject &object)
 {
+    generate_impl(object, nullptr);
+}
+
+void PrintObjectSupportMaterial::generate_from_resin_body(
+    PrintObject &object,
+    const std::function<ExPolygons(coordf_t)> &slice_body_at_z)
+{
+    generate_impl(object, &slice_body_at_z);
+}
+
+void PrintObjectSupportMaterial::generate_impl(
+    PrintObject &object,
+    const std::function<ExPolygons(coordf_t)> *slice_body_at_z)
+{
     BOOST_LOG_TRIVIAL(info) << "Support generator - Start";
 
     coordf_t max_object_layer_height = 0.;
@@ -458,7 +472,22 @@ void PrintObjectSupportMaterial::generate(PrintObject &object)
     BOOST_LOG_TRIVIAL(info) << "Support generator - Creating base layers";
 
     // Fill in intermediate layers between the top / bottom support contact layers, trim them by the object.
-    this->generate_base_layers(object, bottom_contacts, top_contacts, intermediate_layers, layer_support_areas);
+    if (slice_body_at_z == nullptr) {
+        this->generate_base_layers(object, bottom_contacts, top_contacts, intermediate_layers, layer_support_areas);
+    } else {
+        // The resin strategy decides the 3D routing. Convert each analytical
+        // cross-section into the same native FFF base-layer representation used
+        // by normal supports, then apply Orca's object collision clearances.
+        for (SupportGeneratorLayer *layer : intermediate_layers) {
+            ExPolygons body = (*slice_body_at_z)(layer->print_z);
+            layer->polygons = to_polygons(union_ex(body));
+        }
+        this->trim_support_layers_by_object(
+            object, intermediate_layers,
+            m_slicing_params.gap_support_object,
+            m_slicing_params.gap_object_support,
+            m_support_params.gap_xy);
+    }
 
 #ifdef SLIC3R_DEBUG
     for (SupportGeneratorLayersPtr::const_iterator it = intermediate_layers.begin(); it != intermediate_layers.end(); ++ it)
@@ -1600,6 +1629,17 @@ static inline std::tuple<Polygons, Polygons, double> detect_contacts(
         // Expand for better stability.
         contact_polygons = object_config.raft_expansion.value > 0 ? expand(overhang_polygons, scaled<float>(object_config.raft_expansion.value)) : overhang_polygons;
     }
+    else if (is_resin(object_config.support_type.value))
+    {
+        // The latest resin point generator has already classified these
+        // surface locations. Preserve its contact discs instead of applying
+        // FFF's vertical-overhang classification a second time.
+        no_interface_offset = std::accumulate(layer.regions().begin(), layer.regions().end(), FLT_MAX,
+            [](float acc, const LayerRegion *region) {
+                return std::min(acc, float(region->flow(frExternalPerimeter).scaled_width()));
+            });
+        contact_polygons = overhang_polygons;
+    }
     else if (!layer.regions().empty())
     {
         // Generate overhang / contact_polygons for non-raft layers.
@@ -2126,7 +2166,8 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
     // BBS: tree support is selected so normal supports need not be generated.
     // Note we still need to go through the following steps if support is disabled but raft is enabled.
     if (m_object_config->enable_support.value && !is_normal_support(m_object_config->support_type.value) &&
-        !is_tsunami(m_object_config->support_type.value) && !is_mixed(m_object_config->support_type.value)) {
+        !is_tsunami(m_object_config->support_type.value) && !is_mixed(m_object_config->support_type.value) &&
+        !is_resin(m_object_config->support_type.value)) {
         return SupportGeneratorLayersPtr();
     }
 
@@ -2148,7 +2189,9 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
     contact_out.assign(num_layers * 2, nullptr);
 
     std::vector<ExPolygons> overhangs_per_layers(num_layers);
-    size_t layer_id_start = this->has_raft() ? 0 : 1;
+    // A resin-style object may be deliberately elevated without a raft. Its
+    // first model layer is then an actual overhang and must receive contacts.
+    size_t layer_id_start = (this->has_raft() || is_resin(m_object_config->support_type.value)) ? 0 : 1;
      // main part of overhang detection can be parallel
     tbb::parallel_for(tbb::blocked_range<size_t>(layer_id_start, num_layers),
         [&](const tbb::blocked_range<size_t>& range) {
@@ -2341,6 +2384,12 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
         for (size_t layer_id = layer_id_start; layer_id < num_layers; ++layer_id) {
             if (layer_id >= m_demand_mask->size() || (*m_demand_mask)[layer_id].empty())
                 overhangs_per_layers[layer_id].clear();
+            else if (is_resin(m_object_config->support_type.value))
+                // Resin support points are the authoritative contact demand.
+                // Do not require Orca's independent overhang detector to
+                // rediscover the same island or floating first-layer region.
+                overhangs_per_layers[layer_id] = intersection_ex(
+                    (*m_demand_mask)[layer_id], object.layers()[layer_id]->lslices);
             else
                 overhangs_per_layers[layer_id] = intersection_ex(
                     overhangs_per_layers[layer_id], (*m_demand_mask)[layer_id]);

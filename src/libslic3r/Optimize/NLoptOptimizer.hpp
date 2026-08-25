@@ -171,6 +171,7 @@ template<nlopt_algorithm glob, nlopt_algorithm loc>
 class NLoptOpt<NLoptAlgComb<glob, loc>>: public NLoptOpt<NLoptAlg<glob>>
 {
     using Base = NLoptOpt<NLoptAlg<glob>>;
+    StopCriteria m_loc_stopcr;
 public:
 
     template<class Fn, size_t N>
@@ -181,13 +182,21 @@ public:
         NLopt nl_glob{glob, N}, nl_loc{loc, N};
 
         Base::set_up(nl_glob, bounds);
+        // The latest support router intentionally gives the local search a
+        // smaller budget than the global MLSL pass.
+        const StopCriteria global_criteria = Base::get_criteria();
+        Base::set_criteria(m_loc_stopcr);
         Base::set_up(nl_loc, bounds);
+        Base::set_criteria(global_criteria);
         nlopt_set_local_optimizer(nl_glob.ptr, nl_loc.ptr);
 
         return Base::optimize(nl_glob, std::forward<Fn>(f), initvals);
     }
 
     explicit NLoptOpt(StopCriteria stopcr = {}) : Base{stopcr} {}
+
+    void set_loc_criteria(const StopCriteria &cr) { m_loc_stopcr = cr; }
+    const StopCriteria &get_loc_criteria() const noexcept { return m_loc_stopcr; }
 };
 
 } // namespace detail;
@@ -219,6 +228,9 @@ public:
     const StopCriteria &get_criteria() const { return m_opt.get_criteria(); }
 
     void seed(long s) { m_opt.seed(s); }
+
+    void set_loc_criteria(const StopCriteria &cr) { m_opt.set_loc_criteria(cr); }
+    const StopCriteria &get_loc_criteria() const noexcept { return m_opt.get_loc_criteria(); }
 };
 
 // Predefinded NLopt algorithms
@@ -227,6 +239,7 @@ using AlgNLoptSubplex = detail::NLoptAlg<NLOPT_LN_SBPLX>;
 using AlgNLoptSimplex = detail::NLoptAlg<NLOPT_LN_NELDERMEAD>;
 using AlgNLoptDIRECT  = detail::NLoptAlg<NLOPT_GN_DIRECT>;
 using AlgNLoptMLSL    = detail::NLoptAlg<NLOPT_GN_MLSL>;
+using AlgNLoptMLSL_Subplx = detail::NLoptAlgComb<NLOPT_GN_MLSL_LDS, NLOPT_LN_SBPLX>;
 
 }} // namespace Slic3r::opt
 

@@ -21857,8 +21857,8 @@ msgstr ""
 #~ "시작 > 0 단계 >= 0\n"
 #~ "끝 > 시작 + 단계)"
 
-msgid "Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), and Tsunami (auto) are used to generate support automatically. If a manual style is selected, only support enforcers are generated. Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. Normal (Cura style) is an experimental OrcaProject support-area generator."
-msgstr "일반(Prusa 스타일, 자동), 일반(Cura 스타일, 자동), 트리(자동), Mixed(자동), Tsunami(자동)는 서포트를 자동 생성합니다. 수동 스타일을 선택하면 서포트 강제 영역만 생성됩니다. Mixed(자동)는 연결된 각 서포트 필요 영역을 일반 또는 트리 생성기에 배정합니다. 일반(Cura 스타일)은 실험적인 OrcaProject 서포트 영역 생성기입니다."
+msgid "Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), Tsunami (auto), and Resin style (auto) are used to generate support automatically. If a manual style is selected, only support enforcers are generated. Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. Resin style (auto) uses the current PrusaSlicer resin point and tree strategies through the FFF support pipeline. Normal (Cura style) is an experimental OrcaProject support-area generator."
+msgstr "일반(Prusa 스타일, 자동), 일반(Cura 스타일, 자동), 트리(자동), Mixed(자동), Tsunami(자동), 레진 스타일(자동)은 서포트를 자동 생성합니다. 수동 스타일을 선택하면 서포트 강제 영역만 생성됩니다. Mixed(자동)는 연결된 각 서포트 필요 영역을 일반 또는 트리 생성기에 배정합니다. 레진 스타일(자동)은 최신 PrusaSlicer 레진 포인트·트리 전략을 FFF 서포트 파이프라인에서 사용합니다. 일반(Cura 스타일)은 실험적인 OrcaProject 서포트 영역 생성기입니다."
 
 msgid "Mixed (auto)"
 msgstr "Mixed (자동)"
@@ -21895,3 +21895,70 @@ msgstr "서포트 필요 영역의 일반 커버 비율이 역치보다 낮을 �
 #~ "유효한 값을 입력하십시오:\n"
 #~ "시작 > 10 단계 >= 0\n"
 #~ "끝 > 시작 + 단계)"
+#: src/slic3r/GUI/Gizmos/GLGizmoFdmSupports.cpp
+msgid "Paint support as"
+msgstr "서포트 생성 방식"
+
+#: src/slic3r/GUI/Gizmos/GLGizmoFdmSupports.cpp
+msgid "Paint normal support"
+msgstr "일반 서포트 칠하기"
+
+#: src/slic3r/GUI/Gizmos/GLGizmoFdmSupports.cpp
+msgid "Paint tree support"
+msgstr "트리 서포트 칠하기"
+
+#: src/slic3r/GUI/Gizmos/GLGizmoFdmSupports.cpp
+msgid "Left-click paints the selected Mixed support channel. Right-click blocks support. Shift+left-click returns the area to automatic assignment."
+msgstr "왼쪽 클릭은 선택한 Mixed 서포트 채널을 칠하고, 오른쪽 클릭은 서포트를 차단합니다. Shift+왼쪽 클릭은 해당 영역을 자동 배정으로 되돌립니다."
+
+#: src/libslic3r/PrintObject.cpp
+msgid "Some areas painted for normal support are not reachable from the build plate and were assigned to tree support."
+msgstr "일반 서포트로 칠한 일부 영역에 빌드 플레이트에서 도달할 수 없어 트리 서포트로 배정했습니다."
+
+msgid "Resin style (auto)"
+msgstr "레진 스타일 (자동)"
+
+msgid "Resin style supports"
+msgstr "레진 스타일 서포트"
+
+msgid "Resin support tree type"
+msgstr "레진 서포트 트리 유형"
+
+msgid "Branching (experimental)"
+msgstr "브랜칭 (실험적)"
+
+msgid "Support points density"
+msgstr "서포트 포인트 밀도"
+
+msgid "Support only in enforced regions"
+msgstr "강제 지정 영역에만 서포트"
+
+msgid "Pinhead front diameter"
+msgstr "핀헤드 전면 직경"
+
+msgid "Pinhead width"
+msgstr "핀헤드 폭"
+
+msgid "Small pillar diameter percent"
+msgstr "소형 기둥 직경 비율"
+
+msgid "Pillar connection mode"
+msgstr "기둥 연결 방식"
+
+msgid "Pillar widening factor"
+msgstr "기둥 확장 계수"
+
+msgid "Support base diameter"
+msgstr "서포트 베이스 직경"
+
+msgid "Support base height"
+msgstr "서포트 베이스 높이"
+
+msgid "Support base safety distance"
+msgstr "서포트 베이스 안전 거리"
+
+msgid "Max pillar linking distance"
+msgstr "최대 기둥 연결 거리"
+
+msgid "Object elevation"
+msgstr "출력물 띄우기"

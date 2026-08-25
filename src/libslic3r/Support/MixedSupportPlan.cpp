@@ -117,10 +117,24 @@ MixedSupportPlan MixedSupportPlan::build(const PrintObject &object, const std::v
     // Component connection dilation: effective support extrusion width in scaled XY coordinates.
     const coord_t connection_offset = std::max<coord_t>(
         SCALED_EPSILON, scale_(support_parameters.support_extrusion_width));
+    std::vector<Polygons> painted_normal(object.layer_count());
+    std::vector<Polygons> painted_tree(object.layer_count());
+    std::vector<Polygons> painted_support(object.layer_count());
+    object.project_and_append_mixed_support_facets(EnforcerBlockerType::ENFORCER, painted_normal);
+    object.project_and_append_mixed_support_facets(EnforcerBlockerType::BLOCKER, painted_tree);
+    object.project_and_append_custom_facets(false, EnforcerBlockerType::ENFORCER, painted_support);
+    for (size_t layer_id = 0; layer_id < painted_support.size(); ++layer_id) {
+        // A channel annotation is meaningful only while the same surface is
+        // still explicitly painted as a support enforcer. This also makes old
+        // or externally edited files with stale channel data harmless.
+        painted_normal[layer_id] = to_polygons(intersection_ex(painted_normal[layer_id], painted_support[layer_id]));
+        painted_tree[layer_id] = to_polygons(intersection_ex(painted_tree[layer_id], painted_support[layer_id]));
+    }
     return build_for_geometry(
         support_demand, buildplate_covered_by_object(object), connection_offset,
         object.config().mixed_normal_coverage_threshold.value,
-        object.config().mixed_selective_merge.value);
+        object.config().mixed_selective_merge.value,
+        &painted_normal, &painted_tree);
 }
 
 MixedSupportPlan MixedSupportPlan::build_for_geometry(
@@ -128,7 +142,9 @@ MixedSupportPlan MixedSupportPlan::build_for_geometry(
     const std::vector<Polygons> &buildplate_shadow,
     coord_t connection_offset,
     double normal_coverage_threshold_percent,
-    bool selective_merge)
+    bool selective_merge,
+    const std::vector<Polygons> *painted_normal,
+    const std::vector<Polygons> *painted_tree)
 {
     MixedSupportPlan plan;
     const size_t layer_count = std::max(support_demand.size(), buildplate_shadow.size());
@@ -136,6 +152,7 @@ MixedSupportPlan MixedSupportPlan::build_for_geometry(
     plan.m_tree_mask.resize(layer_count);
     plan.m_buildplate_shadow = buildplate_shadow;
     plan.m_buildplate_shadow.resize(layer_count);
+    plan.m_normal_paint_fallback.resize(layer_count);
     connection_offset = std::max<coord_t>(SCALED_EPSILON, connection_offset);
 
     std::vector<DemandPolygon> polygons;
@@ -257,6 +274,37 @@ MixedSupportPlan MixedSupportPlan::build_for_geometry(
     }
 
     for (size_t layer_id = 0; layer_id < layer_count; ++layer_id) {
+        const Polygons demand = layer_id < support_demand.size() ? union_(support_demand[layer_id]) : Polygons{};
+        if (!demand.empty()) {
+            const Polygons normal_paint = painted_normal != nullptr && layer_id < painted_normal->size() ?
+                to_polygons(intersection_ex(demand, (*painted_normal)[layer_id])) : Polygons{};
+            const Polygons tree_paint = painted_tree != nullptr && layer_id < painted_tree->size() ?
+                to_polygons(intersection_ex(demand, (*painted_tree)[layer_id])) : Polygons{};
+
+            // Projected facet masks may overlap even though each source facet owns one channel.
+            // Tree wins that ambiguous projection because it preserves the build-plate-only
+            // invariant of the normal channel and can route around model geometry.
+            const Polygons normal_only = tree_paint.empty() ? normal_paint :
+                to_polygons(diff_ex(normal_paint, tree_paint));
+            Polygons painted = normal_only;
+            append(painted, tree_paint);
+            if (!painted.empty())
+                painted = union_(painted);
+
+            if (!painted.empty()) {
+                plan.m_normal_mask[layer_id] = to_polygons(diff_ex(plan.m_normal_mask[layer_id], painted));
+                plan.m_tree_mask[layer_id] = to_polygons(diff_ex(plan.m_tree_mask[layer_id], painted));
+            }
+
+            const Polygons reachable_normal = plan.m_buildplate_shadow[layer_id].empty() ? normal_only :
+                to_polygons(diff_ex(normal_only, plan.m_buildplate_shadow[layer_id]));
+            plan.m_normal_paint_fallback[layer_id] = normal_only.empty() ? Polygons{} :
+                to_polygons(diff_ex(normal_only, reachable_normal));
+
+            append(plan.m_normal_mask[layer_id], reachable_normal);
+            append(plan.m_tree_mask[layer_id], tree_paint);
+            append(plan.m_tree_mask[layer_id], plan.m_normal_paint_fallback[layer_id]);
+        }
         if (!plan.m_normal_mask[layer_id].empty())
             plan.m_normal_mask[layer_id] = union_(plan.m_normal_mask[layer_id]);
         if (!plan.m_tree_mask[layer_id].empty())
@@ -267,5 +315,6 @@ MixedSupportPlan MixedSupportPlan::build_for_geometry(
 
 bool MixedSupportPlan::has_normal_demand() const { return any_polygons(m_normal_mask); }
 bool MixedSupportPlan::has_tree_demand() const { return any_polygons(m_tree_mask); }
+bool MixedSupportPlan::has_normal_paint_fallback() const { return any_polygons(m_normal_paint_fallback); }
 
 } // namespace Slic3r

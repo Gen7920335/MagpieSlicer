@@ -2250,6 +2250,8 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 return false;
             if (!model_volume1.supported_facets.equals(model_volume2.supported_facets))
                 return false;
+            if (!model_volume1.mixed_support_facets.equals(model_volume2.mixed_support_facets))
+                return false;
             if (!model_volume1.seam_facets.equals(model_volume2.seam_facets))
                 return false;
             if (!model_volume1.mmu_segmentation_facets.equals(model_volume2.mmu_segmentation_facets))

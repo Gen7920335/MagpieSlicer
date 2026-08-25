@@ -347,7 +347,8 @@ static t_config_enum_values s_keys_map_SupportType{
     { "normal_cura(manual)", stNormalCura },
     { "tree(manual)", stTree },
     { "tsunami(auto)", stTsunamiAuto },
-    { "mixed(auto)", stMixedAuto }
+    { "mixed(auto)", stMixedAuto },
+    { "resin(auto)", stResinAuto }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SupportType)
 
@@ -364,6 +365,12 @@ static t_config_enum_values s_keys_map_MixedTreeSupportStyle{
     { "tree_hybrid", mtssTreeHybrid }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(MixedTreeSupportStyle)
+
+static t_config_enum_values s_keys_map_ResinSupportTreeType{
+    { "default",   rstDefault },
+    { "branching", rstBranching }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(ResinSupportTreeType)
 
 static t_config_enum_values s_keys_map_SeamPosition {
     { "nearest",        spNearest },
@@ -6350,9 +6357,10 @@ void PrintConfigDef::init_fff_params()
     def = this->add("support_type", coEnum);
     def->label = L("Type");
     def->category = L("Support");
-    def->tooltip = L("Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), and Tsunami (auto) are used to generate support automatically. "
+    def->tooltip = L("Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), Tsunami (auto), and Resin style (auto) are used to generate support automatically. "
                      "If a manual style is selected, only support enforcers are generated. "
                      "Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. "
+                     "Resin style (auto) uses the current PrusaSlicer resin point and tree strategies through the FFF support pipeline. "
                      "Normal (Cura style) is an experimental OrcaProject support-area generator.");
     def->enum_keys_map = &ConfigOptionEnum<SupportType>::get_enum_values();
     def->enum_values.push_back("normal(auto)");
@@ -6363,6 +6371,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_values.push_back("tree(manual)");
     def->enum_values.push_back("tsunami(auto)");
     def->enum_values.push_back("mixed(auto)");
+    def->enum_values.push_back("resin(auto)");
     def->enum_labels.push_back(L("Normal (Prusa style, auto)"));
     def->enum_labels.push_back(L("Normal (Cura style, auto)"));
     def->enum_labels.push_back(L("Tree (auto)"));
@@ -6371,6 +6380,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_labels.push_back(L("Tree (manual)"));
     def->enum_labels.push_back(L("Tsunami (auto)"));
     def->enum_labels.push_back(L("Mixed (auto)"));
+    def->enum_labels.push_back(L("Resin style (auto)"));
     def->mode = comSimple;
     def->set_default_value(new ConfigOptionEnum<SupportType>(stNormalAuto));
 
@@ -6410,6 +6420,189 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("When a support-demand region is below the normal coverage threshold, use build-plate-origin normal support for its reachable portion and tree support for only the remaining portion. When disabled, the whole region uses tree support.");
     def->mode = comSimple;
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("resin_support_tree_type", coEnum);
+    def->label = L("Resin support tree type");
+    def->category = L("Support");
+    def->tooltip = L("Selects the current PrusaSlicer resin support-tree strategy used by Resin style (auto).");
+    def->enum_keys_map = &ConfigOptionEnum<ResinSupportTreeType>::get_enum_values();
+    def->enum_values = { "default", "branching" };
+    def->enum_labels = { L("Default"), L("Branching (experimental)") };
+    def->mode = comSimple;
+    def->set_default_value(new ConfigOptionEnum<ResinSupportTreeType>(rstDefault));
+
+    def = this->add("resin_support_points_density_relative", coInt);
+    def->label = L("Support points density");
+    def->category = L("Support");
+    def->tooltip = L("Relative density of automatically generated resin-style support points.");
+    def->sidetext = L("%");
+    def->min = 0;
+    def->max = 1000;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(100));
+
+    def = this->add("resin_support_enforcers_only", coBool);
+    def->label = L("Support only in enforced regions");
+    def->category = L("Support");
+    def->tooltip = L("Only creates automatic support points inside support enforcers.");
+    def->mode = comSimple;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    auto init_resin_support_params = [this, &def](const std::string &prefix, bool branching) {
+        def = this->add(prefix + "support_head_front_diameter", coFloat);
+        def->label = L("Pinhead front diameter");
+        def->category = L("Support");
+        def->tooltip = L("Diameter of the pointing side of the support head. Values below the active FFF line width are clamped at generation time.");
+        def->sidetext = L("mm");
+        def->min = 0;
+        def->max = 20;
+        def->mode = comAdvanced;
+        def->set_default_value(new ConfigOptionFloat(0.4));
+
+        def = this->add(prefix + "support_head_width", coFloat);
+        def->label = L("Pinhead width");
+        def->category = L("Support");
+        def->tooltip = L("Width from the back sphere center to the front sphere center.");
+        def->sidetext = L("mm");
+        def->min = 0;
+        def->max = 20;
+        def->mode = comAdvanced;
+        def->set_default_value(new ConfigOptionFloat(1.0));
+
+        def = this->add(prefix + "support_pillar_diameter", coFloat);
+        def->label = L("Pillar diameter");
+        def->category = L("Support");
+        def->tooltip = L("Diameter of the support pillars. Values below the active FFF line width are clamped at generation time.");
+        def->sidetext = L("mm");
+        def->min = 0;
+        def->max = 15;
+        def->mode = comSimple;
+        def->set_default_value(new ConfigOptionFloat(1.0));
+
+        def = this->add(prefix + "support_small_pillar_diameter_percent", coPercent);
+        def->label = L("Small pillar diameter percent");
+        def->category = L("Support");
+        def->tooltip = L("Diameter of fallback pillars as a percentage of the normal pillar diameter.");
+        def->sidetext = L("%");
+        def->min = 1;
+        def->max = 100;
+        def->mode = comExpert;
+        def->set_default_value(new ConfigOptionPercent(50));
+
+        def = this->add(prefix + "support_max_bridges_on_pillar", coInt);
+        def->label = L("Max bridges on a pillar");
+        def->category = L("Support");
+        def->tooltip = L("Maximum number of branches that may connect to one pillar.");
+        def->min = 0;
+        def->max = 50;
+        def->mode = comExpert;
+        def->set_default_value(new ConfigOptionInt(branching ? 2 : 3));
+
+        def = this->add(prefix + "support_max_weight_on_model", coFloat);
+        def->label = L("Max weight on model");
+        def->category = L("Support");
+        def->tooltip = L("Maximum summed branch length of a support subtree that may terminate on the model instead of the build plate.");
+        def->sidetext = L("mm");
+        def->min = 0;
+        def->mode = comExpert;
+        def->set_default_value(new ConfigOptionFloat(10.0));
+
+        def = this->add(prefix + "support_pillar_connection_mode", coEnum);
+        def->label = L("Pillar connection mode");
+        def->category = L("Support");
+        def->tooltip = L("Controls whether neighboring pillars use Zig-Zag, Cross, or distance-dependent Dynamic links.");
+        def->enum_keys_map = &ConfigOptionEnum<SLAPillarConnectionMode>::get_enum_values();
+        def->enum_values = { "zigzag", "cross", "dynamic" };
+        def->enum_labels = { L("Zig-Zag"), L("Cross"), L("Dynamic") };
+        def->mode = comAdvanced;
+        def->set_default_value(new ConfigOptionEnum<SLAPillarConnectionMode>(slapcmDynamic));
+
+        def = this->add(prefix + "support_buildplate_only", coBool);
+        def->label = L("Support on build plate only");
+        def->category = L("Support");
+        def->tooltip = L("Routes support pillars only to the build plate, not onto the model.");
+        def->mode = comSimple;
+        def->set_default_value(new ConfigOptionBool(false));
+
+        def = this->add(prefix + "support_pillar_widening_factor", coFloat);
+        def->label = L("Pillar widening factor");
+        def->category = L("Support");
+        def->tooltip = L("Controls radius growth when branches or pillars merge.");
+        def->min = 0;
+        def->max = 1;
+        def->mode = comExpert;
+        def->set_default_value(new ConfigOptionFloat(0.5));
+
+        def = this->add(prefix + "support_base_diameter", coFloat);
+        def->label = L("Support base diameter");
+        def->category = L("Support");
+        def->tooltip = L("Diameter of the conical pillar base.");
+        def->sidetext = L("mm");
+        def->min = 0;
+        def->max = 30;
+        def->mode = comAdvanced;
+        def->set_default_value(new ConfigOptionFloat(4.0));
+
+        def = this->add(prefix + "support_base_height", coFloat);
+        def->label = L("Support base height");
+        def->category = L("Support");
+        def->tooltip = L("Height of the conical pillar base.");
+        def->sidetext = L("mm");
+        def->min = 0;
+        def->mode = comAdvanced;
+        def->set_default_value(new ConfigOptionFloat(1.0));
+
+        def = this->add(prefix + "support_base_safety_distance", coFloat);
+        def->label = L("Support base safety distance");
+        def->category = L("Support");
+        def->tooltip = L("Minimum clearance between a pillar base and the model.");
+        def->sidetext = L("mm");
+        def->min = 0;
+        def->max = 10;
+        def->mode = comExpert;
+        def->set_default_value(new ConfigOptionFloat(1.0));
+
+        def = this->add(prefix + "support_critical_angle", coFloat);
+        def->label = L("Critical angle");
+        def->category = L("Support");
+        def->tooltip = L("Default angle for connecting support sticks and junctions.");
+        def->sidetext = u8"°";
+        def->min = 0;
+        def->max = 90;
+        def->mode = comExpert;
+        def->set_default_value(new ConfigOptionFloat(45));
+
+        def = this->add(prefix + "support_max_bridge_length", coFloat);
+        def->label = L("Max bridge length");
+        def->category = L("Support");
+        def->tooltip = L("Maximum length of a support-tree bridge.");
+        def->sidetext = L("mm");
+        def->min = 0;
+        def->mode = comAdvanced;
+        def->set_default_value(new ConfigOptionFloat(branching ? 5.0 : 15.0));
+
+        def = this->add(prefix + "support_max_pillar_link_distance", coFloat);
+        def->label = L("Max pillar linking distance");
+        def->category = L("Support");
+        def->tooltip = L("Maximum distance between pillars that may be linked. Zero disables pillar cascading.");
+        def->sidetext = L("mm");
+        def->min = 0;
+        def->mode = comAdvanced;
+        def->set_default_value(new ConfigOptionFloat(10.0));
+
+        def = this->add(prefix + "support_object_elevation", coFloat);
+        def->label = L("Object elevation");
+        def->category = L("Support");
+        def->tooltip = L("Raises the entire FFF object by this amount. This remains active and visible even when support generation is disabled.");
+        def->sidetext = L("mm");
+        def->min = 0;
+        def->max = 150;
+        def->mode = comAdvanced;
+        def->set_default_value(new ConfigOptionFloat(5.0));
+    };
+
+    init_resin_support_params("resin_", false);
+    init_resin_support_params("resin_branching_", true);
 
     def = this->add("support_object_xy_distance", coFloat);
     def->label = L("Support/object XY distance");
