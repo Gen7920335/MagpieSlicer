@@ -12,15 +12,15 @@ An OrcaSlicer-based fork integrating mixed nozzle sizes, extended supports, and 
 
 ## Latest Release
 
-- Version: **2.5.0.0.6**
-- Tag: `v2.5.0.0.6`
+- Version: **2.5.0.0.7**
+- Tag: `v2.5.0.0.7`
 - Platform: **Windows x64**
 - Status: **Pre-release**
-- [Go directly to the latest GitHub release](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.6)
+- [Go directly to the latest GitHub release](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.7)
 
 The source commit and SHA-256 are recorded in the GitHub release notes.
 
-This release connects the FFF overhang threshold to Resin-style automatic contact generation and prevents value-edit crashes when legacy presets omit newly introduced Resin options. It also completes the Korean Resin-setting translations, hides Tsunami-only controls in other modes, and caches repeated polygon work in `Mixed (auto)` to keep complex slicing responsive.
+This release fixes a null-pointer access at startup caused by changing the visibility of a Tsunami settings group before its UI sizer existed. Installer verification now also requires the installed GUI to remain alive and responsive, preventing the same class of startup crash from reaching another release.
 
 > This fork is under active development. Inspect the preview and generated G-code before printing on real hardware.
 

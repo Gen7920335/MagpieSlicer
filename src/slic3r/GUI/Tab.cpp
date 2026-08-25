@@ -3339,7 +3339,6 @@ void TabPrint::build()
         optgroup->append_single_option_line("tree_support_brim_width", "support_settings_tree");
 
         optgroup = page->new_optgroup(L("Tsunami supports"), L"param_support");
-        m_tsunami_support_group = optgroup;
         optgroup->append_single_option_line("tsunami_branch_angle");
         optgroup->append_single_option_line("tsunami_micro_branch_enabled");
         optgroup->append_single_option_line("tsunami_micro_branch_angle");
@@ -3586,9 +3585,6 @@ void TabPrint::toggle_options()
         return option != nullptr && option->value;
     };
 
-    if (m_tsunami_support_group)
-        m_tsunami_support_group->Show(is_tsunami(support_type));
-
     const bool sublayer_available =
         m_config->opt_int("support_interface_top_layers") > 1 ||
         m_config->opt_int("support_interface_bottom_layers") > 1;
@@ -3710,7 +3706,6 @@ void TabPrint::clear_pages()
     m_enable_large_nozzle_override_editor = {};
     m_refresh_interface_density_spacing_editor = {};
     m_enable_interface_density_spacing_editor = {};
-    m_tsunami_support_group.reset();
     Tab::clear_pages();
 
     m_recommended_thin_wall_thickness_description_line = nullptr;

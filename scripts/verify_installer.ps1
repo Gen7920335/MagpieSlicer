@@ -2,6 +2,8 @@ param(
     [string]$InstallerPath,
     [int]$InstallTimeoutSeconds = 180,
     [int]$SliceTimeoutSeconds = 180,
+    [int]$GuiStartupTimeoutSeconds = 45,
+    [int]$GuiStabilitySeconds = 15,
     [switch]$AllowElevationPrompt
 )
 
@@ -82,6 +84,48 @@ Write-Output "InstalledBytes=$payloadBytes"
 Write-Output "InstalledExeSHA256=$exeHash"
 Write-Output "InstalledDllSHA256=$dllHash"
 
+$guiDataDir = Join-Path $verificationRoot "gui-data"
+New-Item -ItemType Directory -Path $guiDataDir -Force | Out-Null
+$guiProcess = Start-Process `
+    -FilePath $installedExe `
+    -ArgumentList @("--datadir", $guiDataDir) `
+    -WorkingDirectory $installRoot `
+    -PassThru
+$guiDeadline = (Get-Date).AddSeconds($GuiStartupTimeoutSeconds)
+$windowReadyAt = $null
+try {
+    while ((Get-Date) -lt $guiDeadline) {
+        Start-Sleep -Milliseconds 250
+        $guiProcess.Refresh()
+        if ($guiProcess.HasExited) {
+            throw "Installed GUI exited during startup with code $($guiProcess.ExitCode)."
+        }
+        if ($guiProcess.MainWindowHandle -ne 0 -and $guiProcess.Responding) {
+            if ($null -eq $windowReadyAt) {
+                $windowReadyAt = Get-Date
+            }
+            if (((Get-Date) - $windowReadyAt).TotalSeconds -ge $GuiStabilitySeconds) {
+                break
+            }
+        } else {
+            $windowReadyAt = $null
+        }
+    }
+
+    $guiProcess.Refresh()
+    if ($null -eq $windowReadyAt -or $guiProcess.HasExited -or -not $guiProcess.Responding) {
+        throw "Installed GUI did not remain responsive for $GuiStabilitySeconds seconds within the $GuiStartupTimeoutSeconds second timeout."
+    }
+    Write-Output "InstalledGuiStartup=PASS"
+} finally {
+    if (-not $guiProcess.HasExited) {
+        $null = $guiProcess.CloseMainWindow()
+        if (-not $guiProcess.WaitForExit(10000)) {
+            Stop-Process -Id $guiProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 $sliceOutput = Join-Path $verificationRoot "cura-support-geometry"
 & (Join-Path $PSScriptRoot "verify_cura_support_geometry.ps1") `
     -SlicerPath $installedExe `
@@ -109,6 +153,7 @@ $report = [ordered]@{
     installed_bytes = $payloadBytes
     installed_exe_sha256 = $exeHash
     installed_dll_sha256 = $dllHash
+    gui_startup_stability_seconds = $GuiStabilitySeconds
     gcode_count = $gcodes.Count
     gcode_files = @($gcodes | ForEach-Object FullName)
 }
