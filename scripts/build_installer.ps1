@@ -1,5 +1,5 @@
 param(
-    [ValidateRange(1, 2)]
+    [ValidateRange(1, 4)]
     [int]$Parallel = 2,
     [string]$ShortStageRoot = "C:\MagpiePkg",
     [string]$BuildDirectory = "",
@@ -9,9 +9,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Installer builds are intentionally conservative. CMake/MSBuild project
-# parallelism and MSVC's per-project /MP workers otherwise multiply each other
-# and can make a 32 GiB workstation unresponsive during a full rebuild.
+# Installer builds cap CMake/MSBuild project parallelism and MSVC's per-project
+# /MP workers together. Four workers are allowed only after the preflight memory
+# check; callers may lower the value when other heavy workloads are active.
 $currentProcess = [Diagnostics.Process]::GetCurrentProcess()
 $currentProcess.PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal
 $env:CMAKE_BUILD_PARALLEL_LEVEL = $Parallel.ToString()
