@@ -21857,6 +21857,36 @@ msgstr ""
 #~ "시작 > 0 단계 >= 0\n"
 #~ "끝 > 시작 + 단계)"
 
+msgid "Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), and Tsunami (auto) are used to generate support automatically. If a manual style is selected, only support enforcers are generated. Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. Normal (Cura style) is an experimental OrcaProject support-area generator."
+msgstr "일반(Prusa 스타일, 자동), 일반(Cura 스타일, 자동), 트리(자동), Mixed(자동), Tsunami(자동)는 서포트를 자동 생성합니다. 수동 스타일을 선택하면 서포트 강제 영역만 생성됩니다. Mixed(자동)는 연결된 각 서포트 필요 영역을 일반 또는 트리 생성기에 배정합니다. 일반(Cura 스타일)은 실험적인 OrcaProject 서포트 영역 생성기입니다."
+
+msgid "Mixed (auto)"
+msgstr "Mixed (자동)"
+
+msgid "Normal support generator"
+msgstr "일반 서포트 생성기"
+
+msgid "Selects the normal-support geometry generator used by Mixed (auto)."
+msgstr "Mixed (자동)에서 사용할 일반 서포트 형상 생성기를 선택합니다."
+
+msgid "Tree support style"
+msgstr "트리 서포트 스타일"
+
+msgid "Selects the tree-support style used by Mixed (auto)."
+msgstr "Mixed (자동)에서 사용할 트리 서포트 스타일을 선택합니다."
+
+msgid "Normal support coverage threshold"
+msgstr "일반 서포트 커버 퍼센테이지 역치"
+
+msgid "A connected support-demand region uses normal support when this percentage can be reached vertically from the build plate. Otherwise it uses tree support."
+msgstr "연결된 서포트 필요 영역 중 베드에서 수직으로 도달 가능한 비율이 이 값 이상이면 일반 서포트를 사용하고, 그렇지 않으면 트리 서포트를 사용합니다."
+
+msgid "Selective merge"
+msgstr "셀렉티브 머지"
+
+msgid "When a support-demand region is below the normal coverage threshold, use build-plate-origin normal support for its reachable portion and tree support for only the remaining portion. When disabled, the whole region uses tree support."
+msgstr "서포트 필요 영역의 일반 커버 비율이 역치보다 낮을 때, 베드에서 도달 가능한 부분은 일반 서포트로 만들고 나머지 부분만 트리 서포트로 만들어 융합합니다. 끄면 해당 영역 전체에 트리 서포트를 사용합니다."
+
 #~ msgid ""
 #~ "Please input valid values:\n"
 #~ "start > 10 step >= 0\n"

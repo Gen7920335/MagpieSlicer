@@ -1,9 +1,17 @@
+param(
+    [string] $SlicerPath = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 
-$exe = Join-Path $repo 'build\src\Release\magpie-slicer.exe'
+$exe = if ([string]::IsNullOrWhiteSpace($SlicerPath)) {
+    Join-Path $repo 'build\src\Release\magpie-slicer.exe'
+} else {
+    [IO.Path]::GetFullPath($SlicerPath)
+}
 if (-not (Test-Path $exe)) {
     throw "Executable not found: $exe"
 }
@@ -18,11 +26,7 @@ $summary = [System.Collections.Generic.List[object]]::new()
 foreach ($test in $tests) {
     $started = Get-Date
     Write-Host "=== Running $test ==="
-    if ($test -like '*verify_support_features.ps1') {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $test -SlicerPath $exe
-    } else {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $test -OrcaExe $exe
-    }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $test -SlicerPath $exe
     $exitCode = $LASTEXITCODE
     $summary.Add([pscustomobject]@{
         Test = $test

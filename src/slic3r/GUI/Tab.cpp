@@ -3163,6 +3163,10 @@ void TabPrint::build()
         optgroup = page->new_optgroup(L("Support"), L"param_support");
         optgroup->append_single_option_line("enable_support", "support_settings_support");
         optgroup->append_single_option_line("support_type", "support_settings_support#type");
+        optgroup->append_single_option_line("mixed_normal_support_generator", "support_settings_support#type");
+        optgroup->append_single_option_line("mixed_tree_support_style", "support_settings_support#type");
+        optgroup->append_single_option_line("mixed_normal_coverage_threshold", "support_settings_support#type");
+        optgroup->append_single_option_line("mixed_selective_merge", "support_settings_support#type");
         optgroup->append_single_option_line("support_style", "support_settings_support#style");
         optgroup->append_single_option_line("support_threshold_angle", "support_settings_support#threshold-angle");
         optgroup->append_single_option_line("support_threshold_overlap", "support_settings_support#threshold-overlap");
@@ -3532,23 +3536,25 @@ void TabPrint::toggle_options()
 
     Field *field = m_active_page->get_field("support_style");
     auto   support_type = m_config->opt_enum<SupportType>("support_type");
-    if (auto choice = dynamic_cast<Choice*>(field)) {
-        auto def = print_config_def.get("support_style");
-        std::vector<int> enum_set_normal = {smsDefault, smsGrid, smsSnug };
-        std::vector<int> enum_set_tree   = { smsDefault, smsTreeSlim, smsTreeStrong, smsTreeHybrid, smsTreeOrganic };
-        auto &           set             = is_tree(support_type) ? enum_set_tree : enum_set_normal;
-        auto &           opt             = const_cast<ConfigOptionDef &>(field->m_opt);
-        auto             cb              = dynamic_cast<ComboBox *>(choice->window);
-        auto             n               = cb->GetValue();
-        opt.enum_values.clear();
-        opt.enum_labels.clear();
-        cb->Clear();
-        for (auto i : set) {
-            opt.enum_values.push_back(def->enum_values[i]);
-            opt.enum_labels.push_back(def->enum_labels[i]);
-            cb->Append(_(def->enum_labels[i]));
+    if (!is_mixed(support_type)) {
+        if (auto choice = dynamic_cast<Choice*>(field)) {
+            auto def = print_config_def.get("support_style");
+            std::vector<int> enum_set_normal = {smsDefault, smsGrid, smsSnug };
+            std::vector<int> enum_set_tree   = { smsDefault, smsTreeSlim, smsTreeStrong, smsTreeHybrid, smsTreeOrganic };
+            auto &           set             = is_tree(support_type) ? enum_set_tree : enum_set_normal;
+            auto &           opt             = const_cast<ConfigOptionDef &>(field->m_opt);
+            auto             cb              = dynamic_cast<ComboBox *>(choice->window);
+            auto             n               = cb->GetValue();
+            opt.enum_values.clear();
+            opt.enum_labels.clear();
+            cb->Clear();
+            for (auto i : set) {
+                opt.enum_values.push_back(def->enum_values[i]);
+                opt.enum_labels.push_back(def->enum_labels[i]);
+                cb->Append(_(def->enum_labels[i]));
+            }
+            cb->SetValue(n);
         }
-        cb->SetValue(n);
     }
 
     const auto optional_bool = [this](const char *key) {

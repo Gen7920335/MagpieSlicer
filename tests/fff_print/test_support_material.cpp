@@ -1,5 +1,6 @@
 #include <catch2/catch_all.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
@@ -16,6 +17,7 @@
 #include "libslic3r/Format/OBJ.hpp"
 #include "libslic3r/SlicesToTriangleMesh.hpp"
 #include "libslic3r/Support/SupportCommon.hpp"
+#include "libslic3r/Support/MixedSupportPlan.hpp"
 
 #include "test_helpers.hpp" // get access to init_print, etc
 #include "test_utils.hpp"
@@ -1284,6 +1286,389 @@ TEST_CASE("Cura normal support honors explicit geometry styles", "[SupportMateri
     CHECK(is_normal_support(stNormalCura));
     CHECK_FALSE(is_normal_support(stTreeAuto));
     CHECK_FALSE(is_normal_support(stTree));
+}
+
+TEST_CASE("Mixed support settings round trip with stable enum values", "[SupportMaterial][Mixed][Config]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "support_type", "mixed(auto)" },
+        { "mixed_normal_support_generator", "cura" },
+        { "mixed_tree_support_style", "tree_strong" },
+        { "mixed_normal_coverage_threshold", "80%" },
+        { "mixed_selective_merge", "1" }
+    });
+
+    REQUIRE(config.opt_enum<SupportType>("support_type") == stMixedAuto);
+    CHECK(config.opt_enum<MixedNormalSupportGenerator>("mixed_normal_support_generator") == mnsgCura);
+    CHECK(config.opt_enum<MixedTreeSupportStyle>("mixed_tree_support_style") == mtssStrong);
+    CHECK(config.opt<ConfigOptionPercent>("mixed_normal_coverage_threshold")->value == Catch::Approx(80.));
+    CHECK(config.opt_bool("mixed_selective_merge"));
+    CHECK(is_auto(stMixedAuto));
+    CHECK(uses_normal_channel(stMixedAuto));
+    CHECK(uses_tree_channel(stMixedAuto));
+    CHECK_FALSE(is_normal_support(stMixedAuto));
+    CHECK_FALSE(is_tree(stMixedAuto));
+    CHECK(mixed_tree_style_to_support_style(mtssOrganic) == smsTreeOrganic);
+    CHECK(mixed_tree_style_to_support_style(mtssSlim) == smsTreeSlim);
+    CHECK(mixed_tree_style_to_support_style(mtssStrong) == smsTreeStrong);
+    CHECK(mixed_tree_style_to_support_style(mtssTreeHybrid) == smsTreeHybrid);
+
+    DynamicPrintConfig restored = DynamicPrintConfig::full_print_config();
+    for (const char *key : { "support_type", "mixed_normal_support_generator",
+                             "mixed_tree_support_style", "mixed_normal_coverage_threshold",
+                             "mixed_selective_merge" })
+        restored.set_deserialize_strict(key, config.opt_serialize(key));
+    CHECK(restored.opt_enum<SupportType>("support_type") == stMixedAuto);
+    CHECK(restored.opt_enum<MixedNormalSupportGenerator>("mixed_normal_support_generator") == mnsgCura);
+    CHECK(restored.opt_enum<MixedTreeSupportStyle>("mixed_tree_support_style") == mtssStrong);
+    CHECK(restored.opt<ConfigOptionPercent>("mixed_normal_coverage_threshold")->value == Catch::Approx(80.));
+    CHECK(restored.opt_bool("mixed_selective_merge"));
+}
+
+TEST_CASE("Mixed support planner uses inclusive coverage boundaries", "[SupportMaterial][Mixed][Planner]")
+{
+    std::vector<Polygons> demand(2);
+    demand[1] = support_test_rectangle(0., 0., 10., 10.);
+    std::vector<Polygons> shadow(2);
+    shadow[1] = support_test_rectangle(0., 0., 2., 10.); // 20 mm2 blocked, 80 mm2 reachable.
+    const coord_t connection_width = scale_(0.4); // Support-demand connection distance in XY millimetres.
+
+    const MixedSupportPlan exact = MixedSupportPlan::build_for_geometry(demand, shadow, connection_width, 80.);
+    REQUIRE(exact.decisions().size() == 1);
+    CHECK(exact.decisions().front().coverage_percent == Catch::Approx(80.).margin(1e-8));
+    CHECK(exact.decisions().front().channel == MixedSupportChannel::Normal);
+    CHECK_FALSE(exact.normal_mask()[1].empty());
+    CHECK(exact.tree_mask()[1].empty());
+
+    // Percentage-point boundary probes around the inclusive 80% comparison.
+    const double threshold_epsilon = 1e-9;
+    const MixedSupportPlan below = MixedSupportPlan::build_for_geometry(
+        demand, shadow, connection_width, 80. - threshold_epsilon);
+    const MixedSupportPlan above = MixedSupportPlan::build_for_geometry(
+        demand, shadow, connection_width, 80. + threshold_epsilon);
+    CHECK(below.decisions().front().channel == MixedSupportChannel::Normal);
+    CHECK(above.decisions().front().channel == MixedSupportChannel::Tree);
+
+    const MixedSupportPlan zero = MixedSupportPlan::build_for_geometry(demand, shadow, connection_width, 0.);
+    CHECK(zero.decisions().front().channel == MixedSupportChannel::Normal);
+    const MixedSupportPlan hundred = MixedSupportPlan::build_for_geometry(demand, shadow, connection_width, 100.);
+    CHECK(hundred.decisions().front().channel == MixedSupportChannel::Tree);
+    const MixedSupportPlan fully_reachable = MixedSupportPlan::build_for_geometry(
+        demand, std::vector<Polygons>(2), connection_width, 100.);
+    CHECK(fully_reachable.decisions().front().channel == MixedSupportChannel::Normal);
+}
+
+TEST_CASE("Mixed support planner joins bridged neighbors but not skipped layers", "[SupportMaterial][Mixed][Planner]")
+{
+    const coord_t connection_width = scale_(0.4); // Support-demand connection distance in XY millimetres.
+    std::vector<Polygons> split_demand(2);
+    split_demand[1] = support_test_rectangle(0., 0., 2., 2.);
+    append(split_demand[1], support_test_rectangle(10., 0., 12., 2.));
+    std::vector<Polygons> split_shadow(2);
+    split_shadow[1] = support_test_rectangle(10., 0., 12., 2.);
+    const MixedSupportPlan split_channels = MixedSupportPlan::build_for_geometry(
+        split_demand, split_shadow, connection_width, 100.);
+    REQUIRE(split_channels.decisions().size() == 2);
+    CHECK(split_channels.has_normal_demand());
+    CHECK(split_channels.has_tree_demand());
+
+    std::vector<Polygons> bridged(3);
+    bridged[1] = support_test_rectangle(0., 0., 2., 2.);
+    append(bridged[1], support_test_rectangle(6., 0., 8., 2.));
+    bridged[2] = support_test_rectangle(1.5, 0., 6.5, 2.);
+    const MixedSupportPlan one_component = MixedSupportPlan::build_for_geometry(
+        bridged, std::vector<Polygons>(3), connection_width, 100.);
+    CHECK(one_component.decisions().size() == 1);
+
+    std::vector<Polygons> reversed = bridged;
+    std::reverse(reversed[1].begin(), reversed[1].end());
+    const MixedSupportPlan reversed_plan = MixedSupportPlan::build_for_geometry(
+        reversed, std::vector<Polygons>(3), connection_width, 100.);
+    REQUIRE(reversed_plan.decisions().size() == one_component.decisions().size());
+    for (size_t layer_id = 0; layer_id < bridged.size(); ++layer_id) {
+        CHECK(same_polygon_set(reversed_plan.normal_mask()[layer_id], one_component.normal_mask()[layer_id]));
+        CHECK(same_polygon_set(reversed_plan.tree_mask()[layer_id], one_component.tree_mask()[layer_id]));
+    }
+
+    std::vector<Polygons> skipped(3);
+    skipped[0] = support_test_rectangle(0., 0., 2., 2.);
+    skipped[2] = support_test_rectangle(0., 0., 2., 2.);
+    const MixedSupportPlan two_components = MixedSupportPlan::build_for_geometry(
+        skipped, std::vector<Polygons>(3), connection_width, 100.);
+    CHECK(two_components.decisions().size() == 2);
+}
+
+TEST_CASE("Mixed selective merge partitions only below-threshold components", "[SupportMaterial][Mixed][Planner]")
+{
+    std::vector<Polygons> demand(2);
+    demand[1] = support_test_rectangle(0., 0., 10., 10.);
+    std::vector<Polygons> shadow(2);
+    shadow[1] = support_test_rectangle(0., 0., 2., 10.); // 80% vertically reachable.
+    const coord_t connection_width = scale_(0.4);
+
+    const MixedSupportPlan disabled = MixedSupportPlan::build_for_geometry(
+        demand, shadow, connection_width, 81., false);
+    REQUIRE(disabled.decisions().size() == 1);
+    CHECK(disabled.decisions().front().channel == MixedSupportChannel::Tree);
+    CHECK_FALSE(disabled.decisions().front().selectively_split);
+    CHECK(disabled.normal_mask()[1].empty());
+    CHECK(same_polygon_set(disabled.tree_mask()[1], demand[1]));
+
+    const MixedSupportPlan enabled = MixedSupportPlan::build_for_geometry(
+        demand, shadow, connection_width, 81., true);
+    REQUIRE(enabled.decisions().size() == 1);
+    CHECK(enabled.decisions().front().channel == MixedSupportChannel::Mixed);
+    CHECK(enabled.decisions().front().selectively_split);
+    CHECK(same_polygon_set(enabled.normal_mask()[1], support_test_rectangle(2., 0., 10., 10.)));
+    CHECK(same_polygon_set(enabled.tree_mask()[1], support_test_rectangle(0., 0., 2., 10.)));
+    CHECK(intersection_ex(enabled.normal_mask()[1], enabled.tree_mask()[1]).empty());
+    Polygons recombined = enabled.normal_mask()[1];
+    append(recombined, enabled.tree_mask()[1]);
+    CHECK(same_polygon_set(union_(recombined), demand[1]));
+
+    const MixedSupportPlan exact = MixedSupportPlan::build_for_geometry(
+        demand, shadow, connection_width, 80., true);
+    CHECK(exact.decisions().front().channel == MixedSupportChannel::Normal);
+    CHECK_FALSE(exact.decisions().front().selectively_split);
+    CHECK(same_polygon_set(exact.normal_mask()[1], demand[1]));
+    CHECK(exact.tree_mask()[1].empty());
+
+    const MixedSupportPlan zero = MixedSupportPlan::build_for_geometry(
+        demand, shadow, connection_width, 0., true);
+    CHECK(zero.decisions().front().channel == MixedSupportChannel::Normal);
+    CHECK_FALSE(zero.decisions().front().selectively_split);
+    CHECK(same_polygon_set(zero.normal_mask()[1], demand[1]));
+    CHECK(zero.tree_mask()[1].empty());
+}
+
+TEST_CASE("Mixed selective merge generates both support channels", "[SupportMaterial][Mixed][Integration]")
+{
+    const auto make_fixture = []() {
+        // Independent analytic fixture: a 20x10 mm ceiling starts at Z=20 mm. An 8x10 mm
+        // pillar ends at Z=10 mm below its left side, so 60% of the ceiling demand is
+        // vertically reachable from the bed and 40% is shadowed by the pillar.
+        TriangleMesh fixture = make_cube(8., 10., 10.);
+        TriangleMesh ceiling = make_cube(20., 10., 2.);
+        ceiling.translate(0.f, 0.f, 20.f);
+        fixture.merge(ceiling);
+        return fixture;
+    };
+
+    for (const MixedNormalSupportGenerator normal_generator : { mnsgPrusa, mnsgCura }) {
+        for (const MixedTreeSupportStyle tree_style : {
+                mtssOrganic, mtssSlim, mtssStrong, mtssTreeHybrid }) {
+            CAPTURE(int(normal_generator), int(tree_style));
+            DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+            config.set_key_value("enable_support", new ConfigOptionBool(true));
+            config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stMixedAuto));
+            config.set_key_value("mixed_normal_support_generator",
+                new ConfigOptionEnum<MixedNormalSupportGenerator>(normal_generator));
+            config.set_key_value("mixed_tree_support_style",
+                new ConfigOptionEnum<MixedTreeSupportStyle>(tree_style));
+            config.set_key_value("mixed_normal_coverage_threshold", new ConfigOptionPercent(80.));
+            config.set_key_value("mixed_selective_merge", new ConfigOptionBool(true));
+            config.set_key_value("layer_height", new ConfigOptionFloat(0.4));
+            config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
+            config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+
+            Print print;
+            init_and_process_print({ make_fixture() }, print, config);
+            REQUIRE(print.objects().size() == 1);
+            const auto support_layers = print.objects().front()->support_layers();
+            REQUIRE_FALSE(support_layers.empty());
+            CHECK(std::any_of(support_layers.begin(), support_layers.end(), [](const SupportLayer *layer) {
+                return has_normal_channel(layer->support_type);
+            }));
+            CHECK(std::any_of(support_layers.begin(), support_layers.end(), [](const SupportLayer *layer) {
+                return has_tree_channel(layer->support_type);
+            }));
+            CHECK(std::any_of(support_layers.begin(), support_layers.end(), [](const SupportLayer *layer) {
+                return layer->support_type == stInnerMixed;
+            }));
+
+            const std::string output = gcode(print);
+            CHECK_FALSE(output.empty());
+            CHECK(output.find("support_type = mixed(auto)") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Mixed selective merge emits a single merged raft", "[SupportMaterial][Mixed][Integration][Raft]")
+{
+    struct GeneratorCombination {
+        MixedNormalSupportGenerator normal;
+        MixedTreeSupportStyle tree;
+    };
+    const GeneratorCombination combinations[] = {
+        { mnsgPrusa, mtssOrganic },
+        { mnsgCura, mtssStrong }
+    };
+
+    for (const GeneratorCombination combination : combinations) {
+        CAPTURE(int(combination.normal), int(combination.tree));
+        TriangleMesh fixture = make_cube(8., 10., 10.);
+        TriangleMesh ceiling = make_cube(20., 10., 2.);
+        ceiling.translate(0.f, 0.f, 20.f);
+        fixture.merge(ceiling);
+
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stMixedAuto));
+        config.set_key_value("mixed_normal_support_generator",
+            new ConfigOptionEnum<MixedNormalSupportGenerator>(combination.normal));
+        config.set_key_value("mixed_tree_support_style",
+            new ConfigOptionEnum<MixedTreeSupportStyle>(combination.tree));
+        config.set_key_value("mixed_normal_coverage_threshold", new ConfigOptionPercent(80.));
+        config.set_key_value("mixed_selective_merge", new ConfigOptionBool(true));
+        config.set_key_value("raft_layers", new ConfigOptionInt(2));
+        config.set_key_value("raft_expansion", new ConfigOptionFloat(2.));
+        config.set_key_value("layer_height", new ConfigOptionFloat(0.4));
+        config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
+        config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+
+        Print print;
+        REQUIRE_NOTHROW(init_and_process_print({ fixture }, print, config));
+        REQUIRE(print.objects().size() == 1);
+        const PrintObject *object = print.objects().front();
+        const auto support_layers = object->support_layers();
+        REQUIRE_FALSE(support_layers.empty());
+
+        size_t raft_layer_count = 0;
+        for (size_t layer_id = 0; layer_id < support_layers.size(); ++layer_id) {
+            const SupportLayer *layer = support_layers[layer_id];
+            if (layer_id > 0)
+                CHECK(layer->print_z > support_layers[layer_id - 1]->print_z + EPSILON);
+            if (layer->print_z <= object->slicing_parameters().raft_contact_top_z + EPSILON) {
+                ++raft_layer_count;
+                CHECK(layer->has_extrusions());
+            }
+        }
+        CHECK(raft_layer_count >= object->slicing_parameters().raft_layers());
+
+        const std::string output = gcode(print);
+        CHECK_FALSE(output.empty());
+        CHECK(output.find("support_type = mixed(auto)") != std::string::npos);
+    }
+}
+
+TEST_CASE("Mixed selective merge supports common nozzle diameters", "[SupportMaterial][Mixed][Integration][Nozzle]")
+{
+    for (const double nozzle_diameter_mm : { 0.2, 0.4, 0.6, 0.8 }) {
+        CAPTURE(nozzle_diameter_mm);
+        TriangleMesh fixture = make_cube(16., 20., 4.);
+        TriangleMesh ceiling = make_cube(40., 20., 2.);
+        ceiling.translate(0.f, 0.f, 20.f);
+        fixture.merge(ceiling);
+
+        const double layer_height_mm = std::min(0.2, 0.5 * nozzle_diameter_mm);
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stMixedAuto));
+        config.set_key_value("mixed_normal_support_generator",
+            new ConfigOptionEnum<MixedNormalSupportGenerator>(mnsgPrusa));
+        config.set_key_value("mixed_normal_coverage_threshold", new ConfigOptionPercent(80.));
+        config.set_key_value("mixed_selective_merge", new ConfigOptionBool(true));
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ nozzle_diameter_mm }));
+        config.set_key_value("layer_height", new ConfigOptionFloat(layer_height_mm));
+        config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(layer_height_mm));
+        config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
+        config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+
+        for (const MixedTreeSupportStyle tree_style : {
+                mtssOrganic, mtssSlim, mtssStrong, mtssTreeHybrid }) {
+            CAPTURE(int(tree_style));
+            config.set_key_value("mixed_tree_support_style",
+                new ConfigOptionEnum<MixedTreeSupportStyle>(tree_style));
+
+            Print print;
+            std::string slicing_error;
+            try {
+                init_and_process_print({ fixture }, print, config);
+            } catch (const std::exception &error) {
+                slicing_error = error.what();
+            }
+            CHECK(slicing_error.empty());
+            if (!slicing_error.empty())
+                continue;
+
+            REQUIRE(print.objects().size() == 1);
+            const auto support_layers = print.objects().front()->support_layers();
+            REQUIRE_FALSE(support_layers.empty());
+            CHECK(std::any_of(support_layers.begin(), support_layers.end(), [](const SupportLayer *layer) {
+                return has_normal_channel(layer->support_type);
+            }));
+            CHECK(std::any_of(support_layers.begin(), support_layers.end(), [](const SupportLayer *layer) {
+                return has_tree_channel(layer->support_type);
+            }));
+
+            const std::string output = gcode(print);
+            CHECK_FALSE(output.empty());
+            CHECK(output.find("support_type = mixed(auto)") != std::string::npos);
+        }
+    }
+}
+
+TEST_CASE("Mixed support preserves dedicated body and interface filaments",
+          "[SupportMaterial][Mixed][Integration][MultiMaterial]")
+{
+    struct GeneratorCombination {
+        MixedNormalSupportGenerator normal;
+        MixedTreeSupportStyle tree;
+    };
+    const GeneratorCombination combinations[] = {
+        { mnsgPrusa, mtssOrganic },
+        { mnsgCura, mtssStrong }
+    };
+
+    for (const GeneratorCombination combination : combinations) {
+        CAPTURE(int(combination.normal), int(combination.tree));
+        TriangleMesh fixture = make_cube(16., 20., 4.);
+        TriangleMesh ceiling = make_cube(40., 20., 2.);
+        ceiling.translate(0.f, 0.f, 20.f);
+        fixture.merge(ceiling);
+
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_num_extruders(3);
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stMixedAuto));
+        config.set_key_value("mixed_normal_support_generator",
+            new ConfigOptionEnum<MixedNormalSupportGenerator>(combination.normal));
+        config.set_key_value("mixed_tree_support_style",
+            new ConfigOptionEnum<MixedTreeSupportStyle>(combination.tree));
+        config.set_key_value("mixed_normal_coverage_threshold", new ConfigOptionPercent(80.));
+        config.set_key_value("mixed_selective_merge", new ConfigOptionBool(true));
+        config.set_key_value("support_filament", new ConfigOptionInt(2));
+        config.set_key_value("support_interface_filament", new ConfigOptionInt(3));
+        config.set_key_value("support_interface_top_layers", new ConfigOptionInt(2));
+        config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4, 0.4, 0.4 }));
+        config.set_key_value("printer_extruder_id", new ConfigOptionInts({ 1, 2, 3 }));
+        config.set_key_value("printer_extruder_variant", new ConfigOptionStrings({
+            "Direct Drive Standard", "Direct Drive Standard", "Direct Drive Standard" }));
+        config.set_key_value("filament_diameter", new ConfigOptionFloats({ 1.75, 1.75, 1.75 }));
+        config.set_key_value("filament_type", new ConfigOptionStrings({ "PLA", "PLA", "PLA" }));
+        config.set_key_value("filament_colour",
+            new ConfigOptionStrings({ "#808080", "#00AAFF", "#FFAA00" }));
+        config.set_key_value("default_filament_colour",
+            new ConfigOptionStrings({ "#808080", "#00AAFF", "#FFAA00" }));
+        config.set_key_value("flush_multiplier", new ConfigOptionFloats({ 1. }));
+        config.set_key_value("flush_volumes_matrix",
+            new ConfigOptionFloats({ 0., 0., 0., 0., 0., 0., 0., 0., 0. }));
+        config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+        config.set_key_value("filament_map", new ConfigOptionInts({ 1, 2, 3 }));
+        config.set_key_value("gcode_comments", new ConfigOptionBool(true));
+
+        Print print;
+        REQUIRE_NOTHROW(init_and_process_print({ fixture }, print, config));
+        CHECK(print.support_material_extruders() == std::vector<unsigned int>{ 1, 2 });
+
+        const std::string output = gcode(print);
+        CHECK(output.find("support_type = mixed(auto)") != std::string::npos);
+        CHECK(output.find("\nT1 ; change extruder\n") != std::string::npos);
+        CHECK(output.find("\nT2 ; change extruder\n") != std::string::npos);
+        CHECK(output.find("support material interface") != std::string::npos);
+    }
 }
 
 TEST_CASE("Cura hollow support emits walls without sparse base fill", "[SupportMaterial][CuraStyle][Hollow]")

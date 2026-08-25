@@ -275,8 +275,19 @@ private:
 
 enum SupportInnerType {
     stInnerNormal,
-    stInnerTree
+    stInnerTree,
+    stInnerMixed
 };
+
+inline bool has_normal_channel(SupportInnerType type)
+{
+    return type == stInnerNormal || type == stInnerMixed;
+}
+
+inline bool has_tree_channel(SupportInnerType type)
+{
+    return type == stInnerTree || type == stInnerMixed;
+}
 
 class SupportLayer : public Layer
 {
@@ -300,6 +311,9 @@ public:
 
     void simplify_support_extrusion_path() { this->simplify_support_entity_collection(&support_fills); }
 
+    // Public so detached support layers can use RAII ownership during multi-generator assembly.
+    virtual ~SupportLayer() = default;
+
 protected:
     friend class PrintObject;
     friend class TreeSupport;
@@ -308,7 +322,6 @@ protected:
     // between the raft and the object first layer.
     SupportLayer(size_t id, size_t interface_id, PrintObject *object, coordf_t height, coordf_t print_z, coordf_t slice_z) :
         Layer(id, object, height, print_z, slice_z), m_interface_id(interface_id), support_type(stInnerNormal) {}
-    virtual ~SupportLayer() = default;
 
     size_t m_interface_id;
 

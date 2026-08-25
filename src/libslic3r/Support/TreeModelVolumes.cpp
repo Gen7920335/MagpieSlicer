@@ -49,6 +49,7 @@ static Polygons calculateMachineBorderCollision(Polygon machine_border)
     out.emplace_back(std::move(machine_border));
     return out;
 #endif
+
 }
 
 TreeModelVolumes::TreeModelVolumes(
@@ -152,6 +153,25 @@ TreeModelVolumes::TreeModelVolumes(
         });
     }
 #endif
+
+    if (!additional_excluded_areas.empty()) {
+        const size_t raft_layer_count = m_raft_layers.size();
+        const size_t collision_layer_count = print_object.layer_count() + raft_layer_count;
+        std::vector<Polygons> blockers = std::move(m_anti_overhang);
+        m_anti_overhang.assign(collision_layer_count, Polygons{});
+
+        // Mixed obstacles are indexed by object layer, while Organic collision layers
+        // include raft placeholders. Convert that index domain exactly once here.
+        for (size_t object_layer = 0; object_layer < print_object.layer_count(); ++object_layer) {
+            Polygons &destination = m_anti_overhang[object_layer + raft_layer_count];
+            if (object_layer < blockers.size())
+                append(destination, blockers[object_layer]);
+            if (object_layer < additional_excluded_areas.size())
+                append(destination, additional_excluded_areas[object_layer]);
+            if (!destination.empty())
+                destination = union_(destination);
+        }
+    }
 }
 
 void TreeModelVolumes::precalculate(const PrintObject& print_object, const coord_t max_layer, std::function<void()> throw_on_cancel)
@@ -469,7 +489,7 @@ void TreeModelVolumes::calculateCollision(const coord_t radius, const LayerIndex
             });
 
             // 2) Sum over top / bottom ranges.
-            const bool processing_last_mesh = outline_idx == layer_outline_indices.size();
+            const bool processing_last_mesh = outline_idx == layer_outline_indices.back();
             tbb::parallel_for(tbb::blocked_range<LayerIndex>(data.begin(), data.end()),
                 [&collision_areas_offsetted, &outlines, &machine_border = m_machine_border, &anti_overhang = m_anti_overhang, radius, 
                     xy_distance, z_distance_bottom_layers, z_distance_top_layers, min_resolution = m_min_resolution, &data, processing_last_mesh, &throw_on_cancel]

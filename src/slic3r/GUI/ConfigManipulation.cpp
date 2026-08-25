@@ -524,7 +524,7 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
         std::set<int> enum_set_normal = { smsDefault, smsGrid, smsSnug };
         std::set<int> enum_set_tree   = { smsDefault, smsTreeSlim, smsTreeStrong, smsTreeHybrid, smsTreeOrganic };
         auto &           set             = is_tree(support_type) ? enum_set_tree : enum_set_normal;
-        if (set.find(support_style) == set.end()) {
+        if (!is_mixed(support_type) && set.find(support_style) == set.end()) {
             DynamicPrintConfig new_conf = *config;
             new_conf.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(smsDefault));
             apply(config, &new_conf);
@@ -792,6 +792,12 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     bool have_support_material = config->opt_bool("enable_support") || have_raft;
 
     SupportType support_type = config->opt_enum<SupportType>("support_type");
+    const bool support_type_is_mixed = is_mixed(support_type);
+    const bool support_is_mixed = config->opt_bool("enable_support") && support_type_is_mixed;
+    const MixedNormalSupportGenerator mixed_normal_generator =
+        config->opt_enum<MixedNormalSupportGenerator>("mixed_normal_support_generator");
+    const MixedTreeSupportStyle mixed_tree_style =
+        config->opt_enum<MixedTreeSupportStyle>("mixed_tree_support_style");
     bool have_support_interface = config->opt_int("support_interface_top_layers") > 0 || config->opt_int("support_interface_bottom_layers") > 0;
     bool have_support_soluble = have_support_material && config->opt_float("support_top_z_distance") == 0;
     auto support_style = config->opt_enum<SupportMaterialStyle>("support_style");
@@ -802,17 +808,27 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
         "support_type", "support_on_build_plate_only", "support_critical_regions_only", "support_interface_not_for_body",
         "support_object_xy_distance", "support_object_first_layer_gap", "independent_support_layer_height"})
         toggle_field(el, have_support_material);
-    toggle_field("cura_solid_support_raft", have_support_material && is_normal_cura(support_type));
+    toggle_field("cura_solid_support_raft", have_support_material &&
+        (is_normal_cura(support_type) || (support_is_mixed && mixed_normal_generator == mnsgCura)));
     toggle_field("support_threshold_angle", support_type == stTreeAuto || (have_support_material && is_auto(support_type)));
     toggle_field("support_threshold_overlap", config->opt_int("support_threshold_angle") == 0 && have_support_material && is_auto(support_type));
     //toggle_field("support_closing_radius", have_support_material && support_style == smsSnug);
 
     bool support_is_tree = config->opt_bool("enable_support") && is_tree(support_type);
-    bool support_is_organic = support_is_tree && (support_style == smsTreeOrganic || support_style == smsDefault);
-    bool support_is_normal_tree = support_is_tree && !support_is_organic;
+    const SupportMaterialStyle effective_tree_style = support_is_mixed ?
+        mixed_tree_style_to_support_style(mixed_tree_style) : support_style;
+    bool support_has_tree = support_is_tree || support_is_mixed;
+    bool support_is_organic = support_has_tree && (effective_tree_style == smsTreeOrganic || effective_tree_style == smsDefault);
+    bool support_is_normal_tree = support_has_tree && !support_is_organic;
+
+    toggle_line("mixed_normal_support_generator", support_type_is_mixed);
+    toggle_line("mixed_tree_support_style", support_type_is_mixed);
+    toggle_line("mixed_normal_coverage_threshold", support_type_is_mixed);
+    toggle_line("mixed_selective_merge", support_type_is_mixed);
+    toggle_line("support_style", !support_type_is_mixed);
 
     // hide settings that are not used by tree supports
-    toggle_line("support_threshold_overlap", !support_is_tree); // ORCA: tree supports do not use Threshold Overlap
+    toggle_line("support_threshold_overlap", !support_is_tree); // Mixed classification uses its selected normal detector.
     // settings specific to normal trees
     for (auto el : {"tree_support_branch_angle", "tree_support_branch_distance", "tree_support_branch_diameter", "tree_support_auto_brim", "tree_support_brim_width"})
         toggle_line(el, support_is_normal_tree);
@@ -823,11 +839,11 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     // as they rely on the support layers being the same as the object layers to determine where to place branches.
     toggle_line("independent_support_layer_height", have_support_material && !support_is_organic);
 
-    toggle_field("tree_support_brim_width", support_is_tree && !config->opt_bool("tree_support_auto_brim"));
+    toggle_field("tree_support_brim_width", support_has_tree && !config->opt_bool("tree_support_auto_brim"));
     // tree support use max_bridge_length instead of bridge_no_support
-    toggle_line("max_bridge_length", support_is_tree);
-    toggle_line("bridge_no_support", !support_is_tree);
-    toggle_line("support_critical_regions_only", is_auto(support_type) && support_is_tree);
+    toggle_line("max_bridge_length", support_has_tree);
+    toggle_line("bridge_no_support", !support_is_tree || support_is_mixed);
+    toggle_line("support_critical_regions_only", is_auto(support_type) && support_has_tree);
 
     for (auto el : { "support_interface_filament",
         "support_interface_loop_pattern", "support_bottom_interface_spacing" })
@@ -864,7 +880,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     // Orca: For regular tree (Slim/Strong) without raft, hide first-layer expansion.
     // Keep it enabled for non-tree supports, organic tree, hybrid tree, and any raft case.
     toggle_field("raft_first_layer_expansion",
-                 have_support_material && ((!support_is_normal_tree || support_style == smsTreeHybrid) || have_raft));
+                 have_support_material && ((!support_is_normal_tree || effective_tree_style == smsTreeHybrid) || have_raft));
 
     bool has_ironing = (config->opt_enum<IroningType>("ironing_type") != IroningType::NoIroning);
     for (auto el : { "ironing_pattern", "ironing_flow", "ironing_spacing", "ironing_angle", "ironing_inset", "ironing_angle_fixed" })

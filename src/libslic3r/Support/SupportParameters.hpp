@@ -22,6 +22,8 @@ struct SupportParameters {
         const PrintObjectConfig& object_config = object.config();
         const SlicingParameters& slicing_params = object.slicing_parameters();
 
+        this->cura_style_support = is_normal_cura(object_config.support_type.value);
+
         this->zero_gap_interface_top = slicing_params.zero_gap_interface_top;
         this->zero_gap_interface_bottom = slicing_params.zero_gap_interface_bottom;
         const bool soluble_interface_non_soluble_base =
@@ -208,6 +210,7 @@ struct SupportParameters {
         }
     }
     // Zero-gap interface flags for top / bottom contact.
+    bool                    cura_style_support { false };
     bool                    zero_gap_interface_top;
     bool                    zero_gap_interface_bottom;
 

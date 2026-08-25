@@ -18317,3 +18317,33 @@ msgstr ""
 #: resources/data/hints.ini: [hint:Avoid warping]
 msgid "Avoid warping\nDid you know that when printing materials that are prone to warping such as ABS, appropriately increasing the heatbed temperature can reduce the probability of warping?"
 msgstr ""
+
+msgid "Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), and Tsunami (auto) are used to generate support automatically. If a manual style is selected, only support enforcers are generated. Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. Normal (Cura style) is an experimental OrcaProject support-area generator."
+msgstr ""
+
+msgid "Mixed (auto)"
+msgstr ""
+
+msgid "Normal support generator"
+msgstr ""
+
+msgid "Selects the normal-support geometry generator used by Mixed (auto)."
+msgstr ""
+
+msgid "Tree support style"
+msgstr ""
+
+msgid "Selects the tree-support style used by Mixed (auto)."
+msgstr ""
+
+msgid "Normal support coverage threshold"
+msgstr ""
+
+msgid "A connected support-demand region uses normal support when this percentage can be reached vertically from the build plate. Otherwise it uses tree support."
+msgstr ""
+
+msgid "Selective merge"
+msgstr ""
+
+msgid "When a support-demand region is below the normal coverage threshold, use build-plate-origin normal support for its reachable portion and tree support for only the remaining portion. When disabled, the whole region uses tree support."
+msgstr ""

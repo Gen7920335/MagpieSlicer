@@ -64,9 +64,13 @@ static bool polygons_may_overlap_after_offset(const Polygons &first, const Polyg
     return bounding_boxes_may_overlap(get_extents(first), second_bounds);
 }
 
-CuraStyleSupportGenerator::CuraStyleSupportGenerator(const PrintObject *object, const SlicingParameters &slicing_params)
+CuraStyleSupportGenerator::CuraStyleSupportGenerator(
+    const PrintObject *object, const SlicingParameters &slicing_params,
+    const std::vector<Polygons> *demand_mask, bool force_buildplate_only)
     : m_object(object)
     , m_slicing_params(slicing_params)
+    , m_demand_mask(demand_mask)
+    , m_force_buildplate_only(force_buildplate_only)
 {
 }
 
@@ -508,7 +512,8 @@ static std::vector<Polygons> propagate_cura_style_support(
     const SupportParameters       &support_params,
     const CuraSupportAnnotations  &annotations,
     const CuraLayerGeometry       &geometry,
-    const CuraOverhangs           &overhangs)
+    const CuraOverhangs           &overhangs,
+    bool                           force_buildplate_only)
 {
     const auto has_support = [](const std::vector<Polygons> &channel) {
         return std::any_of(channel.begin(), channel.end(), [](const Polygons &polygons) { return !polygons.empty(); });
@@ -518,12 +523,13 @@ static std::vector<Polygons> propagate_cura_style_support(
     if (has_support(overhangs.automatic))
         automatic = propagate_cura_style_support_channel(
             object, support_params, annotations, geometry, overhangs.automatic, slicing_params.gap_support_object,
-            object.config().support_on_build_plate_only.value);
+            force_buildplate_only || object.config().support_on_build_plate_only.value);
 
     std::vector<Polygons> enforced(object.layer_count());
     if (has_support(overhangs.enforced))
         enforced = propagate_cura_style_support_channel(
-            object, support_params, annotations, geometry, overhangs.enforced, slicing_params.gap_support_object, false);
+            object, support_params, annotations, geometry, overhangs.enforced, slicing_params.gap_support_object,
+            force_buildplate_only);
 
     for (size_t layer_idx = 0; layer_idx < automatic.size(); ++layer_idx) {
         if (automatic[layer_idx].empty())
@@ -734,6 +740,8 @@ void CuraStyleSupportGenerator::generate(PrintObject &object)
     using Clock = std::chrono::steady_clock;
     const auto started_at = Clock::now();
     SupportParameters support_params(object);
+    if (is_mixed(object.config().support_type.value))
+        support_params.cura_style_support = true;
     SupportGeneratorLayerStorage layer_storage;
     const auto parameters_ready_at = Clock::now();
     const CuraLayerGeometry geometry(object, scale_(support_params.gap_xy));
@@ -741,12 +749,25 @@ void CuraStyleSupportGenerator::generate(PrintObject &object)
 
     const CuraSupportAnnotations annotations(object);
     const auto annotations_ready_at = Clock::now();
-    const bool automatic_support = object.config().support_type.value == stNormalCuraAuto;
-    const CuraOverhangs overhangs = compute_cura_style_full_overhangs(object, support_params, annotations, geometry, automatic_support);
+    const bool automatic_support = object.config().support_type.value == stNormalCuraAuto ||
+                                   is_mixed(object.config().support_type.value);
+    CuraOverhangs overhangs = compute_cura_style_full_overhangs(object, support_params, annotations, geometry, automatic_support);
+    if (m_demand_mask != nullptr) {
+        parallel_for_layers(0, object.layer_count(), [&](size_t layer_idx) {
+            if (layer_idx >= m_demand_mask->size() || (*m_demand_mask)[layer_idx].empty()) {
+                overhangs.automatic[layer_idx].clear();
+                overhangs.enforced[layer_idx].clear();
+            } else {
+                overhangs.automatic[layer_idx] = intersection(overhangs.automatic[layer_idx], (*m_demand_mask)[layer_idx]);
+                overhangs.enforced[layer_idx] = intersection(overhangs.enforced[layer_idx], (*m_demand_mask)[layer_idx]);
+            }
+        });
+    }
     const std::vector<Polygons> full_overhangs = overhangs.combined();
     const auto overhangs_ready_at = Clock::now();
     std::vector<Polygons> support_body = propagate_cura_style_support(
-        object, m_slicing_params, support_params, annotations, geometry, overhangs);
+        object, m_slicing_params, support_params, annotations, geometry, overhangs,
+        m_force_buildplate_only);
     const auto propagation_ready_at = Clock::now();
     ContactFootprints contact_footprints = make_cura_style_contact_footprints(
         object, m_slicing_params, support_params, geometry, full_overhangs, support_body);
@@ -819,6 +840,18 @@ void CuraStyleSupportGenerator::generate(PrintObject &object)
 
     log_timings(Clock::now(), "complete");
     BOOST_LOG_TRIVIAL(info) << "Cura-style normal support generator - End";
+}
+
+std::vector<Polygons> CuraStyleSupportGenerator::detect_support_demand() const
+{
+    if (m_object == nullptr || m_object->layer_count() == 0)
+        return {};
+
+    const SupportParameters support_params(*m_object);
+    const CuraLayerGeometry geometry(*m_object, scale_(support_params.gap_xy));
+    const CuraSupportAnnotations annotations(*m_object);
+    return compute_cura_style_full_overhangs(
+        *m_object, support_params, annotations, geometry, true).combined();
 }
 
 } // namespace Slic3r

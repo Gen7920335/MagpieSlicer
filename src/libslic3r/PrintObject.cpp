@@ -13,6 +13,7 @@
 #include "SLA/IndexedMesh.hpp"
 #include "Support/SupportMaterial.hpp"
 #include "Support/CuraStyleSupport.hpp"
+#include "Support/MixedSupportPlan.hpp"
 #include "Support/SupportSpotsGenerator.hpp"
 #include "Support/TreeSupport.hpp"
 #include "Support/TsunamiSupport.hpp"
@@ -30,6 +31,7 @@
 #include <cstddef>
 #include <float.h>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <oneapi/tbb/blocked_range.h>
@@ -1222,7 +1224,11 @@ bool PrintObject::invalidate_state_by_config_options(
 	            steps.emplace_back(posSlice);
 	        }
         } else if (
-        	   opt_key == "support_type"
+	       opt_key == "support_type"
+            || opt_key == "mixed_normal_support_generator"
+            || opt_key == "mixed_tree_support_style"
+            || opt_key == "mixed_normal_coverage_threshold"
+            || opt_key == "mixed_selective_merge"
             || opt_key == "support_angle"
             || opt_key == "support_on_build_plate_only"
             || opt_key == "support_critical_regions_only"
@@ -1598,6 +1604,14 @@ void PrintObject::detect_surfaces_type()
                     bottom_is_fully_supported &= !m_config.bridge_no_support.value;
                 else if (m_config.support_type.value == stTreeAuto) {
                     bottom_is_fully_supported &= (m_config.support_interface_top_layers.value > 0 && m_config.max_bridge_length.value == 0 && m_config.support_critical_regions_only.value==false);
+                } else if (is_mixed(m_config.support_type.value)) {
+                    const bool normal_channel_fully_supports_bridges = !m_config.bridge_no_support.value;
+                    const bool tree_channel_fully_supports_bridges =
+                        m_config.support_interface_top_layers.value > 0 &&
+                        m_config.max_bridge_length.value == 0 &&
+                        !m_config.support_critical_regions_only.value;
+                    bottom_is_fully_supported &= normal_channel_fully_supports_bridges &&
+                                                 tree_channel_fully_supports_bridges;
                 }
                 SurfaceType surface_type_bottom_other = bottom_is_fully_supported ? stBottom : stBottomBridge;
                 for (size_t idx_layer = range.begin(); idx_layer < range.end(); ++ idx_layer) {
@@ -4322,9 +4336,214 @@ void PrintObject::combine_infill()
     }
 }
 
+using OwnedSupportLayers = std::vector<std::unique_ptr<SupportLayer>>;
+
+static std::vector<Polygons> mixed_tree_obstacles_from_normal_layers(
+    const PrintObject &object, const OwnedSupportLayers &normal_layers)
+{
+    std::vector<Polygons> obstacles(object.layer_count());
+    const coordf_t raft_top = object.slicing_parameters().has_raft() ?
+        object.slicing_parameters().raft_contact_top_z : 0.;
+
+    for (const std::unique_ptr<SupportLayer> &owned_layer : normal_layers) {
+        const SupportLayer *support_layer = owned_layer.get();
+        if (support_layer == nullptr || support_layer->print_z <= raft_top + EPSILON)
+            continue;
+
+        // Exclude only plastic that will actually be extruded. support_islands is a
+        // planning envelope and may span unfilled gaps, which can falsely erase every
+        // Organic route. polygons_covered_by_width already includes the line radius;
+        // TreeModelVolumes adds the candidate branch radius during collision expansion.
+        Polygons footprint = support_layer->support_fills.polygons_covered_by_width(float(SCALED_EPSILON));
+        if (footprint.empty())
+            continue;
+        footprint = union_(footprint);
+
+        const coordf_t support_bottom_z = support_layer->bottom_z();
+        for (size_t layer_id = 0; layer_id < object.layer_count(); ++layer_id) {
+            const Layer *object_layer = object.layers()[layer_id];
+            if (object_layer->print_z + EPSILON < support_bottom_z)
+                continue;
+            if (object_layer->bottom_z() > support_layer->print_z + EPSILON)
+                break;
+            append(obstacles[layer_id], footprint);
+        }
+    }
+
+    for (Polygons &layer : obstacles)
+        if (!layer.empty())
+            layer = union_(layer);
+    return obstacles;
+}
+
+static OwnedSupportLayers take_support_layers(PrintObject &object)
+{
+    SupportLayerPtrs &source = object.support_layers();
+    OwnedSupportLayers owned;
+    owned.reserve(source.size());
+    for (SupportLayer *layer : source)
+        owned.emplace_back(layer);
+    source.clear();
+    return owned;
+}
+
+static void install_support_layer(SupportLayerPtrs &destination, std::unique_ptr<SupportLayer> &layer)
+{
+    destination.push_back(layer.get());
+    layer.release();
+}
+
+static void append_mixed_residual_path(
+    const ExtrusionPath &path, const ExPolygons &owner_coverage, ExtrusionEntityCollection &destination)
+{
+    if (owner_coverage.empty()) {
+        destination.append(path);
+        return;
+    }
+    // owner_coverage already contains the physical width of the owner paths. Add the residual
+    // path radius so the two extrusion envelopes meet without being printed on top of each other.
+    const coord_t residual_radius = path.width > 0.f ? scale_(0.5 * path.width) : SCALED_EPSILON;
+    const ExPolygons exclusion = offset_ex(owner_coverage, std::max<coord_t>(SCALED_EPSILON, residual_radius));
+    path.subtract_expolygons(exclusion, &destination);
+}
+
+static void append_mixed_residual(
+    const ExtrusionEntity &entity, const ExPolygons &owner_coverage, ExtrusionEntityCollection &destination)
+{
+    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+        for (const ExtrusionEntity *child : collection->entities)
+            append_mixed_residual(*child, owner_coverage, destination);
+    } else if (const auto *path = dynamic_cast<const ExtrusionPath *>(&entity)) {
+        append_mixed_residual_path(*path, owner_coverage, destination);
+    } else if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath *>(&entity)) {
+        for (const ExtrusionPath &path : multipath->paths)
+            append_mixed_residual_path(path, owner_coverage, destination);
+    } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(&entity)) {
+        for (const ExtrusionPath &path : loop->paths)
+            append_mixed_residual_path(path, owner_coverage, destination);
+    } else {
+        throw SlicingError(_u8L("Mixed support encountered an unsupported extrusion entity while merging channels."));
+    }
+}
+
+static void merge_mixed_support_layers(
+    PrintObject &object, OwnedSupportLayers &&normal_layers, OwnedSupportLayers &&tree_layers)
+{
+    SupportLayerPtrs &destination = object.support_layers();
+    assert(destination.empty());
+    const auto by_print_z = [](const std::unique_ptr<SupportLayer> &lhs,
+                               const std::unique_ptr<SupportLayer> &rhs) {
+        return lhs->print_z < rhs->print_z;
+    };
+    std::sort(normal_layers.begin(), normal_layers.end(), by_print_z);
+    std::sort(tree_layers.begin(), tree_layers.end(), by_print_z);
+
+    size_t normal_idx = 0;
+    size_t tree_idx = 0;
+    while (normal_idx < normal_layers.size() || tree_idx < tree_layers.size()) {
+        if (normal_idx >= normal_layers.size()) {
+            install_support_layer(destination, tree_layers[tree_idx++]);
+            continue;
+        }
+        if (tree_idx >= tree_layers.size()) {
+            install_support_layer(destination, normal_layers[normal_idx++]);
+            continue;
+        }
+
+        SupportLayer *normal = normal_layers[normal_idx].get();
+        SupportLayer *tree = tree_layers[tree_idx].get();
+        if (normal->print_z + EPSILON < tree->print_z) {
+            install_support_layer(destination, normal_layers[normal_idx++]);
+        } else if (tree->print_z + EPSILON < normal->print_z) {
+            install_support_layer(destination, tree_layers[tree_idx++]);
+        } else {
+            normal->height = std::min(normal->height, tree->height);
+            normal->print_z = 0.5 * (normal->print_z + tree->print_z);
+            normal->support_type = stInnerMixed;
+            if (normal->interface_id() != tree->interface_id())
+                BOOST_LOG_TRIVIAL(debug) << "Mixed support layer at Z=" << normal->print_z
+                    << " keeps normal interface_id=" << normal->interface_id()
+                    << " while tree interface_id=" << tree->interface_id();
+            // The normal channel owns any physical overlap. Clipping the tree centerlines
+            // against the normal extrusion envelope produces a deterministic hand-off for
+            // Organic (which cannot reliably route around sparse support lines) and also
+            // protects raft and classic-tree layers from duplicate extrusion.
+            const ExPolygons owner_coverage = union_ex(
+                normal->support_fills.polygons_covered_by_width(float(SCALED_EPSILON)));
+            for (const ExtrusionEntity *entity : tree->support_fills.entities)
+                append_mixed_residual(*entity, owner_coverage, normal->support_fills);
+            normal->support_fills.no_sort = normal->support_fills.no_sort || tree->support_fills.no_sort;
+            append(normal->support_islands, std::move(tree->support_islands));
+            if (!normal->support_islands.empty())
+                normal->support_islands = union_ex(normal->support_islands);
+            append(normal->lslices, std::move(tree->lslices));
+            if (!normal->lslices.empty())
+                normal->lslices = union_ex(normal->lslices);
+            append(normal->base_areas, std::move(tree->base_areas));
+            if (!normal->base_areas.empty())
+                normal->base_areas = union_ex(normal->base_areas);
+            tree_layers[tree_idx].reset();
+            install_support_layer(destination, normal_layers[normal_idx]);
+            ++normal_idx;
+            ++tree_idx;
+        }
+    }
+
+    for (size_t layer_id = 0; layer_id < destination.size(); ++layer_id)
+        destination[layer_id]->set_id(layer_id);
+}
+
 void PrintObject::_generate_support_material()
 {
-    if (m_config.enable_support.value && is_tsunami(m_config.support_type.value)) {
+    if (m_config.enable_support.value && is_mixed(m_config.support_type.value)) {
+        OwnedSupportLayers normal_layers;
+        OwnedSupportLayers tree_layers;
+        try {
+            const std::vector<Polygons> demand = detect_mixed_support_demand(*this);
+            const MixedSupportPlan plan = MixedSupportPlan::build(*this, demand);
+
+            if (plan.has_normal_demand() || m_slicing_params.has_raft()) {
+                if (m_config.mixed_normal_support_generator.value == mnsgCura) {
+                    CuraStyleSupportGenerator normal_support(this, m_slicing_params, &plan.normal_mask(), true);
+                    normal_support.generate(*this);
+                } else {
+                    PrintObjectSupportMaterial normal_support(this, m_slicing_params, &plan.normal_mask(), true);
+                    normal_support.generate(*this);
+                }
+                normal_layers = take_support_layers(*this);
+                for (const std::unique_ptr<SupportLayer> &layer : normal_layers)
+                    layer->support_type = stInnerNormal;
+            }
+
+            if (plan.has_tree_demand()) {
+                const SupportMaterialStyle tree_style =
+                    mixed_tree_style_to_support_style(m_config.mixed_tree_support_style.value);
+                const std::vector<Polygons> tree_obstacles =
+                    mixed_tree_obstacles_from_normal_layers(*this, normal_layers);
+                // Organic's influence-area solver may discard every branch when sparse
+                // normal extrusion lines are injected as hard obstacles. Its overlap is
+                // resolved deterministically during the same-Z channel merge instead.
+                const std::vector<Polygons> *tree_obstacle_ptr =
+                    tree_style == smsTreeOrganic ? nullptr : &tree_obstacles;
+                TreeSupport tree_support(
+                    *this, m_slicing_params, &plan.tree_mask(), tree_style, tree_obstacle_ptr);
+                tree_support.throw_on_cancel = [this]() { this->throw_if_canceled(); };
+                tree_support.generate();
+                tree_layers = take_support_layers(*this);
+                for (const std::unique_ptr<SupportLayer> &layer : tree_layers)
+                    layer->support_type = stInnerTree;
+                if (tree_layers.empty())
+                    throw SlicingError(_u8L("Mixed support assigned a region to the tree channel, but no printable tree route was generated."));
+            }
+
+            merge_mixed_support_layers(*this, std::move(normal_layers), std::move(tree_layers));
+        } catch (...) {
+            clear_support_layers();
+            clear_tree_support_preview_cache();
+            throw;
+        }
+    }
+    else if (m_config.enable_support.value && is_tsunami(m_config.support_type.value)) {
         TsunamiSupport tsunami_support(*this, m_slicing_params);
         tsunami_support.throw_on_cancel = [this]() { this->throw_if_canceled(); };
         tsunami_support.generate();

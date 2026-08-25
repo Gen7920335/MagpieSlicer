@@ -417,7 +417,7 @@ SupportGeneratorLayersPtr generate_raft_base(
     // A Cura-style support column keeps one XY path from the bed to its roof.
     // Expanding only its first layer creates a second, wider zigzag in top projection.
     const bool  align_cura_column_to_bed = slicing_params.raft_layers() <= 1 &&
-                                           is_normal_cura(object.config().support_type.value);
+                                           support_params.cura_style_support;
     const float first_layer_expansion    = align_cura_column_to_bed ? 0.f :
                                            float(scale_(object.config().raft_first_layer_expansion));
     const float inflate_factor_1st_layer = std::max(0.f, first_layer_expansion - inflate_factor_fine);
@@ -1669,7 +1669,7 @@ void generate_support_toolpaths(
                 // Base flange.
                 filler->angle = support_params.raft_angle_1st_layer;
                 filler->spacing = support_params.first_layer_flow.spacing();
-                density = config.cura_solid_support_raft.value && is_normal_cura(config.support_type.value) ?
+                density = config.cura_solid_support_raft.value && support_params.cura_style_support ?
                               1.f :
                               float(config.raft_first_layer_density.value * 0.01);
             } else if (support_layer_id >= slicing_params.base_raft_layers) {
@@ -2039,7 +2039,7 @@ void generate_support_toolpaths(
                 bool  done    = false;
                 if (base_layer.layer->bottom_z < EPSILON) {
                     flow = support_params.first_layer_flow;
-                    const bool cura_style = is_normal_cura(config.support_type.value);
+                    const bool cura_style = support_params.cura_style_support;
                     if (cura_style && !config.cura_solid_support_raft.value) {
                         // Keep Cura-style support lines vertically aligned from the bed upward.
                         // The first-layer flow changes, but its line centers, spacing and direction do not.
@@ -2069,9 +2069,9 @@ void generate_support_toolpaths(
                 }
                 const bool solid_cura_first_layer =
                     base_layer.layer->bottom_z < EPSILON &&
-                    is_normal_cura(config.support_type.value) &&
+                    support_params.cura_style_support &&
                     config.cura_solid_support_raft.value;
-                if (!done && is_normal_cura(config.support_type.value) &&
+                if (!done && support_params.cura_style_support &&
                     config.support_base_pattern == smpNone && !solid_cura_first_layer) {
                     hollow_support_generate_paths(
                         base_layer.extrusions, base_layer.polygons_to_extrude(), flow);
@@ -2087,7 +2087,7 @@ void generate_support_toolpaths(
                         filler, density,
                         // Extrusion parameters
                         ExtrusionRole::erSupportMaterial, flow,
-                        support_params, sheath, no_sort, is_normal_cura(config.support_type.value));
+                        support_params, sheath, no_sort, support_params.cura_style_support);
             }
 
             // Merge base_interface_layers to base_layers to avoid unneccessary retractions

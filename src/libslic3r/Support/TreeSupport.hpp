@@ -200,6 +200,7 @@ public:
      * \param radius_sample_resolution Sample size used to round requested node radii.
      */
     TreeSupportData(const PrintObject& object, coordf_t xy_distance, coordf_t radius_sample_resolution);
+    void set_extra_obstacles(const std::vector<Polygons> &extra_obstacles);
     ~TreeSupportData() {
         clear_nodes();
     }
@@ -320,6 +321,7 @@ public:
 
     // union contours of all layers below
     std::vector<ExPolygons> m_layer_outlines_below;
+    std::vector<Polygons> m_extra_obstacles;
 
     std::vector<double> m_max_move_distances;
 
@@ -359,7 +361,10 @@ public:
      *
      * \param storage The data storage to get global settings from.
      */
-    TreeSupport(PrintObject& object, const SlicingParameters &slicing_params);
+    TreeSupport(PrintObject& object, const SlicingParameters &slicing_params,
+                const std::vector<Polygons> *demand_mask = nullptr,
+                SupportMaterialStyle style_override = smsDefault,
+                const std::vector<Polygons> *extra_obstacles = nullptr);
 
     void move_bounds_to_contact_nodes(std::vector<TreeSupport3D::SupportElements> &move_bounds,
                                       PrintObject                                 &print_object,
@@ -396,6 +401,8 @@ public:
     bool  has_cantilever = false;
     double max_cantilever_dist = 0;
     SupportType support_type;
+    const std::vector<Polygons> *m_demand_mask { nullptr };
+    const std::vector<Polygons> *m_extra_obstacles { nullptr };
 
     std::unique_ptr<FillLightning::Generator> generator;
     std::unordered_map<double, size_t> printZ_to_lightninglayer;

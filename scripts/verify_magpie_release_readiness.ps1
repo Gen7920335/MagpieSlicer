@@ -108,17 +108,18 @@ $jobs = @(
     @{ Name='preset-roundtrip'; File=(Join-Path $testRoot 'libslic3r\Release\libslic3r_tests.exe'); Args=@('[Preset][Roundtrip],[Preset][Project][MultiNozzle]', '--reporter', 'compact'); Required='All tests passed' },
     @{ Name='multinozzle-config'; File=(Join-Path $testRoot 'fff_print\Release\fff_print_tests.exe'); Args=@('[MultiFilament][Config],[Flow][MultiNozzleWalls]', '--reporter', 'compact'); Required='All tests passed' },
     @{ Name='multinozzle-toolpaths'; File=(Join-Path $testRoot 'fff_print\Release\fff_print_tests.exe'); Args=@('[MultiFilament][MultiNozzleWalls]', '--reporter', 'compact'); Required='All tests passed' },
-    @{ Name='support-unit'; File=(Join-Path $testRoot 'fff_print\Release\fff_print_tests.exe'); Args=@('[SupportMaterial]', '--reporter', 'compact'); Required='All tests passed' },
+    @{ Name='support-unit'; File=(Join-Path $testRoot 'fff_print\Release\fff_print_tests.exe'); Args=@('[SupportMaterial]~[TsunamiSupport]', '--reporter', 'compact'); Required='All tests passed' },
+    @{ Name='mixed-support'; File='powershell.exe'; Args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'scripts\verify_mixed_support.ps1'),'-SlicerPath',$SlicerPath); Required='FAILED=0' },
     @{ Name='snapmaker-unit'; File=(Join-Path $testRoot 'slic3rutils\Release\slic3rutils_tests.exe'); Args=@('[SnapmakerMonitor]', '--reporter', 'compact'); Required='All tests passed' },
-    @{ Name='small-nozzle-core'; File='powershell.exe'; Args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'scripts\verify_small_nozzle_geometry.ps1'),'-Mode','Core','-SlicerPath',$SlicerPath); Required='FAILED=0' },
+    @{ Name='small-nozzle-core'; File='powershell.exe'; Args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'scripts\verify_small_nozzle_geometry.ps1'),'-Mode','Core','-SlicerPath',$SlicerPath,'-NativeAnalyzerPath',(Join-Path (Split-Path -Parent (Split-Path -Parent $SlicerPath)) 'dev-utils\Release\small-nozzle-gcode-verifier.exe')); Required='FAILED=0' },
     @{ Name='support-features'; File='powershell.exe'; Args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'scripts\verify_support_features.ps1'),'-SlicerPath',$SlicerPath); Required='FAILED=0' },
-    @{ Name='cura-regressions'; File='powershell.exe'; Args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'scripts\verify_cura_port_regressions.ps1')); Required='verify_support_features.ps1' },
+    @{ Name='cura-regressions'; File='powershell.exe'; Args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'scripts\verify_cura_port_regressions.ps1'),'-SlicerPath',$SlicerPath); Required='verify_support_features.ps1' },
     @{ Name='tree-wall-counts'; File='powershell.exe'; Args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'scripts\verify_tree_support_wall_counts.ps1'),'-SlicerPath',$SlicerPath); Required='FAILED=0' }
 )
 
 if ($Mode -eq 'Full') {
     $jobs += @(
-        @{ Name='small-nozzle-full'; File='powershell.exe'; Args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'scripts\verify_small_nozzle_geometry.ps1'),'-Mode','Full','-SlicerPath',$SlicerPath); Required='FAILED=0' },
+        @{ Name='small-nozzle-full'; File='powershell.exe'; Args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'scripts\verify_small_nozzle_geometry.ps1'),'-Mode','Full','-SlicerPath',$SlicerPath,'-NativeAnalyzerPath',(Join-Path (Split-Path -Parent (Split-Path -Parent $SlicerPath)) 'dev-utils\Release\small-nozzle-gcode-verifier.exe')); Required='FAILED=0' },
         @{ Name='small-nozzle-speed-classic'; File='powershell.exe'; Args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'scripts\verify_small_nozzle_wall_speed.ps1'),'-WallGenerator','classic','-SlicerPath',$SlicerPath); Required='FAILED=0' },
         @{ Name='small-nozzle-speed-arachne'; File='powershell.exe'; Args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'scripts\verify_small_nozzle_wall_speed.ps1'),'-WallGenerator','arachne','-SlicerPath',$SlicerPath); Required='FAILED=0' }
     )

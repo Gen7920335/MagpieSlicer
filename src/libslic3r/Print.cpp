@@ -1423,9 +1423,12 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
     // Custom layering is not allowed for tree supports as of now.
     for (size_t print_object_idx = 0; print_object_idx < m_objects.size(); ++ print_object_idx)
         if (const PrintObject &print_object = *m_objects[print_object_idx];
-            print_object.has_support_material() && is_tree(print_object.config().support_type.value) && (print_object.config().support_style.value == smsTreeOrganic || 
+            print_object.has_support_material() && uses_tree_channel(print_object.config().support_type.value) &&
+                ((is_mixed(print_object.config().support_type.value) ?
+                    mixed_tree_style_to_support_style(print_object.config().mixed_tree_support_style.value) :
+                    print_object.config().support_style.value) == smsTreeOrganic ||
                 // Orca: use organic as default
-                print_object.config().support_style.value == smsDefault) &&
+                (!is_mixed(print_object.config().support_type.value) && print_object.config().support_style.value == smsDefault)) &&
             print_object.model_object()->has_custom_layering()) {
             if (const std::vector<coordf_t> &layers = layer_height_profile(print_object_idx); ! layers.empty())
                 if (! check_object_layers_fixed(print_object.slicing_parameters(), layers))
@@ -1595,10 +1598,13 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 
                 // Prusa: Fixing crashes with invalid tip diameter or branch diameter
                 // https://github.com/prusa3d/PrusaSlicer/commit/96b3ae85013ac363cd1c3e98ec6b7938aeacf46d
-                if (is_tree(object->config().support_type.value)) {
-                    if (object->config().support_style == smsTreeOrganic ||
+                if (uses_tree_channel(object->config().support_type.value)) {
+                    const SupportMaterialStyle effective_tree_style = is_mixed(object->config().support_type.value) ?
+                        mixed_tree_style_to_support_style(object->config().mixed_tree_support_style.value) :
+                        object->config().support_style.value;
+                    if (effective_tree_style == smsTreeOrganic ||
                         // Orca: use organic as default
-                        object->config().support_style == smsDefault) {
+                        effective_tree_style == smsDefault) {
 
                         // Orca: check if the Lightning base pattern selected
                         if (object->config().support_base_pattern == SupportMaterialPattern::smpLightning)
@@ -3027,9 +3033,9 @@ Polygons Print::first_layer_islands() const
         for (ExPolygon &expoly : object->m_layers.front()->lslices)
             object_islands.push_back(expoly.contour);
         if (!object->support_layers().empty()) {
-            if (object->support_layers().front()->support_type==stInnerNormal)
+            if (has_normal_channel(object->support_layers().front()->support_type))
                 object->support_layers().front()->support_fills.polygons_covered_by_spacing(object_islands, float(SCALED_EPSILON));
-            else if(object->support_layers().front()->support_type==stInnerTree) {
+            if (has_tree_channel(object->support_layers().front()->support_type)) {
                 ExPolygons &expolys_first_layer = object->m_support_layers.front()->lslices;
                 for (ExPolygon &expoly : expolys_first_layer) { object_islands.push_back(expoly.contour); }
             }
@@ -3967,6 +3973,7 @@ const std::string PrintStatistics::TotalFilamentUsedWipeTowerValueMask = "; tota
 
 #define JSON_SUPPORT_LAYER_ISLANDS                  "support_islands"
 #define JSON_SUPPORT_LAYER_FILLS                    "support_fills"
+#define JSON_SUPPORT_LAYER_BASE_AREAS               "base_areas"
 #define JSON_SUPPORT_LAYER_INTERFACE_ID             "interface_id"
 #define JSON_SUPPORT_LAYER_TYPE                     "support_type"
 
@@ -4636,6 +4643,16 @@ void extract_support_layer(const json& support_layer_json, SupportLayer& support
         support_layer.support_islands.push_back(std::move(polygon));
     }
 
+    // Optional for backward compatibility with support caches written before Mixed support.
+    if (const auto base_areas_it = support_layer_json.find(JSON_SUPPORT_LAYER_BASE_AREAS);
+        base_areas_it != support_layer_json.end()) {
+        for (const json &base_area_json : *base_areas_it) {
+            ExPolygon base_area;
+            base_area = base_area_json;
+            support_layer.base_areas.emplace_back(std::move(base_area));
+        }
+    }
+
     //support_fills
     support_layer.support_fills.no_sort = support_layer_json[JSON_SUPPORT_LAYER_FILLS][JSON_EXTRUSION_NO_SORT];
     int support_fills_entities_count = support_layer_json[JSON_SUPPORT_LAYER_FILLS][JSON_EXTRUSION_ENTITIES].size();
@@ -4800,7 +4817,9 @@ int Print::export_cached_data(const std::string& directory, bool with_space)
                 [&support_layers_json_vector, obj, convert_layer_to_json](const tbb::blocked_range<size_t>& support_layer_range) {
                     for (size_t s_layer_index = support_layer_range.begin(); s_layer_index < support_layer_range.end(); ++ s_layer_index) {
                         const SupportLayer *support_layer = obj->get_support_layer(s_layer_index);
-                        json support_layer_json, support_islands_json = json::array(), support_fills_json, supportfills_entities_json = json::array();
+                        json support_layer_json, support_islands_json = json::array(),
+                             support_base_areas_json = json::array(), support_fills_json,
+                             supportfills_entities_json = json::array();
 
                         convert_layer_to_json(support_layer_json, support_layer);
 
@@ -4813,6 +4832,10 @@ int Print::export_cached_data(const std::string& directory, bool with_space)
                             support_islands_json.push_back(std::move(support_island_json));
                         }
                         support_layer_json[JSON_SUPPORT_LAYER_ISLANDS] = std::move(support_islands_json);
+
+                        for (const ExPolygon &base_area : support_layer->base_areas)
+                            support_base_areas_json.push_back(base_area);
+                        support_layer_json[JSON_SUPPORT_LAYER_BASE_AREAS] = std::move(support_base_areas_json);
 
                         //support_fills
                         support_fills_json[JSON_EXTRUSION_NO_SORT] = support_layer->support_fills.no_sort;

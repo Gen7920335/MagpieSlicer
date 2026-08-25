@@ -204,7 +204,11 @@ enum SupportMaterialInterfacePattern {
 
 // BBS
 enum SupportType {
-    stNormalAuto, stNormalCuraAuto, stTreeAuto, stNormal, stNormalCura, stTree, stTsunamiAuto
+    stNormalAuto, stNormalCuraAuto, stTreeAuto, stNormal, stNormalCura, stTree, stTsunamiAuto, stMixedAuto
+};
+inline bool is_mixed(SupportType stype)
+{
+    return stype == stMixedAuto;
 };
 inline bool is_tree(SupportType stype)
 {
@@ -226,6 +230,14 @@ inline bool is_normal_support(SupportType stype)
 {
     return is_normal_prusa(stype) || is_normal_cura(stype);
 };
+inline bool uses_tree_channel(SupportType stype)
+{
+    return is_tree(stype) || is_mixed(stype);
+};
+inline bool uses_normal_channel(SupportType stype)
+{
+    return is_normal_support(stype) || is_mixed(stype);
+};
 inline bool uses_cura_support_geometry(SupportType stype, SupportMaterialStyle style)
 {
     // Support style controls path generation, not the geometry engine. Switching
@@ -239,8 +251,31 @@ inline bool is_tree_slim(SupportType type, SupportMaterialStyle style)
 };
 inline bool is_auto(SupportType stype)
 {
-    return std::set<SupportType>{stNormalAuto, stTreeAuto, stNormalCuraAuto, stTsunamiAuto}.count(stype) != 0;
+    return std::set<SupportType>{stNormalAuto, stTreeAuto, stNormalCuraAuto, stTsunamiAuto, stMixedAuto}.count(stype) != 0;
 };
+
+enum MixedNormalSupportGenerator {
+    mnsgPrusa,
+    mnsgCura
+};
+
+enum MixedTreeSupportStyle {
+    mtssOrganic,
+    mtssSlim,
+    mtssStrong,
+    mtssTreeHybrid
+};
+
+inline SupportMaterialStyle mixed_tree_style_to_support_style(MixedTreeSupportStyle style)
+{
+    switch (style) {
+    case mtssSlim:       return smsTreeSlim;
+    case mtssStrong:     return smsTreeStrong;
+    case mtssTreeHybrid: return smsTreeHybrid;
+    case mtssOrganic:
+    default:             return smsTreeOrganic;
+    }
+}
 
 enum SeamPosition {
     spNearest, spAligned, spAlignedBack, spRear, spRandom
@@ -578,6 +613,8 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportMaterialStyle)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportMaterialInterfacePattern)
 // BBS
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportType)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(MixedNormalSupportGenerator)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(MixedTreeSupportStyle)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SeamPosition)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SeamScarfType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SLADisplayOrientation)
@@ -997,6 +1034,10 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                enable_support))
     // Automatic supports (generated based on support_threshold_angle).
     ((ConfigOptionEnum<SupportType>,   support_type))
+    ((ConfigOptionEnum<MixedNormalSupportGenerator>, mixed_normal_support_generator))
+    ((ConfigOptionEnum<MixedTreeSupportStyle>, mixed_tree_support_style))
+    ((ConfigOptionPercent,             mixed_normal_coverage_threshold))
+    ((ConfigOptionBool,                mixed_selective_merge))
     // Direction of the support pattern (in XY plane).`
     ((ConfigOptionFloat,               support_angle))
     ((ConfigOptionBool,                support_on_build_plate_only))

@@ -14,18 +14,27 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $RepoRoot 'build\verification\cura-bottom-interface'
 }
 
-$auditRoot = Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'build\verification\cura-support-audit') -Directory |
-    Sort-Object Name -Descending | Select-Object -First 1
-if ($null -eq $auditRoot) { throw 'Cura support audit inputs were not found' }
-$baseCase = Join-Path $auditRoot.FullName 'auto_angle_70'
-$baseMachine = Join-Path $baseCase 'machine.json'
-$baseProcess = Join-Path $baseCase 'process.json'
+$baseMachine = Join-Path $RepoRoot 'sandboxes\multinozzle_test\auto_tool2_020_base1_machine.json'
+$baseProcess = Join-Path $RepoRoot 'sandboxes\multinozzle_test\auto_tool2_020_base1_process.json'
 foreach ($path in @($SlicerPath, $baseMachine, $baseProcess)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required file not found: $path" }
 }
 
 function Set-JsonProperty($object, [string] $name, $value) {
     $object | Add-Member -MemberType NoteProperty -Name $name -Value $value -Force
+}
+
+function Find-FilamentProfile([string] $name) {
+    foreach ($root in @(
+        (Join-Path $RepoRoot 'resources\profiles'),
+        (Join-Path (Split-Path -Parent $SlicerPath) 'resources\profiles')
+    )) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        $match = Get-ChildItem -LiteralPath $root -Recurse -File -Filter "$name.json" |
+            Select-Object -First 1
+        if ($null -ne $match) { return $match.FullName }
+    }
+    throw "Filament profile not found: $name"
 }
 
 function Analyze-Support([string] $path) {
@@ -73,6 +82,12 @@ function Analyze-Support([string] $path) {
 
 $runRoot = Join-Path $OutputRoot (Get-Date -Format 'yyyyMMdd-HHmmss')
 New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
+$filaments = @(
+    (Find-FilamentProfile 'Snapmaker PLA @U1'),
+    (Find-FilamentProfile 'Snapmaker ABS @U1'),
+    (Find-FilamentProfile 'Snapmaker PETG @U1'),
+    (Find-FilamentProfile 'Snapmaker TPU @U1')
+)
 $modelPath = Join-Path $runRoot 'bottom-contact.obj'
 @'
 v 0 0 0
@@ -123,23 +138,37 @@ foreach ($bottomLayers in @(0, 3)) {
     New-Item -ItemType Directory -Force -Path $caseRoot | Out-Null
     $machinePath = Join-Path $caseRoot 'machine.json'
     $processPath = Join-Path $caseRoot 'process.json'
-    Copy-Item -LiteralPath $baseMachine -Destination $machinePath
+    $machine = Get-Content -LiteralPath $baseMachine -Raw | ConvertFrom-Json
     $process = Get-Content -LiteralPath $baseProcess -Raw | ConvertFrom-Json
+    $machineName = "Codex Cura bottom interface $bottomLayers"
+    $machine.name = $machineName
+    $machine.setting_id = "cura-bottom-interface-$bottomLayers"
+    $process.name = $machineName
+    $process.setting_id = "cura-bottom-interface-$bottomLayers"
+    $process.compatible_printers = @($machineName)
+    Set-JsonProperty $process 'layer_height' '0.2'
+    Set-JsonProperty $process 'initial_layer_print_height' '0.2'
+    Set-JsonProperty $process 'enable_support' '1'
     Set-JsonProperty $process 'support_type' 'normal_cura(auto)'
     Set-JsonProperty $process 'support_threshold_angle' '90'
     Set-JsonProperty $process 'support_interface_top_layers' '4'
     Set-JsonProperty $process 'support_interface_bottom_layers' ([string] $bottomLayers)
     Set-JsonProperty $process 'support_interface_pattern' 'rectilinear'
     Set-JsonProperty $process 'support_interface_spacing' '0'
+    Set-JsonProperty $process 'support_on_build_plate_only' '0'
+    Set-JsonProperty $process 'use_smaller_nozzles_in_crisp_corners' '0'
+    $machine | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $machinePath -Encoding utf8
     $process | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $processPath -Encoding utf8
 
     $settings = [char]34 + "$machinePath;$processPath" + [char]34
+    $loadedFilaments = [char]34 + ($filaments -join ';') + [char]34
     $output = [char]34 + $caseRoot + [char]34
     $input = [char]34 + $modelPath + [char]34
     $stdout = Join-Path $caseRoot 'cli.out.log'
     $stderr = Join-Path $caseRoot 'cli.err.log'
     $handle = Start-Process -FilePath $SlicerPath -ArgumentList @(
-        '--slice', '0', '--load-settings', $settings, '--outputdir', $output, $input
+        '--slice', '0', '--debug', '1', '--load-settings', $settings,
+        '--load-filaments', $loadedFilaments, '--outputdir', $output, $input
     ) -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     if (-not $handle.WaitForExit($SliceTimeoutSeconds * 1000)) {
         $handle.Kill()

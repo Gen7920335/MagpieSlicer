@@ -346,9 +346,24 @@ static t_config_enum_values s_keys_map_SupportType{
     { "normal(manual)", stNormal },
     { "normal_cura(manual)", stNormalCura },
     { "tree(manual)", stTree },
-    { "tsunami(auto)", stTsunamiAuto }
+    { "tsunami(auto)", stTsunamiAuto },
+    { "mixed(auto)", stMixedAuto }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SupportType)
+
+static t_config_enum_values s_keys_map_MixedNormalSupportGenerator{
+    { "prusa", mnsgPrusa },
+    { "cura",  mnsgCura }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(MixedNormalSupportGenerator)
+
+static t_config_enum_values s_keys_map_MixedTreeSupportStyle{
+    { "organic",    mtssOrganic },
+    { "tree_slim",   mtssSlim },
+    { "tree_strong", mtssStrong },
+    { "tree_hybrid", mtssTreeHybrid }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(MixedTreeSupportStyle)
 
 static t_config_enum_values s_keys_map_SeamPosition {
     { "nearest",        spNearest },
@@ -6335,8 +6350,9 @@ void PrintConfigDef::init_fff_params()
     def = this->add("support_type", coEnum);
     def->label = L("Type");
     def->category = L("Support");
-    def->tooltip = L("Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), and Tsunami (auto) are used to generate support automatically. "
+    def->tooltip = L("Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), and Tsunami (auto) are used to generate support automatically. "
                      "If a manual style is selected, only support enforcers are generated. "
+                     "Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. "
                      "Normal (Cura style) is an experimental OrcaProject support-area generator.");
     def->enum_keys_map = &ConfigOptionEnum<SupportType>::get_enum_values();
     def->enum_values.push_back("normal(auto)");
@@ -6346,6 +6362,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_values.push_back("normal_cura(manual)");
     def->enum_values.push_back("tree(manual)");
     def->enum_values.push_back("tsunami(auto)");
+    def->enum_values.push_back("mixed(auto)");
     def->enum_labels.push_back(L("Normal (Prusa style, auto)"));
     def->enum_labels.push_back(L("Normal (Cura style, auto)"));
     def->enum_labels.push_back(L("Tree (auto)"));
@@ -6353,8 +6370,46 @@ void PrintConfigDef::init_fff_params()
     def->enum_labels.push_back(L("Normal (Cura style, manual)"));
     def->enum_labels.push_back(L("Tree (manual)"));
     def->enum_labels.push_back(L("Tsunami (auto)"));
+    def->enum_labels.push_back(L("Mixed (auto)"));
     def->mode = comSimple;
     def->set_default_value(new ConfigOptionEnum<SupportType>(stNormalAuto));
+
+    def = this->add("mixed_normal_support_generator", coEnum);
+    def->label = L("Normal support generator");
+    def->category = L("Support");
+    def->tooltip = L("Selects the normal-support geometry generator used by Mixed (auto).");
+    def->enum_keys_map = &ConfigOptionEnum<MixedNormalSupportGenerator>::get_enum_values();
+    def->enum_values = { "prusa", "cura" };
+    def->enum_labels = { L("Prusa"), L("Cura") };
+    def->mode = comSimple;
+    def->set_default_value(new ConfigOptionEnum<MixedNormalSupportGenerator>(mnsgPrusa));
+
+    def = this->add("mixed_tree_support_style", coEnum);
+    def->label = L("Tree support style");
+    def->category = L("Support");
+    def->tooltip = L("Selects the tree-support style used by Mixed (auto).");
+    def->enum_keys_map = &ConfigOptionEnum<MixedTreeSupportStyle>::get_enum_values();
+    def->enum_values = { "organic", "tree_slim", "tree_strong", "tree_hybrid" };
+    def->enum_labels = { L("Organic"), L("Tree Slim"), L("Tree Strong"), L("Tree Hybrid") };
+    def->mode = comSimple;
+    def->set_default_value(new ConfigOptionEnum<MixedTreeSupportStyle>(mtssOrganic));
+
+    def = this->add("mixed_normal_coverage_threshold", coPercent);
+    def->label = L("Normal support coverage threshold");
+    def->category = L("Support");
+    def->tooltip = L("A connected support-demand region uses normal support when this percentage can be reached vertically from the build plate. Otherwise it uses tree support.");
+    def->sidetext = L("%");
+    def->min = 0;
+    def->max = 100;
+    def->mode = comSimple;
+    def->set_default_value(new ConfigOptionPercent(100));
+
+    def = this->add("mixed_selective_merge", coBool);
+    def->label = L("Selective merge");
+    def->category = L("Support");
+    def->tooltip = L("When a support-demand region is below the normal coverage threshold, use build-plate-origin normal support for its reachable portion and tree support for only the remaining portion. When disabled, the whole region uses tree support.");
+    def->mode = comSimple;
+    def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("support_object_xy_distance", coFloat);
     def->label = L("Support/object XY distance");

@@ -425,6 +425,8 @@ set(lisbslic3r_sources
     Slicing.hpp
     Support/CuraStyleSupport.cpp
     Support/CuraStyleSupport.hpp
+    Support/MixedSupportPlan.cpp
+    Support/MixedSupportPlan.hpp
     Support/SupportCommon.cpp
     Support/SupportCommon.hpp
     Support/SupportLayer.hpp

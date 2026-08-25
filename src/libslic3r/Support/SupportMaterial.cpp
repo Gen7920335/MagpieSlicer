@@ -329,12 +329,16 @@ static Polygons contours_simplified(const Vec2i32 &grid_size, const double pixel
 }
 #endif // SUPPORT_USE_AGG_RASTERIZER
 
-PrintObjectSupportMaterial::PrintObjectSupportMaterial(const PrintObject *object, const SlicingParameters &slicing_params) :
+PrintObjectSupportMaterial::PrintObjectSupportMaterial(
+    const PrintObject *object, const SlicingParameters &slicing_params,
+    const std::vector<Polygons> *demand_mask, bool force_buildplate_only) :
+    m_object                (object),
     m_print_config          (&object->print()->config()),
     m_object_config         (&object->config()),
     m_slicing_params        (slicing_params),
     m_support_params        (*object),
-	m_object                (object)
+    m_demand_mask           (demand_mask),
+    m_force_buildplate_only (force_buildplate_only)
 {
 }
 
@@ -1313,21 +1317,24 @@ std::vector<Polygons> PrintObjectSupportMaterial::buildplate_covered(const Print
     std::vector<Polygons> buildplate_covered;
     if (buildplate_only) {
         BOOST_LOG_TRIVIAL(debug) << "PrintObjectSupportMaterial::buildplate_covered() - start";
-        buildplate_covered.assign(object.layers().size(), Polygons());
-        //FIXME prefix sum algorithm, parallelize it! Parallelization will also likely be more numerically stable.
-        for (size_t layer_id = 1; layer_id < object.layers().size(); ++ layer_id) {
-            const Layer &lower_layer = *object.layers()[layer_id-1];
-            // Merge the new slices with the preceding slices.
-            // Apply the safety offset to the newly added polygons, so they will connect
-            // with the polygons collected before,
-            // but don't apply the safety offset during the union operation as it would
-            // inflate the polygons over and over.
-            Polygons &covered = buildplate_covered[layer_id];
-            covered = buildplate_covered[layer_id - 1];
-            polygons_append(covered, offset(lower_layer.lslices, scale_(0.01)));
-            covered = union_(covered);
-        }
+        buildplate_covered = buildplate_covered_by_object(object);
         BOOST_LOG_TRIVIAL(debug) << "PrintObjectSupportMaterial::buildplate_covered() - end";
+    }
+    return buildplate_covered;
+}
+
+std::vector<Polygons> buildplate_covered_by_object(const PrintObject &object)
+{
+    std::vector<Polygons> buildplate_covered(object.layers().size());
+    // Safety connection offset: XY distance in millimetres, converted to scaled coordinates.
+    const coord_t connection_offset = scale_(0.01);
+    //FIXME prefix sum algorithm, parallelize it! Parallelization will also likely be more numerically stable.
+    for (size_t layer_id = 1; layer_id < object.layers().size(); ++layer_id) {
+        const Layer &lower_layer = *object.layers()[layer_id - 1];
+        Polygons &covered = buildplate_covered[layer_id];
+        covered = buildplate_covered[layer_id - 1];
+        polygons_append(covered, offset(lower_layer.lslices, connection_offset));
+        covered = union_(covered);
     }
     return buildplate_covered;
 }
@@ -1395,7 +1402,8 @@ static inline ExPolygons detect_overhangs(
     // BBS.
     const bool   auto_normal_support = is_auto(object_config.support_type.value) &&
                                        (is_normal_support(object_config.support_type.value) ||
-                                        is_tsunami(object_config.support_type.value));
+                                        is_tsunami(object_config.support_type.value) ||
+                                        is_mixed(object_config.support_type.value));
     const bool   buildplate_only = ! annotations.buildplate_covered.empty();
     // If user specified a custom angle threshold, convert it to radians.
     // Zero means automatic overhang detection.
@@ -1582,7 +1590,8 @@ static inline std::tuple<Polygons, Polygons, double> detect_contacts(
     // BBS.
     const bool   auto_normal_support = is_auto(object_config.support_type.value) &&
                                        (is_normal_support(object_config.support_type.value) ||
-                                        is_tsunami(object_config.support_type.value));
+                                        is_tsunami(object_config.support_type.value) ||
+                                        is_mixed(object_config.support_type.value));
     const bool   buildplate_only = !annotations.buildplate_covered.empty();
     float        no_interface_offset = 0.f;
 
@@ -2117,7 +2126,7 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
     // BBS: tree support is selected so normal supports need not be generated.
     // Note we still need to go through the following steps if support is disabled but raft is enabled.
     if (m_object_config->enable_support.value && !is_normal_support(m_object_config->support_type.value) &&
-        !is_tsunami(m_object_config->support_type.value)) {
+        !is_tsunami(m_object_config->support_type.value) && !is_mixed(m_object_config->support_type.value)) {
         return SupportGeneratorLayersPtr();
     }
 
@@ -2327,6 +2336,16 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
 
     if (object.print()->canceled())
         return SupportGeneratorLayersPtr();
+
+    if (m_demand_mask != nullptr) {
+        for (size_t layer_id = layer_id_start; layer_id < num_layers; ++layer_id) {
+            if (layer_id >= m_demand_mask->size() || (*m_demand_mask)[layer_id].empty())
+                overhangs_per_layers[layer_id].clear();
+            else
+                overhangs_per_layers[layer_id] = intersection_ex(
+                    overhangs_per_layers[layer_id], (*m_demand_mask)[layer_id]);
+        }
+    }
 
     for (size_t layer_id = layer_id_start; layer_id < num_layers; layer_id++) {
         const Layer& layer = *object.layers()[layer_id];

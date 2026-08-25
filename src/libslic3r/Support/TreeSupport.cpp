@@ -633,12 +633,18 @@ static Point bounding_box_middle(const BoundingBox &bbox)
     return (bbox.max + bbox.min) / 2;
 }
 
-TreeSupport::TreeSupport(PrintObject& object, const SlicingParameters &slicing_params)
-    : m_object(&object), m_slicing_params(slicing_params), m_support_params(object), m_object_config(&object.config())
+TreeSupport::TreeSupport(PrintObject& object, const SlicingParameters &slicing_params,
+                         const std::vector<Polygons> *demand_mask,
+                         SupportMaterialStyle style_override,
+                         const std::vector<Polygons> *extra_obstacles)
+    : m_object(&object), m_slicing_params(slicing_params), m_support_params(object),
+      m_object_config(&object.config()), m_demand_mask(demand_mask), m_extra_obstacles(extra_obstacles)
 {
     m_print_config = &m_object->print()->config();
     m_raft_layers = slicing_params.base_raft_layers + slicing_params.interface_raft_layers;
-    support_type = m_object_config->support_type;
+    support_type = is_mixed(m_object_config->support_type.value) ? stTreeAuto : m_object_config->support_type.value;
+    if (style_override != smsDefault)
+        m_support_params.support_style = style_override;
 
     SupportMaterialPattern support_pattern  = m_object_config->support_base_pattern;
     if (m_support_params.support_style == smsTreeHybrid && support_pattern == smpDefault)
@@ -668,7 +674,8 @@ TreeSupport::TreeSupport(PrintObject& object, const SlicingParameters &slicing_p
 #define SUPPORT_SURFACES_OFFSET_PARAMETERS ClipperLib::jtSquare, 0.
 void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
 {
-    bool tree_support_enable = m_object_config->enable_support.value && is_tree(m_object_config->support_type.value);
+    bool tree_support_enable = m_object_config->enable_support.value &&
+                               (is_tree(m_object_config->support_type.value) || m_demand_mask != nullptr);
     if (!tree_support_enable && !check_support_necessity) {
         BOOST_LOG_TRIVIAL(info) << "Tree support is disabled.";
         return;
@@ -1112,6 +1119,17 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
 
         // add sharp tail overhangs
         append(layer->loverhangs, sharp_tail_overhangs);
+
+        if (m_demand_mask != nullptr) {
+            if (size_t(layer_nr) >= m_demand_mask->size() || (*m_demand_mask)[layer_nr].empty())
+                layer->loverhangs.clear();
+            else
+                layer->loverhangs = union_ex((*m_demand_mask)[layer_nr]);
+            // The selected normal detector owns Mixed demand. Do not intersect it with the
+            // classic-tree detector, which could silently remove regions selected by the plan.
+            nDetected = int(layer->loverhangs.size());
+            nEnforced = nDetected;
+        }
 
         // fill overhang_types
         for (size_t i = 0; i < layer->loverhangs.size(); i++)
@@ -1782,10 +1800,10 @@ void TreeSupport::move_bounds_to_contact_nodes(std::vector<TreeSupport3D::Suppor
 
 void TreeSupport::generate()
 {
-    if (!is_tree(m_object_config->support_type.value)) return;
+    if (!is_tree(m_object_config->support_type.value) && m_demand_mask == nullptr) return;
 
     if (m_support_params.support_style == smsTreeOrganic) {
-        generate_tree_support_3D(*m_object, this, this->throw_on_cancel);
+        generate_tree_support_3D(*m_object, this, this->throw_on_cancel, m_demand_mask);
         return;
     }
 
@@ -1799,6 +1817,8 @@ void TreeSupport::generate()
 
     create_tree_support_layers();
     m_ts_data = m_object->alloc_tree_support_preview_cache();
+    if (m_extra_obstacles != nullptr)
+        m_ts_data->set_extra_obstacles(*m_extra_obstacles);
     m_ts_data->is_slim = is_slim;
     // // get the ring of outside plate
     // auto tmp= diff_ex(offset_ex(m_machine_border, scale_(100)), m_machine_border);
@@ -3797,6 +3817,14 @@ TreeSupportData::TreeSupportData(const PrintObject &object, coordf_t xy_distance
     }
 }
 
+void TreeSupportData::set_extra_obstacles(const std::vector<Polygons> &extra_obstacles)
+{
+    tbb::spin_mutex::scoped_lock guard(m_mutex);
+    m_extra_obstacles = extra_obstacles;
+    m_collision_cache.clear();
+    m_avoidance_cache.clear();
+}
+
 const ExPolygons& TreeSupportData::get_collision(coordf_t radius, size_t layer_nr) const
 {
     profiler.tic();
@@ -3876,6 +3904,12 @@ const ExPolygons& TreeSupportData::calculate_collision(const RadiusLayerPair& ke
     assert(key.layer_nr < m_layer_outlines.size());
 
     ExPolygons collision_areas = offset_ex(m_layer_outlines[key.layer_nr], scale_(key.radius+m_xy_distance));
+    if (key.layer_nr < m_extra_obstacles.size() && !m_extra_obstacles[key.layer_nr].empty()) {
+        ExPolygons extra_collision = offset_ex(
+            union_ex(m_extra_obstacles[key.layer_nr]), scale_(key.radius) + SCALED_EPSILON);
+        append(collision_areas, std::move(extra_collision));
+        collision_areas = union_ex(collision_areas);
+    }
     collision_areas = expolygons_simplify(collision_areas, scale_(m_radius_sample_resolution));
     // collision_areas.emplace_back(m_machine_border);
     const auto ret = m_collision_cache.insert({ key, std::move(collision_areas) });

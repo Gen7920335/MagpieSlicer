@@ -3434,13 +3434,18 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
 #ifdef SLIC3R_TREESUPPORTS_PROGRESS
             m_progress_multiplier, m_progress_offset,
 #endif // SLIC3R_TREESUPPORTS_PROGRESS
-            /* additional_excluded_areas */{} };
+            tree_support->m_extra_obstacles == nullptr ? std::vector<Polygons>{} : *tree_support->m_extra_obstacles };
 
         //FIXME generating overhangs just for the first mesh of the group.
         assert(processing.second.size() == 1);
 
         std::vector<Polygons>        overhangs;
-        if (print_object.config().support_threshold_angle.value > 0) {
+        if (tree_support->m_demand_mask != nullptr) {
+            const int num_raft_layers = int(config.raft_layers.size());
+            overhangs.resize(print_object.layer_count() + num_raft_layers);
+            for (size_t layer_idx = 0; layer_idx < std::min(print_object.layer_count(), tree_support->m_demand_mask->size()); ++layer_idx)
+                overhangs[layer_idx + num_raft_layers] = (*tree_support->m_demand_mask)[layer_idx];
+        } else if (print_object.config().support_threshold_angle.value > 0) {
             // TreeSupport3D's native detector preserves the area difference produced
             // by the requested threshold. The smart detector reduces each layer to
             // contact features, making low and high thresholds converge to nearly
@@ -4169,8 +4174,11 @@ void organic_draw_branches(
 
 } // namespace TreeSupport3D
 
-void generate_tree_support_3D(PrintObject &print_object, TreeSupport* tree_support, std::function<void()> throw_on_cancel)
+void generate_tree_support_3D(PrintObject &print_object, TreeSupport* tree_support,
+                              std::function<void()> throw_on_cancel,
+                              const std::vector<Polygons> *demand_mask)
 {
+    tree_support->m_demand_mask = demand_mask;
     size_t idx = 0;
     for (const PrintObject *po : print_object.print()->objects()) {
         if (po == &print_object)

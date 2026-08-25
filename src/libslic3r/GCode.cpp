@@ -7547,7 +7547,10 @@ std::string GCode::extrude_path(const ExtrusionPath& path, const std::string& de
     std::string gcode = this->_extrude(path, description, speed, path.tool_hint);
     if (m_wipe.enable && FILAMENT_CONFIG(wipe)) {
         m_wipe.path = path.polyline.to_polyline();
-        if (is_tree(this->config().support_type) && is_support(path.role())) {
+        const SupportLayer *active_support_layer = dynamic_cast<const SupportLayer *>(m_layer);
+        if (is_support(path.role()) &&
+            (is_tree(this->config().support_type) ||
+             (active_support_layer != nullptr && has_tree_channel(active_support_layer->support_type)))) {
             if ((m_wipe.path.first_point() - m_wipe.path.last_point()).cast<double>().norm() > scale_(0.2)) {
                 double min_dist = scale_(0.2);
                 int    i        = 0;
@@ -9650,7 +9653,7 @@ bool GCode::needs_retraction(const Polyline &travel, ExtrusionRole role, LiftTyp
                 if (support_island.contains(travel))
                     return false;
         //reduce the retractions in lightning infills for tree support
-        if (support_layer != NULL && support_layer->support_type==stInnerTree)
+        if (support_layer != NULL && has_tree_channel(support_layer->support_type))
             for (auto &area : support_layer->base_areas)
                 if (area.contains(travel))
                     return false;
