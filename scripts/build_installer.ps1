@@ -1,11 +1,37 @@
 param(
-    [int]$Parallel = [Math]::Max(1, [Environment]::ProcessorCount),
+    [ValidateRange(1, 2)]
+    [int]$Parallel = 2,
     [string]$ShortStageRoot = "C:\MagpiePkg",
     [string]$BuildDirectory = "",
-    [switch]$DevelopmentProfiler
+    [switch]$DevelopmentProfiler,
+    [switch]$PreflightOnly
 )
 
 $ErrorActionPreference = "Stop"
+
+# Installer builds are intentionally conservative. CMake/MSBuild project
+# parallelism and MSVC's per-project /MP workers otherwise multiply each other
+# and can make a 32 GiB workstation unresponsive during a full rebuild.
+$currentProcess = [Diagnostics.Process]::GetCurrentProcess()
+$currentProcess.PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal
+$env:CMAKE_BUILD_PARALLEL_LEVEL = $Parallel.ToString()
+$env:CL_MPCount = $Parallel.ToString()
+
+$competingProcesses = @(
+    Get-Process -Name cmake, cpack, makensis, msbuild, cl, link -ErrorAction SilentlyContinue |
+        Where-Object { $_.Id -ne $currentProcess.Id }
+)
+if ($competingProcesses.Count -gt 0) {
+    $processSummary = ($competingProcesses | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ", "
+    throw "Another build or packaging process is already running ($processSummary). Wait for it to finish before building an installer."
+}
+
+$os = Get-CimInstance Win32_OperatingSystem
+$freeMemoryBytes = [int64]$os.FreePhysicalMemory * 1KB
+$minimumFreeMemoryBytes = 8GB
+if ($freeMemoryBytes -lt $minimumFreeMemoryBytes) {
+    throw "Installer packaging requires at least 8 GiB of free physical memory. Available: $([Math]::Round($freeMemoryBytes / 1GB, 1)) GiB."
+}
 
 $root = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
@@ -17,6 +43,12 @@ $resolvedStageRoot = [IO.Path]::GetFullPath($ShortStageRoot)
 $stageDir = Join-Path $resolvedStageRoot $stamp
 $outputDir = Join-Path $buildDir "installer\$stamp"
 Set-Location $root
+
+$stageDrive = Get-PSDrive -Name ([IO.Path]::GetPathRoot($resolvedStageRoot).TrimEnd('\').TrimEnd(':'))
+$minimumFreeDiskBytes = 20GB
+if ($stageDrive.Free -lt $minimumFreeDiskBytes) {
+    throw "Installer packaging requires at least 20 GiB free on $($stageDrive.Name):. Available: $([Math]::Round($stageDrive.Free / 1GB, 1)) GiB."
+}
 
 $cachePath = Join-Path $buildDir 'CMakeCache.txt'
 if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
@@ -60,6 +92,10 @@ if ($lockingProcesses.Count -gt 0) {
 $started = Get-Date
 Write-Output "Installer build started: $($started.ToString('s'))"
 Write-Output "Parallel jobs: $Parallel"
+Write-Output "MSVC compile workers: $env:CL_MPCount"
+Write-Output "Process priority: $($currentProcess.PriorityClass)"
+Write-Output "Free physical memory: $([Math]::Round($freeMemoryBytes / 1GB, 1)) GiB"
+Write-Output "Free staging disk: $([Math]::Round($stageDrive.Free / 1GB, 1)) GiB"
 Write-Output "Build directory: $buildDir"
 Write-Output "Package identity: $appName ($appKey)"
 Write-Output "Vulkan slicer: ON"
@@ -67,7 +103,12 @@ Write-Output "Vulkan test branding: OFF"
 Write-Output "Slicing profiler: $($DevelopmentProfiler.IsPresent)"
 Write-Output "Short staging directory: $stageDir"
 
-& cmake --build $buildDir --config Release --target OrcaSlicer_app_gui --parallel $Parallel
+if ($PreflightOnly) {
+    Write-Output "PREFLIGHT_OK=1"
+    return
+}
+
+& cmake --build $buildDir --config Release --target OrcaSlicer_app_gui --parallel $Parallel -- /p:CL_MPCount=$Parallel /nodeReuse:false
 if ($LASTEXITCODE -ne 0) {
     throw "Release application build failed with exit code $LASTEXITCODE."
 }

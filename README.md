@@ -180,9 +180,11 @@ Snapmaker U1용 기본 출력 시작 순서와 네이티브 장치 패널을 확
 Windows용 기본 빌드는 저장소의 빌드 스크립트를 사용합니다.
 
 ```powershell
-cmake --build build-vulkan --config Release --parallel 8
-powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -BuildDirectory build-vulkan -Parallel 8
+cmake --build build-vulkan --config Release --parallel 2 -- /p:CL_MPCount=2 /nodeReuse:false
+powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -BuildDirectory build-vulkan
 ```
+
+설치파일 빌드 스크립트는 시스템 응답성을 보호하기 위해 CMake와 MSVC의 병렬 작업을 각각 최대 2개로 제한하고, 빌드·패키징을 낮은 프로세스 우선순위로 실행합니다. 다른 빌드가 실행 중이거나 가용 메모리가 8 GiB, 스테이징 디스크가 20 GiB보다 적으면 패키징을 시작하지 않습니다.
 
 ## 라이선스 및 출처
 

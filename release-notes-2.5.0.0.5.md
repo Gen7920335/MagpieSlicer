@@ -7,6 +7,7 @@ This is the fifth Magpie release on the OrcaSlicer 2.5.0 base: Orca `2.5.0` + Ma
 - Fixes the immediate crash caused by selecting `Resin style (auto)` with process presets created before resin settings existed.
 - Treats a missing `resin_support_tree_type` as the schema default while preserving an explicitly selected Branching strategy.
 - Retains all Resin/Mixed support features and Bambu Lab A2L profiles from 2.5.0.0.4.
+- Prevents installer builds from exhausting workstation resources by capping both CMake and MSVC parallelism at two workers, using below-normal process priority, and checking competing builds, free memory, and staging-disk space before starting.
 
 ## Verification
 
