@@ -831,8 +831,13 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("mixed_selective_merge", support_type_is_mixed);
     toggle_line("support_style", !support_type_is_mixed && !support_type_is_resin);
 
-    const bool resin_branching = support_type_is_resin &&
-        config->opt_enum<ResinSupportTreeType>("resin_support_tree_type") == rstBranching;
+    // User presets created before Resin style existed do not contain any of
+    // the resin-specific keys. Treat a missing tree type as the schema default
+    // instead of dereferencing a null option while rebuilding the Support UI.
+    const auto *resin_tree_type =
+        config->option<ConfigOptionEnum<ResinSupportTreeType>>("resin_support_tree_type");
+    const bool resin_branching = support_type_is_resin && resin_tree_type != nullptr &&
+        resin_tree_type->value == rstBranching;
     for (const char *key : { "resin_support_tree_type", "resin_support_points_density_relative",
                             "resin_support_enforcers_only" }) {
         toggle_line(key, support_type_is_resin);
