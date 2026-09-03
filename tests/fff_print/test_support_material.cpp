@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -15,13 +16,22 @@
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/ExtrusionEntityCollection.hpp"
+#include "libslic3r/Format/DRC.hpp"
 #include "libslic3r/Format/OBJ.hpp"
 #include "libslic3r/SlicesToTriangleMesh.hpp"
+#include "libslic3r/TriangleSelector.hpp"
 #include "libslic3r/Support/SupportCommon.hpp"
+#include "libslic3r/Support/CuraStyleSupport.hpp"
 #include "libslic3r/Support/MixedSupportPlan.hpp"
+#include "libslic3r/Support/SupportMaterial.hpp"
+#include "libslic3r/Support/SupportParameters.hpp"
 
 #include "test_helpers.hpp" // get access to init_print, etc
 #include "test_utils.hpp"
+
+namespace Slic3r {
+std::vector<Polygons> buildplate_covered_by_object(const PrintObject &object);
+}
 
 using namespace Slic3r::Test;
 using namespace Slic3r;
@@ -41,163 +51,126 @@ static bool same_polygon_set(const Polygons &left, const Polygons &right)
     return diff(left, right).empty() && diff(right, left).empty();
 }
 
-static Polygon tsunami_test_circle(double radius, int segments = 128)
+TEST_CASE("Cura support joins nearby regions without deleting originals",
+          "[SupportMaterial][Cura][Geometry]")
 {
-    Polygon polygon;
-    polygon.points.reserve(size_t(segments));
-    for (int index = 0; index < segments; ++index) {
-        const double angle = 2. * M_PI * double(index) / double(segments);
-        polygon.points.emplace_back(scale_(radius * std::cos(angle)), scale_(radius * std::sin(angle)));
-    }
-    return polygon;
+    const Polygons left = support_test_rectangle(0., 0., 10., 10.);
+    const Polygons nearby_region = support_test_rectangle(11., 0., 21., 10.);
+    const Polygons distant_region = support_test_rectangle(15., 0., 25., 10.);
+    const coord_t half_min_feature = scale_(0.2);
+
+    const Polygons disabled = join_cura_style_support_regions(
+        left, nearby_region, 0, half_min_feature);
+    CHECK(union_ex(disabled).size() == 2);
+
+    const Polygons connected = join_cura_style_support_regions(
+        left, nearby_region, scale_(2.), half_min_feature);
+    CHECK(union_ex(connected).size() == 1);
+    Polygons originals = left;
+    append(originals, nearby_region);
+    CHECK(diff(originals, connected).empty());
+
+    const Polygons outside_range = join_cura_style_support_regions(
+        left, distant_region, scale_(2.), half_min_feature);
+    CHECK(union_ex(outside_range).size() == 2);
+
+    const Polygons thin = support_test_rectangle(30., 0., 30.2, 10.);
+    const Polygons with_thin_original = join_cura_style_support_regions(
+        left, thin, scale_(2.), half_min_feature);
+    CHECK(diff(thin, with_thin_original).empty());
 }
 
-static Polygon tsunami_test_annular_sector(double inner_radius, double outer_radius,
-                                           double start_angle, double end_angle)
+TEST_CASE("Cura join distance connects separated overhang support in a processed print",
+          "[SupportMaterial][Cura][Geometry][Integration]")
 {
-    Polygon polygon;
-    constexpr int samples = 48;
-    for (int index = 0; index <= samples; ++index) {
-        const double angle = start_angle + (end_angle - start_angle) * double(index) / double(samples);
-        polygon.points.emplace_back(scale_(outer_radius * std::cos(angle)), scale_(outer_radius * std::sin(angle)));
-    }
-    for (int index = samples; index >= 0; --index) {
-        const double angle = start_angle + (end_angle - start_angle) * double(index) / double(samples);
-        polygon.points.emplace_back(scale_(inner_radius * std::cos(angle)), scale_(inner_radius * std::sin(angle)));
-    }
-    return polygon;
-}
-
-static TriangleMesh tsunami_test_circular_overhang(
-    size_t layer_count = 90, size_t upper_start_layer = 75,
-    double sector_inner_radius = 12., double sector_outer_radius = 18.,
-    double sector_start_angle = -1.2, double sector_end_angle = 0.05)
-{
-    constexpr double layer_height = 0.2;
-    std::vector<ExPolygons> slices;
-    slices.reserve(layer_count);
-    const ExPolygons disk { ExPolygon(tsunami_test_circle(20.)) };
-    Polygon column_polygon = tsunami_test_circle(2.5, 48);
-    column_polygon.translate(Point(scale_(15.5), scale_(0.)));
-    const ExPolygons column { ExPolygon(column_polygon) };
-    const Polygon sector = tsunami_test_annular_sector(
-        sector_inner_radius, sector_outer_radius, sector_start_angle, sector_end_angle);
-    const ExPolygons upper = union_ex(Polygons { column_polygon, sector });
-
-    for (size_t layer_index = 0; layer_index < layer_count; ++layer_index) {
-        if (layer_index < 10)
-            slices.emplace_back(disk);
-        else if (layer_index < upper_start_layer)
-            slices.emplace_back(column);
-        else
-            slices.emplace_back(upper);
-    }
-    return TriangleMesh(slices_to_mesh(slices, 0., layer_height, layer_height));
-}
-
-static Polygon tsunami_test_star(double center_x, double center_y, double inner_radius,
-                                 double outer_radius, int point_count, double rotation)
-{
-    Polygon polygon;
-    polygon.points.reserve(size_t(2 * point_count));
-    for (int index = 0; index < 2 * point_count; ++index) {
-        const double radius = index % 2 == 0 ? outer_radius : inner_radius;
-        const double angle = rotation + M_PI * double(index) / double(point_count);
-        polygon.points.emplace_back(scale_(center_x + radius * std::cos(angle)),
-                                    scale_(center_y + radius * std::sin(angle)));
-    }
-    return polygon;
-}
-
-static Polygon tsunami_test_u_shape(double center_x, double center_y, double width,
-                                    double height, double thickness)
-{
-    const double left = center_x - 0.5 * width;
-    const double right = center_x + 0.5 * width;
-    const double bottom = center_y - 0.5 * height;
-    const double top = center_y + 0.5 * height;
-    return Polygon {
-        Point(scale_(left), scale_(top)), Point(scale_(left), scale_(bottom)),
-        Point(scale_(right), scale_(bottom)), Point(scale_(right), scale_(top)),
-        Point(scale_(right - thickness), scale_(top)),
-        Point(scale_(right - thickness), scale_(bottom + thickness)),
-        Point(scale_(left + thickness), scale_(bottom + thickness)),
-        Point(scale_(left + thickness), scale_(top))
+    const auto make_fixture = []() {
+        TriangleMesh fixture = make_cube(1., 1., 1.); // Keep the combined object on the bed.
+        fixture.translate(0.f, 30.f, 0.f);
+        TriangleMesh left_ceiling = make_cube(10., 10., 2.);
+        left_ceiling.translate(0.f, 0.f, 10.f);
+        TriangleMesh right_ceiling = make_cube(10., 10., 2.);
+        right_ceiling.translate(11.f, 0.f, 10.f); // One millimetre unsupported gap.
+        fixture.merge(left_ceiling);
+        fixture.merge(right_ceiling);
+        return fixture;
     };
+
+    const auto component_counts = [&](double join_distance_mm) {
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormalCuraAuto));
+        config.set_key_value("support_threshold_angle", new ConfigOptionInt(60));
+        config.set_key_value("cura_support_join_distance", new ConfigOptionFloat(join_distance_mm));
+        config.set_key_value("support_expansion", new ConfigOptionFloat(0.));
+        config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
+        config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+        config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
+        config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+
+        Print print;
+        REQUIRE_NOTHROW(init_and_process_print({ make_fixture() }, print, config));
+        REQUIRE(print.objects().size() == 1);
+        std::vector<size_t> counts;
+        for (const SupportLayer *layer : print.objects().front()->support_layers()) {
+            if (layer->print_z < 2. || layer->print_z > 8. || layer->support_islands.empty())
+                continue;
+            counts.push_back(union_ex(layer->support_islands).size());
+        }
+        return counts;
+    };
+
+    const std::vector<size_t> unjoined = component_counts(0.);
+    const std::vector<size_t> joined = component_counts(2.);
+    REQUIRE_FALSE(unjoined.empty());
+    REQUIRE_FALSE(joined.empty());
+    CHECK(std::all_of(unjoined.begin(), unjoined.end(), [](size_t count) { return count == 2; }));
+    CHECK(std::all_of(joined.begin(), joined.end(), [](size_t count) { return count == 1; }));
 }
 
-struct TsunamiComplexOverhang {
-    TriangleMesh mesh;
-    std::vector<ExPolygons> target_regions;
-};
-
-static TsunamiComplexOverhang tsunami_test_complex_overhang(
-    const std::array<size_t, 4> &target_birth_layers = { 60, 60, 60, 60 })
+TEST_CASE("Cura and Classic Tree propagate cancellation from their long support stages",
+          "[SupportMaterial][Cancellation]")
 {
-    constexpr double layer_height = 0.2;
-    const std::array<Vec2d, 4> column_centers {{
-        Vec2d(-24., -12.), Vec2d(7., 12.), Vec2d(24., -15.), Vec2d(-21., 32.)
+    TriangleMesh fixture = make_cube(8., 10., 10.);
+    TriangleMesh ceiling = make_cube(20., 10., 2.);
+    ceiling.translate(0.f, 0.f, 20.f);
+    fixture.merge(ceiling);
+
+    struct CancellationCase {
+        SupportType type;
+        SupportMaterialStyle style;
+        int cancel_percent;
+    };
+    const std::array<CancellationCase, 2> cases {{
+        { stNormalCuraAuto, smsDefault, 54 },
+        { stTreeAuto, smsTreeStrong, 60 }
     }};
-    ExPolygons columns;
-    for (const Vec2d &center : column_centers) {
-        Polygon column = tsunami_test_circle(2.2, 48);
-        column.translate(Point(scale_(center.x()), scale_(center.y())));
-        columns.emplace_back(std::move(column));
+
+    for (const CancellationCase &test_case : cases) {
+        CAPTURE(int(test_case.type), int(test_case.style), test_case.cancel_percent);
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(test_case.type));
+        config.set_key_value("support_style",
+            new ConfigOptionEnum<SupportMaterialStyle>(test_case.style));
+        config.set_key_value("support_threshold_angle", new ConfigOptionInt(60));
+        config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
+        config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+
+        Print print;
+        Model model;
+        init_print({ fixture }, print, model, config);
+        bool cancellation_requested = false;
+        print.set_status_callback([&](const PrintBase::SlicingStatus &status) {
+            if (!cancellation_requested && status.percent >= test_case.cancel_percent) {
+                cancellation_requested = true;
+                print.cancel();
+            }
+        });
+
+        REQUIRE_THROWS_AS(print.process(), CanceledException);
+        CHECK(cancellation_requested);
+        CHECK(print.canceled());
     }
-
-    std::vector<ExPolygons> targets;
-    targets.emplace_back(ExPolygons { ExPolygon(
-        tsunami_test_star(-24., -12., 4.2, 10., 13, 0.17)) });
-
-    Polygon c_shape = tsunami_test_annular_sector(5., 11., -2.55, 2.55);
-    c_shape.translate(Point(scale_(0.), scale_(12.)));
-    targets.emplace_back(ExPolygons { ExPolygon(std::move(c_shape)) });
-
-    targets.emplace_back(ExPolygons { ExPolygon(
-        tsunami_test_u_shape(24., -8., 19., 19., 3.2)) });
-
-    Polygon annulus_outer = tsunami_test_circle(10., 96);
-    annulus_outer.translate(Point(scale_(-15.), scale_(32.)));
-    Polygon annulus_hole = tsunami_test_circle(4.5, 64);
-    annulus_hole.translate(Point(scale_(-13.), scale_(32.)));
-    std::reverse(annulus_hole.points.begin(), annulus_hole.points.end());
-    ExPolygon eccentric_annulus(std::move(annulus_outer));
-    eccentric_annulus.holes.emplace_back(std::move(annulus_hole));
-    targets.emplace_back(ExPolygons { std::move(eccentric_annulus) });
-
-    std::vector<ExPolygons> slices;
-    slices.reserve(90);
-    for (size_t layer_index = 0; layer_index < 90; ++layer_index) {
-        ExPolygons layer = columns;
-        for (size_t target_index = 0; target_index < targets.size(); ++target_index)
-            if (layer_index >= target_birth_layers[target_index])
-                layer.insert(layer.end(), targets[target_index].begin(), targets[target_index].end());
-        slices.emplace_back(union_ex(layer));
-    }
-
-    return { TriangleMesh(slices_to_mesh(slices, 0., layer_height, layer_height)), std::move(targets) };
-}
-
-static TriangleMesh tsunami_test_hollow_gear_overhang()
-{
-    constexpr double layer_height = 0.2;
-    Polygon lower_outer = tsunami_test_circle(13., 128);
-    Polygon lower_hole = tsunami_test_circle(6., 96);
-    std::reverse(lower_hole.points.begin(), lower_hole.points.end());
-    ExPolygon lower(std::move(lower_outer));
-    lower.holes.emplace_back(std::move(lower_hole));
-
-    Polygon upper_outer = tsunami_test_star(0., 0., 18., 22., 24, 0.04);
-    Polygon upper_hole = tsunami_test_circle(6., 96);
-    std::reverse(upper_hole.points.begin(), upper_hole.points.end());
-    ExPolygon upper(std::move(upper_outer));
-    upper.holes.emplace_back(std::move(upper_hole));
-
-    std::vector<ExPolygons> slices;
-    slices.reserve(100);
-    for (size_t layer_index = 0; layer_index < 100; ++layer_index)
-        slices.emplace_back(ExPolygons { layer_index < 60 ? lower : upper });
-    return TriangleMesh(slices_to_mesh(slices, 0., layer_height, layer_height));
 }
 
 static TriangleMesh resin_test_sloped_wall()
@@ -273,7 +246,7 @@ TEST_CASE("Top interface smoothing never exceeds its printable support envelope"
 
     stabilize_top_interface_footprints(
         intermediate_layers, interface_layers, base_interface_layers,
-        targets, base_targets, 0, storage);
+        targets, base_targets, scale_(1.0), storage);
 
     CHECK(same_polygon_set(interface.polygons, printable));
 }
@@ -354,13 +327,39 @@ static bool collection_has_closed_path_with_role(
         if (const auto *children = dynamic_cast<const ExtrusionEntityCollection *>(entity)) {
             if (collection_has_closed_path_with_role(*children, role))
                 return true;
+        } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(entity);
+                   loop != nullptr && loop->role() == role && !loop->paths.empty()) {
+            return true;
+        } else if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath *>(entity);
+                   multipath != nullptr && multipath->role() == role && !multipath->paths.empty() &&
+                   multipath->paths.front().first_point().distance_to(multipath->paths.back().last_point()) <= scale_(1.)) {
+            return true;
         } else if (const auto *path = dynamic_cast<const ExtrusionPath *>(entity);
                    path != nullptr && path->role() == role && path->polyline.points.size() >= 4 &&
-                   path->polyline.points.front() == path->polyline.points.back()) {
+                   path->first_point().distance_to(path->last_point()) <= scale_(1.)) {
             return true;
         }
     }
     return false;
+}
+
+static size_t maximum_grouped_path_count_with_role(
+    const ExtrusionEntityCollection &collection, ExtrusionRole role)
+{
+    size_t direct_path_count = 0;
+    size_t maximum_child_count = 0;
+    for (const ExtrusionEntity *entity : collection.entities) {
+        if (entity == nullptr)
+            continue;
+        if (const auto *children = dynamic_cast<const ExtrusionEntityCollection *>(entity)) {
+            maximum_child_count = std::max(
+                maximum_child_count, maximum_grouped_path_count_with_role(*children, role));
+        } else if (const auto *path = dynamic_cast<const ExtrusionPath *>(entity);
+                   path != nullptr && path->role() == role) {
+            ++direct_path_count;
+        }
+    }
+    return std::max(direct_path_count, maximum_child_count);
 }
 
 static std::vector<size_t> support_layers_with_role(const Print &print, ExtrusionRole role)
@@ -377,844 +376,6 @@ static double normalized_undirected_angle(double angle)
 {
     angle = std::fmod(angle, M_PI);
     return angle < 0. ? angle + M_PI : angle;
-}
-
-TEST_CASE("Tsunami keeps unobstructed zero-angle support vertically aligned",
-          "[SupportMaterial][TsunamiSupport][DirectRoot]")
-{
-    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.set_key_value("enable_support", new ConfigOptionBool(true));
-    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
-    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
-    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
-    config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_rib_spacing", new ConfigOptionFloat(0.8));
-    config.set_key_value("tsunami_min_bed_contact_area", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_max_bed_contact_area", new ConfigOptionFloat(1000.));
-    config.set_key_value("support_object_xy_distance", new ConfigOptionFloat(0.));
-    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
-    config.set_key_value("printable_area", new ConfigOptionPoints {
-        Vec2d(-100., -100.), Vec2d(100., -100.), Vec2d(100., 100.), Vec2d(-100., 100.) });
-
-    TriangleMesh overhang = mesh(TestMesh::overhang);
-    overhang.scale(Vec3f(1.f, 1.f, 20.f));
-    Print print;
-    init_and_process_print({ overhang }, print, config);
-
-    const PrintObject *object = print.objects().front();
-    const auto layers = object->support_layers();
-    REQUIRE_FALSE(layers.empty());
-    size_t active_layers = 0;
-    Points reference_path;
-    for (const SupportLayer *layer : layers) {
-        if (layer->support_fills.empty())
-            continue;
-        ++active_layers;
-        CHECK(layer->support_fills.no_sort);
-        REQUIRE(layer->support_fills.entities.size() == 1);
-        Polylines paths;
-        layer->support_fills.entities.front()->collect_polylines(paths);
-        REQUIRE(paths.size() == 1);
-        const Points &xy_path = paths.front().points;
-        if (reference_path.empty()) {
-            reference_path = xy_path;
-        } else {
-            Points reversed = xy_path;
-            std::reverse(reversed.begin(), reversed.end());
-            CHECK((xy_path == reference_path || reversed == reference_path));
-        }
-    }
-    CHECK(active_layers > 0);
-    REQUIRE_FALSE(layers.front()->support_islands.empty());
-    CHECK(intersection_ex(layers.front()->support_islands, object->layers().front()->lslices).empty());
-}
-
-TEST_CASE("Tsunami falls back for independent support-layer heights",
-          "[SupportMaterial][TsunamiSupport][Fallback]")
-{
-    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.set_key_value("enable_support", new ConfigOptionBool(true));
-    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
-    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
-    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(true));
-    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_rib_spacing", new ConfigOptionFloat(1.5));
-    config.set_key_value("tsunami_min_bed_contact_area", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_max_bed_contact_area", new ConfigOptionFloat(100.));
-    config.set_key_value("support_object_xy_distance", new ConfigOptionFloat(0.));
-    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
-    config.set_key_value("printable_area", new ConfigOptionPoints {
-        Vec2d(-60., -60.), Vec2d(60., -60.), Vec2d(60., 60.), Vec2d(-60., 60.) });
-
-    Print print;
-    init_and_process_print({ tsunami_test_circular_overhang() }, print, config);
-
-    const auto support_layers = print.objects().front()->support_layers();
-    REQUIRE_FALSE(support_layers.empty());
-    size_t active_layers = 0;
-    for (const SupportLayer *layer : support_layers) {
-        if (layer->support_fills.empty())
-            continue;
-        ++active_layers;
-        CHECK_FALSE(layer->support_fills.no_sort);
-    }
-    CHECK(active_layers > 0);
-}
-
-TEST_CASE("Selecting Tsunami does not generate support while support is disabled",
-          "[SupportMaterial][TsunamiSupport][FeatureOff]")
-{
-    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.set_key_value("enable_support", new ConfigOptionBool(false));
-    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
-    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
-
-    Print print;
-    init_and_process_print({ TestMesh::overhang }, print, config);
-
-    REQUIRE(print.objects().size() == 1);
-    CHECK(print.objects().front()->support_layers().empty());
-}
-
-TEST_CASE("Tsunami slices a solid circular footprint with an external contour root",
-          "[SupportMaterial][TsunamiSupport][CircularRoot]")
-{
-    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.set_key_value("enable_support", new ConfigOptionBool(true));
-    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
-    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
-    config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
-    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
-    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(45.));
-    config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(4.));
-    config.set_key_value("tsunami_rib_spacing", new ConfigOptionFloat(1.5));
-    config.set_key_value("tsunami_min_bed_contact_area", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_max_bed_contact_area", new ConfigOptionFloat(100.));
-    config.set_key_value("support_object_xy_distance", new ConfigOptionFloat(0.));
-    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
-    config.set_key_value("printable_area", new ConfigOptionPoints {
-        Vec2d(-60., -60.), Vec2d(60., -60.), Vec2d(60., 60.), Vec2d(-60., 60.) });
-
-    Print print;
-    init_and_process_print({ tsunami_test_circular_overhang() }, print, config);
-    const PrintObject *object = print.objects().front();
-    const auto support_layers = object->support_layers();
-    REQUIRE_FALSE(support_layers.empty());
-    REQUIRE_FALSE(support_layers.front()->support_fills.entities.empty());
-    Polylines first_paths;
-    support_layers.front()->support_fills.entities.front()->collect_polylines(first_paths);
-    REQUIRE(first_paths.size() == 1);
-    // A narrow but valid exterior root may contain a single physical rib.
-    REQUIRE(first_paths.front().points.size() >= 2);
-
-    double minimum_radius = std::numeric_limits<double>::max();
-    for (const Point &point : first_paths.front().points) {
-        const double radius = std::hypot(unscale<double>(point.x()), unscale<double>(point.y()));
-        minimum_radius = std::min(minimum_radius, radius);
-    }
-    CHECK(minimum_radius > 20.);
-    CHECK(unscale<double>(first_paths.front().length()) > 0.5);
-
-    REQUIRE(support_layers.size() <= object->layers().size());
-    for (size_t layer_index = 0; layer_index < support_layers.size(); ++layer_index) {
-        const SupportLayer *support_layer = support_layers[layer_index];
-        REQUIRE(support_layer->support_fills.no_sort);
-        REQUIRE(support_layer->support_fills.entities.size() == 1);
-        CHECK(intersection_ex(support_layer->support_islands,
-                              object->layers()[layer_index]->lslices).empty());
-    }
-
-    const ExPolygons required_contact { ExPolygon(
-        tsunami_test_annular_sector(12., 18., -1.2, 0.05)) };
-    REQUIRE_FALSE(support_layers.back()->support_islands.empty());
-    CHECK_FALSE(intersection_ex(
-        support_layers.back()->support_islands, required_contact).empty());
-}
-
-TEST_CASE("Tsunami routes from snug overhang demand instead of expanded contact-grid fragments",
-          "[SupportMaterial][TsunamiSupport][CircularRoot][TargetDetection]")
-{
-    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.set_key_value("enable_support", new ConfigOptionBool(true));
-    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
-    config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
-    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
-    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("support_threshold_angle", new ConfigOptionInt(30));
-    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
-    config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(0.45, false));
-    config.set_key_value("wall_loops", new ConfigOptionInt(6));
-    config.set_key_value("sparse_infill_density", new ConfigOptionPercent(0.));
-    config.set_key_value("wall_generator",
-                         new ConfigOptionEnum<PerimeterGeneratorType>(PerimeterGeneratorType::Classic));
-    config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(45.));
-    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
-    config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(4.));
-    config.set_key_value("tsunami_rib_spacing", new ConfigOptionFloat(1.5));
-    config.set_key_value("tsunami_min_bed_contact_area", new ConfigOptionFloat(1.));
-    config.set_key_value("tsunami_max_bed_contact_area", new ConfigOptionFloat(100.));
-    config.set_key_value("support_object_xy_distance", new ConfigOptionFloat(0.));
-    config.set_key_value("printable_area", new ConfigOptionPoints {
-        Vec2d(-60., -60.), Vec2d(60., -60.), Vec2d(60., 60.), Vec2d(-60., 60.) });
-
-    constexpr double probe_rotation = M_PI + 0.0620709604047737;
-    TriangleMesh probe = tsunami_test_circular_overhang(140, 125);
-    // Match the small deterministic rotation introduced by CLI auto-placement.
-    // Coverage must not depend on an exact cardinal phase or the default flow width.
-    probe.rotate_z(float(probe_rotation));
-    ScopedTemporaryFile probe_file(".obj");
-    probe.WriteOBJFile(probe_file.string().c_str());
-    TriangleMesh imported_probe;
-    ObjInfo obj_info;
-    std::string import_message;
-    REQUIRE(load_obj(probe_file.string().c_str(), &imported_probe, obj_info, import_message));
-
-    Print print;
-    init_and_process_print({ imported_probe }, print, config);
-
-    const PrintObject *object = print.objects().front();
-    const auto support_layers = object->support_layers();
-    REQUIRE_FALSE(support_layers.empty());
-    const SupportLayer *last_active_layer = nullptr;
-    size_t last_active_layer_index = 0;
-    size_t active_layers = 0;
-    for (size_t layer_index = 0; layer_index < support_layers.size(); ++layer_index) {
-        const SupportLayer *support_layer = support_layers[layer_index];
-        if (support_layer->support_fills.empty())
-            continue;
-        ++active_layers;
-        last_active_layer = support_layer;
-        last_active_layer_index = layer_index;
-        CHECK(support_layer->support_fills.no_sort);
-    }
-    REQUIRE(active_layers > 0);
-    REQUIRE(last_active_layer != nullptr);
-
-    const auto *first_multipath = dynamic_cast<const ExtrusionMultiPath *>(
-        support_layers.front()->support_fills.entities.front());
-    REQUIRE(first_multipath != nullptr);
-    using SegmentKey = std::array<coord_t, 4>;
-    const auto segment_key = [](const Point3 &first, const Point3 &last) {
-        std::array<coord_t, 2> a {{ first.x(), first.y() }};
-        std::array<coord_t, 2> b {{ last.x(), last.y() }};
-        if (b < a)
-            std::swap(a, b);
-        return SegmentKey {{ a[0], a[1], b[0], b[1] }};
-    };
-    std::set<SegmentKey> immutable_root_ribs;
-    for (const ExtrusionPath &path : first_multipath->paths) {
-        if (path.polyline.points.size() == 2 &&
-            unscale<double>(path.polyline.length()) > 1.) {
-            immutable_root_ribs.emplace(
-                segment_key(path.polyline.points.front(), path.polyline.points.back()));
-        }
-    }
-    REQUIRE(immutable_root_ribs.size() >= 4);
-    for (const SupportLayer *support_layer : support_layers) {
-        if (support_layer->support_fills.empty())
-            continue;
-        REQUIRE(support_layer->support_fills.entities.size() == 1);
-        const auto *multipath = dynamic_cast<const ExtrusionMultiPath *>(
-            support_layer->support_fills.entities.front());
-        REQUIRE(multipath != nullptr);
-        std::set<SegmentKey> layer_segments;
-        for (const ExtrusionPath &path : multipath->paths) {
-            if (path.polyline.points.size() == 2)
-                layer_segments.emplace(
-                    segment_key(path.polyline.points.front(), path.polyline.points.back()));
-        }
-        for (const SegmentKey &rib : immutable_root_ribs)
-            CHECK(layer_segments.count(rib) == 1);
-    }
-
-    Polygon required_contact_polygon =
-        tsunami_test_annular_sector(12., 18., -1.2, 0.05);
-    required_contact_polygon.rotate(probe_rotation);
-    Polygon supported_column = tsunami_test_circle(2.5, 48);
-    supported_column.translate(Point(scale_(15.5), scale_(0.)));
-    supported_column.rotate(probe_rotation);
-    const ExPolygons required_contact = diff_ex(
-        ExPolygons { ExPolygon(std::move(required_contact_polygon)) },
-        ExPolygons { ExPolygon(std::move(supported_column)) });
-    CHECK_FALSE(intersection_ex(
-        last_active_layer->support_islands, required_contact).empty());
-
-    // Reaching one point is not sufficient. The emitted support pattern must
-    // place support within the configured rib-span reach of the entire snug
-    // overhang demand, excluding the column that already supports the model.
-    const auto *last_multipath = dynamic_cast<const ExtrusionMultiPath *>(
-        last_active_layer->support_fills.entities.front());
-    REQUIRE(last_multipath != nullptr);
-    REQUIRE_FALSE(last_multipath->paths.empty());
-    const double maximum_unsupported_span =
-        0.5 * config.option<ConfigOptionFloat>("tsunami_rib_spacing")->value +
-        0.5 * last_multipath->paths.front().width;
-    ExPolygons load_bearing_footprint = last_active_layer->support_islands;
-    expolygons_append(load_bearing_footprint, object->layers()[last_active_layer_index]->lslices);
-    load_bearing_footprint = union_ex(load_bearing_footprint);
-    ExPolygons uncovered_contact = diff_ex(
-        required_contact,
-        offset_ex(load_bearing_footprint,
-                  float(scale_(maximum_unsupported_span) + SCALED_EPSILON),
-                  ClipperLib::jtRound));
-    remove_small_and_small_holes(
-        uncovered_contact, double(SCALED_EPSILON) * double(SCALED_EPSILON));
-    CAPTURE(std::abs(area(required_contact)) * SCALING_FACTOR * SCALING_FACTOR);
-    CAPTURE(std::abs(area(uncovered_contact)) * SCALING_FACTOR * SCALING_FACTOR);
-    // Runtime planning hard-checks 100% of Orca's detected overhang demand.
-    // This independent analytic sector also includes mesh/tessellation points
-    // that the upstream detector may classify outside that demand, so retain
-    // a strict 99.9% external-shape coverage check here.
-    CHECK(std::abs(area(uncovered_contact)) <= 0.001 * std::abs(area(required_contact)));
-
-    const std::string output = gcode(print);
-    CHECK(output.find("support_type = tsunami(auto)") != std::string::npos);
-    CHECK(output.find(";TYPE:Support") != std::string::npos);
-}
-
-// The macro-only case above cannot reach the snug demand behind the column at
-// (15.5, 0): rigid parallel branches have no permitted detour around it, and it
-// is 1.84 mm2 short of its own 99.9 % check. Measured 2026-08-15, enabling micro
-// takes that residue to 0.267 mm2 and puts all of it inside a terminal ring's
-// micro reach, so the demand is Micro Branch's to serve rather than evidence
-// that a second trunk is needed.
-//
-// This is a separate case because the macro-only one is a contract section 5
-// test: it tracks each root rib across layers and so requires exactly one
-// extrusion entity per support layer, which a micro tree breaks by construction.
-TEST_CASE("Tsunami micro branch serves the snug overhang behind the column",
-          "[SupportMaterial][TsunamiSupport][MicroBranch][SnugOverhang]")
-{
-    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.set_key_value("enable_support", new ConfigOptionBool(true));
-    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
-    config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
-    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
-    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("support_threshold_angle", new ConfigOptionInt(30));
-    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
-    config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(0.45, false));
-    config.set_key_value("wall_loops", new ConfigOptionInt(6));
-    config.set_key_value("sparse_infill_density", new ConfigOptionPercent(0.));
-    config.set_key_value("wall_generator",
-                         new ConfigOptionEnum<PerimeterGeneratorType>(PerimeterGeneratorType::Classic));
-    config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(45.));
-    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(true));
-    config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(4.));
-    config.set_key_value("tsunami_rib_spacing", new ConfigOptionFloat(1.5));
-    config.set_key_value("tsunami_min_bed_contact_area", new ConfigOptionFloat(1.));
-    config.set_key_value("tsunami_max_bed_contact_area", new ConfigOptionFloat(100.));
-    config.set_key_value("support_object_xy_distance", new ConfigOptionFloat(0.));
-    config.set_key_value("printable_area", new ConfigOptionPoints {
-        Vec2d(-60., -60.), Vec2d(60., -60.), Vec2d(60., 60.), Vec2d(-60., 60.) });
-
-    constexpr double probe_rotation = M_PI + 0.0620709604047737;
-    TriangleMesh probe = tsunami_test_circular_overhang(140, 125);
-    probe.rotate_z(float(probe_rotation));
-    // The OBJ round-trip is not incidental: it reproduces the placement the CLI
-    // path produces, and feeding the mesh straight in yields no support layers
-    // at all. Measured, not assumed -- the first version of this case did skip it
-    // and failed on an empty support stack.
-    ScopedTemporaryFile probe_file(".obj");
-    probe.WriteOBJFile(probe_file.string().c_str());
-    TriangleMesh imported_probe;
-    ObjInfo obj_info;
-    std::string import_message;
-    REQUIRE(load_obj(probe_file.string().c_str(), &imported_probe, obj_info, import_message));
-
-    Print print;
-    init_and_process_print({ imported_probe }, print, config);
-
-    const PrintObject *object = print.objects().front();
-    const auto support_layers = object->support_layers();
-    REQUIRE_FALSE(support_layers.empty());
-
-    const SupportLayer *last_active_layer = nullptr;
-    size_t last_active_layer_index = 0;
-    size_t layers_with_multiple_entities = 0;
-    for (size_t layer_index = 0; layer_index < support_layers.size(); ++layer_index) {
-        const SupportLayer *support_layer = support_layers[layer_index];
-        if (support_layer->support_fills.empty())
-            continue;
-        last_active_layer = support_layer;
-        last_active_layer_index = layer_index;
-        if (support_layer->support_fills.entities.size() > 1)
-            ++layers_with_multiple_entities;
-    }
-    REQUIRE(last_active_layer != nullptr);
-    // A micro tree is a second entity on the layers it occupies. Without this the
-    // case would pass on a plan that quietly emitted no trees at all.
-    CHECK(layers_with_multiple_entities > 0);
-
-    Polygon required_contact_polygon =
-        tsunami_test_annular_sector(12., 18., -1.2, 0.05);
-    required_contact_polygon.rotate(probe_rotation);
-    Polygon supported_column = tsunami_test_circle(2.5, 48);
-    supported_column.translate(Point(scale_(15.5), scale_(0.)));
-    supported_column.rotate(probe_rotation);
-    const ExPolygons required_contact = diff_ex(
-        ExPolygons { ExPolygon(std::move(required_contact_polygon)) },
-        ExPolygons { ExPolygon(std::move(supported_column)) });
-    REQUIRE_FALSE(required_contact.empty());
-
-    const auto *last_multipath = dynamic_cast<const ExtrusionMultiPath *>(
-        last_active_layer->support_fills.entities.front());
-    REQUIRE(last_multipath != nullptr);
-    REQUIRE_FALSE(last_multipath->paths.empty());
-    const double maximum_unsupported_span =
-        0.5 * config.option<ConfigOptionFloat>("tsunami_rib_spacing")->value +
-        0.5 * last_multipath->paths.front().width;
-    ExPolygons load_bearing_footprint = last_active_layer->support_islands;
-    expolygons_append(load_bearing_footprint, object->layers()[last_active_layer_index]->lslices);
-    load_bearing_footprint = union_ex(load_bearing_footprint);
-    ExPolygons uncovered_contact = diff_ex(
-        required_contact,
-        offset_ex(load_bearing_footprint,
-                  float(scale_(maximum_unsupported_span) + SCALED_EPSILON),
-                  ClipperLib::jtRound));
-    remove_small_and_small_holes(
-        uncovered_contact, double(SCALED_EPSILON) * double(SCALED_EPSILON));
-    CAPTURE(std::abs(area(required_contact)) * SCALING_FACTOR * SCALING_FACTOR);
-    CAPTURE(std::abs(area(uncovered_contact)) * SCALING_FACTOR * SCALING_FACTOR);
-    // The same analytic sector and the same 99.9 % bar the macro-only case uses,
-    // so the two are directly comparable and this one records that micro clears
-    // what rigid parallel branches alone cannot.
-    CHECK(std::abs(area(uncovered_contact)) <= 0.001 * std::abs(area(required_contact)));
-
-    const std::string output = gcode(print);
-    CHECK(output.find("support_type = tsunami(auto)") != std::string::npos);
-    CHECK(output.find(";TYPE:Support") != std::string::npos);
-}
-
-TEST_CASE("Tsunami terminal ring feeds local tree tips into a separate interface stack",
-          "[SupportMaterial][TsunamiSupport][MicroTree][Interface]")
-{
-    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.set_key_value("enable_support", new ConfigOptionBool(true));
-    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
-    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
-    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("support_threshold_angle", new ConfigOptionInt(30));
-    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(3));
-    config.set_key_value("support_interface_pattern",
-                         new ConfigOptionEnum<SupportMaterialInterfacePattern>(smipRectilinear));
-    config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(45.));
-    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(true));
-    config.set_key_value("tsunami_micro_branch_angle", new ConfigOptionFloat(25.));
-    config.set_key_value("tsunami_micro_branch_size", new ConfigOptionFloat(2.5));
-    config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(4.));
-    config.set_key_value("tsunami_rib_spacing", new ConfigOptionFloat(1.5));
-    config.set_key_value("tsunami_min_bed_contact_area", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_max_bed_contact_area", new ConfigOptionFloat(200.));
-    config.set_key_value("support_object_xy_distance", new ConfigOptionFloat(0.));
-    config.set_key_value("printable_area", new ConfigOptionPoints {
-        Vec2d(-60., -60.), Vec2d(60., -60.), Vec2d(60., 60.), Vec2d(-60., 60.) });
-
-    Print print;
-    init_and_process_print({
-        tsunami_test_circular_overhang(110, 95, 17., 19., -0.95, -0.8) }, print, config);
-    const PrintObject *object = print.objects().front();
-    const auto support_layers = object->support_layers();
-    REQUIRE_FALSE(support_layers.empty());
-
-    const std::vector<size_t> interface_layers =
-        support_layers_with_role(print, erSupportMaterialInterface);
-    REQUIRE(interface_layers.size() == 3);
-    REQUIRE(interface_layers.front() > 0);
-    for (size_t sequence = 0; sequence < interface_layers.size(); ++sequence) {
-        const size_t layer_index = interface_layers[sequence];
-        CHECK(layer_index == interface_layers.front() + sequence);
-        CHECK(support_layers[layer_index]->support_fills.no_sort);
-        CHECK_FALSE(collection_has_role(
-            support_layers[layer_index]->support_fills, erSupportMaterial));
-        CHECK(intersection_ex(support_layers[layer_index]->support_islands,
-                              object->layers()[layer_index]->lslices).empty());
-    }
-
-    const SupportLayer *tree_tip_layer = support_layers[interface_layers.front() - 1];
-    CHECK(collection_has_closed_path_with_role(
-        tree_tip_layer->support_fills, erSupportMaterial));
-    CHECK_FALSE(collection_has_role(
-        tree_tip_layer->support_fills, erSupportMaterialInterface));
-}
-
-TEST_CASE("Tsunami covers every overhang of a multi-column model with complex cross-sections",
-          "[SupportMaterial][TsunamiSupport][ComplexModel]")
-{
-    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.set_key_value("enable_support", new ConfigOptionBool(true));
-    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
-    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
-    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
-    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("support_threshold_angle", new ConfigOptionInt(30));
-    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
-    config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(45.));
-    config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_rib_spacing", new ConfigOptionFloat(1.5));
-    config.set_key_value("tsunami_min_bed_contact_area", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_max_bed_contact_area", new ConfigOptionFloat(200.));
-    config.set_key_value("support_object_xy_distance", new ConfigOptionFloat(0.));
-    config.set_key_value("printable_area", new ConfigOptionPoints {
-        Vec2d(-60., -60.), Vec2d(60., -60.), Vec2d(60., 60.), Vec2d(-60., 60.) });
-
-    const std::array<std::array<size_t, 4>, 2> schedules {{
-        {{ 60, 60, 60, 60 }},
-        {{ 35, 50, 65, 80 }}
-    }};
-    for (size_t schedule_index = 0; schedule_index < schedules.size(); ++schedule_index) {
-        INFO("complex cross-section schedule " << schedule_index);
-        TsunamiComplexOverhang fixture = tsunami_test_complex_overhang(schedules[schedule_index]);
-        Print print;
-        init_and_process_print({ fixture.mesh }, print, config);
-
-        const PrintObject *object = print.objects().front();
-        const auto support_layers = object->support_layers();
-        REQUIRE_FALSE(support_layers.empty());
-        const SupportLayer *root_layer = nullptr;
-        for (const SupportLayer *layer : support_layers) {
-            if (!layer->support_fills.empty()) {
-                root_layer = layer;
-                break;
-            }
-        }
-        REQUIRE(root_layer != nullptr);
-
-        CHECK(object->layers().front()->lslices.size() == 4);
-        size_t final_hole_count = 0;
-        for (const ExPolygon &region : object->layers().back()->lslices)
-            final_hole_count += region.holes.size();
-        CHECK(final_hole_count > 0);
-
-        struct DetectedOverhang {
-            size_t layer_index;
-            ExPolygon region;
-        };
-        std::vector<DetectedOverhang> detected_overhangs;
-        const double threshold_radians = M_PI / 6.;
-        for (size_t layer_index = 1; layer_index < object->layers().size(); ++layer_index) {
-            const double height = object->layers()[layer_index]->print_z
-                                - object->layers()[layer_index - 1]->print_z;
-            const ExPolygons supported = offset_ex(
-                object->layers()[layer_index - 1]->lslices, scale_(height / std::tan(threshold_radians)));
-            for (ExPolygon &overhang : diff_ex(object->layers()[layer_index]->lslices, supported))
-                if (std::abs(overhang.area()) > 1.)
-                    detected_overhangs.push_back({ layer_index, std::move(overhang) });
-        }
-        REQUIRE(detected_overhangs.size() >= fixture.target_regions.size());
-        // Removed: one entity per detected overhang. detected_overhangs counts
-        // every overhang fragment on every layer, and one trunk legitimately
-        // serves many of them, so the inequality had no reason to hold -- it read
-        // 2 against 5 here. What it was standing in for is checked directly by
-        // the per-overhang loop below.
-        for (size_t target_index = 0; target_index < detected_overhangs.size(); ++target_index) {
-            INFO("detected complex overhang " << target_index);
-            const DetectedOverhang &target = detected_overhangs[target_index];
-            REQUIRE(target.layer_index > 0);
-            // Find the support layer that actually serves this overhang by print_z
-            // rather than by index arithmetic. Support stops one object layer below
-            // the overhang because of the Z gap, so `layer_index - 1` runs off the
-            // end for the topmost overhang -- it read 60 against 59 support layers.
-            // The same index bug was fixed in the hollow gear fixture earlier.
-            const double target_print_z = object->layers()[target.layer_index]->print_z;
-            const SupportLayer *serving_layer = nullptr;
-            for (const SupportLayer *candidate : support_layers) {
-                if (candidate->print_z >= target_print_z - EPSILON)
-                    break;
-                serving_layer = candidate;
-            }
-            REQUIRE(serving_layer != nullptr);
-            CHECK_FALSE(intersection_ex(
-                serving_layer->support_islands, ExPolygons { target.region }).empty());
-        }
-        CHECK(root_layer->support_islands.size() >= fixture.target_regions.size());
-
-        REQUIRE(support_layers.size() <= object->layers().size());
-        for (size_t layer_index = 0; layer_index < support_layers.size(); ++layer_index) {
-            const SupportLayer *support_layer = support_layers[layer_index];
-            if (support_layer->support_fills.empty())
-                continue;
-            CHECK(support_layer->support_fills.no_sort);
-            CHECK(intersection_ex(support_layer->support_islands,
-                                  object->layers()[layer_index]->lslices).empty());
-        }
-    }
-}
-
-TEST_CASE("Tsunami covers every quadrant of a hollow gear overhang",
-          "[SupportMaterial][TsunamiSupport][ComplexModel][ThroughHole]")
-{
-    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.set_key_value("enable_support", new ConfigOptionBool(true));
-    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
-    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
-    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
-    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("support_threshold_angle", new ConfigOptionInt(30));
-    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
-    config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(45.));
-    config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_rib_spacing", new ConfigOptionFloat(1.5));
-    config.set_key_value("tsunami_min_bed_contact_area", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_max_bed_contact_area", new ConfigOptionFloat(400.));
-    config.set_key_value("support_object_xy_distance", new ConfigOptionFloat(0.));
-    config.set_key_value("printable_area", new ConfigOptionPoints {
-        Vec2d(-60., -60.), Vec2d(60., -60.), Vec2d(60., 60.), Vec2d(-60., 60.) });
-
-    Print print;
-    init_and_process_print({ tsunami_test_hollow_gear_overhang() }, print, config);
-    const PrintObject *object = print.objects().front();
-    REQUIRE(object->layers().front()->lslices.size() == 1);
-    CHECK(object->layers().front()->lslices.front().holes.size() == 1);
-    CHECK(object->layers().back()->lslices.front().holes.size() == 1);
-
-    size_t target_layer = 0;
-    ExPolygon target;
-    double target_area = 0.;
-    for (size_t layer_index = 1; layer_index < object->layers().size(); ++layer_index) {
-        const double height = object->layers()[layer_index]->print_z
-                            - object->layers()[layer_index - 1]->print_z;
-        const ExPolygons supported = offset_ex(
-            object->layers()[layer_index - 1]->lslices, scale_(height / std::tan(M_PI / 6.)));
-        for (const ExPolygon &overhang : diff_ex(object->layers()[layer_index]->lslices, supported)) {
-            const double area = std::abs(overhang.area());
-            if (area > target_area) {
-                target_area = area;
-                target_layer = layer_index;
-                target = overhang;
-            }
-        }
-    }
-    REQUIRE(target_area > 1.);
-    REQUIRE(target_layer > 0);
-
-    const auto support_layers = object->support_layers();
-    REQUIRE_FALSE(support_layers.empty());
-    // The contact layer is the topmost support layer, not support_layers[target_layer - 1].
-    // Support stops one object layer below the overhang's bottom because of the Z
-    // gap, so that index is out of range: the overhang here spans z 12.0-12.2 and
-    // the contact lands at 11.8, giving 59 support layers against the 60 that
-    // index needs. Measured three ways -- Tsunami, the Normal fallback, and with
-    // support_top_z_distance forced to 0, which does not move the contact at all --
-    // so the old index was unsatisfiable for any support generator. The checks
-    // below compare the root and contact extrusions to confirm the trunk is
-    // vertically unchanged, and the topmost support layer serves that intent.
-    const SupportLayer *root_layer = support_layers.front();
-    const SupportLayer *contact_layer = support_layers.back();
-    REQUIRE(root_layer->support_fills.no_sort);
-    REQUIRE(contact_layer->support_fills.no_sort);
-    CHECK(intersection_ex(root_layer->support_islands, object->layers().front()->lslices).empty());
-    REQUIRE(root_layer->support_fills.entities.size() == contact_layer->support_fills.entities.size());
-    // One continuous extrusion per trunk per layer, on both the root layer and the
-    // layer meeting the overhang. This used to additionally require the two to be
-    // the same polyline, which cannot hold here: contract section 5 keeps geometry
-    // vertically unchanged only through Trunk Height, and this fixture sets
-    // tsunami_trunk_height to 0, so branches add geometry above the root. Measured:
-    // the root layer emits 49 and 61 sections, the contact layer 121 and 151. The
-    // old check also cast every entity to ExtrusionPath, which never succeeds --
-    // all 118 emissions on this fixture are ExtrusionMultiPath, because the root
-    // zigzag alone carries 98 semantic anchors.
-    for (size_t branch_index = 0; branch_index < root_layer->support_fills.entities.size(); ++branch_index) {
-        const ExtrusionEntity *root_entity = root_layer->support_fills.entities[branch_index];
-        const ExtrusionEntity *contact_entity = contact_layer->support_fills.entities[branch_index];
-        REQUIRE(root_entity != nullptr);
-        REQUIRE(contact_entity != nullptr);
-        CHECK(root_entity->length() > 0);
-        CHECK(contact_entity->length() > 0);
-    }
-
-    const std::array<Polygons, 4> quadrants {{
-        support_test_rectangle(-30., -30., 0., 0.),
-        support_test_rectangle(0., -30., 30., 0.),
-        support_test_rectangle(-30., 0., 0., 30.),
-        support_test_rectangle(0., 0., 30., 30.)
-    }};
-    for (size_t quadrant_index = 0; quadrant_index < quadrants.size(); ++quadrant_index) {
-        INFO("hollow gear quadrant " << quadrant_index);
-        const ExPolygons quadrant_target = intersection_ex(ExPolygons { target }, quadrants[quadrant_index]);
-        REQUIRE_FALSE(quadrant_target.empty());
-        CHECK_FALSE(intersection_ex(contact_layer->support_islands, quadrant_target).empty());
-    }
-
-    const std::string output = gcode(print);
-    CHECK(output.find("support_type = tsunami(auto)") != std::string::npos);
-    CHECK(output.find(";TYPE:Support") != std::string::npos);
-
-    // How much of each quadrant is within bridging distance of support. The
-    // non-emptiness check above cannot tell adequate support from a collapse:
-    // it passed on a plan that left 93 % of a target uncovered. This one is a
-    // number, and the dilation is the test's own rib spacing rather than the
-    // planner's internal bridge constant, so the planner is not grading itself.
-    //
-    // Measured 2026-08-15, macro-only: 0.983 0.983 0.958 0.941. The gate is set
-    // below the worst of those with room, and a collapsed plan scores far under
-    // it -- the two-branch plan that motivated this covered under a tenth.
-    for (size_t quadrant_index = 0; quadrant_index < quadrants.size(); ++quadrant_index) {
-        INFO("hollow gear quadrant " << quadrant_index);
-        const ExPolygons quadrant_target = intersection_ex(ExPolygons { target }, quadrants[quadrant_index]);
-        const ExPolygons reachable = offset_ex(contact_layer->support_islands, scale_(1.5));
-        const double missed = std::abs(area(diff_ex(quadrant_target, reachable)));
-        CHECK(1. - missed / std::abs(area(quadrant_target)) > 0.90);
-    }
-}
-
-TEST_CASE("Tsunami micro branch reaches the hollow gear overhang",
-          "[SupportMaterial][TsunamiSupport][ComplexModel][MicroBranch]")
-{
-    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.set_key_value("enable_support", new ConfigOptionBool(true));
-    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
-    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
-    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("support_threshold_angle", new ConfigOptionInt(30));
-    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
-    config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(45.));
-    config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_rib_spacing", new ConfigOptionFloat(1.5));
-    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(true));
-    config.set_key_value("tsunami_min_bed_contact_area", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_max_bed_contact_area", new ConfigOptionFloat(400.));
-    config.set_key_value("support_object_xy_distance", new ConfigOptionFloat(0.));
-    config.set_key_value("printable_area", new ConfigOptionPoints {
-        Vec2d(-60., -60.), Vec2d(60., -60.), Vec2d(60., 60.), Vec2d(-60., 60.) });
-
-    Print print;
-    init_and_process_print({ tsunami_test_hollow_gear_overhang() }, print, config);
-    const PrintObject *object = print.objects().front();
-
-    size_t target_layer = 0;
-    ExPolygon target;
-    double target_area = 0.;
-    for (size_t layer_index = 1; layer_index < object->layers().size(); ++layer_index) {
-        const double height = object->layers()[layer_index]->print_z
-                            - object->layers()[layer_index - 1]->print_z;
-        const ExPolygons supported = offset_ex(
-            object->layers()[layer_index - 1]->lslices, scale_(height / std::tan(M_PI / 6.)));
-        for (const ExPolygon &overhang : diff_ex(object->layers()[layer_index]->lslices, supported)) {
-            const double area_value = std::abs(overhang.area());
-            if (area_value > target_area) {
-                target_area = area_value;
-                target_layer = layer_index;
-                target = overhang;
-            }
-        }
-    }
-    REQUIRE(target_area > 1.);
-    REQUIRE(target_layer > 0);
-
-    const auto support_layers = object->support_layers();
-    REQUIRE_FALSE(support_layers.empty());
-    const SupportLayer *root_layer = support_layers.front();
-    const SupportLayer *contact_layer = support_layers.back();
-    CHECK(intersection_ex(root_layer->support_islands, object->layers().front()->lslices).empty());
-
-    // The macro-only fixture requires the root and contact layers to carry the
-    // same number of extrusions. Micro trees add contact-layer geometry, so the
-    // relation here is the opposite one, and that difference is the evidence the
-    // trees were emitted at all rather than silently skipped.
-    CHECK(contact_layer->support_fills.entities.size()
-          > root_layer->support_fills.entities.size());
-
-    // Micro's whole purpose is reaching what the macro branches leave, so it is
-    // held to a higher bar than the macro-only fixture's 0.90. Measured
-    // 2026-08-15: 0.998 0.997 0.990 0.976 against macro-only's 0.983 0.983 0.958
-    // 0.941 -- better in every quadrant, which is the evidence that micro trees
-    // improve the result rather than merely being emitted.
-    const std::array<Polygons, 4> quadrants {{
-        support_test_rectangle(-30., -30., 0., 0.),
-        support_test_rectangle(0., -30., 30., 0.),
-        support_test_rectangle(-30., 0., 0., 30.),
-        support_test_rectangle(0., 0., 30., 30.)
-    }};
-    for (size_t quadrant_index = 0; quadrant_index < quadrants.size(); ++quadrant_index) {
-        INFO("hollow gear micro quadrant " << quadrant_index);
-        const ExPolygons quadrant_target = intersection_ex(ExPolygons { target }, quadrants[quadrant_index]);
-        REQUIRE_FALSE(quadrant_target.empty());
-        const ExPolygons reachable = offset_ex(contact_layer->support_islands, scale_(1.5));
-        const double missed = std::abs(area(diff_ex(quadrant_target, reachable)));
-        CHECK(1. - missed / std::abs(area(quadrant_target)) > 0.95);
-    }
-
-    const std::string output = gcode(print);
-    CHECK(output.find("support_type = tsunami(auto)") != std::string::npos);
-    CHECK(output.find(";TYPE:Support") != std::string::npos);
-}
-
-TEST_CASE("Tsunami slices a corpus of complex upstream test models",
-          "[SupportMaterial][TsunamiSupport][ComplexModel][ModelCorpus]")
-{
-    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.set_key_value("enable_support", new ConfigOptionBool(true));
-    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTsunamiAuto));
-    config.set_key_value("tsunami_micro_branch_enabled", new ConfigOptionBool(false));
-    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(false));
-    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
-    config.set_key_value("support_threshold_angle", new ConfigOptionInt(89));
-    config.set_key_value("bridge_no_support", new ConfigOptionBool(false));
-    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
-    config.set_key_value("tsunami_branch_angle", new ConfigOptionFloat(45.));
-    config.set_key_value("tsunami_trunk_height", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_rib_spacing", new ConfigOptionFloat(1.5));
-    config.set_key_value("tsunami_min_bed_contact_area", new ConfigOptionFloat(0.));
-    config.set_key_value("tsunami_max_bed_contact_area", new ConfigOptionFloat(400.));
-    config.set_key_value("support_object_xy_distance", new ConfigOptionFloat(0.));
-    config.set_key_value("printable_area", new ConfigOptionPoints {
-        Vec2d(-150., -150.), Vec2d(150., -150.), Vec2d(150., 150.), Vec2d(-150., 150.) });
-
-    const std::array<std::pair<TestMesh, const char *>, 6> models {{
-        { TestMesh::bridge_with_hole, "bridge_with_hole" },
-        { TestMesh::cube_with_concave_hole, "cube_with_concave_hole" },
-        { TestMesh::sloping_hole, "sloping_hole" },
-        { TestMesh::two_hollow_squares, "two_hollow_squares" },
-        { TestMesh::gt2_teeth, "gt2_teeth" },
-        { TestMesh::ipadstand, "ipadstand" }
-    }};
-    size_t models_with_support = 0;
-    size_t native_tsunami_models = 0;
-    for (const auto &[model_id, model_name] : models) {
-        INFO("upstream complex model " << model_name);
-        Print print;
-        init_and_process_print({ model_id }, print, config);
-        REQUIRE(print.objects().size() == 1);
-        const PrintObject *object = print.objects().front();
-        REQUIRE_FALSE(object->layers().empty());
-
-        bool has_support = false;
-        bool has_native_tsunami = false;
-        const auto support_layers = object->support_layers();
-        REQUIRE(support_layers.size() <= object->layers().size());
-        for (size_t layer_index = 0; layer_index < support_layers.size(); ++layer_index) {
-            const SupportLayer *support_layer = support_layers[layer_index];
-            if (support_layer->support_fills.empty())
-                continue;
-            has_support = true;
-            has_native_tsunami |= support_layer->support_fills.no_sort;
-            if (support_layer->support_fills.no_sort)
-                CHECK(intersection_ex(support_layer->support_islands,
-                                      object->layers()[layer_index]->lslices).empty());
-        }
-        models_with_support += has_support ? 1 : 0;
-        native_tsunami_models += has_native_tsunami ? 1 : 0;
-
-        const std::string output = gcode(print);
-        CHECK_FALSE(output.empty());
-        CHECK(output.find("support_type = tsunami(auto)") != std::string::npos);
-    }
-    CHECK(models_with_support >= 3);
-    CHECK(native_tsunami_models >= 1);
 }
 
 template <class PolylineType>
@@ -1340,6 +501,101 @@ TEST_CASE("Mixed support settings round trip with stable enum values", "[Support
     CHECK(restored.opt_bool("mixed_selective_merge"));
 }
 
+TEST_CASE("Removed Tsunami support settings migrate safely", "[SupportMaterial][Config][Legacy]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+
+    const auto &support_types = ConfigOptionEnum<SupportType>::get_enum_values();
+    CHECK(support_types.find("tsunami(auto)") == support_types.end());
+    CHECK(support_types.at("mixed(auto)") == stMixedAuto);
+    CHECK(support_types.at("resin(auto)") == stResinAuto);
+
+    REQUIRE_NOTHROW(config.set_deserialize_strict("support_type", "tsunami(auto)"));
+    CHECK(config.opt_enum<SupportType>("support_type") == stNormalAuto);
+    CHECK(config.opt_serialize("support_type") == "normal(auto)");
+
+    for (const char *key : {
+             "tsunami_branch_angle",
+             "tsunami_micro_branch_enabled",
+             "tsunami_micro_branch_angle",
+             "tsunami_micro_branch_size",
+             "tsunami_trunk_height",
+             "tsunami_rib_spacing",
+             "tsunami_trunk_thickness",
+             "tsunami_min_bed_contact_area",
+             "tsunami_max_bed_contact_area",
+             "tsunami_branch_minimum_spacing",
+         }) {
+        CHECK_NOTHROW(config.set_deserialize_strict(key, "0"));
+        CHECK(config.option(key) == nullptr);
+    }
+}
+
+TEST_CASE("Normal and tree support walls plus Cura joining round trip independently",
+          "[SupportMaterial][Config]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "support_wall_count", 2 },
+        { "tree_support_wall_count", 5 },
+        { "cura_support_join_distance", 1.75 }
+    });
+
+    CHECK(config.opt_int("support_wall_count") == 2);
+    CHECK(config.opt_int("tree_support_wall_count") == 5);
+    CHECK(config.opt_float("cura_support_join_distance") == Catch::Approx(1.75));
+
+    DynamicPrintConfig restored = DynamicPrintConfig::full_print_config();
+    for (const char *key : {
+             "support_wall_count", "tree_support_wall_count", "cura_support_join_distance" })
+        restored.set_deserialize_strict(key, config.opt_serialize(key));
+    CHECK(restored.opt_int("support_wall_count") == 2);
+    CHECK(restored.opt_int("tree_support_wall_count") == 5);
+    CHECK(restored.opt_float("cura_support_join_distance") == Catch::Approx(1.75));
+
+    DynamicPrintConfig legacy = DynamicPrintConfig::full_print_config();
+    REQUIRE_NOTHROW(legacy.set_deserialize_strict("support_wall_loops", "3"));
+    // The pre-2.5.0.0.7 Magpie contract named support_wall_loops as the Tree
+    // support wall setting. Deserializing an old project must preserve that
+    // channel instead of silently applying the value to normal support.
+    CHECK(legacy.opt_int("tree_support_wall_count") == 3);
+    CHECK(legacy.opt_int("support_wall_count") == 0);
+}
+
+TEST_CASE("Normal support wall count zero disables walls on the bed layer",
+          "[SupportMaterial][NormalWallsAudit][Integration]")
+{
+    const auto support_has_closed_wall = [](int wall_count) {
+        TriangleMesh fixture = make_cube(12., 20., 4.);
+        TriangleMesh ceiling = make_cube(32., 20., 2.);
+        ceiling.translate(0.f, 0.f, 20.f);
+        fixture.merge(ceiling);
+
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormalAuto));
+        config.set_key_value("support_base_pattern", new ConfigOptionEnum<SupportMaterialPattern>(smpRectilinear));
+        config.set_key_value("support_wall_count", new ConfigOptionInt(wall_count));
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4 }));
+        config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
+        config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+        config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
+        config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+
+        Print print;
+        init_and_process_print({ fixture }, print, config);
+        REQUIRE(print.objects().size() == 1);
+        const auto support_layers = print.objects().front()->support_layers();
+        REQUIRE_FALSE(support_layers.empty());
+        return std::any_of(support_layers.begin(), support_layers.end(), [](const SupportLayer *layer) {
+            return collection_has_closed_path_with_role(layer->support_fills, erSupportMaterial);
+        });
+    };
+
+    CHECK_FALSE(support_has_closed_wall(0));
+    CHECK(support_has_closed_wall(2));
+}
+
 TEST_CASE("Mixed support planner uses inclusive coverage boundaries", "[SupportMaterial][Mixed][Planner]")
 {
     std::vector<Polygons> demand(2);
@@ -1373,7 +629,7 @@ TEST_CASE("Mixed support planner uses inclusive coverage boundaries", "[SupportM
     CHECK(fully_reachable.decisions().front().channel == MixedSupportChannel::Normal);
 }
 
-TEST_CASE("Mixed support planner joins bridged neighbors but not skipped layers", "[SupportMaterial][Mixed][Planner]")
+TEST_CASE("Mixed support planner preserves vanilla per-layer support islands", "[SupportMaterial][Mixed][Planner]")
 {
     const coord_t connection_width = scale_(0.4); // Support-demand connection distance in XY millimetres.
     std::vector<Polygons> split_demand(2);
@@ -1391,18 +647,20 @@ TEST_CASE("Mixed support planner joins bridged neighbors but not skipped layers"
     bridged[1] = support_test_rectangle(0., 0., 2., 2.);
     append(bridged[1], support_test_rectangle(6., 0., 8., 2.));
     bridged[2] = support_test_rectangle(1.5, 0., 6.5, 2.);
-    const MixedSupportPlan one_component = MixedSupportPlan::build_for_geometry(
+    const MixedSupportPlan vanilla_islands = MixedSupportPlan::build_for_geometry(
         bridged, std::vector<Polygons>(3), connection_width, 100.);
-    CHECK(one_component.decisions().size() == 1);
+    // The bridge on layer 2 must not reconnect the two vanilla islands on
+    // layer 1 into a single Mixed decision.
+    CHECK(vanilla_islands.decisions().size() == 3);
 
     std::vector<Polygons> reversed = bridged;
     std::reverse(reversed[1].begin(), reversed[1].end());
     const MixedSupportPlan reversed_plan = MixedSupportPlan::build_for_geometry(
         reversed, std::vector<Polygons>(3), connection_width, 100.);
-    REQUIRE(reversed_plan.decisions().size() == one_component.decisions().size());
+    REQUIRE(reversed_plan.decisions().size() == vanilla_islands.decisions().size());
     for (size_t layer_id = 0; layer_id < bridged.size(); ++layer_id) {
-        CHECK(same_polygon_set(reversed_plan.normal_mask()[layer_id], one_component.normal_mask()[layer_id]));
-        CHECK(same_polygon_set(reversed_plan.tree_mask()[layer_id], one_component.tree_mask()[layer_id]));
+        CHECK(same_polygon_set(reversed_plan.normal_mask()[layer_id], vanilla_islands.normal_mask()[layer_id]));
+        CHECK(same_polygon_set(reversed_plan.tree_mask()[layer_id], vanilla_islands.tree_mask()[layer_id]));
     }
 
     std::vector<Polygons> skipped(3);
@@ -1413,7 +671,7 @@ TEST_CASE("Mixed support planner joins bridged neighbors but not skipped layers"
     CHECK(two_components.decisions().size() == 2);
 }
 
-TEST_CASE("Mixed selective merge partitions only below-threshold components", "[SupportMaterial][Mixed][Planner]")
+TEST_CASE("Mixed selective merge gives reachable demand to normal support first", "[SupportMaterial][Mixed][Planner]")
 {
     std::vector<Polygons> demand(2);
     demand[1] = support_test_rectangle(0., 0., 10., 10.);
@@ -1443,17 +701,17 @@ TEST_CASE("Mixed selective merge partitions only below-threshold components", "[
 
     const MixedSupportPlan exact = MixedSupportPlan::build_for_geometry(
         demand, shadow, connection_width, 80., true);
-    CHECK(exact.decisions().front().channel == MixedSupportChannel::Normal);
-    CHECK_FALSE(exact.decisions().front().selectively_split);
-    CHECK(same_polygon_set(exact.normal_mask()[1], demand[1]));
-    CHECK(exact.tree_mask()[1].empty());
+    CHECK(exact.decisions().front().channel == MixedSupportChannel::Mixed);
+    CHECK(exact.decisions().front().selectively_split);
+    CHECK(same_polygon_set(exact.normal_mask()[1], support_test_rectangle(2., 0., 10., 10.)));
+    CHECK(same_polygon_set(exact.tree_mask()[1], support_test_rectangle(0., 0., 2., 10.)));
 
     const MixedSupportPlan zero = MixedSupportPlan::build_for_geometry(
         demand, shadow, connection_width, 0., true);
-    CHECK(zero.decisions().front().channel == MixedSupportChannel::Normal);
-    CHECK_FALSE(zero.decisions().front().selectively_split);
-    CHECK(same_polygon_set(zero.normal_mask()[1], demand[1]));
-    CHECK(zero.tree_mask()[1].empty());
+    CHECK(zero.decisions().front().channel == MixedSupportChannel::Mixed);
+    CHECK(zero.decisions().front().selectively_split);
+    CHECK(same_polygon_set(zero.normal_mask()[1], support_test_rectangle(2., 0., 10., 10.)));
+    CHECK(same_polygon_set(zero.tree_mask()[1], support_test_rectangle(0., 0., 2., 10.)));
 }
 
 TEST_CASE("Mixed painted channels override automatic assignment safely", "[SupportMaterial][Mixed][Planner][Paint]")
@@ -1483,7 +741,8 @@ TEST_CASE("Mixed painted channels override automatic assignment safely", "[Suppo
     CHECK(same_polygon_set(union_(recombined), demand[1]));
 }
 
-TEST_CASE("Mixed selective merge generates both support channels", "[SupportMaterial][Mixed][Integration]")
+TEST_CASE("Mixed selective merge generates both support channels",
+          "[SupportMaterial][Mixed][Integration][MixedIndependent]")
 {
     const auto make_fixture = []() {
         // Independent analytic fixture: a 20x10 mm ceiling starts at Z=20 mm. An 8x10 mm
@@ -1509,6 +768,8 @@ TEST_CASE("Mixed selective merge generates both support channels", "[SupportMate
                 new ConfigOptionEnum<MixedTreeSupportStyle>(tree_style));
             config.set_key_value("mixed_normal_coverage_threshold", new ConfigOptionPercent(80.));
             config.set_key_value("mixed_selective_merge", new ConfigOptionBool(true));
+            config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(false));
+            config.set_key_value("support_expansion", new ConfigOptionFloat(0.));
             config.set_key_value("layer_height", new ConfigOptionFloat(0.4));
             config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
             config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
@@ -1535,6 +796,96 @@ TEST_CASE("Mixed selective merge generates both support channels", "[SupportMate
     }
 }
 
+TEST_CASE("Mixed organic tree wall count changes emitted support paths",
+          "[SupportMaterial][Mixed][Tree][Walls][Integration][MixedIndependent][MixedTreeWalls]")
+{
+    const auto make_fixture = []() {
+        TriangleMesh fixture = make_cube(8., 10., 10.);
+        TriangleMesh ceiling = make_cube(20., 10., 2.);
+        ceiling.translate(0.f, 0.f, 20.f);
+        fixture.merge(ceiling);
+        return fixture;
+    };
+    struct WallMetrics {
+        std::map<int, double> path_length_by_layer;
+        size_t maximum_grouped_tree_wall_paths { 0 };
+    };
+    const auto support_metrics = [&](int wall_count, bool selective_merge) {
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stMixedAuto));
+        config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
+        config.set_key_value("mixed_normal_support_generator",
+            new ConfigOptionEnum<MixedNormalSupportGenerator>(mnsgCura));
+        config.set_key_value("mixed_tree_support_style",
+            new ConfigOptionEnum<MixedTreeSupportStyle>(mtssOrganic));
+        config.set_key_value("mixed_normal_coverage_threshold", new ConfigOptionPercent(80.));
+        config.set_key_value("mixed_selective_merge", new ConfigOptionBool(selective_merge));
+        config.set_key_value("support_threshold_angle", new ConfigOptionInt(60));
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4 }));
+        config.set_key_value("support_wall_count", new ConfigOptionInt(0));
+        config.set_key_value("tree_support_wall_count", new ConfigOptionInt(wall_count));
+        config.set_key_value("tree_support_with_infill", new ConfigOptionBool(false));
+        config.set_key_value("tree_support_branch_diameter_organic", new ConfigOptionFloat(6.));
+        config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
+        config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+        config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
+        config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+        config.set_key_value("gcode_comments", new ConfigOptionBool(true));
+
+        Print print;
+        init_and_process_print({ make_fixture() }, print, config);
+        REQUIRE(print.objects().size() == 1);
+        WallMetrics metrics;
+        for (const SupportLayer *layer : print.objects().front()->support_layers()) {
+            if (!has_tree_channel(layer->support_type))
+                continue;
+            metrics.maximum_grouped_tree_wall_paths = std::max(
+                metrics.maximum_grouped_tree_wall_paths,
+                maximum_grouped_path_count_with_role(layer->support_fills, erSupportMaterial));
+        }
+
+        const std::string output = gcode(print);
+        bool support = false;
+        GCodeReader reader;
+        reader.parse_buffer(output, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+            const std::string_view comment = line.comment();
+            if (comment.find("TYPE:") != std::string_view::npos)
+                support = comment.find("TYPE:Support") != std::string_view::npos &&
+                          comment.find("interface") == std::string_view::npos;
+            if (support && line.extruding(self))
+                metrics.path_length_by_layer[int(std::lround(double(self.z()) * 1000.))] += line.dist_XY(self);
+        });
+        return metrics;
+    };
+
+    for (const bool selective_merge : { false, true }) {
+        CAPTURE(selective_merge);
+        const WallMetrics one_wall = support_metrics(1, selective_merge);
+        const WallMetrics four_walls = support_metrics(4, selective_merge);
+        double one_wall_length = 0.;
+        double four_wall_length = 0.;
+        double max_layer_ratio = 0.;
+        for (const auto &[layer_z, length] : one_wall.path_length_by_layer) {
+            one_wall_length += length;
+            const auto four = four_walls.path_length_by_layer.find(layer_z);
+            if (length > 0. && four != four_walls.path_length_by_layer.end())
+                max_layer_ratio = std::max(max_layer_ratio, four->second / length);
+        }
+        for (const auto &[layer_z, length] : four_walls.path_length_by_layer)
+            four_wall_length += length;
+        INFO("Mixed one-wall support path length: " << one_wall_length);
+        INFO("Mixed four-wall support path length: " << four_wall_length);
+        INFO("Largest per-layer four/one wall path ratio: " << max_layer_ratio);
+        INFO("One-wall maximum grouped support-wall paths: " << one_wall.maximum_grouped_tree_wall_paths);
+        INFO("Four-wall maximum grouped support-wall paths: " << four_walls.maximum_grouped_tree_wall_paths);
+        CHECK(one_wall.maximum_grouped_tree_wall_paths >= 1);
+        CHECK(four_walls.maximum_grouped_tree_wall_paths >= 4);
+        CHECK(four_wall_length > one_wall_length * 1.02);
+        CHECK(max_layer_ratio > 1.1);
+    }
+}
+
 TEST_CASE("Mixed auto dense-path stress remains responsive",
           "[.MixedPerformance][SupportMaterial][Mixed][Performance]")
 {
@@ -1546,6 +897,7 @@ TEST_CASE("Mixed auto dense-path stress remains responsive",
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_key_value("enable_support", new ConfigOptionBool(true));
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stMixedAuto));
+    config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
     config.set_key_value("mixed_normal_support_generator",
         new ConfigOptionEnum<MixedNormalSupportGenerator>(mnsgPrusa));
     config.set_key_value("mixed_tree_support_style",
@@ -1576,6 +928,219 @@ TEST_CASE("Mixed auto dense-path stress remains responsive",
     CHECK(elapsed_seconds < 15.);
 }
 
+TEST_CASE("Mixed auto classifies Stanford Bunny vanilla islands independently",
+          "[.MixedBunny][SupportMaterial][Mixed][Integration][Bunny]")
+{
+    const boost::filesystem::path repo_root =
+        boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path();
+    const boost::filesystem::path bunny_path =
+        repo_root / "resources" / "handy_models" / "Stanford_Bunny.drc";
+    TriangleMesh bunny;
+    REQUIRE(load_drc(bunny_path.string().c_str(), &bunny));
+    REQUIRE_FALSE(bunny.empty());
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stMixedAuto));
+    config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
+    config.set_key_value("mixed_normal_support_generator",
+        new ConfigOptionEnum<MixedNormalSupportGenerator>(mnsgCura));
+    config.set_key_value("mixed_tree_support_style",
+        new ConfigOptionEnum<MixedTreeSupportStyle>(mtssOrganic));
+    config.set_key_value("mixed_normal_coverage_threshold", new ConfigOptionPercent(50.));
+    config.set_key_value("support_threshold_angle", new ConfigOptionInt(60));
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4 }));
+    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
+    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+
+    for (const bool selective_merge : { false, true }) {
+        CAPTURE(selective_merge);
+        config.set_key_value("mixed_selective_merge", new ConfigOptionBool(selective_merge));
+
+        const auto started = std::chrono::steady_clock::now();
+        Print print;
+        REQUIRE_NOTHROW(init_and_process_print({ bunny }, print, config));
+        const double elapsed_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count();
+
+        REQUIRE(print.objects().size() == 1);
+        const PrintObject *object = print.objects().front();
+        const std::vector<Polygons> demand = detect_mixed_support_demand(*object);
+        const std::vector<Polygons> shadow = buildplate_covered_by_object(*object);
+        const MixedSupportPlan fifty = MixedSupportPlan::build_for_geometry(
+            demand, shadow, scale_(0.4), 50., selective_merge);
+        INFO("Stanford Bunny selective merge: " << selective_merge);
+        INFO("Stanford Bunny Mixed processing seconds: " << elapsed_seconds);
+        INFO("Stanford Bunny Mixed decision count: " << fifty.decisions().size());
+        REQUIRE_FALSE(fifty.decisions().empty());
+        CHECK(std::all_of(fifty.decisions().begin(), fifty.decisions().end(),
+            [](const MixedSupportComponentDecision &decision) {
+                return decision.polygon_ids.size() == 1;
+            }));
+        CHECK(fifty.has_normal_demand());
+        CHECK(fifty.has_tree_demand());
+
+        long double reachable_area = 0.;
+        long double unassigned_demand_area = 0.;
+        long double channel_overlap_area = 0.;
+        long double reachable_missing_from_normal_area = 0.;
+        long double reachable_assigned_to_tree_area = 0.;
+        size_t reachable_layer_count = 0;
+        for (size_t layer_id = 0; layer_id < demand.size(); ++layer_id) {
+            const ExPolygons layer_demand = union_ex(demand[layer_id]);
+            if (layer_demand.empty())
+                continue;
+            const Polygons layer_shadow = layer_id < shadow.size() ? shadow[layer_id] : Polygons{};
+            const ExPolygons reachable = layer_shadow.empty() ? layer_demand :
+                diff_ex(layer_demand, layer_shadow);
+            const Polygons &normal = fifty.normal_mask()[layer_id];
+            const Polygons &tree = fifty.tree_mask()[layer_id];
+            Polygons assigned = normal;
+            append(assigned, tree);
+            assigned = union_(assigned);
+
+            unassigned_demand_area += area(diff_ex(layer_demand, assigned));
+            channel_overlap_area += area(intersection_ex(normal, tree));
+            if (!reachable.empty()) {
+                ++reachable_layer_count;
+                reachable_area += area(reachable);
+                const ExPolygons missing_from_normal = diff_ex(reachable, normal);
+                const ExPolygons assigned_to_tree = intersection_ex(reachable, tree);
+                reachable_missing_from_normal_area += area(missing_from_normal);
+                reachable_assigned_to_tree_area += area(assigned_to_tree);
+            }
+        }
+        const long double scaled_area_to_mm2 =
+            static_cast<long double>(SCALING_FACTOR) * static_cast<long double>(SCALING_FACTOR);
+        INFO("Stanford Bunny reachable layers: " << reachable_layer_count);
+        INFO("Stanford Bunny bed-reachable demand mm2: " <<
+            double(reachable_area * scaled_area_to_mm2));
+        INFO("Stanford Bunny unassigned demand mm2: " <<
+            double(unassigned_demand_area * scaled_area_to_mm2));
+        INFO("Stanford Bunny normal/tree overlap mm2: " <<
+            double(channel_overlap_area * scaled_area_to_mm2));
+        INFO("Stanford Bunny bed-reachable area missing from normal mm2: " <<
+            double(reachable_missing_from_normal_area * scaled_area_to_mm2));
+        INFO("Stanford Bunny bed-reachable area assigned to tree mm2: " <<
+            double(reachable_assigned_to_tree_area * scaled_area_to_mm2));
+        // Clipper may leave sub-micron boundary dust when the same integer polygon
+        // partition is unioned and differenced again. A 0.001 mm square is already
+        // far below any printable 0.4 mm extrusion; enforce that total artifact
+        // budget across the whole Bunny rather than requiring an unstable exact-empty test.
+        constexpr long double geometry_artifact_tolerance_mm2 = 1e-5L;
+        CHECK(unassigned_demand_area * scaled_area_to_mm2 <= geometry_artifact_tolerance_mm2);
+        CHECK(channel_overlap_area * scaled_area_to_mm2 <= geometry_artifact_tolerance_mm2);
+        if (selective_merge) {
+            CHECK(reachable_missing_from_normal_area * scaled_area_to_mm2 <= geometry_artifact_tolerance_mm2);
+            CHECK(reachable_assigned_to_tree_area * scaled_area_to_mm2 <= geometry_artifact_tolerance_mm2);
+        }
+
+        const auto support_layers = object->support_layers();
+        REQUIRE_FALSE(support_layers.empty());
+        CHECK(std::any_of(support_layers.begin(), support_layers.end(), [](const SupportLayer *layer) {
+            return has_normal_channel(layer->support_type);
+        }));
+        CHECK(std::any_of(support_layers.begin(), support_layers.end(), [](const SupportLayer *layer) {
+            return has_tree_channel(layer->support_type);
+        }));
+
+        const MixedSupportPlan zero = MixedSupportPlan::build_for_geometry(
+            demand, shadow, scale_(0.4), 0., selective_merge);
+        CHECK(zero.has_normal_demand());
+        CHECK(zero.has_tree_demand() == selective_merge);
+    }
+}
+
+TEST_CASE("Mixed auto worst-case Stanford Bunny planning stays bounded",
+          "[.MixedBunnyWorstCase][SupportMaterial][Mixed][Performance][Bunny]")
+{
+    const boost::filesystem::path repo_root =
+        boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path();
+    const boost::filesystem::path bunny_path =
+        repo_root / "resources" / "handy_models" / "Stanford_Bunny.drc";
+    TriangleMesh bunny;
+    REQUIRE(load_drc(bunny_path.string().c_str(), &bunny));
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stMixedAuto));
+    config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
+    config.set_key_value("mixed_normal_support_generator",
+        new ConfigOptionEnum<MixedNormalSupportGenerator>(mnsgCura));
+    config.set_key_value("mixed_tree_support_style",
+        new ConfigOptionEnum<MixedTreeSupportStyle>(mtssOrganic));
+    config.set_key_value("mixed_normal_coverage_threshold", new ConfigOptionPercent(90.));
+    config.set_key_value("mixed_selective_merge", new ConfigOptionBool(true));
+    config.set_key_value("support_threshold_angle", new ConfigOptionInt(60));
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4 }));
+    config.set_key_value("layer_height", new ConfigOptionFloat(0.16));
+    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+    config.set_key_value("cura_solid_support_raft", new ConfigOptionBool(true));
+    config.set_key_value("independent_support_layer_height", new ConfigOptionBool(true));
+    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(5));
+    config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(2));
+    config.set_key_value("support_base_pattern", new ConfigOptionEnum<SupportMaterialPattern>(smpDefault));
+    config.set_key_value("support_base_pattern_spacing", new ConfigOptionFloat(1.));
+    config.set_key_value("support_interface_pattern", new ConfigOptionEnum<SupportMaterialInterfacePattern>(smipTriangles));
+    config.set_key_value("support_interface_spacing", new ConfigOptionFloat(0.5));
+
+    const auto total_started = std::chrono::steady_clock::now();
+    Print print;
+    Model model;
+    init_print({ bunny }, print, model, config);
+    REQUIRE(print.objects().size() == 1);
+    PrintObject *object = const_cast<PrintObject *>(print.objects().front());
+    const auto slice_started = std::chrono::steady_clock::now();
+    object->slice();
+
+    const auto demand_started = std::chrono::steady_clock::now();
+    const std::vector<Polygons> demand = detect_mixed_support_demand(*object);
+    const auto shadow_started = std::chrono::steady_clock::now();
+    const std::vector<Polygons> shadow = buildplate_covered_by_object(*object);
+    const auto plan_started = std::chrono::steady_clock::now();
+    const MixedSupportPlan plan = MixedSupportPlan::build_for_geometry(
+        demand, shadow, scale_(0.4), 90., true);
+    const auto finished = std::chrono::steady_clock::now();
+
+    const auto seconds = [](auto begin, auto end) {
+        return std::chrono::duration<double>(end - begin).count();
+    };
+    INFO("demand seconds: " << seconds(demand_started, shadow_started));
+    INFO("shadow seconds: " << seconds(shadow_started, plan_started));
+    INFO("plan seconds: " << seconds(plan_started, finished));
+    INFO("layers: " << object->layer_count());
+    INFO("decisions: " << plan.decisions().size());
+    INFO("initialization seconds: " << seconds(total_started, slice_started));
+    INFO("object slicing seconds: " << seconds(slice_started, demand_started));
+    CHECK(plan.has_normal_demand());
+    CHECK(plan.has_tree_demand());
+
+    const auto process_started = std::chrono::steady_clock::now();
+    REQUIRE_NOTHROW(print.process());
+    const auto total_finished = std::chrono::steady_clock::now();
+    const double demand_seconds = seconds(demand_started, shadow_started);
+    const double shadow_seconds = seconds(shadow_started, plan_started);
+    const double plan_seconds = seconds(plan_started, finished);
+    const double process_seconds = seconds(process_started, total_finished);
+    const double total_seconds = seconds(total_started, total_finished);
+    INFO("full processing seconds: " << process_seconds);
+    INFO("total setup, planning and processing seconds: " << total_seconds);
+    REQUIRE_FALSE(object->support_layers().empty());
+    // Release-test budgets in wall-clock seconds. process() performs demand
+    // detection again as part of support generation, while the total budget also
+    // includes the explicitly measured demand, shadow and plan construction above.
+    constexpr double maximum_demand_seconds = 45.;
+    constexpr double maximum_shadow_seconds = 5.;
+    constexpr double maximum_plan_seconds = 5.;
+    constexpr double maximum_process_seconds = 90.;
+    constexpr double maximum_total_seconds = 120.;
+    CHECK(demand_seconds < maximum_demand_seconds);
+    CHECK(shadow_seconds < maximum_shadow_seconds);
+    CHECK(plan_seconds < maximum_plan_seconds);
+    CHECK(process_seconds < maximum_process_seconds);
+    CHECK(total_seconds < maximum_total_seconds);
+}
+
 TEST_CASE("Mixed selective merge emits a single merged raft", "[SupportMaterial][Mixed][Integration][Raft]")
 {
     struct GeneratorCombination {
@@ -1597,6 +1162,7 @@ TEST_CASE("Mixed selective merge emits a single merged raft", "[SupportMaterial]
         DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
         config.set_key_value("enable_support", new ConfigOptionBool(true));
         config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stMixedAuto));
+        config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
         config.set_key_value("mixed_normal_support_generator",
             new ConfigOptionEnum<MixedNormalSupportGenerator>(combination.normal));
         config.set_key_value("mixed_tree_support_style",
@@ -1647,6 +1213,7 @@ TEST_CASE("Mixed selective merge supports common nozzle diameters", "[SupportMat
         DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
         config.set_key_value("enable_support", new ConfigOptionBool(true));
         config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stMixedAuto));
+        config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
         config.set_key_value("mixed_normal_support_generator",
             new ConfigOptionEnum<MixedNormalSupportGenerator>(mnsgPrusa));
         config.set_key_value("mixed_normal_coverage_threshold", new ConfigOptionPercent(80.));
@@ -1694,6 +1261,21 @@ TEST_CASE("Mixed selective merge supports common nozzle diameters", "[SupportMat
 TEST_CASE("Resin style exposes current support controls without penetration",
           "[SupportMaterial][Resin][Config]")
 {
+    const ConfigOptionDef *support_type_def = print_config_def.get("support_type");
+    REQUIRE(support_type_def != nullptr);
+    REQUIRE(support_type_def->enum_keys_map != nullptr);
+    REQUIRE(support_type_def->enum_values.size() == support_type_def->enum_labels.size());
+    REQUIRE(support_type_def->enum_values.size() == 8);
+    CHECK(support_type_def->enum_values[6] == "mixed(auto)");
+    CHECK(support_type_def->enum_values[7] == "resin(auto)");
+    CHECK(support_type_def->enum_keys_map->at(support_type_def->enum_values[6]) == stMixedAuto);
+    CHECK(support_type_def->enum_keys_map->at(support_type_def->enum_values[7]) == stResinAuto);
+    // Tsunami's retired numeric slot makes the final two enum values differ
+    // from their combo-box indices. The GUI must resolve these through the
+    // enum key map instead of storing selection indices directly.
+    CHECK(stMixedAuto != 6);
+    CHECK(stResinAuto != 7);
+
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({
         { "support_type", "resin(auto)" },
@@ -1841,6 +1423,167 @@ TEST_CASE("Support threshold uses one inclusive angle conversion",
           support_overhang_offset_from_threshold(0.2, 30.));
 }
 
+TEST_CASE("Cura support demand uses Orca native overhang detection exactly",
+          "[SupportMaterial][Cura][Threshold][Integration]")
+{
+    for (const int threshold_angle : { 30, 60, 80 }) {
+        CAPTURE(threshold_angle);
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormalCuraAuto));
+        config.set_key_value("support_threshold_angle", new ConfigOptionInt(threshold_angle));
+        config.set_key_value("support_interface_top_layers", new ConfigOptionInt(2));
+        config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+        config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
+        config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+
+        Print print;
+        REQUIRE_NOTHROW(init_and_process_print({ resin_test_sloped_wall() }, print, config));
+        REQUIRE(print.objects().size() == 1);
+        const PrintObject &object = *print.objects().front();
+
+        CuraStyleSupportGenerator cura_detector(&object, object.slicing_parameters());
+        const std::vector<Polygons> cura_demand = cura_detector.detect_support_demand();
+
+        SupportGeneratorLayerStorage storage;
+        PrintObjectSupportMaterial orca_detector(&object, object.slicing_parameters());
+        const SupportGeneratorLayersPtr contacts =
+            orca_detector.detect_top_contact_layers(storage, true);
+        std::vector<Polygons> orca_demand(object.layer_count());
+        for (const SupportGeneratorLayer *contact : contacts) {
+            REQUIRE(contact != nullptr);
+            REQUIRE(contact->idx_object_layer_above < orca_demand.size());
+            if (contact->overhang_polygons && !contact->overhang_polygons->empty())
+                append(orca_demand[contact->idx_object_layer_above], *contact->overhang_polygons);
+            else
+                append(orca_demand[contact->idx_object_layer_above], contact->polygons);
+        }
+        for (Polygons &layer : orca_demand)
+            if (!layer.empty())
+                layer = union_(layer);
+
+        REQUIRE(cura_demand.size() == orca_demand.size());
+        for (size_t layer_idx = 0; layer_idx < cura_demand.size(); ++layer_idx) {
+            CAPTURE(layer_idx);
+            CHECK(same_polygon_set(cura_demand[layer_idx], orca_demand[layer_idx]));
+        }
+    }
+}
+
+TEST_CASE("Cura automatic demand preserves painted enforcers as a separate channel",
+          "[SupportMaterial][Cura][Paint][Integration][CuraPaint]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormalCuraAuto));
+    config.set_key_value("support_threshold_angle", new ConfigOptionInt(60));
+    config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
+    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
+    config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
+    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+
+    Model model;
+    ModelObject *model_object = model.add_object();
+    TriangleMesh bed_anchor = make_cube(1., 1., 1.);
+    bed_anchor.translate(0.f, 30.f, 0.f);
+    model_object->add_volume(std::move(bed_anchor));
+
+    TriangleMesh automatic_ceiling = make_cube(10., 10., 2.);
+    automatic_ceiling.translate(0.f, 0.f, 10.f);
+    model_object->add_volume(std::move(automatic_ceiling));
+
+    TriangleMesh painted_ceiling = make_cube(10., 10., 2.);
+    painted_ceiling.translate(20.f, 0.f, 10.f);
+    ModelVolume *painted_volume = model_object->add_volume(std::move(painted_ceiling));
+    TriangleSelector selector(painted_volume->mesh());
+    for (size_t facet_idx = 0; facet_idx < painted_volume->mesh().facets_count(); ++facet_idx)
+        selector.set_facet(int(facet_idx), EnforcerBlockerType::ENFORCER);
+    REQUIRE(painted_volume->supported_facets.set(selector));
+
+    model_object->add_instance();
+    model_object->ensure_on_bed();
+    Print print;
+    print.auto_assign_extruders(model_object);
+    print.apply(model, config);
+    print.set_status_silent();
+    REQUIRE_NOTHROW(print.process());
+    REQUIRE(print.objects().size() == 1);
+
+    const PrintObject &object = *print.objects().front();
+    CuraStyleSupportGenerator detector(&object, object.slicing_parameters());
+    const CuraSupportDemand demand = detector.analyze_support_demand();
+    const auto channel_has_support = [](const std::vector<Polygons> &channel) {
+        return std::any_of(channel.begin(), channel.end(), [](const Polygons &polygons) {
+            return !polygons.empty();
+        });
+    };
+
+    CHECK(channel_has_support(demand.automatic));
+    CHECK(channel_has_support(demand.enforced));
+}
+
+TEST_CASE("Mixed Prusa demand preserves painted support enforcers",
+          "[SupportMaterial][Mixed][Prusa][Paint][Integration][MixedPrusaPaint]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stMixedAuto));
+    config.set_key_value("mixed_normal_support_generator",
+        new ConfigOptionEnum<MixedNormalSupportGenerator>(mnsgPrusa));
+    config.set_key_value("support_threshold_angle", new ConfigOptionInt(60));
+    config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
+    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
+    config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+    config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
+    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+
+    Model model;
+    ModelObject *model_object = model.add_object();
+    TriangleMesh bed_anchor = make_cube(1., 1., 1.);
+    bed_anchor.translate(0.f, 30.f, 0.f);
+    model_object->add_volume(std::move(bed_anchor));
+
+    TriangleMesh automatic_ceiling = make_cube(10., 10., 2.);
+    automatic_ceiling.translate(0.f, 0.f, 10.f);
+    model_object->add_volume(std::move(automatic_ceiling));
+
+    TriangleMesh painted_ceiling = make_cube(10., 10., 2.);
+    painted_ceiling.translate(20.f, 0.f, 10.f);
+    ModelVolume *painted_volume = model_object->add_volume(std::move(painted_ceiling));
+    TriangleSelector selector(painted_volume->mesh());
+    for (size_t facet_idx = 0; facet_idx < painted_volume->mesh().facets_count(); ++facet_idx)
+        selector.set_facet(int(facet_idx), EnforcerBlockerType::ENFORCER);
+    REQUIRE(painted_volume->supported_facets.set(selector));
+
+    model_object->add_instance();
+    model_object->ensure_on_bed();
+    Print print;
+    print.auto_assign_extruders(model_object);
+    print.apply(model, config);
+    print.set_status_silent();
+    REQUIRE_NOTHROW(print.process());
+    REQUIRE(print.objects().size() == 1);
+
+    const PrintObject &object = *print.objects().front();
+    const std::vector<Polygons> mixed_demand = detect_mixed_support_demand(object);
+
+    SupportGeneratorLayerStorage storage;
+    PrintObjectSupportMaterial native_detector(&object, object.slicing_parameters());
+    const SupportGeneratorLayersPtr contacts = native_detector.detect_top_contact_layers(storage, false);
+    bool saw_painted_enforcer = false;
+    for (const SupportGeneratorLayer *contact : contacts) {
+        REQUIRE(contact != nullptr);
+        REQUIRE(contact->idx_object_layer_above < mixed_demand.size());
+        if (contact->enforcer_polygons && !contact->enforcer_polygons->empty()) {
+            saw_painted_enforcer = true;
+            CHECK(diff_ex(*contact->enforcer_polygons,
+                          mixed_demand[contact->idx_object_layer_above]).empty());
+        }
+    }
+    CHECK(saw_painted_enforcer);
+}
+
 TEST_CASE("Resin style automatic points obey the shared overhang threshold",
           "[SupportMaterial][Resin][Integration][Threshold]")
 {
@@ -1968,6 +1711,145 @@ TEST_CASE("Resin style accepts the full configured pillar diameter range",
     }
 }
 
+TEST_CASE("Resin style processes variable layer heights with both tree strategies",
+          "[SupportMaterial][Resin][Integration][VariableLayer]")
+{
+    const auto make_fixture = []() {
+        TriangleMesh fixture = make_cube(8., 8., 12.);
+        TriangleMesh ceiling = make_cube(24., 16., 2.);
+        ceiling.translate(-8.f, -4.f, 12.f);
+        fixture.merge(ceiling);
+        return fixture;
+    };
+
+    for (const ResinSupportTreeType strategy : { rstDefault, rstBranching }) {
+        CAPTURE(int(strategy));
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stResinAuto));
+        config.set_key_value("resin_support_tree_type",
+            new ConfigOptionEnum<ResinSupportTreeType>(strategy));
+        config.set_key_value("resin_support_points_density_relative", new ConfigOptionInt(50));
+        config.set_key_value("resin_support_object_elevation", new ConfigOptionFloat(0.));
+        config.set_key_value("resin_branching_support_object_elevation", new ConfigOptionFloat(0.));
+        config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
+        config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+        config.set_key_value("support_interface_top_layers", new ConfigOptionInt(1));
+
+        Model model;
+        ModelObject *model_object = model.add_object();
+        model_object->add_volume(make_fixture());
+        model_object->add_instance();
+        model_object->ensure_on_bed();
+        model_object->layer_height_profile.set({
+            0., 0.20,
+            4., 0.12,
+            8., 0.28,
+            14., 0.16
+        });
+
+        Print print;
+        print.auto_assign_extruders(model_object);
+        print.apply(model, config);
+        print.set_status_silent();
+        REQUIRE_NOTHROW(print.process());
+        REQUIRE(print.objects().size() == 1);
+        const PrintObject *object = print.objects().front();
+        REQUIRE_FALSE(object->layers().empty());
+        std::set<int> layer_heights_um;
+        for (const Layer *layer : object->layers())
+            layer_heights_um.insert(int(std::lround(1000. * layer->height)));
+        CHECK(layer_heights_um.size() > 1);
+        CHECK(object->is_step_done(posSupportMaterial));
+        CHECK_FALSE(object->support_layers().empty());
+    }
+}
+
+TEST_CASE("Every exposed Resin strategy setting survives a slicing mutation",
+          "[SupportMaterial][Resin][Integration][ResinSettingSweep]")
+{
+    const char *sweep_filter_env = std::getenv("MAGPIE_RESIN_SWEEP_FILTER");
+    if (sweep_filter_env == nullptr || *sweep_filter_env == '\0')
+        SKIP("Run through verify_resin_setting_sweep.ps1 so each mutation has an isolated timeout");
+    const std::string sweep_filter(sweep_filter_env);
+    size_t executed_mutations = 0;
+    const std::array<std::pair<const char *, const char *>, 16> mutations {{
+        { "head_front_diameter", "2" },
+        { "head_width", "5" },
+        { "pillar_diameter", "15" },
+        { "small_pillar_diameter_percent", "1" },
+        { "max_bridges_on_pillar", "50" },
+        { "max_weight_on_model", "0" },
+        { "pillar_connection_mode", "cross" },
+        { "buildplate_only", "1" },
+        { "pillar_widening_factor", "1" },
+        { "base_diameter", "30" },
+        { "base_height", "5" },
+        { "base_safety_distance", "10" },
+        { "critical_angle", "90" },
+        { "max_bridge_length", "0" },
+        { "max_pillar_link_distance", "0" },
+        { "object_elevation", "15" }
+    }};
+    const auto make_fixture = []() {
+        TriangleMesh fixture = make_cube(8., 8., 12.);
+        TriangleMesh ceiling = make_cube(24., 16., 2.);
+        ceiling.translate(-8.f, -4.f, 12.f);
+        fixture.merge(ceiling);
+        return fixture;
+    };
+
+    for (const ResinSupportTreeType strategy : { rstDefault, rstBranching }) {
+        const std::string strategy_name = strategy == rstBranching ? "branching" : "default";
+        const std::string prefix = strategy == rstBranching ?
+            "resin_branching_support_" : "resin_support_";
+        for (const auto &[suffix, value] : mutations) {
+            const std::string key = prefix + suffix;
+            if (sweep_filter != "all" && sweep_filter != strategy_name + ":" + key)
+                continue;
+            ++executed_mutations;
+            CAPTURE(int(strategy), key, value);
+            DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+            config.set_key_value("enable_support", new ConfigOptionBool(true));
+            config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stResinAuto));
+            config.set_key_value("resin_support_tree_type",
+                new ConfigOptionEnum<ResinSupportTreeType>(strategy));
+            config.set_key_value("resin_support_points_density_relative", new ConfigOptionInt(25));
+            config.set_key_value("support_interface_top_layers", new ConfigOptionInt(1));
+            config.set_deserialize_strict(key, value);
+            const std::string normalized_value = config.opt_serialize(key);
+
+            Print print;
+            REQUIRE_NOTHROW(init_and_process_print({ make_fixture() }, print, config));
+            REQUIRE(print.objects().size() == 1);
+            CHECK(print.objects().front()->is_step_done(posSupportMaterial));
+            CHECK(print.objects().front()->config().opt_serialize(key) == normalized_value);
+        }
+    }
+
+    for (const auto &[key, value] : {
+             std::pair<const char *, const char *>{ "resin_support_points_density_relative", "250" },
+             std::pair<const char *, const char *>{ "resin_support_enforcers_only", "1" } }) {
+        if (sweep_filter != "all" && sweep_filter != std::string("common:") + key)
+            continue;
+        ++executed_mutations;
+        CAPTURE(key, value);
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stResinAuto));
+        config.set_key_value("support_interface_top_layers", new ConfigOptionInt(1));
+        config.set_deserialize_strict(key, value);
+        const std::string normalized_value = config.opt_serialize(key);
+
+        Print print;
+        REQUIRE_NOTHROW(init_and_process_print({ make_fixture() }, print, config));
+        REQUIRE(print.objects().size() == 1);
+        CHECK(print.objects().front()->is_step_done(posSupportMaterial));
+        CHECK(print.objects().front()->config().opt_serialize(key) == normalized_value);
+    }
+    CHECK(executed_mutations > 0);
+}
+
 TEST_CASE("Resin style preserves dedicated body and interface filaments",
           "[SupportMaterial][Resin][Integration][MultiMaterial]")
 {
@@ -2012,6 +1894,62 @@ TEST_CASE("Resin style preserves dedicated body and interface filaments",
     CHECK(output.find("support material interface") != std::string::npos);
 }
 
+TEST_CASE("Tree support geometry width follows the body hotend instead of the interface hotend",
+          "[SupportMaterial][Tree][MultiNozzle][TreeWidthAudit]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_num_extruders(3);
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTreeAuto));
+    config.set_key_value("support_filament", new ConfigOptionInt(2));
+    config.set_key_value("support_interface_filament", new ConfigOptionInt(3));
+    config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(105., true));
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4, 0.6, 0.4 }));
+    config.set_key_value("toolhead_support_line_width", new ConfigOptionFloatsOrPercents({
+        FloatOrPercent(0.42, false), FloatOrPercent(0.63, false), FloatOrPercent(0.42, false) }));
+    config.set_key_value("filament_diameter", new ConfigOptionFloats({ 1.75, 1.75, 1.75 }));
+    config.set_key_value("filament_type", new ConfigOptionStrings({ "PLA", "PLA", "PLA" }));
+    config.set_key_value("filament_colour",
+        new ConfigOptionStrings({ "#808080", "#00AAFF", "#FFAA00" }));
+    config.set_key_value("default_filament_colour",
+        new ConfigOptionStrings({ "#808080", "#00AAFF", "#FFAA00" }));
+
+    Print print;
+    Model model;
+    REQUIRE_NOTHROW(init_print({ make_cube(20., 20., 20.) }, print, model, config));
+    REQUIRE(print.objects().size() == 1);
+
+    const SupportParameters parameters(*print.objects().front());
+    CHECK(parameters.support_material_flow.nozzle_diameter() == Catch::Approx(0.6));
+    CHECK(parameters.support_material_flow.width() == Catch::Approx(0.63));
+    CHECK(parameters.support_extrusion_width == Catch::Approx(parameters.support_material_flow.width()));
+}
+
+TEST_CASE("Tree support internal geometry resolves automatic support width",
+          "[SupportMaterial][Tree][Flow][TreeWidthAudit]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTreeAuto));
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4 }));
+    config.set_key_value("line_width", new ConfigOptionFloatOrPercent(0., false));
+    config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(0., false));
+    config.set_key_value("toolhead_line_width",
+        new ConfigOptionFloatsOrPercents({ FloatOrPercent(0., false) }));
+    config.set_key_value("toolhead_support_line_width",
+        new ConfigOptionFloatsOrPercents({ FloatOrPercent(0., false) }));
+
+    Print print;
+    Model model;
+    REQUIRE_NOTHROW(init_print({ make_cube(20., 20., 20.) }, print, model, config));
+    REQUIRE(print.objects().size() == 1);
+
+    const SupportParameters parameters(*print.objects().front());
+    CHECK(parameters.support_material_flow.nozzle_diameter() == Catch::Approx(0.4));
+    CHECK(parameters.support_material_flow.width() == Catch::Approx(0.4));
+    CHECK(parameters.support_extrusion_width == Catch::Approx(parameters.support_material_flow.width()));
+}
+
 TEST_CASE("Mixed support preserves dedicated body and interface filaments",
           "[SupportMaterial][Mixed][Integration][MultiMaterial]")
 {
@@ -2035,6 +1973,7 @@ TEST_CASE("Mixed support preserves dedicated body and interface filaments",
         config.set_num_extruders(3);
         config.set_key_value("enable_support", new ConfigOptionBool(true));
         config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stMixedAuto));
+        config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
         config.set_key_value("mixed_normal_support_generator",
             new ConfigOptionEnum<MixedNormalSupportGenerator>(combination.normal));
         config.set_key_value("mixed_tree_support_style",

@@ -28,7 +28,6 @@ add_executable(${_TEST_NAME}_tests
     test_marchingsquares.cpp
     test_utils.cpp
     test_timeutils.cpp
-    test_tsunami_support.cpp
     test_voronoi.cpp
     test_optimizers.cpp
     # test_png_io.cpp
@@ -37,7 +36,7 @@ add_executable(${_TEST_NAME}_tests
     ../libnest2d/printer_parts.cpp
     )
 
-if (MAGPIE_SLICING_PROFILER)
+if (MAGPIE_SLICING_TIMING OR MAGPIE_SLICING_PROFILER)
     target_sources(${_TEST_NAME}_tests PRIVATE test_slicing_profiler.cpp)
 endif ()
 

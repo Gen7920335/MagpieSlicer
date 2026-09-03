@@ -104,6 +104,19 @@ void AppConfig::reset()
     set_defaults();
 };
 
+void AppConfig::set_slicing_acceleration_mode(const std::string& key, const std::string& mode)
+{
+    if (key == "cuda_slicer_mode") {
+        const bool enabled = mode == "on" || mode == "max";
+        set(key, enabled ? mode : "off");
+        if (enabled) set("vulkan_slicer_mode", "off");
+    } else if (key == "vulkan_slicer_mode") {
+        const std::string valid = mode == "auto" || mode == "on" || mode == "max" ? mode : "off";
+        set(key, valid);
+        if (valid != "off") set("cuda_slicer_mode", "off");
+    }
+}
+
 // Override missing or keys with their defaults.
 void AppConfig::set_defaults()
 {
@@ -130,6 +143,14 @@ void AppConfig::set_defaults()
             // while moving the old/default disabled state to calibrated Auto.
             set("vulkan_slicer_mode", get_bool("vulkan_slicer_compute") ? "on" : "auto");
         }
+
+        // CUDA is opt-in, including upgrades from the environment-only prototype.
+        set_slicing_acceleration_mode("cuda_slicer_mode", get("cuda_slicer_mode"));
+        const std::string timing_detail = get("slicing_timing_detail");
+        if (timing_detail != "off" && timing_detail != "stages" && timing_detail != "detailed")
+            set("slicing_timing_detail", "detailed");
+        if (get("slicing_timing_auto_save").empty())
+            set_bool("slicing_timing_auto_save", false);
 
         if (get("drop_project_action").empty())
             set_bool("drop_project_action", true);

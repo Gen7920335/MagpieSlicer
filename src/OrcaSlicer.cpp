@@ -18,6 +18,8 @@
     #endif /* SLIC3R_GUI */
 #endif /* WIN32 */
 
+#include "libslic3r/Gpu/CudaSlicer.hpp"
+
 #include <cstdio>
 #include <string>
 #include <cstring>
@@ -68,6 +70,9 @@ using namespace nlohmann;
 #include "libslic3r/Thread.hpp"
 #include "libslic3r/BlacklistedLibraryCheck.hpp"
 #include "libslic3r/FlushVolCalc.hpp"
+#ifdef MAGPIE_SLICING_TIMING
+#include "libslic3r/SlicingProfiler.hpp"
+#endif
 
 #include "libslic3r/Orient.hpp"
 #include "libslic3r/PNGReadWrite.hpp"
@@ -394,6 +399,44 @@ static PrinterTechnology get_printer_technology(const DynamicConfig &config)
 }
 
 //BBS: add flush and exit
+#ifdef MAGPIE_SLICING_TIMING
+namespace {
+// Opt-in, one report per CLI invocation. Ordinary early returns (including
+// flush_and_exit) unwind this scope; crashes/forced termination cannot export.
+class CliSlicingProfile {
+public:
+    CliSlicingProfile()
+    {
+        const char* path = boost::nowide::getenv("MAGPIE_SLICING_TIMING_JSON");
+        if (path != nullptr && *path != '\0') {
+            m_path = path;
+            SlicingProfiler::instance().begin_session("environment-controlled");
+        }
+    }
+    ~CliSlicingProfile()
+    {
+        if (m_path.empty())
+            return;
+        auto& profiler = SlicingProfiler::instance();
+        if (!m_completed)
+            profiler.cancel_session("CLI exited before successful completion");
+        std::string error;
+        if (!profiler.export_json(m_path, &error))
+            BOOST_LOG_TRIVIAL(error) << "Slicing timing export failed: " << error;
+    }
+    void finish()
+    {
+        if (!m_path.empty())
+            SlicingProfiler::instance().finish_session();
+        m_completed = true;
+    }
+private:
+    std::string m_path;
+    bool m_completed { false };
+};
+}
+#endif
+
 #if defined(__linux__) || defined(__LINUX__)
 #define flush_and_exit(ret)     { boost::nowide::cout << __FUNCTION__ << " found error, return "<<ret<<", exit..." << std::endl;\
     g_cli_callback_mgr.stop();\
@@ -663,7 +706,11 @@ static int load_assemble_plate_list(std::string config_file, std::vector<assembl
                 }
 
                 assemble_object.filaments = object_json.at(JSON_ASSEMPLE_OBJECT_FILAMENTS).get<std::vector<int>>();
-                if ((assemble_object.filaments.size() > 0) && (assemble_object.filaments.size() != assemble_object.count) && (assemble_object.filaments.size() != 1))
+                if (assemble_object.filaments.empty()) {
+                    BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << boost::format(": object %1% has no filament assignment") % assemble_object.path;
+                    return CLI_CONFIG_FILE_ERROR;
+                }
+                if ((assemble_object.filaments.size() != assemble_object.count) && (assemble_object.filaments.size() != 1))
                 {
                     BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << boost::format(": object %1%'s filaments count %2% not equal to clone count %3%, also not equal to 1") % assemble_object.path % assemble_object.filaments.size() % assemble_object.count;
                     return CLI_CONFIG_FILE_ERROR;
@@ -1046,36 +1093,29 @@ static int construct_assemble_list(std::vector<assemble_plate_info_t> &assemble_
 
             for (size_t copy_index = 1; copy_index < assemble_object.count; copy_index++)
             {
-                int array_index = copy_index;
-
                 ModelObject* copy_obj = temp_model.add_object(*object);
                 copy_obj->name = object_name + "_" + std::to_string(copy_index + 1);
 
-                if (copy_index >= assemble_object.pos_x.size())
-                    array_index = 0;
-                copy_obj->translate(assemble_object.pos_x[array_index], assemble_object.pos_y[array_index], assemble_object.pos_z[array_index]);
+                const size_t pos_x_index = copy_index < assemble_object.pos_x.size() ? copy_index : 0;
+                const size_t pos_y_index = copy_index < assemble_object.pos_y.size() ? copy_index : 0;
+                const size_t pos_z_index = copy_index < assemble_object.pos_z.size() ? copy_index : 0;
+                copy_obj->translate(assemble_object.pos_x[pos_x_index], assemble_object.pos_y[pos_y_index], assemble_object.pos_z[pos_z_index]);
 
-                if (copy_index < assemble_object.filaments.size())
-                    array_index = copy_index;
-                else
-                    array_index = 0;
+                const size_t filament_index = copy_index < assemble_object.filaments.size() ? copy_index : 0;
 
                 if (!skip_filament) {
-                    copy_obj->config.set_key_value("extruder", new ConfigOptionInt(assemble_object.filaments[array_index]));
-                    used_filaments.emplace(assemble_object.filaments[array_index]);
+                    copy_obj->config.set_key_value("extruder", new ConfigOptionInt(assemble_object.filaments[filament_index]));
+                    used_filaments.emplace(assemble_object.filaments[filament_index]);
                 }
                 else {
-                    assemble_object.filaments[array_index] = 0;
+                    assemble_object.filaments[filament_index] = 0;
                 }
 
-                if (copy_index < assemble_object.assemble_index.size())
-                    array_index = copy_index;
-                else
-                    array_index = 0;
-                merge_or_add_object(assemble_plate_info, model, assemble_object.assemble_index[array_index], merged_objects, copy_obj);
+                const size_t assembly_index = copy_index < assemble_object.assemble_index.size() ? copy_index : 0;
+                merge_or_add_object(assemble_plate_info, model, assemble_object.assemble_index[assembly_index], merged_objects, copy_obj);
 
                 BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": cloned object %1%, name %2%, pos_x %3% pos_y %4%, pos_z %5%")
-                    %copy_index %object->name %assemble_object.pos_x[array_index] %assemble_object.pos_y[array_index] %assemble_object.pos_z[array_index];
+                    %copy_index %object->name %assemble_object.pos_x[pos_x_index] %assemble_object.pos_y[pos_y_index] %assemble_object.pos_z[pos_z_index];
             }
         }
 
@@ -1420,6 +1460,11 @@ int CLI::run(int argc, char **argv)
 #endif // SLIC3R_GUI
     }
 
+#ifdef MAGPIE_SLICING_TIMING
+    CliSlicingProfile cli_profile;
+    ScopedSlicingProfileEvent cli_prepare_event("cli", "Load, configure and arrange models", SlicingProfileBackend::CPU);
+#endif
+    Gpu::CudaSlicerBackend::begin_slicing_session();
     // Setup logging for CLI
     const ConfigOptionInt* opt_loglevel = m_config.opt<ConfigOptionInt>("debug");
     if (opt_loglevel) {
@@ -3875,9 +3920,21 @@ int CLI::run(int argc, char **argv)
         ConfigOptionFloatsNullable *default_acceleration_option = m_print_config.option<ConfigOptionFloatsNullable>("default_acceleration");
         travel_acceleration_option->values = default_acceleration_option->values;
 
-        ConfigOptionFloatsNullable *initial_layer_travel_acceleration_option = m_print_config.option<ConfigOptionFloatsNullable>("initial_layer_travel_acceleration", true);
-        ConfigOptionFloatsNullable *initial_layer_acceleration_option = m_print_config.option<ConfigOptionFloatsNullable>("initial_layer_acceleration");
-        initial_layer_travel_acceleration_option->values = initial_layer_acceleration_option->values;
+        ConfigOptionFloatsOrPercentsNullable *initial_layer_travel_acceleration_option =
+            m_print_config.option<ConfigOptionFloatsOrPercentsNullable>("initial_layer_travel_acceleration", true);
+        ConfigOptionFloatsNullable *initial_layer_acceleration_option =
+            m_print_config.option<ConfigOptionFloatsNullable>("initial_layer_acceleration");
+        if (initial_layer_travel_acceleration_option != nullptr && initial_layer_acceleration_option != nullptr) {
+            initial_layer_travel_acceleration_option->values.resize(
+                initial_layer_acceleration_option->values.size(), FloatOrPercent(0., false));
+            for (size_t i = 0; i < initial_layer_acceleration_option->values.size(); ++i) {
+                if (initial_layer_acceleration_option->is_nil(i))
+                    initial_layer_travel_acceleration_option->set_at_to_nil(i);
+                else
+                    initial_layer_travel_acceleration_option->values[i] =
+                        FloatOrPercent(initial_layer_acceleration_option->values[i], false);
+            }
+        }
     }
 
     auto get_print_sequence = [](Slic3r::GUI::PartPlate* plate, DynamicPrintConfig& print_config, bool &is_seq_print) {
@@ -5546,7 +5603,13 @@ int CLI::run(int argc, char **argv)
     sliced_info.prepare_time = (size_t) (global_current_time - global_begin_time);
     global_begin_time = global_current_time;
 
+#ifdef MAGPIE_SLICING_TIMING
+    cli_prepare_event.finish();
+#endif
     for (auto const &opt_key : m_actions) {
+#ifdef MAGPIE_SLICING_TIMING
+        ScopedSlicingProfileEvent cli_action_event("cli-action", opt_key, SlicingProfileBackend::CPU);
+#endif
         if (opt_key == "help") {
             this->print_help();
         } else if (opt_key == "help_fff") {
@@ -5692,6 +5755,10 @@ int CLI::run(int argc, char **argv)
                         }
                         sliced_plate_info_t sliced_plate_info;
                         sliced_plate_info.plate_id = index+1;
+#ifdef MAGPIE_SLICING_TIMING
+                        ScopedSlicingProfileEvent plate_event("cli-plate",
+                            "Plate " + std::to_string(index + 1) + (pre_check ? " (precheck)" : ""), SlicingProfileBackend::CPU);
+#endif
 
                         model.curr_plate_index = index;
                         BOOST_LOG_TRIVIAL(info) << boost::format("Plate %1%: pre_check %2%, start")%(index+1)%pre_check;
@@ -6147,6 +6214,9 @@ int CLI::run(int argc, char **argv)
 #endif
 
                                 //update information for brim
+#ifdef MAGPIE_SLICING_TIMING
+                                ScopedSlicingProfileEvent print_process_event("pipeline", "Load cache and print process", SlicingProfileBackend::CPU);
+#endif
                                 const PrintConfig& print_config = print_fff->config();
                                 Model::setExtruderParams(m_print_config, filament_count);
                                 Model::setPrintSpeedTable(m_print_config, print_config);
@@ -6174,6 +6244,9 @@ int CLI::run(int argc, char **argv)
                                     print->process(&time_using_cache);
                                     BOOST_LOG_TRIVIAL(info) << "print::process: first time_using_cache is " << time_using_cache << " secs.";
                                 }
+#ifdef MAGPIE_SLICING_TIMING
+                                print_process_event.finish();
+#endif
                                 if (printer_technology == ptFFF) {
                                     std::string conflict_result = print_fff->get_conflict_string();
                                     if (!conflict_result.empty()) {
@@ -6225,7 +6298,13 @@ int CLI::run(int argc, char **argv)
                                     }
                                     BOOST_LOG_TRIVIAL(info) << "process finished, will export gcode temporarily to " << outfile << std::endl;
                                     temp_time = (long long)Slic3r::Utils::get_current_time_utc();
+#ifdef MAGPIE_SLICING_TIMING
+                                    ScopedSlicingProfileEvent gcode_event("pipeline", "Generate and save G-code", SlicingProfileBackend::CPU);
+#endif
                                     outfile = print_fff->export_gcode(outfile, gcode_result, nullptr);
+#ifdef MAGPIE_SLICING_TIMING
+                                    gcode_event.finish();
+#endif
                                     time_using_cache = time_using_cache + ((long long)Slic3r::Utils::get_current_time_utc() - temp_time);
                                     BOOST_LOG_TRIVIAL(info) << "export_gcode finished: time_using_cache update to " << time_using_cache << " secs.";
                                     if (gcode_result && gcode_result->gcode_check_result.error_code) {
@@ -6268,6 +6347,9 @@ int CLI::run(int argc, char **argv)
                                 }
 #endif
                                 if (export_slicedata) {
+#ifdef MAGPIE_SLICING_TIMING
+                                    ScopedSlicingProfileEvent cache_export_event("pipeline", "Export slice cache", SlicingProfileBackend::CPU);
+#endif
                                     BOOST_LOG_TRIVIAL(info) << "plate "<< index+1<< ":will export Slicing data to " << export_slice_data_dir;
                                     std::string plate_dir = export_slice_data_dir+"/"+std::to_string(index+1);
                                     bool with_space = (get_logging_level() >= 4)?true:false;
@@ -6356,6 +6438,9 @@ int CLI::run(int argc, char **argv)
     }
 
     global_begin_time = (long long)Slic3r::Utils::get_current_time_utc();
+#ifdef MAGPIE_SLICING_TIMING
+    ScopedSlicingProfileEvent cli_finalize_event("cli", "Export project and finalize", SlicingProfileBackend::CPU);
+#endif
     if (export_to_3mf) {
         //BBS: export as bbl 3mf
         std::vector<ThumbnailData *> thumbnails, no_light_thumbnails, top_thumbnails, pick_thumbnails;
@@ -7129,6 +7214,10 @@ int CLI::run(int argc, char **argv)
     boost::nowide::cout.flush();
     boost::nowide::cerr.flush();
 
+#ifdef MAGPIE_SLICING_TIMING
+    cli_finalize_event.finish();
+    cli_profile.finish();
+#endif
     return 0;
 }
 

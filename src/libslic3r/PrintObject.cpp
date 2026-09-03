@@ -16,8 +16,8 @@
 #include "Support/MixedSupportPlan.hpp"
 #include "Support/ResinStyleSupport.hpp"
 #include "Support/SupportSpotsGenerator.hpp"
+#include "Support/SupportTiming.hpp"
 #include "Support/TreeSupport.hpp"
-#include "Support/TsunamiSupport.hpp"
 #include "Surface.hpp"
 #include "Slicing.hpp"
 #include "Tesselate.hpp"
@@ -30,6 +30,7 @@
 #include "AABBTreeLines.hpp"
 
 #include <cstddef>
+#include <chrono>
 #include <float.h>
 #include <iterator>
 #include <memory>
@@ -905,6 +906,14 @@ void PrintObject::generate_support_material()
 void PrintObject::estimate_curled_extrusions()
 {
     if (this->set_started(posEstimateCurledExtrusions)) {
+#ifdef MAGPIE_SLICING_TIMING
+        // This operation does not call set_done. Close its timing at the work
+        // boundary without changing the existing print-state/cache behavior.
+        ScopeGuard finish_timing([this] {
+            SlicingProfiler::instance().finish_state_step(true, static_cast<int>(posEstimateCurledExtrusions),
+                static_cast<const Inherited*>(this));
+        });
+#endif
         if ( std::any_of(this->print()->m_print_regions.begin(), this->print()->m_print_regions.end(), [](const PrintRegion* region) {
                 const auto& cfg = region->config().enable_overhang_speed.values;
                 return std::any_of(cfg.begin(), cfg.end(), [](const unsigned char v) { return (bool) v; });
@@ -1238,6 +1247,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "mixed_normal_coverage_threshold"
             || opt_key == "mixed_selective_merge"
             || opt_key == "support_angle"
+            || opt_key == "support_wall_count"
             || opt_key == "support_on_build_plate_only"
             || opt_key == "support_critical_regions_only"
             || opt_key == "support_remove_small_overhang"
@@ -1264,6 +1274,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "support_object_first_layer_gap"
             || opt_key == "support_base_pattern_spacing"
             || opt_key == "cura_solid_support_raft"
+            || opt_key == "cura_support_join_distance"
             || opt_key == "support_expansion"
             || opt_key == "independent_support_layer_height" // Orca
             || opt_key == "support_threshold_angle"
@@ -1290,17 +1301,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "tree_support_branch_angle"
             || opt_key == "tree_support_branch_angle_organic"
             || opt_key == "tree_support_angle_slow"
-            || opt_key == "tree_support_wall_count"
-            || opt_key == "tsunami_branch_angle"
-            || opt_key == "tsunami_micro_branch_enabled"
-            || opt_key == "tsunami_micro_branch_angle"
-            || opt_key == "tsunami_micro_branch_size"
-            || opt_key == "tsunami_trunk_height"
-            || opt_key == "tsunami_rib_spacing"
-            || opt_key == "tsunami_trunk_thickness"
-            || opt_key == "tsunami_min_bed_contact_area"
-            || opt_key == "tsunami_max_bed_contact_area"
-            || opt_key == "tsunami_branch_minimum_spacing") {
+            || opt_key == "tree_support_wall_count") {
             steps.emplace_back(posSupportMaterial);
         } else if (
                opt_key == "bottom_shell_layers"
@@ -1608,7 +1609,7 @@ void PrintObject::detect_surfaces_type()
                 // 2. for normal(auto), bridge_no_support is off
                 // 3. for tree(auto), interface top layers=0, max bridge length=0, support_critical_regions_only=false (only in this way the bridge is fully supported)
                 bool bottom_is_fully_supported = this->has_support() && m_config.support_top_z_distance.value == 0 && is_auto(m_config.support_type.value);
-                if (m_config.support_type.value == stNormalAuto || is_tsunami(m_config.support_type.value))
+                if (m_config.support_type.value == stNormalAuto)
                     bottom_is_fully_supported &= !m_config.bridge_no_support.value;
                 else if (m_config.support_type.value == stTreeAuto) {
                     bottom_is_fully_supported &= (m_config.support_interface_top_layers.value > 0 && m_config.max_bridge_length.value == 0 && m_config.support_critical_regions_only.value==false);
@@ -4355,6 +4356,7 @@ static std::vector<Polygons> mixed_tree_obstacles_from_normal_layers(
 
     for (const std::unique_ptr<SupportLayer> &owned_layer : normal_layers) {
         const SupportLayer *support_layer = owned_layer.get();
+        SupportProfileStage layer_timing("support-mixed-obstacle", "Project normal support obstacle", 1);
         if (support_layer == nullptr || support_layer->print_z <= raft_top + EPSILON)
             continue;
 
@@ -4376,6 +4378,7 @@ static std::vector<Polygons> mixed_tree_obstacles_from_normal_layers(
                 break;
             append(obstacles[layer_id], footprint);
         }
+        layer_timing.finish(footprint.size(), "support_z=" + std::to_string(support_layer->print_z));
     }
 
     for (Polygons &layer : obstacles)
@@ -4456,12 +4459,15 @@ static void merge_mixed_support_layers(
     size_t normal_idx = 0;
     size_t tree_idx = 0;
     while (normal_idx < normal_layers.size() || tree_idx < tree_layers.size()) {
+        SupportProfileStage layer_timing("support-mixed-merge", "Merge Mixed support layer", 1);
         if (normal_idx >= normal_layers.size()) {
             install_support_layer(destination, tree_layers[tree_idx++]);
+            layer_timing.finish(1, "tree_only");
             continue;
         }
         if (tree_idx >= tree_layers.size()) {
             install_support_layer(destination, normal_layers[normal_idx++]);
+            layer_timing.finish(1, "normal_only");
             continue;
         }
 
@@ -4469,8 +4475,10 @@ static void merge_mixed_support_layers(
         SupportLayer *tree = tree_layers[tree_idx].get();
         if (normal->print_z + EPSILON < tree->print_z) {
             install_support_layer(destination, normal_layers[normal_idx++]);
+            layer_timing.finish(1, "normal_only");
         } else if (tree->print_z + EPSILON < normal->print_z) {
             install_support_layer(destination, tree_layers[tree_idx++]);
+            layer_timing.finish(1, "tree_only");
         } else {
             normal->height = std::min(normal->height, tree->height);
             normal->print_z = 0.5 * (normal->print_z + tree->print_z);
@@ -4479,10 +4487,11 @@ static void merge_mixed_support_layers(
                 BOOST_LOG_TRIVIAL(debug) << "Mixed support layer at Z=" << normal->print_z
                     << " keeps normal interface_id=" << normal->interface_id()
                     << " while tree interface_id=" << tree->interface_id();
-            // The normal channel owns any physical overlap. Clipping the tree centerlines
-            // against the normal extrusion envelope produces a deterministic hand-off for
-            // Organic (which cannot reliably route around sparse support lines) and also
-            // protects raft and classic-tree layers from duplicate extrusion.
+            // The normal channel owns overlap. MixedSupportPlan already assigns
+            // unreachable demand to the tree channel; allowing a multi-wall tree
+            // to own every propagated overlap can erase the reachable normal
+            // channel completely when tree_support_wall_count is greater than the
+            // normal wall count. Tree walls remain intact in tree-only regions.
             const ExPolygons owner_coverage = union_ex(
                 normal->support_fills.polygons_covered_by_width(float(SCALED_EPSILON)));
             std::unordered_map<coord_t, ExPolygons> exclusion_cache;
@@ -4500,6 +4509,8 @@ static void merge_mixed_support_layers(
                 normal->base_areas = union_ex(normal->base_areas);
             tree_layers[tree_idx].reset();
             install_support_layer(destination, normal_layers[normal_idx]);
+            layer_timing.finish(normal->support_fills.entities.size(),
+                "mixed_z=" + std::to_string(normal->print_z));
             ++normal_idx;
             ++tree_idx;
         }
@@ -4519,31 +4530,57 @@ void PrintObject::_generate_support_material()
         OwnedSupportLayers normal_layers;
         OwnedSupportLayers tree_layers;
         try {
-            const std::vector<Polygons> demand = detect_mixed_support_demand(*this);
+            using MixedClock = std::chrono::steady_clock;
+            const auto mixed_started_at = MixedClock::now();
+            this->print()->set_status(51, _u8L("Mixed support: analyzing overhangs"));
+            SupportProfileStage demand_timing("support-mixed", "Analyze support demand", layer_count());
+            CuraSupportDemand cura_demand;
+            const std::vector<Polygons> demand = detect_mixed_support_demand(*this, &cura_demand);
+            demand_timing.finish(demand.size());
+            const auto demand_ready_at = MixedClock::now();
+            this->print()->set_status(52, _u8L("Mixed support: classifying normal and tree regions"));
+            SupportProfileStage plan_timing("support-mixed", "Classify support channels", demand.size());
             const MixedSupportPlan plan = MixedSupportPlan::build(*this, demand);
+            plan_timing.finish(plan.decisions().size());
+            const auto plan_ready_at = MixedClock::now();
             if (plan.has_normal_paint_fallback())
                 this->active_step_add_warning(
                     PrintStateBase::WarningLevel::NON_CRITICAL,
                     _u8L("Some areas painted for normal support are not reachable from the build plate and were assigned to tree support."));
 
-            if (plan.has_normal_demand() || m_slicing_params.has_raft()) {
+            const auto generate_normal_channel = [this, &cura_demand](const std::vector<Polygons> &mask) {
+                clear_support_layers();
                 if (m_config.mixed_normal_support_generator.value == mnsgCura) {
-                    CuraStyleSupportGenerator normal_support(this, m_slicing_params, &plan.normal_mask(), true);
+                    CuraStyleSupportGenerator normal_support(
+                        this, m_slicing_params, &mask, false, &cura_demand);
                     normal_support.generate(*this);
                 } else {
-                    PrintObjectSupportMaterial normal_support(this, m_slicing_params, &plan.normal_mask(), true);
+                    PrintObjectSupportMaterial normal_support(this, m_slicing_params, &mask, false);
                     normal_support.generate(*this);
                 }
-                normal_layers = take_support_layers(*this);
-                for (const std::unique_ptr<SupportLayer> &layer : normal_layers)
+
+                OwnedSupportLayers generated = take_support_layers(*this);
+                for (const std::unique_ptr<SupportLayer> &layer : generated)
                     layer->support_type = stInnerNormal;
+                return generated;
+            };
+
+            if (plan.has_normal_demand() || m_slicing_params.has_raft()) {
+                this->print()->set_status(53, _u8L("Mixed support: generating normal support"));
+                SupportProfileStage normal_timing("support-mixed", "Generate normal channel", plan.normal_mask().size());
+                normal_layers = generate_normal_channel(plan.normal_mask());
+                normal_timing.finish(normal_layers.size());
             }
+            const auto normal_ready_at = MixedClock::now();
 
             if (plan.has_tree_demand()) {
+                this->print()->set_status(56, _u8L("Mixed support: generating tree support"));
                 const SupportMaterialStyle tree_style =
                     mixed_tree_style_to_support_style(m_config.mixed_tree_support_style.value);
+                SupportProfileStage obstacle_timing("support-mixed", "Build tree obstacles", normal_layers.size());
                 const std::vector<Polygons> tree_obstacles =
                     mixed_tree_obstacles_from_normal_layers(*this, normal_layers);
+                obstacle_timing.finish(tree_obstacles.size());
                 // Organic's influence-area solver may discard every branch when sparse
                 // normal extrusion lines are injected as hard obstacles. Its overlap is
                 // resolved deterministically during the same-Z channel merge instead.
@@ -4552,25 +4589,61 @@ void PrintObject::_generate_support_material()
                 TreeSupport tree_support(
                     *this, m_slicing_params, &plan.tree_mask(), tree_style, tree_obstacle_ptr);
                 tree_support.throw_on_cancel = [this]() { this->throw_if_canceled(); };
+                SupportProfileStage tree_timing("support-mixed", "Generate tree channel", plan.tree_mask().size());
                 tree_support.generate();
                 tree_layers = take_support_layers(*this);
                 for (const std::unique_ptr<SupportLayer> &layer : tree_layers)
                     layer->support_type = stInnerTree;
-                if (tree_layers.empty())
-                    throw SlicingError(_u8L("Mixed support assigned a region to the tree channel, but no printable tree route was generated."));
-            }
+                if (tree_layers.empty()) {
+                    // A valid tree mask may collapse to no printable branches after the
+                    // tree generator applies its own minimum-area, collision and routing
+                    // constraints. Do not discard that assigned demand or abort the whole
+                    // slice. Re-run the selected normal generator with both masks so the
+                    // residual region gets a printable fallback whenever normal support
+                    // can reach it.
+                    clear_tree_support_preview_cache();
+                    std::vector<Polygons> fallback_mask = plan.normal_mask();
+                    fallback_mask.resize(std::max(fallback_mask.size(), plan.tree_mask().size()));
+                    for (size_t layer_id = 0; layer_id < plan.tree_mask().size(); ++layer_id) {
+                        append(fallback_mask[layer_id], plan.tree_mask()[layer_id]);
+                        fallback_mask[layer_id] = union_(fallback_mask[layer_id]);
+                    }
 
+                    SupportProfileStage fallback_timing(
+                        "support-mixed", "Fallback tree demand to normal channel", fallback_mask.size());
+                    normal_layers = generate_normal_channel(fallback_mask);
+                    fallback_timing.finish(normal_layers.size());
+                    if (normal_layers.empty())
+                        throw SlicingError(_u8L("Mixed support could not generate a printable route for the assigned support demand."));
+                    this->active_step_add_warning(
+                        PrintStateBase::WarningLevel::NON_CRITICAL,
+                        _u8L("Tree support could not route part of the Mixed support demand, so it was generated with normal support instead."));
+                }
+                tree_timing.finish(tree_layers.size());
+            }
+            const auto tree_ready_at = MixedClock::now();
+
+            this->print()->set_status(69, _u8L("Mixed support: merging support channels"));
+            SupportProfileStage merge_timing(
+                "support-mixed", "Merge support channels", normal_layers.size() + tree_layers.size());
             merge_mixed_support_layers(*this, std::move(normal_layers), std::move(tree_layers));
+            merge_timing.finish(support_layers().size());
+            const auto mixed_finished_at = MixedClock::now();
+            const auto milliseconds = [](const MixedClock::time_point &begin, const MixedClock::time_point &end) {
+                return std::chrono::duration<double, std::milli>(end - begin).count();
+            };
+            BOOST_LOG_TRIVIAL(info)
+                << "Mixed support timings: demand=" << milliseconds(mixed_started_at, demand_ready_at)
+                << "ms plan=" << milliseconds(demand_ready_at, plan_ready_at)
+                << "ms normal=" << milliseconds(plan_ready_at, normal_ready_at)
+                << "ms tree=" << milliseconds(normal_ready_at, tree_ready_at)
+                << "ms merge=" << milliseconds(tree_ready_at, mixed_finished_at)
+                << "ms total=" << milliseconds(mixed_started_at, mixed_finished_at) << "ms";
         } catch (...) {
             clear_support_layers();
             clear_tree_support_preview_cache();
             throw;
         }
-    }
-    else if (m_config.enable_support.value && is_tsunami(m_config.support_type.value)) {
-        TsunamiSupport tsunami_support(*this, m_slicing_params);
-        tsunami_support.throw_on_cancel = [this]() { this->throw_if_canceled(); };
-        tsunami_support.generate();
     }
     else if (is_tree(m_config.support_type.value)) {
         TreeSupport tree_support(*this, m_slicing_params);

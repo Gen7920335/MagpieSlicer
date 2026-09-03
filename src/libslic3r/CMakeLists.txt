@@ -20,6 +20,7 @@ endif()
 
 option(BUILD_SHARED_LIBS "Build shared libs" OFF)
 option(SLIC3R_ENABLE_VULKAN_SLICER "Build the experimental deterministic Vulkan slicer backend" OFF)
+option(SLIC3R_ENABLE_CUDA_SLICER "Build opt-in validated CUDA compute backend (Windows)" OFF)
 
 set(lisbslic3r_sources
     AABBMesh.cpp
@@ -482,6 +483,7 @@ set(lisbslic3r_sources
     Support/ResinStyleSupport.cpp
     Support/ResinStyleSupport.hpp
     Support/SupportParameters.hpp
+    Support/SupportTiming.hpp
     Support/SupportSpotsGenerator.cpp
     Support/SupportSpotsGenerator.hpp
     Support/TreeModelVolumes.cpp
@@ -491,8 +493,6 @@ set(lisbslic3r_sources
     Support/TreeSupportCommon.hpp
     Support/TreeSupport.cpp
     Support/TreeSupport.hpp
-    Support/TsunamiSupport.cpp
-    Support/TsunamiSupport.hpp
     SurfaceCollection.cpp
     SurfaceCollection.hpp
     Surface.cpp
@@ -537,11 +537,15 @@ set(lisbslic3r_sources
     Gpu/GpuExactGeometry.hpp
     Gpu/VulkanSlicer.hpp
     Gpu/VulkanSlicer.cpp
+    Gpu/CudaSlicer.hpp
+    Gpu/SlicerCompute.hpp
+    Gpu/CudaSlicer.cpp
+    Gpu/CudaIntersectionAbi.hpp
     FlushVolPredictor.hpp
     FlushVolPredictor.cpp
 )
 
-if (MAGPIE_SLICING_PROFILER)
+if (MAGPIE_SLICING_TIMING OR MAGPIE_SLICING_PROFILER)
     list(APPEND lisbslic3r_sources
         SlicingProfiler.hpp
         SlicingProfiler.cpp
@@ -560,6 +564,43 @@ add_library(libslic3r STATIC ${lisbslic3r_sources}
     "${CMAKE_CURRENT_BINARY_DIR}/libslic3r_version.h"
     ${OpenVDBUtils_SOURCES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${lisbslic3r_sources})
+
+if (SLIC3R_ENABLE_CUDA_SLICER)
+    if (NOT WIN32)
+        message(FATAL_ERROR "The experimental CUDA loader currently supports Windows only")
+    endif ()
+    set(MAGPIE_CUDA_NVCC "" CACHE FILEPATH "Path to nvcc.exe")
+    set(MAGPIE_CUDA_INCLUDE_DIR "" CACHE PATH "CUDA driver/runtime headers")
+    set(MAGPIE_CUDA_CCCL_INCLUDE_DIR "" CACHE PATH "CUDA CCCL headers")
+    if (NOT EXISTS "${MAGPIE_CUDA_NVCC}" OR NOT EXISTS "${MAGPIE_CUDA_INCLUDE_DIR}/cuda.h")
+        message(FATAL_ERROR "Set MAGPIE_CUDA_NVCC and MAGPIE_CUDA_INCLUDE_DIR")
+    endif ()
+    set(cuda_binary "${CMAKE_CURRENT_BINARY_DIR}/cuda/intersections.fatbin")
+    set(cuda_header "${CMAKE_CURRENT_BINARY_DIR}/cuda/CudaIntersectionBinary.hpp")
+    add_custom_command(OUTPUT "${cuda_binary}" "${cuda_header}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/cuda"
+        COMMAND "${MAGPIE_CUDA_NVCC}" --fatbin -std=c++17 -Xcompiler /utf-8
+            -Wno-deprecated-gpu-targets
+            "-I${MAGPIE_CUDA_INCLUDE_DIR}" "-I${MAGPIE_CUDA_CCCL_INCLUDE_DIR}"
+            --generate-code arch=compute_61,code=sm_61
+            --generate-code arch=compute_89,code=sm_89
+            "${CMAKE_CURRENT_SOURCE_DIR}/Gpu/CudaIntersections.cu" -o "${cuda_binary}"
+        COMMAND "${CMAKE_COMMAND}" "-DINPUT=${cuda_binary}" "-DOUTPUT=${cuda_header}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/EmbedCudaBinary.cmake"
+        DEPENDS Gpu/CudaIntersections.cu Gpu/CudaIntersectionAbi.hpp
+            "${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/EmbedCudaBinary.cmake" VERBATIM)
+    add_custom_target(magpie_cuda_kernel DEPENDS "${cuda_header}")
+    add_dependencies(libslic3r magpie_cuda_kernel)
+    set_property(SOURCE Gpu/CudaSlicer.cpp Fill/FillRectilinear.cpp APPEND
+        PROPERTY COMPILE_DEFINITIONS SLIC3R_ENABLE_CUDA_SLICER=1)
+    set_property(SOURCE Gpu/CudaSlicer.cpp APPEND PROPERTY INCLUDE_DIRECTORIES
+        "${MAGPIE_CUDA_INCLUDE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/cuda")
+    # Hardware-dependent probe: opt-in target, never part of ordinary CTest.
+    add_executable(magpie-cuda-compute-selftest EXCLUDE_FROM_ALL Gpu/CudaComputeSelfTest.cpp)
+    target_compile_definitions(magpie-cuda-compute-selftest PRIVATE MAGPIE_CUDA_PRODUCT_SELFTEST=1)
+    target_link_libraries(magpie-cuda-compute-selftest PRIVATE libslic3r)
+    target_include_directories(magpie-cuda-compute-selftest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+endif ()
 
 if (SLIC3R_ENABLE_VULKAN_SLICER)
     find_package(Vulkan 1.2 REQUIRED)

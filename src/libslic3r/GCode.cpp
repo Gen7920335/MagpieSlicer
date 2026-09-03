@@ -102,9 +102,43 @@ namespace Slic3r {
 static const float g_min_purge_volume = 100.f;
 static const float g_purge_volume_one_time = 135.f;
 static const int g_max_flush_count = 4;
+
+static int flush_count_for_volume(double purge_volume)
+{
+    if (!std::isfinite(purge_volume) || purge_volume <= 0.)
+        return 0;
+    const double rounded = std::round(purge_volume / g_purge_volume_one_time);
+    if (!std::isfinite(rounded) || rounded <= 0.)
+        return 0;
+    if (rounded >= static_cast<double>(g_max_flush_count))
+        return g_max_flush_count;
+    return static_cast<int>(rounded);
+}
 static const size_t g_max_label_object = 64;
 
 namespace {
+
+static std::vector<float> flush_matrix_for_filaments(const PrintConfig &config,
+                                                     size_t toolhead_id,
+                                                     size_t filament_count)
+{
+    const size_t expected_size = filament_count * filament_count;
+    std::vector<float> matrix;
+    const auto &stored = config.flush_volumes_matrix.values;
+    if (expected_size > 0 && !stored.empty() && stored.size() % expected_size == 0) {
+        const size_t matrix_count = stored.size() / expected_size;
+        const size_t matrix_index = matrix_count == 1 ? 0 : std::min(toolhead_id, matrix_count - 1);
+        const size_t begin = matrix_index * expected_size;
+        matrix = cast<float>(std::vector<double>(stored.begin() + begin, stored.begin() + begin + expected_size));
+    }
+    if (matrix.size() == expected_size)
+        return matrix;
+
+    matrix.assign(expected_size, config.prime_volume);
+    for (size_t filament_id = 0; filament_id < filament_count; ++filament_id)
+        matrix[filament_id * filament_count + filament_id] = 0.f;
+    return matrix;
+}
 
 constexpr double LESIC_ZERO_ANGLE_DEG = -90.0;
 constexpr bool   LESIC_CLOCKWISE      = true;
@@ -2007,7 +2041,12 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
                 Vec3d nozzle_pos = gcode_writer.get_position();
 
                 float purge_volume = tcr.purge_volume < EPSILON ? 0 : std::max(tcr.purge_volume, g_min_purge_volume);
-                float filament_area = float((M_PI / 4.f) * pow(full_config.filament_diameter.get_at(new_filament_id), 2));
+                if (full_config.filament_diameter.values.empty())
+                    throw Slic3r::SlicingError(_(L("Filament diameter is missing for the selected material.")));
+                const double filament_diameter = full_config.filament_diameter.get_at(new_filament_id);
+                if (!std::isfinite(filament_diameter) || filament_diameter <= 0.)
+                    throw Slic3r::SlicingError(_(L("Filament diameter must be greater than zero.")));
+                float filament_area = float((M_PI / 4.f) * filament_diameter * filament_diameter);
                 float purge_length = purge_volume / filament_area;
 
                 int old_filament_e_feedrate = (old_filament_id != -1) ? (int)(60.0 * full_config.filament_max_volumetric_speed.get_at(old_filament_id) / filament_area) : 200;
@@ -2033,9 +2072,11 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
                 config.set_key_value("old_retract_length_toolchange", new ConfigOptionFloat(old_retract_length_toolchange));
                 config.set_key_value("new_retract_length_toolchange", new ConfigOptionFloat(new_retract_length_toolchange));
                 config.set_key_value("old_filament_temp", new ConfigOptionInt(old_filament_temp));
-                int interface_temp = full_config.filament_tower_interface_print_temp.get_at(new_filament_id);
+                int interface_temp = full_config.filament_tower_interface_print_temp.values.empty() ?
+                                         -1 : full_config.filament_tower_interface_print_temp.get_at(new_filament_id);
                 if (interface_temp == -1)
-                    interface_temp = full_config.nozzle_temperature_range_high.get_at(new_filament_id);
+                    interface_temp = !full_config.nozzle_temperature_range_high.values.empty() ?
+                                         full_config.nozzle_temperature_range_high.get_at(new_filament_id) : new_filament_temp;
                 if (full_config.enable_tower_interface_features && tcr.is_contact)
                     new_filament_temp = interface_temp;
                 config.set_key_value("new_filament_temp", new ConfigOptionInt(new_filament_temp));
@@ -2068,15 +2109,18 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
                 auto flush_temps = m_print_config->filament_flush_temp.values;
                 auto filament_cooling_before_tower = m_print_config->filament_cooling_before_tower.values;
                 for (size_t idx = 0; idx < flush_v_speed.size(); ++idx) {
-                    if (flush_v_speed[idx] == 0)
+                    if (flush_v_speed[idx] == 0 && !m_print_config->filament_max_volumetric_speed.values.empty())
                         flush_v_speed[idx] = m_print_config->filament_max_volumetric_speed.get_at(idx);
                 }
                 for (size_t idx = 0; idx < flush_temps.size(); ++idx) {
-                    if (flush_temps[idx] == 0)
+                    if (flush_temps[idx] == 0 && !m_print_config->nozzle_temperature_range_high.values.empty())
                         flush_temps[idx] = m_print_config->nozzle_temperature_range_high.get_at(idx);
                 }
-                if (filament_cooling_before_tower.size() < m_print_config->filament_type.values.size())
-                    filament_cooling_before_tower.resize(m_print_config->filament_type.values.size(), m_print_config->filament_cooling_before_tower.get_at(0));
+                if (filament_cooling_before_tower.size() < m_print_config->filament_type.values.size()) {
+                    const double cooling_default = m_print_config->filament_cooling_before_tower.values.empty() ?
+                                                       0. : m_print_config->filament_cooling_before_tower.get_at(0);
+                    filament_cooling_before_tower.resize(m_print_config->filament_type.values.size(), cooling_default);
+                }
                 if (tcr.is_contact || gcodegen.m_layer_index == 0)
                     std::fill(filament_cooling_before_tower.begin(), filament_cooling_before_tower.end(), 0);
                 config.set_key_value("flush_volumetric_speeds", new ConfigOptionFloats(flush_v_speed));
@@ -2086,11 +2130,13 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
                 config.set_key_value("wipe_avoid_perimeter", new ConfigOptionBool(is_used_travel_avoid_perimeter));
                 config.set_key_value("wipe_avoid_pos_x", new ConfigOptionFloat(wipe_avoid_pos_x));
                 config.set_key_value("is_prime_tower_interface", new ConfigOptionBool(tcr.is_contact));
-                config.set_key_value("filament_tower_interface_purge_volume", new ConfigOptionFloat(full_config.filament_tower_interface_purge_volume.get_at(new_filament_id)));
+                const double interface_purge_volume = full_config.filament_tower_interface_purge_volume.values.empty() ?
+                                                          0. : full_config.filament_tower_interface_purge_volume.get_at(new_filament_id);
+                config.set_key_value("filament_tower_interface_purge_volume", new ConfigOptionFloat(interface_purge_volume));
                 config.set_key_value("filament_tower_interface_print_temp", new ConfigOptionInt(interface_temp));
 
-                int   flush_count = std::min(g_max_flush_count, (int) std::round(purge_volume / g_purge_volume_one_time));
-                float flush_unit  = purge_length / flush_count;
+                int   flush_count = flush_count_for_volume(purge_volume);
+                float flush_unit  = flush_count > 0 && std::isfinite(purge_length) ? purge_length / flush_count : 0.f;
                 int   flush_idx   = 0;
                 for (; flush_idx < flush_count; flush_idx++) {
                     char key_value[64] = {0};
@@ -5183,7 +5229,7 @@ int GCode::get_bed_temperature(const int extruder_id, const bool is_first_layer,
 {
     std::string bed_temp_key = is_first_layer ? get_bed_temp_1st_layer_key(bed_type) : get_bed_temp_key(bed_type);
     const ConfigOptionInts* bed_temp_opt = m_config.option<ConfigOptionInts>(bed_temp_key);
-    return bed_temp_opt->get_at(extruder_id);
+    return bed_temp_opt != nullptr && !bed_temp_opt->values.empty() ? bed_temp_opt->get_at(extruder_id) : 0;
 }
 
 int GCode::get_highest_bed_temperature(const bool is_first_layer, const Print& print) const
@@ -6224,8 +6270,8 @@ LayerResult GCode::process_layer(
 
     // BBS: get next extruder according to flush and soluble
     auto get_next_extruder = [&](int current_extruder,const std::vector<unsigned int>&extruders) {
-        std::vector<float> flush_matrix(cast<float>(get_flush_volumes_matrix(m_config.flush_volumes_matrix.values, 0, m_config.nozzle_diameter.values.size())));
-        const unsigned int number_of_extruders = (unsigned int)(sqrt(flush_matrix.size()) + EPSILON);
+        const unsigned int number_of_extruders = (unsigned int)m_config.filament_colour.values.size();
+        std::vector<float> flush_matrix = flush_matrix_for_filaments(m_config, 0, number_of_extruders);
         // Extract purging volumes for each extruder pair:
         std::vector<std::vector<float>> wipe_volumes;
         for (unsigned int i = 0; i < number_of_extruders; ++i)
@@ -7032,25 +7078,36 @@ void GCode::append_full_config(const Print &print, std::string &str)
 {
     DynamicPrintConfig cfg = print.full_print_config();
     { // correct the flush_volumes_matrix with flush_multiplier values
-        std::vector<double> temp_cfg_flush_multiplier = cfg.option<ConfigOptionFloats>("flush_multiplier")->values;
-        std::vector<double> temp_flush_volumes_matrix = cfg.option<ConfigOptionFloats>("flush_volumes_matrix")->values;
-        auto                temp_filament_color       = cfg.option<ConfigOptionStrings>("filament_colour")->values;
-        size_t              heads_count_tmp           = temp_cfg_flush_multiplier.size(),
-               matrix_value_count                     = temp_flush_volumes_matrix.size() / temp_cfg_flush_multiplier.size(),
-               filament_count_tmp                     = temp_filament_color.size();
-        if (filament_count_tmp * filament_count_tmp * heads_count_tmp == temp_flush_volumes_matrix.size()) {
-            for (size_t idx = 0; idx < heads_count_tmp; ++idx) {
-                double temp_cfg_flush_multiplier_idx = temp_cfg_flush_multiplier[idx];
-                size_t temp_begin_t = idx * matrix_value_count, temp_end_t = (idx + 1) * matrix_value_count;
+        const auto *flush_multiplier_opt = cfg.option<ConfigOptionFloats>("flush_multiplier");
+        const auto *flush_matrix_opt = cfg.option<ConfigOptionFloats>("flush_volumes_matrix");
+        const auto *filament_color_opt = cfg.option<ConfigOptionStrings>("filament_colour");
+        std::vector<double> temp_cfg_flush_multiplier = flush_multiplier_opt != nullptr ?
+                                                            flush_multiplier_opt->values : std::vector<double>{};
+        std::vector<double> temp_flush_volumes_matrix = flush_matrix_opt != nullptr ?
+                                                            flush_matrix_opt->values : std::vector<double>{};
+        auto temp_filament_color = filament_color_opt != nullptr ?
+                                       filament_color_opt->values : std::vector<std::string>{};
+        if (temp_cfg_flush_multiplier.empty()) {
+            const auto *nozzle_diameters = cfg.option<ConfigOptionFloats>("nozzle_diameter");
+            const size_t nozzle_count = nozzle_diameters != nullptr && !nozzle_diameters->values.empty() ?
+                                            nozzle_diameters->values.size() : 1;
+            temp_cfg_flush_multiplier.assign(nozzle_count, 1.);
+            cfg.set_key_value("flush_multiplier", new ConfigOptionFloats(temp_cfg_flush_multiplier));
+        }
+        const size_t filament_count_tmp = temp_filament_color.size();
+        const size_t matrix_value_count = filament_count_tmp * filament_count_tmp;
+        if (matrix_value_count > 0 && temp_flush_volumes_matrix.size() % matrix_value_count == 0) {
+            const size_t matrix_count = temp_flush_volumes_matrix.size() / matrix_value_count;
+            for (size_t idx = 0; idx < matrix_count; ++idx) {
+                const double temp_cfg_flush_multiplier_idx =
+                    temp_cfg_flush_multiplier[std::min(idx, temp_cfg_flush_multiplier.size() - 1)];
+                const size_t temp_begin_t = idx * matrix_value_count;
+                const size_t temp_end_t = temp_begin_t + matrix_value_count;
                 std::transform(temp_flush_volumes_matrix.begin() + temp_begin_t, temp_flush_volumes_matrix.begin() + temp_end_t,
                                temp_flush_volumes_matrix.begin() + temp_begin_t,
                                [temp_cfg_flush_multiplier_idx](double inputx) { return std::round(inputx * temp_cfg_flush_multiplier_idx); });
             }
-            cfg.option<ConfigOptionFloats>("flush_volumes_matrix")->values = temp_flush_volumes_matrix;
-        } else if (filament_count_tmp == 1) {
-        } // Not applicable to flush matrix situations
-        else { // flush_volumes_matrix value count error?
-            throw Slic3r::SlicingError(_(L("Flush volumes matrix do not match to the correct size!")));
+            cfg.set_key_value("flush_volumes_matrix", new ConfigOptionFloats(temp_flush_volumes_matrix));
         }
     }
     // Sorted list of config keys, which shall not be stored into the G-code. Initializer list.
@@ -9829,19 +9886,26 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
     float old_retract_length, old_retract_length_toolchange, wipe_volume;
     int old_filament_temp, old_filament_e_feedrate;
 
-    float filament_area = float((M_PI / 4.f) * pow(m_config.filament_diameter.get_at(new_filament_id), 2));
+    if (m_config.filament_diameter.values.empty())
+        throw Slic3r::SlicingError(_(L("Filament diameter is missing for the selected material.")));
+    const double filament_diameter = m_config.filament_diameter.get_at(new_filament_id);
+    if (!std::isfinite(filament_diameter) || filament_diameter <= 0.)
+        throw Slic3r::SlicingError(_(L("Filament diameter must be greater than zero.")));
+    float filament_area = float((M_PI / 4.f) * filament_diameter * filament_diameter);
     //BBS: add handling for filament change in start gcode
     int old_filament_id = -1;
     int old_extruder_id = -1;
     if (m_writer.filament() != nullptr || m_start_gcode_filament != -1) {
-        std::vector<float> flush_matrix(cast<float>(get_flush_volumes_matrix(m_config.flush_volumes_matrix.values, new_extruder_id, m_config.nozzle_diameter.values.size())));
         const unsigned int number_of_extruders = (unsigned int) (m_config.filament_colour.values.size()); // if is multi_extruder only use the fist extruder matrix
-        if (m_writer.filament() != nullptr)
-            assert(m_writer.filament()->id() < number_of_extruders);
-        else
-            assert(m_start_gcode_filament < number_of_extruders);
+        if (number_of_extruders == 0 || new_filament_id >= number_of_extruders)
+            throw Slic3r::SlicingError(_(L("The selected filament is not present in the current material list.")));
+        std::vector<float> flush_matrix = flush_matrix_for_filaments(m_config, new_extruder_id, number_of_extruders);
+        const int active_old_filament = m_writer.filament() != nullptr ?
+                                            static_cast<int>(m_writer.filament()->id()) : m_start_gcode_filament;
+        if (active_old_filament < 0 || static_cast<unsigned int>(active_old_filament) >= number_of_extruders)
+            throw Slic3r::SlicingError(_(L("The active filament is not present in the current material list.")));
 
-        old_filament_id = m_writer.filament() != nullptr ? m_writer.filament()->id() : m_start_gcode_filament;
+        old_filament_id = active_old_filament;
         old_extruder_id = m_writer.filament() != nullptr ? m_writer.filament()->extruder_id() : get_extruder_id(m_start_gcode_filament);
 
         old_retract_length = m_config.retraction_length.get_at(old_filament_id);
@@ -9856,6 +9920,9 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
             if (old_filament_id_in_new_extruder == -1)
                 wipe_volume = 0;
             else {
+                if (old_filament_id_in_new_extruder < 0 ||
+                    static_cast<unsigned int>(old_filament_id_in_new_extruder) >= number_of_extruders)
+                    throw Slic3r::SlicingError(_(L("The active filament is not present in the current material list.")));
                 wipe_volume = flush_matrix[old_filament_id_in_new_extruder * number_of_extruders + new_filament_id];
                 wipe_volume *= m_config.flush_multiplier.get_at(new_extruder_id);
             }
@@ -9921,11 +9988,15 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
     dyn_config.set_key_value("wipe_avoid_perimeter", new ConfigOptionBool(false));
     dyn_config.set_key_value("wipe_avoid_pos_x", new ConfigOptionFloat(wipe_avoid_pos_x));
     dyn_config.set_key_value("is_prime_tower_interface", new ConfigOptionBool(false));
-    dyn_config.set_key_value("filament_tower_interface_purge_volume", new ConfigOptionFloat(m_config.filament_tower_interface_purge_volume.get_at(new_filament_id)));
+    const double interface_purge_volume = m_config.filament_tower_interface_purge_volume.values.empty() ?
+                                              0. : m_config.filament_tower_interface_purge_volume.get_at(new_filament_id);
+    dyn_config.set_key_value("filament_tower_interface_purge_volume", new ConfigOptionFloat(interface_purge_volume));
     {
-        int interface_temp = m_config.filament_tower_interface_print_temp.get_at(new_filament_id);
+        int interface_temp = m_config.filament_tower_interface_print_temp.values.empty() ?
+                                 -1 : m_config.filament_tower_interface_print_temp.get_at(new_filament_id);
         if (interface_temp == -1)
-            interface_temp = m_config.nozzle_temperature_range_high.get_at(new_filament_id);
+            interface_temp = !m_config.nozzle_temperature_range_high.values.empty() ?
+                                 m_config.nozzle_temperature_range_high.get_at(new_filament_id) : new_filament_temp;
         dyn_config.set_key_value("filament_tower_interface_print_temp", new ConfigOptionInt(interface_temp));
     }
     if (toolchange_temp_override > 0) {
@@ -9946,23 +10017,26 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
     auto flush_temps = m_print->config().filament_flush_temp.values;
     auto filament_cooling_before_tower = m_print->config().filament_cooling_before_tower.values;
     for (size_t idx = 0; idx < flush_v_speed.size(); ++idx) {
-        if (flush_v_speed[idx] == 0)
+        if (flush_v_speed[idx] == 0 && !m_print->config().filament_max_volumetric_speed.values.empty())
             flush_v_speed[idx] = m_print->config().filament_max_volumetric_speed.get_at(idx);
     }
     for (size_t idx = 0; idx < flush_temps.size(); ++idx) {
-        if (flush_temps[idx] == 0)
+        if (flush_temps[idx] == 0 && !m_print->config().nozzle_temperature_range_high.values.empty())
             flush_temps[idx] = m_print->config().nozzle_temperature_range_high.get_at(idx);
     }
-    if (filament_cooling_before_tower.size() < m_print->config().filament_type.values.size())
-        filament_cooling_before_tower.resize(m_print->config().filament_type.values.size(), m_print->config().filament_cooling_before_tower.get_at(0));
+    if (filament_cooling_before_tower.size() < m_print->config().filament_type.values.size()) {
+        const double cooling_default = m_print->config().filament_cooling_before_tower.values.empty() ?
+                                           0. : m_print->config().filament_cooling_before_tower.get_at(0);
+        filament_cooling_before_tower.resize(m_print->config().filament_type.values.size(), cooling_default);
+    }
     std::fill(filament_cooling_before_tower.begin(), filament_cooling_before_tower.end(), 0);
     dyn_config.set_key_value("flush_volumetric_speeds", new ConfigOptionFloats(flush_v_speed));
     dyn_config.set_key_value("flush_temperatures", new ConfigOptionInts(flush_temps));
     dyn_config.set_key_value("filament_cooling_before_tower", new ConfigOptionFloats(filament_cooling_before_tower));
     dyn_config.set_key_value("flush_length", new ConfigOptionFloat(wipe_length));
 
-    int flush_count = std::min(g_max_flush_count, (int)std::round(wipe_volume / g_purge_volume_one_time));
-    float flush_unit = wipe_length / flush_count;
+    int flush_count = flush_count_for_volume(wipe_volume);
+    float flush_unit = flush_count > 0 && std::isfinite(wipe_length) ? wipe_length / flush_count : 0.f;
     int flush_idx = 0;
     for (; flush_idx < flush_count; flush_idx++) {
         char key_value[64] = { 0 };

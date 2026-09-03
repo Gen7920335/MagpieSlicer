@@ -1,5 +1,5 @@
 #include "Plater.hpp"
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
 #include "libslic3r/SlicingProfiler.hpp"
 #endif
 #include "libslic3r/Config.hpp"
@@ -797,11 +797,17 @@ void Sidebar::priv::hide_rich_tip(wxButton* btn)
 std::vector<int> get_min_flush_volumes(const DynamicPrintConfig &full_config, size_t nozzle_id)
 {
     std::vector<int>extra_flush_volumes;
+    const size_t safe_nozzle_id = nozzle_id == size_t(-1) ? 0 : nozzle_id;
     //const auto& full_config = wxGetApp().preset_bundle->full_config();
     //auto& printer_config = wxGetApp().preset_bundle->printers.get_edited_preset().config;
 
     const ConfigOptionFloatsNullable* nozzle_volume_opt = full_config.option<ConfigOptionFloatsNullable>("nozzle_volume");
-    int nozzle_volume_val = nozzle_volume_opt ? (int)nozzle_volume_opt->get_at(nozzle_id) : 0;
+    const size_t nozzle_volume_index = nozzle_volume_opt != nullptr && safe_nozzle_id < nozzle_volume_opt->values.size() ?
+                                           safe_nozzle_id : 0;
+    int nozzle_volume_val = nozzle_volume_opt != nullptr && !nozzle_volume_opt->values.empty() &&
+                            !nozzle_volume_opt->is_nil(nozzle_volume_index)
+                                ? static_cast<int>(nozzle_volume_opt->get_at(nozzle_volume_index))
+                                : 0;
 
     const ConfigOptionInt* enable_long_retraction_when_cut_opt = full_config.option<ConfigOptionInt>("enable_long_retraction_when_cut");
     int machine_enabled_level = 0;
@@ -811,35 +817,45 @@ std::vector<int> get_min_flush_volumes(const DynamicPrintConfig &full_config, si
     }
     const ConfigOptionBools* long_retractions_when_cut_opt = full_config.option<ConfigOptionBools>("long_retractions_when_cut");
     bool machine_activated = false;
-    if (long_retractions_when_cut_opt) {
-        machine_activated = long_retractions_when_cut_opt->values[nozzle_id] == 1;
-        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": get long_retractions_when_cut from config, value=%1%, activated=%2%")%long_retractions_when_cut_opt->values[0] %machine_activated;
+    if (long_retractions_when_cut_opt && !long_retractions_when_cut_opt->values.empty()) {
+        machine_activated = long_retractions_when_cut_opt->get_at(safe_nozzle_id);
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": get long_retractions_when_cut from config, value=%1%, activated=%2%")%long_retractions_when_cut_opt->get_at(safe_nozzle_id) %machine_activated;
     }
 
-    size_t filament_size = full_config.option<ConfigOptionFloats>("filament_diameter")->values.size();
-    std::vector<double> filament_retraction_distance_when_cut(filament_size, 18.0f), printer_retraction_distance_when_cut(filament_size, 18.0f);
+    const auto *filament_diameters = full_config.option<ConfigOptionFloats>("filament_diameter");
+    size_t filament_size = filament_diameters != nullptr && !filament_diameters->values.empty() ?
+                               filament_diameters->values.size() : 1;
+    std::vector<double> filament_retraction_distance_when_cut(filament_size, 18.0f);
+    std::vector<double> printer_retraction_distance_when_cut(std::max<size_t>(1, safe_nozzle_id + 1), 18.0f);
     std::vector<unsigned char> filament_long_retractions_when_cut(filament_size, 0);
-    const ConfigOptionFloats* filament_retraction_distances_when_cut_opt = full_config.option<ConfigOptionFloats>("filament_retraction_distances_when_cut");
+    const ConfigOptionFloatsNullable* filament_retraction_distances_when_cut_opt = full_config.option<ConfigOptionFloatsNullable>("filament_retraction_distances_when_cut");
     if (filament_retraction_distances_when_cut_opt) {
-        filament_retraction_distance_when_cut = filament_retraction_distances_when_cut_opt->values;
+        for (size_t idx = 0; idx < filament_size && idx < filament_retraction_distances_when_cut_opt->values.size(); ++idx)
+            if (!filament_retraction_distances_when_cut_opt->is_nil(idx))
+                filament_retraction_distance_when_cut[idx] = filament_retraction_distances_when_cut_opt->get_at(idx);
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": get filament_retraction_distance_when_cut from config, size=%1%, values=%2%")%filament_retraction_distance_when_cut.size() %filament_retraction_distances_when_cut_opt->serialize();
     }
 
     const ConfigOptionFloats* printer_retraction_distance_when_cut_opt = full_config.option<ConfigOptionFloats>("retraction_distances_when_cut");
-    if (printer_retraction_distance_when_cut_opt) {
-        printer_retraction_distance_when_cut = printer_retraction_distance_when_cut_opt->values;
+    if (printer_retraction_distance_when_cut_opt && !printer_retraction_distance_when_cut_opt->values.empty()) {
+        printer_retraction_distance_when_cut.resize(
+            std::max(printer_retraction_distance_when_cut.size(), printer_retraction_distance_when_cut_opt->values.size()), 18.0);
+        std::copy(printer_retraction_distance_when_cut_opt->values.begin(),
+                  printer_retraction_distance_when_cut_opt->values.end(), printer_retraction_distance_when_cut.begin());
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": get retraction_distances_when_cut from config, size=%1%, values=%2%")%printer_retraction_distance_when_cut.size() %printer_retraction_distance_when_cut_opt->serialize();
     }
 
-    const ConfigOptionBools* filament_long_retractions_when_cut_opt = full_config.option<ConfigOptionBools>("filament_long_retractions_when_cut");
+    const ConfigOptionBoolsNullable* filament_long_retractions_when_cut_opt = full_config.option<ConfigOptionBoolsNullable>("filament_long_retractions_when_cut");
     if (filament_long_retractions_when_cut_opt) {
-        filament_long_retractions_when_cut = filament_long_retractions_when_cut_opt->values;
+        for (size_t idx = 0; idx < filament_size && idx < filament_long_retractions_when_cut_opt->values.size(); ++idx)
+            if (!filament_long_retractions_when_cut_opt->is_nil(idx))
+                filament_long_retractions_when_cut[idx] = filament_long_retractions_when_cut_opt->get_at(idx);
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": get filament_long_retractions_when_cut from config, size=%1%, values=%2%")%filament_long_retractions_when_cut.size() %filament_long_retractions_when_cut_opt->serialize();
     }
 
     for (size_t idx = 0; idx < filament_size; ++idx) {
         int extra_flush_volume = nozzle_volume_val;
-        int retract_length = machine_enabled_level && machine_activated ? printer_retraction_distance_when_cut[nozzle_id] : 0;
+        int retract_length = machine_enabled_level && machine_activated ? printer_retraction_distance_when_cut[safe_nozzle_id] : 0;
 
         unsigned char filament_activated = filament_long_retractions_when_cut[idx];
         double filament_retract_length = filament_retraction_distance_when_cut[idx];
@@ -850,7 +866,7 @@ std::vector<int> get_min_flush_volumes(const DynamicPrintConfig &full_config, si
             if (!std::isnan(filament_retract_length))
                 retract_length = (int)filament_retraction_distance_when_cut[idx];
             else
-                retract_length = printer_retraction_distance_when_cut[nozzle_id];
+                retract_length = printer_retraction_distance_when_cut[safe_nozzle_id];
         }
 
         extra_flush_volume -= PI * 1.75 * 1.75 / 4 * retract_length;
@@ -913,8 +929,17 @@ struct DynamicFilamentList : DynamicList
         for (int i = 0; i < presets.size(); ++i) {
             wxString str;
             std::string type;
-            wxGetApp().preset_bundle->filaments.find_preset(presets[i])->get_filament_type(type);
-            str << type;
+            Preset *preset = wxGetApp().preset_bundle->filaments.find_preset(presets[i]);
+            if (preset != nullptr)
+                preset->get_filament_type(type);
+
+            // A preset name and its actual filament type may differ (for example a
+            // user preset named "PVA" that still inherits PLA settings). Showing
+            // only the type hid both the selected slot and this mismatch in every
+            // dynamic filament selector, including support body and interface.
+            str << (i + 1) << ": " << from_u8(preset != nullptr ? preset->label(false) : presets[i]);
+            if (!type.empty())
+                str << " (" << from_u8(type) << ")";
             items.push_back({str, i < icons.size() ? icons[i] : nullptr});
         }
         DynamicList::update();
@@ -957,6 +982,22 @@ static int toolhead_nozzle_selection_for(double diameter)
         }
     }
     return best;
+}
+
+static size_t toolhead_index_for_filament(const PresetBundle &preset_bundle, size_t filament_index, size_t toolhead_count)
+{
+    if (toolhead_count == 0)
+        return 0;
+
+    if (const auto *filament_map = preset_bundle.project_config.option<ConfigOptionInts>("filament_map")) {
+        if (filament_index < filament_map->values.size()) {
+            const int mapped_toolhead = filament_map->values[filament_index];
+            if (mapped_toolhead > 0 && size_t(mapped_toolhead) <= toolhead_count)
+                return size_t(mapped_toolhead - 1);
+        }
+    }
+
+    return std::min(filament_index, toolhead_count - 1);
 }
 
 class AMSCountPopupWindow : public PopupWindow
@@ -2442,7 +2483,8 @@ void Sidebar::init_filament_combo(PlaterPresetComboBox **combo, const int filame
     double current_nozzle_diameter = 0.4;
     if (auto *nozzle_opt = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter")) {
         if (!nozzle_opt->values.empty()) {
-            const size_t nozzle_idx = std::min<size_t>(filament_idx, nozzle_opt->values.size() - 1);
+            const size_t nozzle_idx = toolhead_index_for_filament(
+                *wxGetApp().preset_bundle, size_t(filament_idx), nozzle_opt->values.size());
             current_nozzle_diameter = nozzle_opt->values[nozzle_idx];
         }
     }
@@ -2457,24 +2499,20 @@ void Sidebar::init_filament_combo(PlaterPresetComboBox **combo, const int filame
 
         PresetBundle &preset_bundle = *wxGetApp().preset_bundle;
         const DynamicPrintConfig &current_config = preset_bundle.printers.get_edited_preset().config;
-        std::vector<double> nozzle_values;
-        if (auto *nozzle_opt = current_config.option<ConfigOptionFloats>("nozzle_diameter"))
-            nozzle_values = nozzle_opt->values;
-        if (nozzle_values.empty())
-            nozzle_values.push_back(0.4);
-        if (nozzle_values.size() <= size_t(filament_idx))
-            nozzle_values.resize(size_t(filament_idx) + 1, nozzle_values.back());
+        const auto *nozzle_opt = current_config.option<ConfigOptionFloats>("nozzle_diameter");
+        const size_t toolhead_count = nozzle_opt != nullptr ? nozzle_opt->values.size() : 0;
+        const size_t toolhead_index = toolhead_index_for_filament(
+            preset_bundle, size_t(filament_idx), toolhead_count);
 
         const double nozzle_diameter = s_toolhead_nozzle_choices[size_t(selection)];
-        nozzle_values[size_t(filament_idx)] = nozzle_diameter;
 
         DynamicPrintConfig new_config = current_config;
-        set_toolhead_nozzle_diameter(new_config, size_t(filament_idx), nozzle_diameter);
+        set_toolhead_nozzle_diameter(new_config, toolhead_index, nozzle_diameter);
 
         wxGetApp().get_tab(Preset::TYPE_PRINTER)->load_config(new_config);
         sync_toolhead_nozzle_combos(new_config);
         if (auto *filament_tab = dynamic_cast<TabFilament *>(wxGetApp().get_tab(Preset::TYPE_FILAMENT)))
-            filament_tab->set_hotend_index(size_t(filament_idx));
+            filament_tab->set_hotend_index(toolhead_index);
         wxGetApp().plater()->on_config_change(preset_bundle.full_config());
         wxGetApp().plater()->update();
     });
@@ -2547,7 +2585,9 @@ void Sidebar::sync_toolhead_nozzle_combos(const DynamicPrintConfig &printer_conf
         if (combo == nullptr)
             continue;
 
-        const double diameter = nozzles->values[std::min(index, nozzles->values.size() - 1)];
+        const size_t toolhead_index = toolhead_index_for_filament(
+            *wxGetApp().preset_bundle, index, nozzles->values.size());
+        const double diameter = nozzles->values[toolhead_index];
         const int selection = toolhead_nozzle_selection_for(diameter);
         if (combo->GetSelection() != selection)
             combo->SetSelection(selection);
@@ -3338,6 +3378,11 @@ void Sidebar::on_filaments_delete(size_t filament_id)
         sizer_filaments->Remove(last / 2);
 
         PlaterPresetComboBox* to_delete_combox = p->combos_filament[filament_id];
+        if (size_t(last) < p->combos_toolhead_nozzle.size()) {
+            if (p->combos_toolhead_nozzle[size_t(last)] != nullptr)
+                p->combos_toolhead_nozzle[size_t(last)]->Destroy();
+            p->combos_toolhead_nozzle.resize(size_t(last));
+        }
         (*p->combos_filament[last]).Destroy();
         p->combos_filament.pop_back();
 
@@ -3765,7 +3810,7 @@ void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
     ConfigOptionStrings* color_opt = project_config.option<ConfigOptionStrings>("filament_colour");
     for (int i = 0; i < p->combos_filament.size(); ++i) {
         is_support_before.push_back(is_support_filament(i));
-        color_before_sync.push_back(color_opt->values[i]);
+        color_before_sync.push_back(color_opt != nullptr && !color_opt->values.empty() ? color_opt->get_at(i) : std::string());
     }
     MergeFilamentInfo merge_info;
     std::vector<std::pair<DynamicPrintConfig *,std::string>> unknowns;
@@ -3815,11 +3860,13 @@ void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
 
     // BBS:Synchronized consumables information
     // auto calculation of flushing volumes
+    color_opt = project_config.option<ConfigOptionStrings>("filament_colour");
     for (int i = 0; i < p->combos_filament.size(); ++i) {
         if (i >= color_before_sync.size()) {
             auto_calc_flushing_volumes(i);
         }
-        else if(color_before_sync[i] != color_opt->values[i] && wxGetApp().app_config->get("auto_calculate_flush") != "disabled"){
+        else if(color_opt != nullptr && !color_opt->values.empty() && color_before_sync[i] != color_opt->get_at(i) &&
+                wxGetApp().app_config->get("auto_calculate_flush") != "disabled"){
             auto_calc_flushing_volumes(i);
         }
         else if(is_support_filament(i) !=is_support_before[i] && wxGetApp().app_config->get("auto_calculate_flush") == "all"){
@@ -4344,16 +4391,24 @@ void Sidebar::auto_calc_flushing_volumes_internal(const int modify_id, const int
     const auto& full_config = wxGetApp().preset_bundle->full_config();
     auto& ams_multi_color_filament = preset_bundle->ams_multi_color_filment;
     size_t extruder_nums = preset_bundle->get_printer_extruder_count();
-    int nozzle_flush_dataset = full_config.option<ConfigOptionIntsNullable>("nozzle_flush_dataset")->values[extruder_id];
+    const auto *flush_dataset_option = full_config.option<ConfigOptionIntsNullable>("nozzle_flush_dataset");
+    const size_t dataset_index = extruder_id >= 0 ? static_cast<size_t>(extruder_id) : 0;
+    const size_t resolved_dataset_index = flush_dataset_option != nullptr && dataset_index < flush_dataset_option->values.size() ?
+                                              dataset_index : 0;
+    int nozzle_flush_dataset = flush_dataset_option != nullptr && !flush_dataset_option->values.empty() &&
+                               !flush_dataset_option->is_nil(resolved_dataset_index)
+                                   ? flush_dataset_option->get_at(resolved_dataset_index)
+                                   : 0;
     std::vector<double> init_matrix = get_flush_volumes_matrix((project_config.option<ConfigOptionFloats>("flush_volumes_matrix"))->values, extruder_id, extruder_nums);
 
     const std::vector<int>& min_flush_volumes = get_min_flush_volumes(full_config, extruder_id);
 
     const auto* flush_multi_opt = project_config.option<ConfigOptionFloats>("flush_multiplier");
-    float flush_multiplier = flush_multi_opt ? (float)flush_multi_opt->get_at(extruder_id) : 1.f;
+    float flush_multiplier = flush_multi_opt != nullptr && !flush_multi_opt->values.empty() ?
+                                 static_cast<float>(flush_multi_opt->get_at(dataset_index)) : 1.f;
     std::vector<double> matrix = init_matrix;
     int m_max_flush_volume = Slic3r::g_max_flush_volume;
-    unsigned int m_number_of_extruders = (int)(sqrt(init_matrix.size()) + 0.001);
+    unsigned int m_number_of_extruders = 0;
 
     const std::vector<std::string> extruder_colours = wxGetApp().plater()->get_extruder_colors_from_plater_config();
     std::vector<std::vector<wxColour>> multi_colours;
@@ -4376,12 +4431,19 @@ void Sidebar::auto_calc_flushing_volumes_internal(const int modify_id, const int
         multi_colours.push_back(single_filament);
     }
 
+    m_number_of_extruders = static_cast<unsigned int>(multi_colours.size());
+    matrix.resize(size_t(m_number_of_extruders) * m_number_of_extruders, 0.);
+    const auto min_flush_volume_for = [&min_flush_volumes](size_t filament_id) {
+        return min_flush_volumes.empty() ? 0 :
+               min_flush_volumes[filament_id < min_flush_volumes.size() ? filament_id : 0];
+    };
+
     if (modify_id >= 0 && modify_id < multi_colours.size()) {
         for (int i = 0; i < multi_colours.size(); ++i) {
             // from to modify
             int from_idx = i;
             if (from_idx != modify_id) {
-                Slic3r::FlushVolCalculator calculator(min_flush_volumes[from_idx], m_max_flush_volume, nozzle_flush_dataset);
+                Slic3r::FlushVolCalculator calculator(min_flush_volume_for(from_idx), m_max_flush_volume, nozzle_flush_dataset);
                 int flushing_volume = 0;
                 bool is_from_support = is_support_filament(from_idx);
                 bool is_to_support = is_support_filament(modify_id);
@@ -4406,7 +4468,7 @@ void Sidebar::auto_calc_flushing_volumes_internal(const int modify_id, const int
             // modify to to
             int to_idx = i;
             if (to_idx != modify_id) {
-                Slic3r::FlushVolCalculator calculator(min_flush_volumes[modify_id], m_max_flush_volume, nozzle_flush_dataset);
+                Slic3r::FlushVolCalculator calculator(min_flush_volume_for(modify_id), m_max_flush_volume, nozzle_flush_dataset);
                 bool is_from_support = is_support_filament(modify_id);
                 bool is_to_support = is_support_filament(to_idx);
                 int flushing_volume = 0;
@@ -4553,6 +4615,34 @@ struct Plater::priv
     bool m_slice_all{false};
     bool m_is_slicing {false};
     bool m_slice_timer_running{false};
+    static std::string current_slicing_execution_settings()
+    {
+        const auto& cfg = *wxGetApp().app_config;
+        return cfg.get("cuda_slicer_mode") + "/" + cfg.get("vulkan_slicer_mode") + "/" + cfg.get("slicing_timing_detail");
+    }
+    std::string m_slicing_execution_settings { current_slicing_execution_settings() };
+    void refresh_slicing_execution_settings()
+    {
+        // A selector never interrupts a worker. Rebuild derived print caches
+        // only when a subsequent slicing request arrives while the worker is idle.
+        if (background_process.running() || q->printer_technology() != ptFFF)
+            return;
+        const std::string requested = current_slicing_execution_settings();
+        if (requested == m_slicing_execution_settings)
+            return;
+        for (auto* plate : partplate_list.get_plate_list()) {
+            if (plate == nullptr || !plate->has_printable_instances()) continue;
+            PrintBase* print = nullptr;
+            plate->get_print(&print, nullptr, nullptr);
+            if (print != nullptr) {
+                // Print::clear clears its derived copy; Plater::model is retained
+                // and the normal apply path reconstructs it with unchanged settings.
+                print->clear();
+                plate->update_slice_result_valid_state(false);
+            }
+        }
+        m_slicing_execution_settings = requested;
+    }
     std::chrono::steady_clock::time_point m_slice_started_at;
     std::string m_slice_duration_label;
     bool auto_reslice_pending {false};
@@ -6685,8 +6775,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             // do some post process after loading config
                             {
                                 //BBS: rewrite wipe tower pos stored in 3mf file , the code above should be seriously reconsidered
-                                 ConfigOptionFloats* wipe_tower_x = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_x");
-                                ConfigOptionFloats* wipe_tower_y = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_y");
+                                ConfigOptionFloats* wipe_tower_x = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_x", true);
+                                ConfigOptionFloats* wipe_tower_y = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_y", true);
                                 if (file_wipe_tower_x)
                                     *wipe_tower_x = *file_wipe_tower_x;
                                 if (file_wipe_tower_y)
@@ -9628,13 +9718,19 @@ void Plater::priv::on_combobox_select(wxCommandEvent &evt)
 
 void Plater::priv::on_select_bed_type(wxCommandEvent &evt)
 {
-    ComboBox* combo = static_cast<ComboBox*>(evt.GetEventObject());
-    auto        select_bed_type = sidebar->get_cur_select_bed_type();
-    std::string bed_type_name = print_config_def.get("curr_bed_type")->enum_values[(int)select_bed_type - 1];
+    const auto *bed_type_def = print_config_def.get("curr_bed_type");
+    auto select_bed_type = sidebar->get_cur_select_bed_type();
+    const int bed_type_index = static_cast<int>(select_bed_type) - 1;
+    if (bed_type_def == nullptr || bed_type_index < 0 ||
+        static_cast<size_t>(bed_type_index) >= bed_type_def->enum_values.size()) {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": ignored invalid bed type " << static_cast<int>(select_bed_type);
+        return;
+    }
+    std::string bed_type_name = bed_type_def->enum_values[static_cast<size_t>(bed_type_index)];
 
     PresetBundle& preset_bundle = *wxGetApp().preset_bundle;
     DynamicPrintConfig& proj_config = wxGetApp().preset_bundle->project_config;
-    const t_config_enum_values* keys_map = print_config_def.get("curr_bed_type")->enum_keys_map;
+    const t_config_enum_values* keys_map = bed_type_def->enum_keys_map;
 
     if (keys_map) {
         BedType new_bed_type = btCount;
@@ -9679,13 +9775,19 @@ void Plater::priv::on_select_bed_type(wxCommandEvent &evt)
 
 void Plater::priv::on_select_preset(wxCommandEvent &evt)
 {
-    PlaterPresetComboBox* combo = static_cast<PlaterPresetComboBox*>(evt.GetEventObject());
+    PlaterPresetComboBox* combo = dynamic_cast<PlaterPresetComboBox*>(evt.GetEventObject());
+    if (combo == nullptr)
+        return;
     Preset::Type preset_type    = combo->get_type();
 
     // Under OSX: in case of use of a same names written in different case (like "ENDER" and "Ender"),
     // m_presets_choice->GetSelection() will return first item, because search in PopupListCtrl is case-insensitive.
     // So, use GetSelection() from event parameter
     int selection = evt.GetSelection();
+    if (selection < 0 || static_cast<unsigned int>(selection) >= combo->GetCount()) {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": ignored invalid preset selection " << selection;
+        return;
+    }
 
     auto marker = reinterpret_cast<size_t>(combo->GetClientData(selection));
     if (PresetComboBox::LabelItemType::LABEL_ITEM_WIZARD_ADD_PRINTERS == marker) {
@@ -9698,6 +9800,10 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
     // BBS:Save the plate parameters before switching
     PartPlateList& old_plate_list = this->partplate_list;
     PartPlate* old_plate = old_plate_list.get_selected_plate();
+    if (old_plate == nullptr) {
+        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": no selected plate while changing preset";
+        return;
+    }
     Vec3d old_plate_pos = old_plate->get_center_origin();
 
     // BBS: Save the model in the current platelist
@@ -9713,7 +9819,11 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
         plate_object.emplace_back(obj_idxs);
     }
 
-    bool flag = is_support_filament(idx);
+    if (preset_type == Preset::TYPE_FILAMENT &&
+        (idx < 0 || static_cast<size_t>(idx) >= wxGetApp().preset_bundle->filament_presets.size())) {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": ignored invalid filament slot " << idx;
+        return;
+    }
     //! Because of The MSW and GTK version of wxBitmapComboBox derived from wxComboBox,
     //! but the OSX version derived from wxOwnerDrawnCombo.
     //! So, to get selected string we do
@@ -9737,11 +9847,6 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
         wxGetApp().preset_bundle->set_filament_preset(idx, preset_name);
         wxGetApp().plater()->update_project_dirty_from_presets();
         wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
-        sidebar->update_dynamic_filament_list();
-        bool flag_is_change = is_support_filament(idx);
-        if (flag != flag_is_change && wxGetApp().app_config->get("auto_calculate_flush") == "all") {
-            sidebar->auto_calc_flushing_volumes(idx);
-        }
         auto select_flag = combo->GetFlag(selection);
         combo->ShowBadge(select_flag == (int)PresetComboBox::FilamentAMSType::FROM_AMS);
         q->on_filament_change(idx);
@@ -9763,8 +9868,12 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
             if (combo->is_selected_printer_model()) {
                 auto preset = wxGetApp().preset_bundle->get_similar_printer_preset(preset_name, {});
                 if (preset == nullptr) {
-                    MessageDialog dlg(this->sidebar, "", "");
+                    MessageDialog dlg(this->sidebar,
+                        _L("Unable to find a compatible printer preset for the selected printer model."),
+                        _L("Printer preset unavailable"), wxOK | wxICON_WARNING);
                     dlg.ShowModal();
+                    combo->update();
+                    return;
                 }
                 preset->is_visible = true; // force visible
                 preset_name = preset->name;
@@ -9790,7 +9899,9 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
                     PresetBundle *preset_bundle = wxGetApp().preset_bundle;
                     Preset& cur_preset = preset_bundle->printers.get_edited_preset();
                     if (cur_preset.get_printer_type(preset_bundle) == obj->get_show_printer_type()) {
-                        double preset_nozzle_diameter = cur_preset.config.option<ConfigOptionFloats>("nozzle_diameter")->values[0];
+                        const auto *nozzle_diameter_opt = cur_preset.config.option<ConfigOptionFloats>("nozzle_diameter");
+                        const double preset_nozzle_diameter = nozzle_diameter_opt != nullptr && !nozzle_diameter_opt->values.empty() ?
+                                                                  nozzle_diameter_opt->values[0] : 0.4;
                         bool   same_nozzle_diameter   = true;
 
                         const auto& extruders = obj->GetExtderSystem()->GetExtruders();
@@ -9821,6 +9932,10 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
 
     // update plater with new config
     q->on_config_change(wxGetApp().preset_bundle->full_config());
+    // Tab selection may still change the edited filament preset. Refresh all
+    // material assignments after that transaction, retaining their slot IDs.
+    if (preset_type == Preset::TYPE_FILAMENT)
+        sidebar->update_dynamic_filament_list();
     if (preset_type == Preset::TYPE_PRINTER) {
     /* Settings list can be changed after printer preset changing, so
      * update all settings items for all item had it.
@@ -11907,10 +12022,11 @@ void Plater::priv::take_snapshot(const std::string& snapshot_name, const UndoRed
         const DynamicPrintConfig& proj_cfg = wxGetApp().preset_bundle->project_config;
         const ConfigOptionFloats* tower_x_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_x");
         const ConfigOptionFloats* tower_y_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_y");
-        assert(tower_x_opt->values.size() == tower_y_opt->values.size());
+        const size_t position_count = tower_x_opt != nullptr && tower_y_opt != nullptr ?
+                                          std::min(tower_x_opt->values.size(), tower_y_opt->values.size()) : 0;
         model.wipe_tower.positions.clear();
-        model.wipe_tower.positions.resize(tower_x_opt->values.size());
-        for (int plate_idx = 0; plate_idx < tower_x_opt->values.size(); plate_idx++) {
+        model.wipe_tower.positions.resize(position_count);
+        for (size_t plate_idx = 0; plate_idx < position_count; plate_idx++) {
             ModelWipeTower& tower = model.wipe_tower;
 
             tower.positions[plate_idx] = Vec2d(tower_x_opt->get_at(plate_idx), tower_y_opt->get_at(plate_idx));
@@ -12017,10 +12133,11 @@ void Plater::priv::undo_redo_to(std::vector<UndoRedo::Snapshot>::const_iterator 
         const DynamicPrintConfig& proj_cfg = wxGetApp().preset_bundle->project_config;
         const ConfigOptionFloats* tower_x_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_x");
         const ConfigOptionFloats* tower_y_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_y");
-        assert(tower_x_opt->values.size() == tower_y_opt->values.size());
+        const size_t position_count = tower_x_opt != nullptr && tower_y_opt != nullptr ?
+                                          std::min(tower_x_opt->values.size(), tower_y_opt->values.size()) : 0;
         model.wipe_tower.positions.clear();
-        model.wipe_tower.positions.resize(tower_x_opt->values.size());
-        for (int plate_idx = 0; plate_idx < tower_x_opt->values.size(); plate_idx++) {
+        model.wipe_tower.positions.resize(position_count);
+        for (size_t plate_idx = 0; plate_idx < position_count; plate_idx++) {
             ModelWipeTower& tower = model.wipe_tower;
 
             tower.positions[plate_idx] = Vec2d(tower_x_opt->get_at(plate_idx), tower_y_opt->get_at(plate_idx));
@@ -12081,9 +12198,9 @@ void Plater::priv::undo_redo_to(std::vector<UndoRedo::Snapshot>::const_iterator 
         // BBS: add partplate logic
         if (this->printer_technology == ptFFF) {
             const DynamicPrintConfig& config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-            const DynamicPrintConfig& proj_cfg = wxGetApp().preset_bundle->project_config;
-            ConfigOptionFloats* tower_x_opt = const_cast<ConfigOptionFloats*>(proj_cfg.option<ConfigOptionFloats>("wipe_tower_x"));
-            ConfigOptionFloats* tower_y_opt = const_cast<ConfigOptionFloats*>(proj_cfg.option<ConfigOptionFloats>("wipe_tower_y"));
+            DynamicPrintConfig& proj_cfg = wxGetApp().preset_bundle->project_config;
+            ConfigOptionFloats* tower_x_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_x", true);
+            ConfigOptionFloats* tower_y_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_y", true);
             // BBS: don't support wipe tower rotation
             //double current_rotation = proj_cfg.opt_float("wipe_tower_rotation_angle");
             bool need_update = false;
@@ -13229,11 +13346,10 @@ void adjust_settings_for_flowrate_calib(ModelObjectPtrs& objects, bool linear, i
     /// --- scale ---
     // model is created for a 0.4 nozzle, scale z with nozzle size.
     const ConfigOptionFloats* nozzle_diameter_config = printer_config->option<ConfigOptionFloats>("nozzle_diameter");
-    std::vector<int> extruder_types         = printer_config->option<ConfigOptionEnumsGeneric>("extruder_type")->values;
-    std::vector<int> nozzle_volume_types    = wxGetApp().preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type")->values;
-
-    assert(nozzle_diameter_config->values.size() > 0);
-    float nozzle_diameter = nozzle_diameter_config->values[0];
+    float nozzle_diameter = nozzle_diameter_config != nullptr && !nozzle_diameter_config->values.empty() ?
+                                nozzle_diameter_config->values.front() : 0.4f;
+    if (!std::isfinite(nozzle_diameter) || nozzle_diameter <= 0.f)
+        nozzle_diameter = 0.4f;
     float xyScale = nozzle_diameter / 0.6;
     //scale z to have 10 layers
     // 2 bottom, 5 top, 3 sparse infill
@@ -13255,7 +13371,11 @@ void adjust_settings_for_flowrate_calib(ModelObjectPtrs& objects, bool linear, i
     }
     canvas->do_scale("");
 
-    auto cur_flowrate = filament_config->option<ConfigOptionFloats>("filament_flow_ratio")->get_at(0); // TODO: per-filament param
+    const auto *flow_ratio_opt = filament_config->option<ConfigOptionFloatsNullable>("filament_flow_ratio");
+    double cur_flowrate = flow_ratio_opt != nullptr && !flow_ratio_opt->values.empty() && !flow_ratio_opt->is_nil(0) ?
+                              flow_ratio_opt->get_at(0) : 1.; // TODO: per-filament param
+    if (!std::isfinite(cur_flowrate) || cur_flowrate <= 0.)
+        cur_flowrate = 1.;
     std::vector<double> internal_solid_speeds = generate_max_speed_parameter_value("internal_solid_infill_speed", linear, pass);
     std::vector<double> top_surface_speeds = generate_max_speed_parameter_value("top_surface_speed", linear, pass);
 
@@ -13293,18 +13413,18 @@ void adjust_settings_for_flowrate_calib(ModelObjectPtrs& objects, bool linear, i
         _obj->config.set_key_value("calib_flowrate_topinfill_special_order", new ConfigOptionBool(true));
 
         // extract flowrate from name, filename format: flowrate_xxx
-        std::string obj_name = _obj->name;
-        assert(obj_name.length() > 9);
-        obj_name = obj_name.substr(9);
-        if (obj_name[0] == 'm')
+        std::string obj_name = _obj->name.length() > 9 ? _obj->name.substr(9) : std::string();
+        if (!obj_name.empty() && obj_name[0] == 'm')
             obj_name[0] = '-';
         // Orca: force set locale to C to avoid parsing error
         const std::string _loc = std::setlocale(LC_NUMERIC, nullptr);
         std::setlocale(LC_NUMERIC,"C");
-        auto              modifier  = 1.0f;
-        try {
-            modifier = stof(obj_name);
-        } catch (...) {
+        auto modifier = 0.0f;
+        if (!obj_name.empty()) {
+            try {
+                modifier = stof(obj_name);
+            } catch (...) {
+            }
         }
         // restore locale
         std::setlocale(LC_NUMERIC, _loc.c_str());
@@ -16232,6 +16352,8 @@ void Plater::reslice()
         return;
     }
 
+    p->refresh_slicing_execution_settings();
+
     // Orca: regenerate CalibPressureAdvancePattern custom G-code to apply changes
     if (model().calib_pa_pattern) {
         _calib_pa_pattern_gen_gcode();
@@ -16346,6 +16468,11 @@ void Plater::record_slice_preset(std::string action)
         auto filament_presets = wxGetApp().preset_bundle->filament_presets;
         for (int i = 0; i < filament_presets.size(); ++i) {
             auto filament_preset = wxGetApp().preset_bundle->filaments.find_preset(filament_presets[i]);
+            if (filament_preset == nullptr) {
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": missing filament preset " << filament_presets[i];
+                j["filament_preset_" + std::to_string(i)] = filament_presets[i];
+                continue;
+            }
             if (filament_preset->is_system) {
                 j["filament_preset_" + std::to_string(i)] = filament_preset->name;
             }
@@ -16392,6 +16519,7 @@ void Plater::record_slice_preset(std::string action)
 //BBS: add project slicing related logic
 int Plater::start_next_slice()
 {
+    p->refresh_slicing_execution_settings();
     // Stop arrange and (or) optimize rotation tasks.
     //this->stop_jobs();
 
@@ -16876,7 +17004,6 @@ void Plater::on_filament_change(size_t filament_idx)
     Slic3r::Preset* filament = wxGetApp().preset_bundle->filaments.find_preset(filament_presets[filament_idx]);
     if (filament == nullptr)
         return;
-    std::string filament_type = filament->config.option<ConfigOptionStrings>("filament_type")->values[0];
 }
 
 // BBS.
@@ -16982,9 +17109,13 @@ bool Plater::update_filament_colors_in_full_config()
     const auto& full_config = wxGetApp().preset_bundle->full_config();
     ConfigOptionStrings* color_opt = project_config.option<ConfigOptionStrings>("filament_colour");
     const ConfigOptionStrings* type_opt = full_config.option<ConfigOptionStrings>("filament_type");
+    auto *target_colors = p->config->option<ConfigOptionStrings>("filament_colour", true);
+    auto *target_types = p->config->option<ConfigOptionStrings>("filament_type", true);
+    if (color_opt == nullptr || type_opt == nullptr || target_colors == nullptr || target_types == nullptr)
+        return false;
 
-    p->config->option<ConfigOptionStrings>("filament_colour")->values = color_opt->values;
-    p->config->option<ConfigOptionStrings>("filament_type")->values = type_opt->values;
+    target_colors->values = color_opt->values;
+    target_types->values = type_opt->values;
     return true;
 }
 
@@ -17033,6 +17164,8 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
         }
         if (opt_key == "filament_type") {
             update_filament_colors_in_full_config();
+            // Type-only edits must refresh the same labels as color changes.
+            p->sidebar->update_dynamic_filament_list();
             continue;
         }
         if (opt_key == "material_colour") {
@@ -17205,8 +17338,12 @@ void Plater::force_filament_colors_update()
         std::vector<std::string> filament_colors;
         filament_colors.reserve(filament_presets.size());
 
-        for (const std::string& filament_preset : filament_presets)
-            filament_colors.push_back(filaments.find_preset(filament_preset, true)->config.opt_string("filament_colour", (unsigned)0));
+        for (size_t i = 0; i < filament_presets.size(); ++i) {
+            const Preset *filament_preset = filaments.find_preset(filament_presets[i], true);
+            filament_colors.push_back(filament_preset != nullptr ?
+                filament_preset->config.opt_string("filament_colour", (unsigned) 0) :
+                config->option<ConfigOptionStrings>("filament_colour")->get_at(i));
+        }
 
         if (config->option<ConfigOptionStrings>("filament_colour")->values != filament_colors) {
             config->option<ConfigOptionStrings>("filament_colour")->values = filament_colors;
@@ -17300,7 +17437,7 @@ std::vector<std::string> Plater::get_colors_for_color_print(const GCodeProcessor
 void Plater::set_global_filament_map_mode(FilamentMapMode mode)
 {
     auto& project_config = wxGetApp().preset_bundle->project_config;
-    auto mode_ptr = project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode");
+    auto mode_ptr = project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true);
     FilamentMapMode old_mode = mode_ptr->value;
     if(mode != old_mode)
         on_filament_map_mode_change();
@@ -17310,20 +17447,22 @@ void Plater::set_global_filament_map_mode(FilamentMapMode mode)
 void Plater::set_global_filament_map(const std::vector<int>& filament_map)
 {
     auto& project_config = wxGetApp().preset_bundle->project_config;
-    project_config.option<ConfigOptionInts>("filament_map")->values = filament_map;
+    project_config.option<ConfigOptionInts>("filament_map", true)->values = filament_map;
 }
 
 std::vector<int> Plater::get_global_filament_map() const
 {
     auto& project_config = wxGetApp().preset_bundle->project_config;
-    return project_config.option<ConfigOptionInts>("filament_map")->values;
+    const auto *filament_map = project_config.option<ConfigOptionInts>("filament_map");
+    return filament_map != nullptr ? filament_map->values : std::vector<int>{};
 }
 
 
 FilamentMapMode Plater::get_global_filament_map_mode() const
 {
     auto& project_config = wxGetApp().preset_bundle->project_config;
-    return project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode")->value;
+    const auto *mode = project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode");
+    return mode != nullptr ? mode->value : FilamentMapMode::fmmDefault;
 }
 
 void Plater::on_filament_map_mode_change()
@@ -18767,7 +18906,7 @@ bool Plater::is_slice_timer_running() const
     return p->m_slice_timer_running;
 }
 
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
 std::string Plater::get_slicing_profile_status_label() const
 {
     const SlicingProfileStatus status = SlicingProfiler::instance().status();
@@ -18777,7 +18916,7 @@ std::string Plater::get_slicing_profile_status_label() const
     std::string mode = status.requested_mode.empty() ? "auto" : status.requested_mode;
     if (mode[0] >= 'a' && mode[0] <= 'z')
         mode[0] = static_cast<char>(mode[0] - 'a' + 'A');
-    std::string label = "Vulkan " + mode + " | " +
+    std::string label = "Compute " + mode + " | " +
         (status.effective_backend.empty() ? "CPU" : status.effective_backend);
     if (!status.current_step.empty())
         label += " | " + status.current_step;
@@ -18787,6 +18926,22 @@ std::string Plater::get_slicing_profile_status_label() const
 bool Plater::has_slicing_profile_report() const
 {
     return SlicingProfiler::instance().has_report();
+}
+
+void Plater::show_slicing_profile_details()
+{
+    const std::string summary = SlicingProfiler::instance().summary_text();
+    if (summary.empty()) return;
+    wxDialog dialog(this, wxID_ANY, _L("Slicing timing details"), wxDefaultPosition,
+        FromDIP(wxSize(800, 600)), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+    auto* sizer = new wxBoxSizer(wxVERTICAL);
+    auto* text = new wxTextCtrl(&dialog, wxID_ANY, from_u8(summary), wxDefaultPosition, wxDefaultSize,
+        wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
+    sizer->Add(text, 1, wxEXPAND | wxALL, FromDIP(10));
+    sizer->Add(dialog.CreateButtonSizer(wxOK), 0, wxALIGN_RIGHT | wxALL, FromDIP(10));
+    dialog.SetSizer(sizer);
+    dialog.CentreOnParent();
+    dialog.ShowModal();
 }
 
 void Plater::export_slicing_profile()

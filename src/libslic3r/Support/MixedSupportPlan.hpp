@@ -10,6 +10,7 @@
 namespace Slic3r {
 
 class PrintObject;
+struct CuraSupportDemand;
 
 enum class MixedSupportChannel { Normal, Tree, Mixed };
 
@@ -54,7 +55,8 @@ private:
     std::vector<MixedSupportComponentDecision> m_decisions;
 };
 
-std::vector<Polygons> detect_mixed_support_demand(const PrintObject &object);
+std::vector<Polygons> detect_mixed_support_demand(
+    const PrintObject &object, CuraSupportDemand *cura_demand = nullptr);
 
 } // namespace Slic3r
 

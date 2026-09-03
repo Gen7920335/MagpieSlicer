@@ -543,7 +543,7 @@ std::vector<unsigned int> Print::extruders(bool conside_custom_gcode) const
         int num_extruders = m_config.filament_colour.size();
         if (m_model.plates_custom_gcodes.find(m_model.curr_plate_index) != m_model.plates_custom_gcodes.end()) {
             for (auto item : m_model.plates_custom_gcodes.at(m_model.curr_plate_index).gcodes) {
-                if (item.type == CustomGCode::Type::ToolChange && item.extruder <= num_extruders)
+                if (item.type == CustomGCode::Type::ToolChange && item.extruder > 0 && item.extruder <= num_extruders)
                     extruders.push_back((unsigned int)(item.extruder - 1));
             }
         }
@@ -1760,8 +1760,8 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
     // ORCA: check if bed type is compatible with all selected filaments
     if (is_BBL_printer() || m_config.support_multi_bed_types.value) {
 	    const t_config_enum_values* bed_type_keys_map = bed_type_def->enum_keys_map;
-	    for (unsigned int extruder_id : extruders) {
-	        const ConfigOptionInts* bed_temp_opt = m_config.option<ConfigOptionInts>(get_bed_temp_key(m_config.curr_bed_type));
+	    const ConfigOptionInts* bed_temp_opt = m_config.option<ConfigOptionInts>(get_bed_temp_key(m_config.curr_bed_type));
+	    if (bed_temp_opt != nullptr && !bed_temp_opt->values.empty()) {
 	        for (unsigned int extruder_id : extruders) {
 	            int curr_bed_temp = bed_temp_opt->get_at(extruder_id);
 	            if (curr_bed_temp == 0 && bed_type_keys_map != nullptr) {
@@ -3349,11 +3349,19 @@ const WipeTowerData &Print::wipe_tower_data(size_t filaments_cnt) const
 
     double layer_height                  = 0.08f; // hard code layer height
     layer_height        = m_objects.front()->config().layer_height.value;
+    if (!std::isfinite(layer_height) || layer_height <= 0.)
+        layer_height = 0.08;
 
     auto   timelapse_type  = config().option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
     bool   need_wipe_tower = (timelapse_type ? (timelapse_type->value == TimelapseType::tlSmooth) : false) | (m_config.wipe_tower_wall_type.value == WipeTowerWallType::wtwRib);
-    double extra_spacing = config().option("prime_tower_infill_gap")->getFloat() / 100.;
-    double rib_width     = config().option("wipe_tower_rib_width")->getFloat();
+    const ConfigOption *infill_gap_opt = config().option("prime_tower_infill_gap");
+    const ConfigOption *rib_width_opt = config().option("wipe_tower_rib_width");
+    double extra_spacing = infill_gap_opt != nullptr ? infill_gap_opt->getFloat() / 100. : 1.5;
+    double rib_width = rib_width_opt != nullptr ? rib_width_opt->getFloat() : 8.;
+    if (!std::isfinite(extra_spacing) || extra_spacing < 0.)
+        extra_spacing = 1.5;
+    if (!std::isfinite(rib_width) || rib_width < 0.)
+        rib_width = 8.;
 
     double filament_change_volume = 0.;
     {
@@ -3361,34 +3369,50 @@ const WipeTowerData &Print::wipe_tower_data(size_t filaments_cnt) const
         auto                filament_change_lengths_opt = config().option<ConfigOptionFloats>("filament_change_length");
         if (filament_change_lengths_opt) filament_change_lengths = filament_change_lengths_opt->values;
         double              length   = filament_change_lengths.empty() ? 0 : *std::max_element(filament_change_lengths.begin(), filament_change_lengths.end());
+        if (!std::isfinite(length) || length < 0.)
+            length = 0.;
         double              diameter = 1.75;
         std::vector<double> diameters;
         auto                filament_diameter_opt = config().option<ConfigOptionFloats>("filament_diameter");
         if (filament_diameter_opt) diameters = filament_diameter_opt->values;
         diameter               = diameters.empty() ? diameter : *std::max_element(diameters.begin(), diameters.end());
+        if (!std::isfinite(diameter) || diameter <= 0.)
+            diameter = 1.75;
         filament_change_volume = length * PI * diameter * diameter / 4.;
     }
 
 
     if (! is_step_done(psWipeTower) && filaments_cnt !=0) {
-        double wipe_volume  = m_config.prime_volume;
-        int filament_depth_count = m_config.nozzle_diameter.values.size() == 2 ? filaments_cnt : filaments_cnt - 1;
+        double wipe_volume = m_config.prime_volume;
+        if (!std::isfinite(wipe_volume) || wipe_volume < 0.)
+            wipe_volume = 0.;
+        size_t filament_depth_count = m_config.nozzle_diameter.values.size() == 2 ? filaments_cnt : filaments_cnt - 1;
         if (filaments_cnt == 1 && enable_timelapse_print()) filament_depth_count = 1;
-        double volume = wipe_volume * filament_depth_count;
-        if (m_config.nozzle_diameter.values.size() == 2) volume += filament_change_volume * (int) (filaments_cnt / 2);
+        double volume = wipe_volume * static_cast<double>(filament_depth_count);
+        if (m_config.nozzle_diameter.values.size() == 2)
+            volume += filament_change_volume * static_cast<double>(filaments_cnt / 2);
+        if (!std::isfinite(volume) || volume < 0.)
+            volume = 0.;
 
         if (m_config.wipe_tower_wall_type.value == WipeTowerWallType::wtwRib) {
             double depth = std::sqrt(volume / layer_height * extra_spacing);
             if (need_wipe_tower || filaments_cnt > 1) {
                 float min_wipe_tower_depth = WipeTower::get_limit_depth_by_height(max_height);
                 depth  = std::max((double) min_wipe_tower_depth, depth);
-                depth += rib_width / std::sqrt(2) + config().wipe_tower_extra_rib_length.value;
+                double extra_rib_length = config().wipe_tower_extra_rib_length.value;
+                if (!std::isfinite(extra_rib_length) || extra_rib_length < 0.)
+                    extra_rib_length = 0.;
+                depth += rib_width / std::sqrt(2.) + extra_rib_length;
+                if (!std::isfinite(depth) || depth < 0.)
+                    depth = 0.;
                 const_cast<Print *>(this)->m_wipe_tower_data.depth = depth;
                 const_cast<Print *>(this)->m_wipe_tower_data.brim_width = m_config.prime_tower_brim_width;
             }
         }
         else {
-        double width        = m_config.prime_tower_width;
+        double width = m_config.prime_tower_width;
+        if (!std::isfinite(width) || width <= 0.)
+            width = 60.;
         if (m_config.purge_in_prime_tower && m_config.single_extruder_multi_material) {
             // Calculating depth should take into account currently set wiping volumes.
             // For a long time, the initial preview would just use 900/width per toolchange (15mm on a 60mm wide tower)
@@ -3396,9 +3420,15 @@ const WipeTowerData &Print::wipe_tower_data(size_t filaments_cnt) const
             std::vector<std::vector<float>> wipe_volumes = WipeTower2::extract_wipe_volumes(m_config);
             std::vector<float>              max_wipe_volumes;
             for (const std::vector<float> &v : wipe_volumes)
-                max_wipe_volumes.emplace_back(*std::max_element(v.begin(), v.end()));
-            float maximum = std::accumulate(max_wipe_volumes.begin(), max_wipe_volumes.end(), 0.f);
-            maximum       = maximum * filaments_cnt / max_wipe_volumes.size();
+                if (!v.empty())
+                    max_wipe_volumes.emplace_back(*std::max_element(v.begin(), v.end()));
+            float maximum = 900.f;
+            if (!max_wipe_volumes.empty()) {
+                maximum = std::accumulate(max_wipe_volumes.begin(), max_wipe_volumes.end(), 0.f);
+                maximum = maximum * filaments_cnt / max_wipe_volumes.size();
+            }
+            if (!std::isfinite(maximum) || maximum < 0.f)
+                maximum = 0.f;
             
             // Orca: it's overshooting a bit, so let's reduce it a bit
             maximum *= 0.6; 
@@ -3409,11 +3439,16 @@ const WipeTowerData &Print::wipe_tower_data(size_t filaments_cnt) const
                 float min_wipe_tower_depth = WipeTower::get_limit_depth_by_height(max_height);
                 depth = std::max((double) min_wipe_tower_depth, depth);
             }
+            if (!std::isfinite(depth) || depth < 0.)
+                depth = 0.;
             const_cast<Print *>(this)->m_wipe_tower_data.depth = depth;
         }
         const_cast<Print *>(this)->m_wipe_tower_data.brim_width = m_config.prime_tower_brim_width;
         }
-        if (m_config.prime_tower_brim_width < 0) const_cast<Print *>(this)->m_wipe_tower_data.brim_width = WipeTower::get_auto_brim_by_height(max_height);
+        if (!std::isfinite(const_cast<Print *>(this)->m_wipe_tower_data.brim_width))
+            const_cast<Print *>(this)->m_wipe_tower_data.brim_width = 0.;
+        if (m_config.prime_tower_brim_width < 0)
+            const_cast<Print *>(this)->m_wipe_tower_data.brim_width = WipeTower::get_auto_brim_by_height(max_height);
     }
     return m_wipe_tower_data;
 }
@@ -3501,7 +3536,21 @@ void Print::_make_wipe_tower()
         using FlushMatrix = std::vector<std::vector<float>>;
         std::vector<FlushMatrix> multi_extruder_flush;
         for (size_t nozzle_id = 0; nozzle_id < nozzle_nums; ++nozzle_id) {
-            std::vector<float> flush_matrix(cast<float>(get_flush_volumes_matrix(m_config.flush_volumes_matrix.values, nozzle_id, nozzle_nums)));
+            const size_t expected_size = size_t(number_of_extruders) * size_t(number_of_extruders);
+            std::vector<float> flush_matrix;
+            const auto &stored = m_config.flush_volumes_matrix.values;
+            if (expected_size > 0 && !stored.empty() && stored.size() % expected_size == 0) {
+                const size_t matrix_count = stored.size() / expected_size;
+                const size_t matrix_index = matrix_count == 1 ? 0 : std::min(nozzle_id, matrix_count - 1);
+                const size_t begin = matrix_index * expected_size;
+                flush_matrix = cast<float>(std::vector<double>(
+                    stored.begin() + begin, stored.begin() + begin + expected_size));
+            }
+            if (flush_matrix.size() != expected_size) {
+                flush_matrix.assign(expected_size, m_config.prime_volume);
+                for (size_t filament_id = 0; filament_id < number_of_extruders; ++filament_id)
+                    flush_matrix[filament_id * number_of_extruders + filament_id] = 0.f;
+            }
             std::vector<std::vector<float>> wipe_volumes;
             for (unsigned int i = 0; i < number_of_extruders; ++i)
                 wipe_volumes.push_back(std::vector<float>(flush_matrix.begin() + i * number_of_extruders, flush_matrix.begin() + (i + 1) * number_of_extruders));

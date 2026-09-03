@@ -130,7 +130,10 @@ struct SupportParameters {
 
         SupportMaterialPattern  support_pattern = object_config.support_base_pattern;
         this->tree_support_wall_count = size_t(std::clamp(object_config.tree_support_wall_count.value, 0, 10));
-        this->with_sheath = object_config.tree_support_wall_count > 0;
+        this->support_wall_count = is_tree(object_config.support_type.value) ?
+            this->tree_support_wall_count :
+            size_t(std::clamp(object_config.support_wall_count.value, 0, 10));
+        this->with_sheath = this->support_wall_count > 0;
         this->base_fill_pattern =
             support_pattern == smpHoneycomb ? ipHoneycomb :
             this->support_density > 0.95 || this->with_sheath ? ipRectilinear : ipSupportBase;
@@ -180,10 +183,10 @@ struct SupportParameters {
             assert(slicing_params.raft_layers() == 0);
         }
 
-	    const auto     nozzle_diameter = print_config.nozzle_diameter.get_at(object_config.support_interface_filament - 1);
-        const coordf_t extrusion_width = object_config.line_width.get_abs_value(nozzle_diameter);
-        support_extrusion_width        = object_config.support_line_width.get_abs_value(nozzle_diameter);
-        support_extrusion_width        = support_extrusion_width > 0 ? support_extrusion_width : extrusion_width;
+        // Geometry and emitted paths must use the same resolved body-support
+        // tool, nozzle and per-toolhead width.  The shared flow helper also
+        // handles the "current extruder" value 0 and automatic widths.
+        support_extrusion_width = support_material_flow.width();
 
         independent_layer_height = print_config.independent_support_layer_height;
 
@@ -280,6 +283,8 @@ struct SupportParameters {
     InfillPattern 			contact_fill_pattern;
     // Shall the sparse (base) layers be printed with a single perimeter line (sheath) for robustness?
     bool                    with_sheath;
+    // Explicit perimeter count for the normal Prusa/Cura support channel. Zero disables walls.
+    size_t                  support_wall_count = 0;
     // Explicit tree branch perimeter count. Zero keeps automatic one/two-wall behavior.
     size_t                  tree_support_wall_count = 0;
     // Branches of organic supports with area larger than this threshold will be extruded with double lines.

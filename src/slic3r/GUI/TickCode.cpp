@@ -4,6 +4,8 @@ namespace Slic3r {
 namespace GUI {
 std::string TickCodeInfo::get_color_for_tick(TickCode tick, Type type, const int extruder)
 {
+    if (m_colors == nullptr || m_colors->empty())
+        return {};
     auto opposite_one_color = [](const std::string& color) {
         ColorRGB rgb;
         decode_color(color, rgb);
@@ -32,9 +34,9 @@ std::string TickCodeInfo::get_color_for_tick(TickCode tick, Type type, const int
             if (before_tick_it->type == ColorChange) return opposite_two_colors(frst_color, before_tick_it->color);
 
             auto next_tick_it = before_tick_it;
-            while (next_tick_it != ticks.end())
-                if (++next_tick_it; next_tick_it->type == ColorChange) break;
-            if (next_tick_it->type == ColorChange) return opposite_two_colors(frst_color, next_tick_it->color);
+            while (++next_tick_it != ticks.end())
+                if (next_tick_it->type == ColorChange) break;
+            if (next_tick_it != ticks.end()) return opposite_two_colors(frst_color, next_tick_it->color);
 
             return opposite_one_color(frst_color);
         }
@@ -44,8 +46,8 @@ std::string TickCodeInfo::get_color_for_tick(TickCode tick, Type type, const int
             frst_color = before_tick_it->color;
         else {
             auto next_tick_it = before_tick_it;
-            while (next_tick_it != ticks.end())
-                if (++next_tick_it; next_tick_it->type == ColorChange) {
+            while (++next_tick_it != ticks.end())
+                if (next_tick_it->type == ColorChange) {
                     frst_color = next_tick_it->color;
                     break;
                 }
@@ -70,7 +72,9 @@ std::string TickCodeInfo::get_color_for_tick(TickCode tick, Type type, const int
 #endif
     }
 
-    std::string color = (*m_colors)[extruder - 1];
+    const size_t color_index = extruder > 0 && static_cast<size_t>(extruder) <= m_colors->size() ?
+                                   static_cast<size_t>(extruder - 1) : 0;
+    std::string color = (*m_colors)[color_index];
 
     if (type == ColorChange) {
         if (!ticks.empty()) {

@@ -1659,13 +1659,17 @@ void GCodeProcessorResult::reset() {
     //BBS: add bed exclude area
     bed_exclude_area = Pointfs();
     wrapping_exclude_area = Pointfs();
+    extruder_areas.clear();
+    extruder_heights.clear();
     //BBS: add toolpath_outside
     toolpath_outside = false;
     //BBS: add label_object_enabled
     label_object_enabled = false;
     long_retraction_when_cut = false;
     timelapse_warning_code = 0;
+    support_traditional_timelapse = true;
     printable_height = 0.0f;
+    z_offset = 0.0f;
     settings_ids.reset();
     filaments_count = 0;
     backtrace_enabled = false;
@@ -1673,15 +1677,26 @@ void GCodeProcessorResult::reset() {
     filament_diameters = std::vector<float>(MIN_EXTRUDERS_COUNT, DEFAULT_FILAMENT_DIAMETER);
     required_nozzle_HRC = std::vector<int>(MIN_EXTRUDERS_COUNT, DEFAULT_FILAMENT_HRC);
     filament_densities = std::vector<float>(MIN_EXTRUDERS_COUNT, DEFAULT_FILAMENT_DENSITY);
+    filament_vitrification_temperature.clear();
     filament_costs = std::vector<float>(MIN_EXTRUDERS_COUNT, DEFAULT_FILAMENT_COST);
+    filament_maps.clear();
+    limit_filament_maps.clear();
+    print_statistics.reset();
     custom_gcode_per_print_z = std::vector<CustomGCode::Item>();
     spiral_vase_mode = false;
+    nozzle_hrc = 0;
+    nozzle_type.clear();
+    conflict_result.reset();
+    gcode_check_result.reset();
+    filament_printable_reuslt = FilamentPrintableResult{};
     layer_filaments.clear();
     filament_change_sequence.clear();
     nozzle_change_sequence.clear();
     optimal_assignment.clear();
     filament_change_count_map.clear();
     warnings.clear();
+    bed_type = BedType::btCount;
+    initial_layer_time = 0.0f;
 
     //BBS: add mutex for protection of gcode result
     unlock();
@@ -1934,7 +1949,20 @@ bool GCodeProcessor::check_multi_extruder_gcode_valid(const int                 
         int                                object_label_id = obj_iter->first;
         const std::map<int, GCodePosInfo> &path_pos        = obj_iter->second;
         for (auto iter = path_pos.begin(); iter != path_pos.end(); ++iter) {
-            int extruder_id = filament_map[iter->first] - 1;
+            const int filament_id = iter->first;
+            if (filament_id < 0 || static_cast<size_t>(filament_id) >= filament_map.size()) {
+                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": G-code references an invalid filament id " << filament_id;
+                valid = false;
+                continue;
+            }
+            const int mapped_extruder = filament_map[filament_id];
+            if (mapped_extruder <= 0 || mapped_extruder > extruder_size) {
+                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": filament " << filament_id
+                                         << " maps to an invalid extruder " << mapped_extruder;
+                valid = false;
+                continue;
+            }
+            const int extruder_id = mapped_extruder - 1;
             Points iter_points;//temp points
             iter_points.insert(iter_points.end(), iter->second.pos.begin(), iter->second.pos.end());// put object/wipetower extrude position in
             Polygon     path_poly(iter_points);
@@ -2017,7 +2045,8 @@ bool GCodeProcessor::check_multi_extruder_gcode_valid(const int                 
     for (int extruder_id = 0; extruder_id < unprintable_filament_types.size(); ++extruder_id) {
         const std::set<int> &filament_ids = unprintable_filament_types[extruder_id];
         for (int filament_id : filament_ids) {
-            m_result.limit_filament_maps[filament_id] |= (1 << extruder_id);
+            if (filament_id >= 0 && static_cast<size_t>(filament_id) < m_result.limit_filament_maps.size())
+                m_result.limit_filament_maps[filament_id] |= (1 << extruder_id);
         }
     };
 
@@ -2069,10 +2098,21 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
 
     std::vector<int> filament_map = config.filament_map.values; // 1 based idxs
     // if filament map has wrong length, set filament to master extruder_id
-    filament_map.resize(filament_count, config.master_extruder_id.value);
+    const int physical_extruder_count = static_cast<int>(config.extruder_offset.size());
+    const int fallback_extruder = config.master_extruder_id.value > 0 &&
+                                          config.master_extruder_id.value <= physical_extruder_count
+                                      ? config.master_extruder_id.value
+                                      : 1;
+    filament_map.resize(filament_count, fallback_extruder);
+    for (int &mapped_extruder : filament_map)
+        if (mapped_extruder <= 0 || mapped_extruder > physical_extruder_count)
+            mapped_extruder = fallback_extruder;
+    m_filament_maps = filament_map;
+    std::transform(m_filament_maps.begin(), m_filament_maps.end(), m_filament_maps.begin(), [](int value) { return value - 1; });
 
     for (size_t i = 0; i < filament_count; ++ i) {
-        m_extruder_offsets[i] = to_3d(config.extruder_offset.get_at(filament_map[i] - 1).cast<float>().eval(), 0.f);
+        m_extruder_offsets[i] = config.extruder_offset.values.empty() ? Vec3f::Zero() :
+                                    to_3d(config.extruder_offset.get_at(filament_map[i] - 1).cast<float>().eval(), 0.f);
         m_extruder_colors[i]            = static_cast<unsigned char>(i);
         m_filament_nozzle_temp_first_layer[i] = static_cast<int>(config.nozzle_temperature_initial_layer.get_at(i));
         m_filament_nozzle_temp[i]      = static_cast<int>(config.nozzle_temperature.get_at(i));
@@ -2131,12 +2171,6 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
         m_first_layer_height = std::abs(initial_layer_print_height->value);
 
     m_result.printable_height = config.printable_height;
-
-    auto filament_maps = config.option<ConfigOptionInts>("filament_map");
-    if (filament_maps != nullptr) {
-        m_filament_maps = filament_maps->values;
-        std::transform(m_filament_maps.begin(), m_filament_maps.end(), m_filament_maps.begin(), [](int value) {return value - 1; });
-    }
 
     const ConfigOptionBool* spiral_vase = config.option<ConfigOptionBool>("spiral_mode");
     if (spiral_vase != nullptr) {
@@ -2215,11 +2249,9 @@ void GCodeProcessor::apply_config(const DynamicPrintConfig& config)
     if (printer_settings_id != nullptr)
         m_result.settings_ids.printer = printer_settings_id->value;
 
-    // BBS
-    m_result.filaments_count = config.option<ConfigOptionFloats>("filament_diameter")->values.size();
-
     const ConfigOptionFloats* filament_diameters = config.option<ConfigOptionFloats>("filament_diameter");
     if (filament_diameters != nullptr) {
+        m_result.filaments_count = filament_diameters->values.size();
         m_result.filament_diameters.clear();
         m_result.filament_diameters.resize(filament_diameters->values.size());
         for (size_t i = 0; i < filament_diameters->values.size(); ++i) {
@@ -2263,7 +2295,18 @@ void GCodeProcessor::apply_config(const DynamicPrintConfig& config)
     auto filament_maps = config.option<ConfigOptionInts>("filament_map");
     if (filament_maps != nullptr) {
         m_filament_maps = filament_maps->values;
-        std::transform(m_filament_maps.begin(), m_filament_maps.end(), m_filament_maps.begin(), [](int value) {return value - 1; });
+        m_filament_maps.resize(m_result.filaments_count, 1);
+        size_t physical_extruder_count = 0;
+        if (const auto *nozzle_diameters = config.option<ConfigOptionFloats>("nozzle_diameter"))
+            physical_extruder_count = nozzle_diameters->values.size();
+        physical_extruder_count = std::max(physical_extruder_count, m_result.nozzle_type.size());
+        if (physical_extruder_count == 0)
+            physical_extruder_count = 1;
+        for (int &mapped_extruder : m_filament_maps) {
+            if (mapped_extruder <= 0 || static_cast<size_t>(mapped_extruder) > physical_extruder_count)
+                mapped_extruder = 1;
+            --mapped_extruder;
+        }
     }
 
     //BBS
@@ -2537,6 +2580,9 @@ void GCodeProcessor::reset()
     for (size_t i = 0; i < MIN_EXTRUDERS_COUNT; ++i) {
         m_extruder_temps[i] = 0.0f;
     }
+    m_filament_nozzle_temp.clear();
+    m_filament_nozzle_temp_first_layer.clear();
+    m_filament_maps.clear();
 
     m_physical_extruder_map.clear();
 
@@ -5010,8 +5056,12 @@ void GCodeProcessor::process_M104(const GCodeReader::GCodeLine& line)
 {
     int filament_id = get_filament_id();
     float new_temp;
-    if (line.has_value('S', new_temp))
-        m_extruder_temps[filament_id] = new_temp;
+    if (line.has_value('S', new_temp)) {
+        if (filament_id >= 0 && static_cast<size_t>(filament_id) < m_extruder_temps.size())
+            m_extruder_temps[filament_id] = new_temp;
+        else
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": ignoring M104 without a valid active filament (" << filament_id << ")";
+    }
 }
 
 void GCodeProcessor::process_VM104(const GCodeReader::GCodeLine& line)
@@ -5086,6 +5136,12 @@ void GCodeProcessor::process_M108(const GCodeReader::GCodeLine& line)
 void GCodeProcessor::process_M109(const GCodeReader::GCodeLine& line)
 {
     int filament_id = get_filament_id();
+    const auto set_active_filament_temperature = [this, filament_id](float temperature) {
+        if (filament_id >= 0 && static_cast<size_t>(filament_id) < m_extruder_temps.size())
+            m_extruder_temps[filament_id] = temperature;
+        else
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": ignoring M109 without a valid active filament (" << filament_id << ")";
+    };
     float new_temp;
     if (line.has_value('R', new_temp)) {
         float val;
@@ -5095,10 +5151,10 @@ void GCodeProcessor::process_M109(const GCodeReader::GCodeLine& line)
                 m_extruder_temps[eid] = new_temp;
         }
         else
-            m_extruder_temps[filament_id] = new_temp;
+            set_active_filament_temperature(new_temp);
     }
     else if (line.has_value('S', new_temp))
-        m_extruder_temps[filament_id] = new_temp;
+        set_active_filament_temperature(new_temp);
 }
 
 void GCodeProcessor::process_VM109(const GCodeReader::GCodeLine& line)
@@ -5516,7 +5572,12 @@ void GCodeProcessor::init_filament_maps_and_nozzle_type_when_import_only_gcode()
 
 void GCodeProcessor::process_filament_change(int id)
 {
-    assert(id < m_result.filaments_count);
+    assert(id >= 0 && id < m_result.filaments_count);
+    if (id < 0 || static_cast<size_t>(id) >= m_filament_maps.size()) {
+        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": invalid filament id " << id
+                                 << " for a filament map of size " << m_filament_maps.size();
+        return;
+    }
     int prev_extruder_id = get_extruder_id(false);
     int prev_filament_id = get_filament_id(false);
     int next_extruder_id = m_filament_maps[id];

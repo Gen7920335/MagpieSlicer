@@ -836,7 +836,7 @@ void ObjectList::update_filament_values_for_items_when_delete_filament(const siz
                         else {
                             int new_value = object->volumes[id]->config.opt_int(key) > filament_id ? object->volumes[id]->config.opt_int(key) - 1 :
                                                                                                      object->volumes[id]->config.opt_int(key);
-                            object->config.set_key_value(key, new ConfigOptionInt(new_value));
+                            object->volumes[id]->config.set_key_value(key, new ConfigOptionInt(new_value));
                         }
                     }
                 }
@@ -3373,8 +3373,8 @@ DynamicPrintConfig ObjectList::get_default_layer_config(const int obj_idx)
     // BBS
     int extruder = object(obj_idx)->config.has("extruder") ?
         object(obj_idx)->config.opt_int("extruder") :
-        wxGetApp().preset_bundle->prints.get_edited_preset().config.opt_float("extruder");
-    config.set_key_value("extruder",    new ConfigOptionInt(0));
+        wxGetApp().preset_bundle->prints.get_edited_preset().config.opt_int("extruder");
+    config.set_key_value("extruder", new ConfigOptionInt(extruder));
 
     return config;
 }
@@ -6600,11 +6600,14 @@ void ObjectList::set_extruder_for_selected_items(const int extruder)
             const int obj_idx = m_objects_model->GetObjectIdByItem(item);
             int vol_idx = m_objects_model->GetVolumeIdByItem(item);
             vol_idx     = m_objects_model->get_real_volume_index_in_3d(obj_idx, vol_idx);
-            if ((obj_idx < m_objects->size()) && (obj_idx < (*m_objects)[obj_idx]->volumes.size())) {
-                auto volume_type = (*m_objects)[obj_idx]->volumes[vol_idx]->type();
-                if (volume_type != ModelVolumeType::MODEL_PART && volume_type != ModelVolumeType::PARAMETER_MODIFIER)
-                    continue;
-            }
+            if (obj_idx < 0 || static_cast<size_t>(obj_idx) >= m_objects->size())
+                continue;
+            const auto &volumes = (*m_objects)[obj_idx]->volumes;
+            if (vol_idx < 0 || static_cast<size_t>(vol_idx) >= volumes.size())
+                continue;
+            const auto volume_type = volumes[vol_idx]->type();
+            if (volume_type != ModelVolumeType::MODEL_PART && volume_type != ModelVolumeType::PARAMETER_MODIFIER)
+                continue;
         }
 
         if (type & itLayerRoot)

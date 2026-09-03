@@ -566,8 +566,12 @@ void DefaultSupportTree::classify()
                             const PointIndexEl &e2) {
         double d2d = distance(to_2d(e1.first), to_2d(e2.first));
         double d3d = distance(e1.first, e2.first);
-        return d2d < 2 * m_sm.cfg.base_radius_mm
-               && d3d < m_sm.cfg.max_bridge_length_mm;
+        // Clustering must always consume its seed. With a zero maximum bridge
+        // length, the strict distance predicate otherwise rejects the point
+        // itself and the clustering loop can never remove it from the index.
+        return e1.second == e2.second ||
+               (d2d < 2 * m_sm.cfg.base_radius_mm
+                && d3d < m_sm.cfg.max_bridge_length_mm);
     };
 
     m_pillar_clusters = cluster(ground_head_indices, pointfn, predicate,

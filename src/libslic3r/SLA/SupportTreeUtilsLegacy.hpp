@@ -44,6 +44,12 @@ std::optional<DiffBridge> search_widening_path(Ex                     policy,
                                                double                 radius,
                                                double new_radius)
 {
+    // A zero maximum bridge length means bridge routing is disabled.  Do not
+    // pass it to NLopt: the radius-derived lower bound would be positive while
+    // the configured upper bound is zero, producing an invalid search domain.
+    if (sm.cfg.max_bridge_length_mm <= EPSILON)
+        return {};
+
     double w = radius + 2 * sm.cfg.head_back_radius_mm;
     double stopval = w + jp.z() - ground_level(sm);
     Optimizer<AlgNLoptSubplex> solver(get_criteria(sm.cfg).stop_score(stopval));
@@ -274,6 +280,12 @@ std::pair<bool, long> search_ground_route(Ex                     policy,
     auto res = connect_to_ground(policy, builder, sm, j, init_dir, end_radius);
     if (res.first)
         return res;
+
+    // The direct pillar attempt above is the only valid route when bridges are
+    // disabled.  Searching bridge angles cannot change the zero travel distance
+    // and only repeats the same failed placement thousands of times.
+    if (sm.cfg.max_bridge_length_mm <= EPSILON)
+        return {false, SupportTreeNode::ID_UNSET};
 
          // Optimize bridge direction:
          // Straight path failed so we will try to search for a suitable

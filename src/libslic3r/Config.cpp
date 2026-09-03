@@ -1934,7 +1934,11 @@ const double& DynamicConfig::opt_float(const t_config_option_key &opt_key, unsig
         return opt_floats_nullable->get_at(idx);
     } else {
         assert(false);
-        return 0;
+        // Keep the Release fallback valid for the lifetime of the program.
+        // Returning a reference to the temporary literal produced a dangling
+        // reference whenever a caller requested a non-float option as a float.
+        static const double zero = 0.0;
+        return zero;
     }
 }
 

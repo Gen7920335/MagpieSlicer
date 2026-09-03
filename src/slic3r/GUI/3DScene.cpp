@@ -615,9 +615,12 @@ void GLVolume::simple_render(GLShaderProgram* shader, ModelObjectPtrs& model_obj
                 if (idx == 0) {
                     int extruder_id = model_volume->extruder_id();
                     //to make black not too hard too see
-                    ColorRGBA new_color = adjust_color_for_rendering(extruder_colors[extruder_id - 1]);
+                    const size_t color_index = extruder_id > 0 && static_cast<size_t>(extruder_id) <= extruder_colors.size() ?
+                                                   static_cast<size_t>(extruder_id - 1) : 0;
+                    ColorRGBA new_color = adjust_color_for_rendering(
+                        extruder_colors.empty() ? ColorRGBA::WHITE() : extruder_colors[color_index]);
                     if (ban_light) {
-                        new_color[3] = (255 - (extruder_id - 1))/255.0f;
+                        new_color[3] = (255 - std::min<size_t>(color_index, 255)) / 255.0f;
                     }
                     m.set_color(new_color);
                     // shader->set_uniform("uniform_color", new_color);
@@ -634,7 +637,8 @@ void GLVolume::simple_render(GLShaderProgram* shader, ModelObjectPtrs& model_obj
                     }
                     else {
                         //to make black not too hard too see
-                        ColorRGBA new_color = adjust_color_for_rendering(extruder_colors[0]);
+                        ColorRGBA new_color = adjust_color_for_rendering(
+                            extruder_colors.empty() ? ColorRGBA::WHITE() : extruder_colors[0]);
                         if (ban_light) {
                             new_color[3] = (255 - 0) / 255.0f;
                         }
@@ -846,9 +850,9 @@ int GLVolumeCollection::load_wipe_tower_preview(
     std::vector<int> plate_extruders = ppl.get_plate(plate_idx)->get_extruders(true);
     TriangleMesh wipe_tower_shell = make_cube(width, depth, height);
     for (int extruder_id : plate_extruders) {
-        if (extruder_id <= extruder_colors.size())
+        if (extruder_id > 0 && static_cast<size_t>(extruder_id) <= extruder_colors.size())
             colors.push_back(extruder_colors[extruder_id - 1]);
-        else
+        else if (!extruder_colors.empty())
             colors.push_back(extruder_colors[0]);
     }
 
@@ -929,9 +933,9 @@ int GLVolumeCollection::load_real_wipe_tower_preview(
     std::vector<int>                  plate_extruders  = ppl.get_plate(plate_idx)->get_extruders(true);
     std::vector<Slic3r::ColorRGBA>    colors;
     if (!plate_extruders.empty()) {
-        if (plate_extruders.front() <= extruder_colors.size())
+        if (plate_extruders.front() > 0 && static_cast<size_t>(plate_extruders.front()) <= extruder_colors.size())
             colors.push_back(extruder_colors[plate_extruders.front() - 1]);
-        else
+        else if (!extruder_colors.empty())
             colors.push_back(extruder_colors[0]);
     }
     if (colors.empty()) return int(this->volumes.size() - 1);
@@ -1033,14 +1037,14 @@ float GLVolumeCollection::get_selection_support_normal_z() const
         const double layer_height        = full_cfg.opt_float("layer_height");
         const auto*  nozzle_diameter_opt = full_cfg.option<ConfigOptionFloats>("nozzle_diameter");
         const int    wall_filament_id       = full_cfg.opt_int("outer_wall_filament_id");
-        const size_t nozzle_count        = nozzle_diameter_opt->values.size();
+        const size_t nozzle_count        = nozzle_diameter_opt != nullptr ? nozzle_diameter_opt->values.size() : 0;
         const size_t wall_extruder_idx   = (wall_filament_id > 0 && wall_filament_id <= static_cast<int>(nozzle_count))
             ? static_cast<size_t>(wall_filament_id - 1)
             : 0; // Invalid extruder index falls back to extruder 1.
         
         // Use wall extruder's nozzle diameter for better estimation of external perimeter width,
         // which is more relevant to overhang printing than the default nozzle diameter.
-        const double nozzle_diameter = nozzle_diameter_opt->values[wall_extruder_idx];
+        const double nozzle_diameter = nozzle_count > 0 ? nozzle_diameter_opt->values[wall_extruder_idx] : 0.4;
 
         double external_perimeter_width = full_cfg.get_abs_value("outer_wall_line_width", nozzle_diameter);
         if (external_perimeter_width <= 0.0) {
@@ -1483,7 +1487,8 @@ bool GLVolumeCollection::check_outside_state(const BuildVolume &build_volume, Mo
 
                     for (int filament: filaments_set)
                     {
-                        if (filament_maps[filament - 1] == extruder_id)
+                        if (filament > 0 && static_cast<size_t>(filament) <= filament_maps.size() &&
+                            filament_maps[filament - 1] == extruder_id)
                         {
                             object_filament_info.manual_filaments.emplace(filament, extruder_id);
                             object_results->filament_maps[filament] = extruder_id;

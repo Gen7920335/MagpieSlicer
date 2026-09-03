@@ -2,9 +2,6 @@
 option(SLIC3R_ENC_CHECK "Verify encoding of source files" 1)
 
 add_executable(small-nozzle-gcode-verifier small_nozzle_gcode_verifier.cpp)
-add_executable(tsunami-probe-generator tsunami_probe_generator.cpp)
-target_link_libraries(tsunami-probe-generator PRIVATE libslic3r)
-
 if (IS_CROSS_COMPILE)
     # Force disable due to cross compilation. This fact is already printed on cli for users
     set(SLIC3R_ENC_CHECK OFF CACHE BOOL "" FORCE)

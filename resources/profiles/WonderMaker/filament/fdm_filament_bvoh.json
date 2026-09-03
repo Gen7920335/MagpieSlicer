@@ -37,6 +37,9 @@
 	"filament_is_support": [
 		"1"
 	],
+	"filament_soluble": [
+		"1"
+	],
 	"filament_max_volumetric_speed": [
 		"8"
 	],

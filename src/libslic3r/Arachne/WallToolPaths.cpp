@@ -12,7 +12,7 @@
 #include "EdgeGrid.hpp"
 #include "utils/SparseLineGrid.hpp"
 #include "Geometry.hpp"
-#include "../Gpu/VulkanSlicer.hpp"
+#include "../Gpu/SlicerCompute.hpp"
 #include "utils/PolylineStitcher.hpp"
 #include "SVG.hpp"
 #include "Utils.hpp"
@@ -897,7 +897,7 @@ WallToolPaths::ExtrusionLineSet WallToolPaths::getRegionOrder(const std::vector<
                             { point.x() + searching_radius, point.y() + searching_radius } });
         targets.push_back({ { point.x(), point.y() }, { point.x(), point.y() } });
     }
-    const auto batch = Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+    const auto batch = Gpu::SlicerCompute::dispatch_indexed_aabb_candidates(
         queries, targets, searching_radius, Gpu::VulkanAabbOperation::ArachneWall);
     if (batch.resolved) {
         for (const auto &pair : batch.overlap_pairs)

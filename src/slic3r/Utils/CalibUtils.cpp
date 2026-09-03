@@ -21,6 +21,9 @@
 #include "libslic3r/FlushVolCalc.hpp"
 #include "../GUI/Plater.hpp"
 
+#include <cmath>
+#include <stdexcept>
+
 namespace Slic3r {
 namespace GUI {
 const double MIN_PA_K_VALUE = 0.0;
@@ -97,24 +100,36 @@ void update_speed_parameter( const std::string& key)
     auto& print_config    = preset_bundle->prints.get_edited_preset().config;
 
     int extruder_nums = preset_bundle->get_printer_extruder_count();
-    std::vector<int> extruder_types      = printer_config.option<ConfigOptionEnumsGeneric>("extruder_type")->values;
-    std::vector<int> nozzle_volume_types = preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type")->values;
+    const auto *extruder_types_opt = printer_config.option<ConfigOptionEnumsGeneric>("extruder_type");
+    const auto *nozzle_volume_types_opt = preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
+    const auto *nozzle_diameters = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
 
-    float nozzle_diameter = printer_config.option<ConfigOptionFloats>("nozzle_diameter")->values[0];
+    float nozzle_diameter = nozzle_diameters != nullptr && !nozzle_diameters->values.empty() ? nozzle_diameters->values[0] : 0.4f;
     float layer_height = print_config.option<ConfigOptionFloat>("layer_height")->value;
     float line_width = print_config.get_abs_value("line_width", nozzle_diameter);
     if (line_width <= 0.) line_width = Flow::auto_extrusion_width(frPerimeter, nozzle_diameter);
 
     Flow flow = Flow(line_width, layer_height, nozzle_diameter);
+    const double flow_area = flow.mm3_per_mm();
 
     for (size_t i = 0; i < extruder_nums; ++i) {
-        int index = get_index_for_extruder_parameter(filament_config, "filament_max_volumetric_speed", i, ExtruderType(extruder_types[i]), NozzleVolumeType(nozzle_volume_types[i]));
-        double filament_max_volumetric_speed = filament_config.option<ConfigOptionFloats>("filament_max_volumetric_speed")->get_at(index);
-        double max_speed = filament_max_volumetric_speed / flow.mm3_per_mm();
+        const ExtruderType extruder_type = extruder_types_opt != nullptr && !extruder_types_opt->values.empty() ?
+                                               ExtruderType(extruder_types_opt->get_at(i)) : etDirectDrive;
+        const NozzleVolumeType nozzle_volume_type = nozzle_volume_types_opt != nullptr && !nozzle_volume_types_opt->values.empty() ?
+                                                        NozzleVolumeType(nozzle_volume_types_opt->get_at(i)) : nvtStandard;
+        int index = get_index_for_extruder_parameter(filament_config, "filament_max_volumetric_speed", i, extruder_type, nozzle_volume_type);
+        const auto *max_flow_opt = filament_config.option<ConfigOptionFloats>("filament_max_volumetric_speed");
+        const size_t max_flow_index = index >= 0 ? static_cast<size_t>(index) : 0;
+        double filament_max_volumetric_speed = max_flow_opt != nullptr && !max_flow_opt->values.empty() ? max_flow_opt->get_at(max_flow_index) : 0.;
+        double max_speed = flow_area > 0. ? filament_max_volumetric_speed / flow_area : 0.;
 
-        index = get_index_for_extruder_parameter(print_config, key, i, ExtruderType(extruder_types[i]), NozzleVolumeType(nozzle_volume_types[i]));
+        index = get_index_for_extruder_parameter(print_config, key, i, extruder_type, nozzle_volume_type);
         ConfigOptionFloatsNullable *speed_opt = print_config.option<ConfigOptionFloatsNullable>(key);
-        speed_opt->values[index] = max_speed;
+        if (speed_opt != nullptr && index >= 0) {
+            if (static_cast<size_t>(index) >= speed_opt->values.size())
+                speed_opt->values.resize(static_cast<size_t>(index) + 1, max_speed);
+            speed_opt->values[index] = max_speed;
+        }
     }
 }
 
@@ -126,30 +141,49 @@ std::vector<double> generate_max_speed_parameter_value(const std::string &key, c
     auto &print_config    = preset_bundle->prints.get_edited_preset().config;
 
     int              extruder_nums       = preset_bundle->get_printer_extruder_count();
-    std::vector<int> extruder_types      = printer_config.option<ConfigOptionEnumsGeneric>("extruder_type")->values;
-    std::vector<int> nozzle_volume_types = preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type")->values;
+    const auto *extruder_types_opt = printer_config.option<ConfigOptionEnumsGeneric>("extruder_type");
+    const auto *nozzle_volume_types_opt = preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
+    const auto *nozzle_diameters = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
 
-    float nozzle_diameter = printer_config.option<ConfigOptionFloats>("nozzle_diameter")->values[0];
+    float nozzle_diameter = nozzle_diameters != nullptr && !nozzle_diameters->values.empty() ? nozzle_diameters->values[0] : 0.4f;
     float layer_height    = print_config.option<ConfigOptionFloat>("layer_height")->value;
     float line_width      = print_config.get_abs_value("line_width", nozzle_diameter);
 
     Flow flow = Flow(line_width, layer_height, nozzle_diameter);
+    const double flow_area = flow.mm3_per_mm();
 
     std::vector<double> speed_values;
-    speed_values.reserve(extruder_nums * nozzle_volume_types.size());
+    const size_t variant_count = nozzle_volume_types_opt != nullptr ? std::max<size_t>(1, nozzle_volume_types_opt->values.size()) : 1;
+    speed_values.reserve(extruder_nums * variant_count);
 
     for (size_t i = 0; i < extruder_nums; ++i) {
-        int    index                         = get_index_for_extruder_parameter(filament_config, "filament_max_volumetric_speed", i, ExtruderType(extruder_types[i]),
-                                                                                NozzleVolumeType(nozzle_volume_types[i]));
-        double filament_max_volumetric_speed = filament_config.option<ConfigOptionFloats>("filament_max_volumetric_speed")->get_at(index);
-        double cur_flowrate                  = filament_config.option<ConfigOptionFloats>("filament_flow_ratio")->get_at(index);
-        double max_speed                     = linear ? filament_max_volumetric_speed / (flow.mm3_per_mm() * (cur_flowrate + (pass == 2 ? 0.035 : 0.05)) / cur_flowrate) :
-                                                        filament_max_volumetric_speed / (flow.mm3_per_mm() * (pass == 1 ? 1.2 : 1));
+        const ExtruderType extruder_type = extruder_types_opt != nullptr && !extruder_types_opt->values.empty() ?
+                                               ExtruderType(extruder_types_opt->get_at(i)) : etDirectDrive;
+        const NozzleVolumeType nozzle_volume_type = nozzle_volume_types_opt != nullptr && !nozzle_volume_types_opt->values.empty() ?
+                                                        NozzleVolumeType(nozzle_volume_types_opt->get_at(i)) : nvtStandard;
+        int    index = get_index_for_extruder_parameter(filament_config, "filament_max_volumetric_speed", i, extruder_type, nozzle_volume_type);
+        const auto *max_flow_opt = filament_config.option<ConfigOptionFloats>("filament_max_volumetric_speed");
+        const size_t max_flow_index = index >= 0 ? static_cast<size_t>(index) : 0;
+        double filament_max_volumetric_speed = max_flow_opt != nullptr && !max_flow_opt->values.empty() ? max_flow_opt->get_at(max_flow_index) : 0.;
+        const auto *flow_ratio_opt = filament_config.option<ConfigOptionFloatsNullable>("filament_flow_ratio");
+        const size_t flow_ratio_index = index >= 0 && static_cast<size_t>(index) < (flow_ratio_opt != nullptr ? flow_ratio_opt->values.size() : 0) ?
+                                            static_cast<size_t>(index) : 0;
+        double cur_flowrate = flow_ratio_opt != nullptr && !flow_ratio_opt->values.empty() && !flow_ratio_opt->is_nil(flow_ratio_index) ?
+                                  flow_ratio_opt->get_at(flow_ratio_index) : 1.;
+        if (!std::isfinite(cur_flowrate) || cur_flowrate <= 0.)
+            cur_flowrate = 1.;
+        double max_speed = 0.;
+        if (flow_area > 0.)
+            max_speed = linear ? filament_max_volumetric_speed / (flow_area * (cur_flowrate + (pass == 2 ? 0.035 : 0.05)) / cur_flowrate) :
+                                 filament_max_volumetric_speed / (flow_area * (pass == 1 ? 1.2 : 1));
 
-        index = get_index_for_extruder_parameter(print_config, key, i, ExtruderType(extruder_types[i]), NozzleVolumeType(nozzle_volume_types[i]));
+        index = get_index_for_extruder_parameter(print_config, key, i, extruder_type, nozzle_volume_type);
         ConfigOptionFloatsNullable *speed_opt = print_config.option<ConfigOptionFloatsNullable>(key);
-        double speed_value = std::floor(std::min(speed_opt->values[index], max_speed));
-        for (size_t v_id = 0; v_id < nozzle_volume_types.size(); ++v_id) {
+        const size_t speed_index = index >= 0 ? static_cast<size_t>(index) : 0;
+        double configured_speed = speed_opt != nullptr && !speed_opt->values.empty() ? speed_opt->get_at(speed_index) : max_speed;
+        if (!std::isfinite(configured_speed)) configured_speed = max_speed;
+        double speed_value = std::floor(std::min(configured_speed, max_speed));
+        for (size_t v_id = 0; v_id < variant_count; ++v_id) {
             speed_values.emplace_back(speed_value);
         }
     }
@@ -168,7 +202,7 @@ static int get_physical_extruder_idx(std::vector<int> physical_extruder_maps, in
 
 void get_tray_ams_and_slot_id(MachineObject* obj, int in_tray_id, int &ams_id, int &slot_id, int &tray_id)
 {
-    assert(obj);
+    ams_id = slot_id = tray_id = -1;
     if (!obj)
         return;
 
@@ -300,14 +334,18 @@ static void init_multi_extruder_params_for_cali(DynamicPrintConfig& config, cons
 {
     int extruder_count = 1;
     auto nozzle_diameters_opt = dynamic_cast<const ConfigOptionFloats*>(config.option("nozzle_diameter"));
-    if (nozzle_diameters_opt != nullptr) {
-        extruder_count = (int)(nozzle_diameters_opt->size());
+    if (nozzle_diameters_opt != nullptr && !nozzle_diameters_opt->values.empty()) {
+        extruder_count = std::max(1, static_cast<int>(nozzle_diameters_opt->size()));
     }
     std::vector<int>& nozzle_volume_types =  dynamic_cast<ConfigOptionEnumsGeneric*>(config.option("nozzle_volume_type", true))->values;
     nozzle_volume_types.clear();
     nozzle_volume_types.resize(extruder_count, (int)calib_info.nozzle_volume_type);
 
     std::vector<int> physical_extruder_maps = dynamic_cast<ConfigOptionInts*>(config.option("physical_extruder_map", true))->values;
+    const size_t old_map_size = physical_extruder_maps.size();
+    physical_extruder_maps.resize(static_cast<size_t>(extruder_count));
+    for (size_t index = old_map_size; index < physical_extruder_maps.size(); ++index)
+        physical_extruder_maps[index] = static_cast<int>(index) + 1;
     int extruder_id = calib_info.extruder_id;
     for (size_t index = 0; index < extruder_count; ++index) {
         if (physical_extruder_maps[index] == extruder_id)
@@ -320,8 +358,8 @@ static void init_multi_extruder_params_for_cali(DynamicPrintConfig& config, cons
 
     int num_filaments = 1;
     auto filament_colour_opt = dynamic_cast<const ConfigOptionStrings*>(config.option("filament_colour"));
-    if (filament_colour_opt != nullptr) {
-        num_filaments = (int)(filament_colour_opt->size());
+    if (filament_colour_opt != nullptr && !filament_colour_opt->values.empty()) {
+        num_filaments = std::max(1, static_cast<int>(filament_colour_opt->size()));
     }
     std::vector<int>& filament_maps = config.option<ConfigOptionInts>("filament_map", true)->values;
     filament_maps.clear();
@@ -695,8 +733,10 @@ bool CalibUtils::calib_flowrate(int pass, const CalibInfo &calib_info, wxString 
     /// --- scale ---
     // model is created for a 0.4 nozzle, scale z with nozzle size.
     const ConfigOptionFloats *nozzle_diameter_config = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
-    assert(nozzle_diameter_config->values.size() > 0);
-    float nozzle_diameter = nozzle_diameter_config->values[0];
+    float nozzle_diameter = nozzle_diameter_config != nullptr && !nozzle_diameter_config->values.empty() ?
+                                nozzle_diameter_config->values.front() : 0.4f;
+    if (!std::isfinite(nozzle_diameter) || nozzle_diameter <= 0.f)
+        nozzle_diameter = 0.4f;
     float xyScale         = nozzle_diameter / 0.6;
     // scale z to have 7 layers
     double first_layer_height = print_config.option<ConfigOptionFloat>("initial_layer_print_height")->value;
@@ -715,7 +755,10 @@ bool CalibUtils::calib_flowrate(int pass, const CalibInfo &calib_info, wxString 
     Flow   infill_flow                   = Flow(nozzle_diameter * 1.2f, layer_height, nozzle_diameter);
 
     int index = get_index_for_extruder_parameter(filament_config, "filament_max_volumetric_speed", calib_info.extruder_id, calib_info.extruder_type, calib_info.nozzle_volume_type);
-    double filament_max_volumetric_speed = filament_config.option<ConfigOptionFloats>("filament_max_volumetric_speed")->get_at(index);
+    const auto *max_flow_opt = filament_config.option<ConfigOptionFloats>("filament_max_volumetric_speed");
+    const size_t max_flow_index = index >= 0 ? static_cast<size_t>(index) : 0;
+    double filament_max_volumetric_speed = max_flow_opt != nullptr && !max_flow_opt->values.empty() ?
+                                               max_flow_opt->get_at(max_flow_index) : 0.;
     double max_infill_speed              = filament_max_volumetric_speed / (infill_flow.mm3_per_mm() * (pass == 1 ? 1.2 : 1));
     double internal_solid_speed          = std::floor(std::min(print_config.opt_float_nullable("internal_solid_infill_speed", 0), max_infill_speed));
     double top_surface_speed             = std::floor(std::min(print_config.opt_float_nullable("top_surface_speed", 0), max_infill_speed));
@@ -742,12 +785,30 @@ bool CalibUtils::calib_flowrate(int pass, const CalibInfo &calib_info, wxString 
         _obj->config.set_key_value("internal_solid_infill_speed", new ConfigOptionFloatsNullable({internal_solid_speed}));
         _obj->config.set_key_value("top_surface_speed", new ConfigOptionFloatsNullable({top_surface_speed}));
 
-        // extract flowrate from name, filename format: flowrate_xxx
+        // Extract flow rate from names in the form flowrate_xxx. A damaged or
+        // replaced calibration resource must fail cleanly instead of indexing
+        // an empty suffix or throwing out of the UI callback.
         std::string obj_name = _obj->name;
-        assert(obj_name.length() > 9);
+        if (obj_name.size() <= 9) {
+            error_message = _L("Unable to calibrate: invalid flow-rate calibration model name");
+            return false;
+        }
         obj_name = obj_name.substr(9);
-        if (obj_name[0] == 'm') obj_name[0] = '-';
-        auto modifier = stof(obj_name);
+        if (obj_name.front() == 'm')
+            obj_name.front() = '-';
+
+        float  modifier = 0.f;
+        size_t parsed   = 0;
+        try {
+            modifier = std::stof(obj_name, &parsed);
+        } catch (const std::exception &) {
+            error_message = _L("Unable to calibrate: invalid flow-rate calibration value");
+            return false;
+        }
+        if (parsed != obj_name.size() || !std::isfinite(modifier)) {
+            error_message = _L("Unable to calibrate: invalid flow-rate calibration value");
+            return false;
+        }
         _obj->config.set_key_value("print_flow_ratio", new ConfigOptionFloat(1.0f + modifier / 100.f));
     }
     print_config.set_key_value("alternate_extra_wall", new ConfigOptionBool(false));
@@ -789,7 +850,11 @@ void CalibUtils::calib_pa_pattern(const CalibInfo &calib_info, Model& model)
     full_config.apply(printer_config);
     const auto& config_pattern = SuggestedConfigCalibPAPattern();
 
-    float nozzle_diameter = printer_config.option<ConfigOptionFloats>("nozzle_diameter")->get_at(0);
+    const auto *nozzle_diameters = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
+    float nozzle_diameter = nozzle_diameters != nullptr && !nozzle_diameters->values.empty() ?
+                                nozzle_diameters->values.front() : 0.4f;
+    if (!std::isfinite(nozzle_diameter) || nozzle_diameter <= 0.f)
+        nozzle_diameter = 0.4f;
 
     for (const auto& opt : config_pattern.floats_pairs) {
         print_config.set_key_value(opt.first, new ConfigOptionFloatsNullable(opt.second));
@@ -797,8 +862,12 @@ void CalibUtils::calib_pa_pattern(const CalibInfo &calib_info, Model& model)
 
     int index = get_index_for_extruder_parameter(print_config, "outer_wall_speed", calib_info.extruder_id, calib_info.extruder_type, calib_info.nozzle_volume_type);
     float wall_speed = CalibPressureAdvance::find_optimal_PA_speed(full_config, print_config.get_abs_value("line_width"), print_config.get_abs_value("layer_height"), calib_info.extruder_id, 0);
-    ConfigOptionFloatsNullable *wall_speed_speed_opt = print_config.option<ConfigOptionFloatsNullable>("outer_wall_speed");
-    wall_speed_speed_opt->values[index]              = wall_speed;
+    ConfigOptionFloatsNullable *wall_speed_speed_opt = print_config.option<ConfigOptionFloatsNullable>("outer_wall_speed", true);
+    if (index < 0)
+        index = 0;
+    if (static_cast<size_t>(index) >= wall_speed_speed_opt->values.size())
+        wall_speed_speed_opt->values.resize(static_cast<size_t>(index) + 1, wall_speed);
+    wall_speed_speed_opt->values[static_cast<size_t>(index)] = wall_speed;
 
     for (const auto& opt : config_pattern.nozzle_ratio_pairs) {
         print_config.set_key_value(opt.first, new ConfigOptionFloatOrPercent(nozzle_diameter * opt.second / 100, false));
@@ -1025,10 +1094,8 @@ bool CalibUtils::calib_generic_auto_pa_cali(const std::vector<CalibInfo> &calib_
             js["cali_type"] = "cali_auto_pa_line";
 
         const ConfigOptionFloats *nozzle_diameter_config = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
-        assert(nozzle_diameter_config->values.size() > 0);
-        float nozzle_diameter = nozzle_diameter_config->values[0];
-
-        js["nozzle_diameter"] = nozzle_diameter;
+        if (nozzle_diameter_config != nullptr && !nozzle_diameter_config->values.empty())
+            js["nozzle_diameter"] = nozzle_diameter_config->values.front();
         std::string filament_ids;
         for (const auto& calib_info : calib_infos) {
             filament_ids += calib_info.filament_prest->filament_id;
@@ -1174,28 +1241,45 @@ void CalibUtils::calib_max_vol_speed(const CalibInfo &calib_info, wxString &erro
     std::string input_file = Slic3r::resources_dir() + "/calib/volumetric_speed/SpeedTestStructure.drc";
     read_model_from_file(input_file, model);
 
+    if (model.objects.empty() || model.objects.front() == nullptr || model.objects.front()->instances.empty()) {
+        error_message = _L("Unable to calibrate: volumetric-speed calibration model is empty");
+        return;
+    }
+
     DynamicPrintConfig print_config    = calib_info.print_prest->config;
     DynamicPrintConfig filament_config = calib_info.filament_prest->config;
     DynamicPrintConfig printer_config  = calib_info.printer_prest->config;
 
-    auto obj             = model.objects[0];
-    auto         bed_shape = printer_config.option<ConfigOptionPoints>("printable_area")->values;
+    auto obj = model.objects.front();
+    const auto *bed_shape_opt = printer_config.option<ConfigOptionPoints>("printable_area");
+    if (bed_shape_opt == nullptr || bed_shape_opt->values.size() < 3) {
+        error_message = _L("Unable to calibrate: invalid printable area");
+        return;
+    }
+    auto         bed_shape = bed_shape_opt->values;
     BoundingBoxf bed_ext   = get_extents(bed_shape);
     auto         scale_obj = (bed_ext.size().x() - 10) / obj->bounding_box_exact().size().x();
     if (scale_obj < 1.0)
         obj->scale(scale_obj, 1, 1);
 
     const ConfigOptionFloats *nozzle_diameter_config = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
-    assert(nozzle_diameter_config->values.size() > 0);
-    double nozzle_diameter = nozzle_diameter_config->values[0];
+    if (nozzle_diameter_config == nullptr || nozzle_diameter_config->values.empty() ||
+        !std::isfinite(nozzle_diameter_config->values.front()) || nozzle_diameter_config->values.front() <= 0.) {
+        error_message = _L("Unable to calibrate: invalid nozzle diameter");
+        return;
+    }
+    double nozzle_diameter = nozzle_diameter_config->values.front();
     double line_width      = nozzle_diameter * 1.75;
     double layer_height    = nozzle_diameter * 0.8;
 
-    auto max_lh = printer_config.option<ConfigOptionFloats>("max_layer_height");
-    if (max_lh->values[0] < layer_height) max_lh->values[0] = {layer_height};
+    auto *max_lh = printer_config.option<ConfigOptionFloats>("max_layer_height", true);
+    if (max_lh->values.empty())
+        max_lh->values.push_back(layer_height);
+    else if (max_lh->values.front() < layer_height)
+        max_lh->values.front() = layer_height;
 
     filament_config.set_key_value("filament_max_volumetric_speed", new ConfigOptionFloats{50});
-    filament_config.set_key_value("slow_down_layer_time", new ConfigOptionInts{0});
+    filament_config.set_key_value("slow_down_layer_time", new ConfigOptionFloats{0.});
     filament_config.set_key_value("curr_bed_type", new ConfigOptionEnum<BedType>(calib_info.bed_type));
 
     print_config.set_key_value("enable_overhang_speed", new ConfigOptionBoolsNullable({false}));
@@ -1207,7 +1291,7 @@ void CalibUtils::calib_max_vol_speed(const CalibInfo &calib_info, wxString &erro
     print_config.set_key_value("sparse_infill_density", new ConfigOptionPercent(0));
     print_config.set_key_value("overhang_reverse", new ConfigOptionBool(false));
     print_config.set_key_value("spiral_mode", new ConfigOptionBool(true));
-    print_config.set_key_value("outer_wall_line_width", new ConfigOptionFloat(line_width));
+    print_config.set_key_value("outer_wall_line_width", new ConfigOptionFloatOrPercent(line_width, false));
     print_config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(layer_height));
     print_config.set_key_value("layer_height", new ConfigOptionFloat(layer_height));
     obj->config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btOuterAndInner));
@@ -1216,13 +1300,28 @@ void CalibUtils::calib_max_vol_speed(const CalibInfo &calib_info, wxString &erro
 
     //  cut upper
     auto obj_bb = obj->bounding_box_exact();
+    if (!std::isfinite(params.step) || params.step <= 0.) {
+        error_message = _L("Unable to calibrate: calibration step must be greater than zero");
+        return;
+    }
     double height = (params.end - params.start + 1) / params.step;
     if (height < obj_bb.size().z()) {
         cut_model(model, height, ModelObjectCutAttribute::KeepLower);
     }
 
-    auto new_params  = params;
-    auto mm3_per_mm  = Flow(line_width, layer_height, nozzle_diameter).mm3_per_mm() * filament_config.option<ConfigOptionFloatsNullable>("filament_flow_ratio")->get_at(0);
+    auto new_params = params;
+    const auto *flow_ratio_opt = filament_config.option<ConfigOptionFloatsNullable>("filament_flow_ratio");
+    double flow_ratio = flow_ratio_opt != nullptr && !flow_ratio_opt->values.empty() && !flow_ratio_opt->is_nil(0) ?
+                            flow_ratio_opt->get_at(0) : 1.;
+    if (!std::isfinite(flow_ratio) || flow_ratio <= 0.) {
+        error_message = _L("Unable to calibrate: invalid filament flow ratio");
+        return;
+    }
+    auto mm3_per_mm = Flow(line_width, layer_height, nozzle_diameter).mm3_per_mm() * flow_ratio;
+    if (!std::isfinite(mm3_per_mm) || mm3_per_mm <= 0.) {
+        error_message = _L("Unable to calibrate: invalid extrusion flow");
+        return;
+    }
     new_params.end   = params.end / mm3_per_mm;
     new_params.start = params.start / mm3_per_mm;
     new_params.step  = params.step / mm3_per_mm;
@@ -1256,7 +1355,7 @@ void CalibUtils::calib_VFA(const CalibInfo &calib_info, wxString &error_message)
     DynamicPrintConfig filament_config = calib_info.filament_prest->config;
     DynamicPrintConfig printer_config  = calib_info.printer_prest->config;
 
-    filament_config.set_key_value("slow_down_layer_time", new ConfigOptionInts{0});
+    filament_config.set_key_value("slow_down_layer_time", new ConfigOptionFloats{0.});
     filament_config.set_key_value("filament_max_volumetric_speed", new ConfigOptionFloats{200});
     filament_config.set_key_value("curr_bed_type", new ConfigOptionEnum<BedType>(calib_info.bed_type));
 
@@ -1311,16 +1410,24 @@ void CalibUtils::calib_retraction(const CalibInfo &calib_info, wxString &error_m
     std::string input_file = Slic3r::resources_dir() + "/calib/retraction/retraction_tower.drc";
     read_model_from_file(input_file, model);
 
+    if (model.objects.empty() || model.objects.front() == nullptr || model.objects.front()->instances.empty()) {
+        error_message = _L("Unable to calibrate: retraction calibration model is empty");
+        return;
+    }
+
     DynamicPrintConfig print_config    = calib_info.print_prest->config;
     DynamicPrintConfig filament_config = calib_info.filament_prest->config;
     DynamicPrintConfig printer_config  = calib_info.printer_prest->config;
 
-    auto obj = model.objects[0];
+    auto obj = model.objects.front();
 
     double layer_height = 0.2;
 
-    auto max_lh = printer_config.option<ConfigOptionFloats>("max_layer_height");
-    if (max_lh->values[0] < layer_height) max_lh->values[0] = {layer_height};
+    auto *max_lh = printer_config.option<ConfigOptionFloats>("max_layer_height", true);
+    if (max_lh->values.empty())
+        max_lh->values.push_back(layer_height);
+    else if (max_lh->values.front() < layer_height)
+        max_lh->values.front() = layer_height;
 
     filament_config.set_key_value("curr_bed_type", new ConfigOptionEnum<BedType>(calib_info.bed_type));
 
@@ -1334,6 +1441,10 @@ void CalibUtils::calib_retraction(const CalibInfo &calib_info, wxString &error_m
 
     //  cut upper
     auto obj_bb = obj->bounding_box_exact();
+    if (!std::isfinite(params.step) || params.step <= 0.) {
+        error_message = _L("Unable to calibrate: calibration step must be greater than zero");
+        return;
+    }
     auto height = 1.0 + 0.4 + ((params.end - params.start)) / params.step;
     if (height < obj_bb.size().z()) {
         cut_model(model, height, ModelObjectCutAttribute::KeepLower);
@@ -1457,12 +1568,18 @@ bool CalibUtils::check_printable_status_before_cali(const MachineObject *obj, co
         return false;
     }
 
-    if (cali_infos.empty())
-        return true;
+    if (cali_infos.empty()) {
+        error_message = _L("No calibration filament was selected");
+        return false;
+    }
 
     bool is_multi_extruder = obj->is_multi_extruders();
 
     for (const auto &cali_info : cali_infos) {
+        if (cali_info.filament_prest == nullptr || cali_info.print_prest == nullptr || cali_info.printer_prest == nullptr) {
+            error_message = _L("Unable to calibrate: a required preset is missing");
+            return false;
+        }
         wxString name = "";
         if (is_multi_extruder) { name = cali_info.extruder_id == MAIN_EXTRUDER_ID ? _L("right") + " " : _L("left") + " "; }
 
@@ -1479,7 +1596,7 @@ bool CalibUtils::check_printable_status_before_cali(const MachineObject *obj, co
 
         float cali_diameter = cali_info.nozzle_diameter;
         int   extruder_id   = cali_info.extruder_id;
-        if (extruder_id >= obj->GetExtderSystem()->GetTotalExtderSize()) {
+        if (extruder_id < 0 || extruder_id >= obj->GetExtderSystem()->GetTotalExtderSize()) {
             error_message = _L("The number of printer extruders and the printer selected for calibration does not match.");
             return false;
         }
@@ -1525,10 +1642,38 @@ bool CalibUtils::check_printable_status_before_cali(const MachineObject* obj, co
 
 bool CalibUtils::process_and_store_3mf(Model *model, const DynamicPrintConfig &full_config, const Calib_Params &params, wxString &error_message)
 {
-    Pointfs bedfs         = make_counter_clockwise(full_config.opt<ConfigOptionPoints>("printable_area")->values);
-    std::vector<Pointfs> extruder_areas = full_config.option<ConfigOptionPointsGroups>("extruder_printable_area")->values;
-    std::vector<double> extruder_heights = full_config.option<ConfigOptionFloatsNullable>("extruder_printable_height")->values;
-    double  print_height  = full_config.opt_float("printable_height");
+    if (model == nullptr || model->objects.empty()) {
+        error_message = _L("Unable to calibrate: calibration model is empty");
+        return false;
+    }
+    for (const ModelObject *object : model->objects) {
+        if (object == nullptr || object->instances.empty()) {
+            error_message = _L("Unable to calibrate: calibration model has no printable instance");
+            return false;
+        }
+    }
+
+    const auto *printable_area_opt = full_config.option<ConfigOptionPoints>("printable_area");
+    if (printable_area_opt == nullptr || printable_area_opt->values.size() < 3) {
+        error_message = _L("Unable to calibrate: invalid printable area");
+        return false;
+    }
+    Pointfs bedfs = make_counter_clockwise(printable_area_opt->values);
+    if (bedfs.size() < 3) {
+        error_message = _L("Unable to calibrate: invalid printable area");
+        return false;
+    }
+
+    const auto *extruder_areas_opt = full_config.option<ConfigOptionPointsGroups>("extruder_printable_area");
+    const auto *extruder_heights_opt = full_config.option<ConfigOptionFloatsNullable>("extruder_printable_height");
+    std::vector<Pointfs> extruder_areas = extruder_areas_opt != nullptr ? extruder_areas_opt->values : std::vector<Pointfs>{};
+    std::vector<double> extruder_heights = extruder_heights_opt != nullptr ? extruder_heights_opt->values : std::vector<double>{};
+    const auto *print_height_opt = full_config.option<ConfigOptionFloat>("printable_height");
+    double print_height = print_height_opt != nullptr ? print_height_opt->value : 0.;
+    if (!std::isfinite(print_height) || print_height <= 0.) {
+        error_message = _L("Unable to calibrate: invalid printable height");
+        return false;
+    }
     double  current_width = bedfs[2].x() - bedfs[0].x();
     double  current_depth = bedfs[2].y() - bedfs[0].y();
     Vec3i32   plate_size;
@@ -1537,6 +1682,10 @@ bool CalibUtils::process_and_store_3mf(Model *model, const DynamicPrintConfig &f
     plate_size[2] = print_height;
 
     if (params.mode == CalibMode::Calib_PA_Line) {
+        if (!std::isfinite(params.step) || params.step <= 0.) {
+            error_message = _L("Unable to calibrate: calibration step must be greater than zero");
+            return false;
+        }
         double space_y       = 3.5;
         int    max_line_nums = int(plate_size[1] - 10) / space_y;
         int    count         = std::llround(std::ceil((params.end - params.start) / params.step)) + 1;
@@ -1547,6 +1696,10 @@ bool CalibUtils::process_and_store_3mf(Model *model, const DynamicPrintConfig &f
     }
 
     if (params.mode == CalibMode::Calib_PA_Pattern) {
+        if (model->calib_pa_pattern == nullptr) {
+            error_message = _L("Unable to calibrate: pressure-advance pattern data is missing");
+            return false;
+        }
         ModelInstance *instance = model->objects[0]->instances[0];
         Vec3d offset = model->calib_pa_pattern->get_start_offset() +
                        Vec3d(model->calib_pa_pattern->handle_xy_size() / 2, -model->calib_pa_pattern->handle_xy_size() / 2 - model->calib_pa_pattern->handle_spacing(), 0);
@@ -1568,11 +1721,20 @@ bool CalibUtils::process_and_store_3mf(Model *model, const DynamicPrintConfig &f
     partplate_list.reset_size(plate_size.x(), plate_size.y(), plate_size.z(), false);
 
     Slic3r::GUI::PartPlate *part_plate = partplate_list.get_plate(0);
+    if (part_plate == nullptr) {
+        error_message = _L("Unable to calibrate: failed to create calibration plate");
+        return false;
+    }
 
     PrintBase *               print        = NULL;
     Slic3r::GUI::GCodeResult *gcode_result = NULL;
     int                       print_index;
     part_plate->get_print(&print, &gcode_result, &print_index);
+    Print *fff_print = dynamic_cast<Print *>(print);
+    if (fff_print == nullptr || gcode_result == nullptr) {
+        error_message = _L("Unable to calibrate: failed to initialize slicing output");
+        return false;
+    }
 
     BuildVolume build_volume(bedfs, print_height, extruder_areas, extruder_heights);
     unsigned int count = model->update_print_volume_state(build_volume);
@@ -1585,7 +1747,6 @@ bool CalibUtils::process_and_store_3mf(Model *model, const DynamicPrintConfig &f
     DynamicPrintConfig new_print_config = full_config;
     print->apply(*model, new_print_config);
 
-    Print *fff_print = dynamic_cast<Print *>(print);
     fff_print->set_calib_params(params);
     fff_print->is_BBL_printer() = true;
 
@@ -1608,20 +1769,31 @@ bool CalibUtils::process_and_store_3mf(Model *model, const DynamicPrintConfig &f
     std::vector<ThumbnailData*> thumbnails;
     PlateDataPtrs plate_data_list;
     partplate_list.store_to_3mf_structure(plate_data_list, true, 0);
+    if (plate_data_list.empty()) {
+        error_message = _L("Unable to calibrate: failed to create plate data");
+        return false;
+    }
 
     DeviceManager *dev = Slic3r::GUI::wxGetApp().getDeviceManager();
     if (!dev) {
+        release_PlateData_list(plate_data_list);
         error_message = _L("Need select printer");
         return false;
     }
 
     MachineObject *obj_ = dev->get_selected_machine();
     if (obj_ == nullptr) {
+        release_PlateData_list(plate_data_list);
         error_message = _L("Need select printer");
         return false;
     }
 
     for (auto plate_data : plate_data_list) {
+        if (plate_data == nullptr || plate_data->slice_filaments_info.empty()) {
+            release_PlateData_list(plate_data_list);
+            error_message = _L("Unable to calibrate: sliced filament data is missing");
+            return false;
+        }
         plate_data->gcode_file      = temp_gcode_path;
         plate_data->is_sliced_valid = true;
         plate_data->printer_model_id = obj_->printer_type;
@@ -1696,13 +1868,17 @@ bool CalibUtils::process_and_store_3mf(Model *model, const DynamicPrintConfig &f
 
     store_params.strategy = SaveStrategy::Silence | SaveStrategy::WithGcode | SaveStrategy::SplitModel | SaveStrategy::SkipModel;
 
-    bool success = Slic3r::store_bbs_3mf(store_params);
+    const bool gcode_package_saved = Slic3r::store_bbs_3mf(store_params);
 
     store_params.strategy = SaveStrategy::Silence | SaveStrategy::SplitModel | SaveStrategy::WithSliceInfo | SaveStrategy::SkipAuxiliary;
     store_params.path = config_3mf_path.c_str();
-    success           = Slic3r::store_bbs_3mf(store_params);
+    const bool config_package_saved = Slic3r::store_bbs_3mf(store_params);
 
     release_PlateData_list(plate_data_list);
+    if (!gcode_package_saved || !config_package_saved) {
+        error_message = _L("Unable to calibrate: failed to save calibration package");
+        return false;
+    }
     return true;
 }
 

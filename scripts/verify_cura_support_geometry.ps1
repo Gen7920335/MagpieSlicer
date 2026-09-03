@@ -264,7 +264,7 @@ foreach ($case in @(
     Set-JsonProperty $process 'support_interface_bottom_layers' '0'
     Set-JsonProperty $process 'support_interface_pattern' 'rectilinear'
     Set-JsonProperty $process 'support_interface_spacing' '0'
-    Set-JsonProperty $process 'support_wall_loops' '1'
+    Set-JsonProperty $process 'support_wall_count' '1'
     Set-JsonProperty $process 'support_expansion' '0'
     Set-JsonProperty $process 'support_on_build_plate_only' '0'
     Set-JsonProperty $process 'use_smaller_nozzles_in_crisp_corners' '0'

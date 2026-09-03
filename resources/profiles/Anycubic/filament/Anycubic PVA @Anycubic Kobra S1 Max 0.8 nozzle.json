@@ -148,7 +148,7 @@
 		"nil"
 	],
 	"filament_is_support": [
-		"0"
+		"1"
 	],
 	"filament_loading_speed": [
 		"0"
@@ -220,7 +220,7 @@
 		"100%"
 	],
 	"filament_soluble": [
-		"0"
+		"1"
 	],
 	"filament_stamping_distance": [
 		"0"

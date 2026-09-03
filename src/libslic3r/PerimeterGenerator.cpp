@@ -13,7 +13,7 @@
 #include "Geometry/ConvexHull.hpp"
 #include "ExPolygonCollection.hpp"
 #include "Geometry.hpp"
-#include "Gpu/VulkanSlicer.hpp"
+#include "Gpu/SlicerCompute.hpp"
 #include "Line.hpp"
 #include <cmath>
 #include <cassert>
@@ -974,7 +974,7 @@ Polylines reconnect_polylines(const Polylines &polylines, double limit_distance)
             queries.push_back({ { query.min.x(), query.min.y() }, { query.max.x(), query.max.y() } });
             targets.push_back({ { target.min.x(), target.min.y() }, { target.max.x(), target.max.y() } });
         }
-        const auto batch = Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+        const auto batch = Gpu::SlicerCompute::dispatch_indexed_aabb_candidates(
             queries, targets, margin, Gpu::VulkanAabbOperation::SeamTravel);
         use_vulkan_pairs = batch.resolved;
         if (use_vulkan_pairs) {
@@ -989,8 +989,10 @@ Polylines reconnect_polylines(const Polylines &polylines, double limit_distance)
             continue;
         }
         Polyline &base = connected.at(a);
+        bool base_extended = false;
         for (size_t b = a + 1; b < polylines.size(); b++) {
-            if (use_vulkan_pairs && nearby_pairs.count((uint64_t(a) << 32) | uint64_t(b)) == 0)
+            // The original AABB ceases to bound base after a successful join.
+            if (use_vulkan_pairs && !base_extended && nearby_pairs.count((uint64_t(a) << 32) | uint64_t(b)) == 0)
                 continue;
             if (connected.find(b) == connected.end()) {
                 continue;
@@ -999,19 +1001,23 @@ Polylines reconnect_polylines(const Polylines &polylines, double limit_distance)
             if ((base.last_point() - next.first_point()).cast<double>().squaredNorm() < limit_distance * limit_distance) {
                 base.append(std::move(next));
                 connected.erase(b);
+                base_extended = true;
             } else if ((base.last_point() - next.last_point()).cast<double>().squaredNorm() < limit_distance * limit_distance) {
                 base.points.insert(base.points.end(), next.points.rbegin(), next.points.rend());
                 connected.erase(b);
+                base_extended = true;
             } else if ((base.first_point() - next.last_point()).cast<double>().squaredNorm() < limit_distance * limit_distance) {
                 next.append(std::move(base));
                 base = std::move(next);
                 base.reverse();
                 connected.erase(b);
+                base_extended = true;
             } else if ((base.first_point() - next.first_point()).cast<double>().squaredNorm() < limit_distance * limit_distance) {
                 base.reverse();
                 base.append(std::move(next));
                 base.reverse();
                 connected.erase(b);
+                base_extended = true;
             }
         }
     }
@@ -1043,7 +1049,7 @@ ExtrusionPaths sort_extra_perimeters(const ExtrusionPaths& extra_perims, int ind
             queries.push_back({ { query.min.x(), query.min.y() }, { query.max.x(), query.max.y() } });
             targets.push_back({ { target.min.x(), target.min.y() }, { target.max.x(), target.max.y() } });
         }
-        const auto batch = Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+        const auto batch = Gpu::SlicerCompute::dispatch_indexed_aabb_candidates(
             queries, targets, margin, Gpu::VulkanAabbOperation::ClassicWall);
         use_vulkan_pairs = batch.resolved;
         if (use_vulkan_pairs) {

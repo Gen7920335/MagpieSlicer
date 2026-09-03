@@ -1145,6 +1145,28 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     else
         m_support_used = false;
 
+    // Project files and imported configs may contain a missing, short, or stale
+    // 1-based filament map. Many downstream paths index this vector directly,
+    // so normalize it once before comparing or applying the print config.
+    if (auto *filament_map = new_full_config.option<ConfigOptionInts>("filament_map", true)) {
+        const auto *filament_diameters = new_full_config.option<ConfigOptionFloats>("filament_diameter");
+        const auto *nozzle_diameters   = new_full_config.option<ConfigOptionFloats>("nozzle_diameter");
+        const size_t filament_count    = filament_diameters != nullptr ? filament_diameters->values.size() : 0;
+        const size_t nozzle_count      = nozzle_diameters != nullptr ? nozzle_diameters->values.size() : 0;
+        if (filament_count > 0 && nozzle_count > 0) {
+            int fallback_extruder = 1;
+            if (const auto *master_extruder = new_full_config.option<ConfigOptionInt>("master_extruder_id");
+                master_extruder != nullptr && master_extruder->value > 0 &&
+                static_cast<size_t>(master_extruder->value) <= nozzle_count)
+                fallback_extruder = master_extruder->value;
+
+            filament_map->values.resize(filament_count, fallback_extruder);
+            for (int &mapped_extruder : filament_map->values)
+                if (mapped_extruder <= 0 || static_cast<size_t>(mapped_extruder) > nozzle_count)
+                    mapped_extruder = fallback_extruder;
+        }
+    }
+
     {
         const auto& o = model.objects;
         const auto opt_has_scarf_joint_seam = [](const DynamicConfig& c) {

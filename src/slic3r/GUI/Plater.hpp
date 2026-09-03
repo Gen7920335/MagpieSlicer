@@ -755,10 +755,11 @@ public:
     GLToolbar& get_collapse_toolbar();
     std::string get_slice_duration_label() const;
     bool is_slice_timer_running() const;
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
     std::string get_slicing_profile_status_label() const;
     bool has_slicing_profile_report() const;
     void export_slicing_profile();
+    void show_slicing_profile_details();
 #endif
 
     void update_preview_bottom_toolbar();

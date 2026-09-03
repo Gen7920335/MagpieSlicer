@@ -4,17 +4,18 @@
 #include "format.hpp"
 #include "ClipperUtils.hpp"
 #include "Fill/FillBase.hpp"
+#include "Gpu/CudaSlicer.hpp"
 #include "I18N.hpp"
 #include "Layer.hpp"
 #include "MinimumSpanningTree.hpp"
 #include "Print.hpp"
 #include "ShortestPath.hpp"
 #include "SupportCommon.hpp"
+#include "SupportTiming.hpp"
 #include "SVG.hpp"
 #include "TreeSupportCommon.hpp"
 #include "TreeSupport.hpp"
 #include "TreeSupport3D.hpp"
-#include "../Gpu/VulkanSlicer.hpp"
 #include <libnest2d/backends/libslic3r/geometries.hpp>
 #include <libnest2d/placers/nfpplacer.hpp>
 
@@ -23,10 +24,14 @@
 #include <tbb/concurrent_unordered_set.h>
 #include <tbb/concurrent_vector.h>
 #include <tbb/parallel_for.h>
-#include <tbb/parallel_for_each.h>
 
 #include <boost/log/trivial.hpp>
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstdlib>
+#include <iostream>
+#include <stdexcept>
 
 #ifndef M_PI
 #define M_PI 3.1415926535897932384626433832795
@@ -120,68 +125,130 @@ enum TreeSupportStage {
 class TreeSupportProfiler
 {
 public:
-    uint32_t stage_durations[NUM_STAGES] = { 0 };
-    uint32_t stage_index = 0;
-    boost::posix_time::ptime tic_time;
-    boost::posix_time::ptime toc_time;
+    using Clock = std::chrono::steady_clock;
 
-    TreeSupportProfiler()
-    {
-        for (uint32_t& item : stage_durations) {
-            item = 0;
-        }
-    }
+    TreeSupportProfiler() = default;
 
     void stage_start(TreeSupportStage stage)
     {
-        if (stage > NUM_STAGES)
+        if (stage >= NUM_STAGES)
             return;
-
-        m_stage_start_times[stage] = boost::posix_time::microsec_clock::local_time();
+        m_stage_start_times[stage] = Clock::now();
     }
 
     void stage_finish(TreeSupportStage stage)
     {
-        if (stage > NUM_STAGES)
+        if (stage >= NUM_STAGES)
             return;
-
-        boost::posix_time::ptime time = boost::posix_time::microsec_clock::local_time();
-        stage_durations[stage] = (time - m_stage_start_times[stage]).total_milliseconds();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            Clock::now() - m_stage_start_times[stage]);
+        m_stage_durations_us[stage].store(uint64_t(elapsed.count()), std::memory_order_relaxed);
     }
 
-    void tic() { tic_time = boost::posix_time::microsec_clock::local_time(); }
-    uint32_t toc() {
-        toc_time = boost::posix_time::microsec_clock::local_time();
-        return (toc_time - tic_time).total_milliseconds();
-    }
-    void stage_add(TreeSupportStage stage)
+    void stage_add(TreeSupportStage stage, Clock::duration elapsed)
     {
-        if (stage > NUM_STAGES)
+        if (stage >= NUM_STAGES)
             return;
-        stage_durations[stage] += toc();
+        const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+        m_stage_durations_us[stage].fetch_add(uint64_t(std::max<int64_t>(0, elapsed_us)), std::memory_order_relaxed);
+    }
+
+    void record_collision_lookup(bool cache_hit)
+    {
+        m_collision_requests.fetch_add(1, std::memory_order_relaxed);
+        (cache_hit ? m_collision_hits : m_collision_misses).fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void record_avoidance_lookup(bool cache_hit)
+    {
+        m_avoidance_requests.fetch_add(1, std::memory_order_relaxed);
+        (cache_hit ? m_avoidance_hits : m_avoidance_misses).fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void record_collision_calculation(bool inserted, Clock::duration elapsed)
+    {
+        m_collision_calculations.fetch_add(1, std::memory_order_relaxed);
+        add_duration(m_collision_calculation_us, elapsed);
+        if (!inserted)
+            m_collision_duplicate_calculations.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void record_avoidance_calculation(bool inserted, Clock::duration offset_elapsed, Clock::duration union_elapsed)
+    {
+        m_avoidance_calculations.fetch_add(1, std::memory_order_relaxed);
+        add_duration(m_avoidance_offset_us, offset_elapsed);
+        add_duration(m_avoidance_union_us, union_elapsed);
+        if (!inserted)
+            m_avoidance_duplicate_calculations.fetch_add(1, std::memory_order_relaxed);
     }
 
     std::string report()
     {
         std::stringstream ss;
-        ss << "total overhange cost: " << stage_durations[STAGE_total]
-            << "; STAGE_DETECT_OVERHANGS: " << stage_durations[STAGE_DETECT_OVERHANGS]
-            << "; STAGE_GENERATE_CONTACT_NODES: " << stage_durations[STAGE_GENERATE_CONTACT_NODES]
-            << "; STAGE_DROP_DOWN_NODES: " << stage_durations[STAGE_DROP_DOWN_NODES]
-            << "; STAGE_DRAW_CIRCLES: " << stage_durations[STAGE_DRAW_CIRCLES]
-            << "; STAGE_GENERATE_TOOLPATHS: " << stage_durations[STAGE_GENERATE_TOOLPATHS]
-            << "; STAGE_MinimumSpanningTree: " << stage_durations[STAGE_MinimumSpanningTree]
-            << "; STAGE_GET_AVOIDANCE: " << stage_durations[STAGE_GET_AVOIDANCE]
-            << "; STAGE_projection_onto_ex: " << stage_durations[STAGE_projection_onto_ex]
-            << "; STAGE_get_collision: " << stage_durations[STAGE_get_collision]
-            << "; STAGE_intersection_ln: " << stage_durations[STAGE_intersection_ln];
+        const auto milliseconds = [this](TreeSupportStage stage) {
+            return double(m_stage_durations_us[stage].load(std::memory_order_relaxed)) / 1000.;
+        };
+        ss << "total_ms=" << milliseconds(STAGE_total)
+            << "; detect_ms=" << milliseconds(STAGE_DETECT_OVERHANGS)
+            << "; contacts_ms=" << milliseconds(STAGE_GENERATE_CONTACT_NODES)
+            << "; drop_nodes_ms=" << milliseconds(STAGE_DROP_DOWN_NODES)
+            << "; draw_ms=" << milliseconds(STAGE_DRAW_CIRCLES)
+            << "; toolpaths_ms=" << milliseconds(STAGE_GENERATE_TOOLPATHS)
+            << "; mst_cpu_ms=" << milliseconds(STAGE_MinimumSpanningTree)
+            << "; avoidance_lookup_cpu_ms=" << milliseconds(STAGE_GET_AVOIDANCE)
+            << "; projection_cpu_ms=" << milliseconds(STAGE_projection_onto_ex)
+            << "; collision_lookup_cpu_ms=" << milliseconds(STAGE_get_collision)
+            << "; intersection_cpu_ms=" << milliseconds(STAGE_intersection_ln)
+            << "; collision_requests=" << m_collision_requests.load(std::memory_order_relaxed)
+            << "; collision_hits=" << m_collision_hits.load(std::memory_order_relaxed)
+            << "; collision_misses=" << m_collision_misses.load(std::memory_order_relaxed)
+            << "; collision_calculations=" << m_collision_calculations.load(std::memory_order_relaxed)
+            << "; collision_duplicate_calculations=" << m_collision_duplicate_calculations.load(std::memory_order_relaxed)
+            << "; collision_calculation_cpu_ms=" << atomic_milliseconds(m_collision_calculation_us)
+            << "; avoidance_requests=" << m_avoidance_requests.load(std::memory_order_relaxed)
+            << "; avoidance_hits=" << m_avoidance_hits.load(std::memory_order_relaxed)
+            << "; avoidance_misses=" << m_avoidance_misses.load(std::memory_order_relaxed)
+            << "; avoidance_calculations=" << m_avoidance_calculations.load(std::memory_order_relaxed)
+            << "; avoidance_duplicate_calculations=" << m_avoidance_duplicate_calculations.load(std::memory_order_relaxed)
+            << "; avoidance_offset_cpu_ms=" << atomic_milliseconds(m_avoidance_offset_us)
+            << "; avoidance_union_cpu_ms=" << atomic_milliseconds(m_avoidance_union_us);
 
         return ss.str();
     }
 private:
-    boost::posix_time::ptime m_stage_start_times[NUM_STAGES];
+    static void add_duration(std::atomic<uint64_t> &destination, Clock::duration elapsed)
+    {
+        const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+        destination.fetch_add(uint64_t(std::max<int64_t>(0, elapsed_us)), std::memory_order_relaxed);
+    }
+
+    static double atomic_milliseconds(const std::atomic<uint64_t> &duration_us)
+    {
+        return double(duration_us.load(std::memory_order_relaxed)) / 1000.;
+    }
+
+    std::array<std::atomic<uint64_t>, NUM_STAGES> m_stage_durations_us {};
+    std::array<Clock::time_point, NUM_STAGES> m_stage_start_times {};
+    std::atomic<uint64_t> m_collision_requests { 0 };
+    std::atomic<uint64_t> m_collision_hits { 0 };
+    std::atomic<uint64_t> m_collision_misses { 0 };
+    std::atomic<uint64_t> m_collision_calculations { 0 };
+    std::atomic<uint64_t> m_collision_duplicate_calculations { 0 };
+    std::atomic<uint64_t> m_collision_calculation_us { 0 };
+    std::atomic<uint64_t> m_avoidance_requests { 0 };
+    std::atomic<uint64_t> m_avoidance_hits { 0 };
+    std::atomic<uint64_t> m_avoidance_misses { 0 };
+    std::atomic<uint64_t> m_avoidance_calculations { 0 };
+    std::atomic<uint64_t> m_avoidance_duplicate_calculations { 0 };
+    std::atomic<uint64_t> m_avoidance_offset_us { 0 };
+    std::atomic<uint64_t> m_avoidance_union_us { 0 };
 };
-TreeSupportProfiler profiler;
+
+static bool tree_profiling_enabled()
+{
+    const char *value = std::getenv("MAGPIE_TREE_PROFILE");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
 
 Lines spanning_tree_to_lines(const std::vector<MinimumSpanningTree>& spanning_trees)
 {
@@ -597,6 +664,45 @@ static bool is_inside_ex(const ExPolygons &polygons, const Point &pt)
     return false;
 }
 
+static std::vector<uint8_t> cuda_inside_ex(const ExPolygons& polygons, const Points& points)
+{
+    if (!Gpu::CudaSlicerBackend::operation_enabled("point_in_polygon") ||
+        !Gpu::CudaSlicerBackend::should_dispatch(points.size())) return {};
+#ifdef MAGPIE_SLICING_TIMING
+    ScopedSlicingProfileEvent reference_timing("cuda", "tree_containment_reference", SlicingProfileBackend::CPU, points.size());
+#endif
+    std::vector<uint8_t> reference;
+    std::vector<Gpu::Point> queries;
+    if (!Gpu::CudaSlicerBackend::skips_cpu_validation()) reference.reserve(points.size());
+    queries.reserve(points.size());
+    for (const auto& p : points) {
+        if (!Gpu::CudaSlicerBackend::skips_cpu_validation())
+            reference.push_back(uint8_t(is_inside_ex(polygons,p)));
+        queries.push_back({p.x(),p.y()});
+    }
+#ifdef MAGPIE_SLICING_TIMING
+    reference_timing.finish();
+#endif
+    std::vector<Gpu::CudaPolygonContours> contours;
+    for (const auto& poly : polygons) {
+        Gpu::CudaPolygonContours converted;
+        auto append_ring = [&](const Polygon& ring) {
+            converted.rings.emplace_back();
+            for (const auto& p : ring.points) converted.rings.back().push_back({p.x(),p.y()});
+        };
+        append_ring(poly.contour);
+        for (const auto& hole : poly.holes) append_ring(hole);
+        contours.push_back(std::move(converted));
+    }
+    auto batch = Gpu::CudaSlicerBackend::dispatch_points_in_polygons(queries, contours, reference);
+    if (batch.resolved) return std::move(batch.inside);
+    if (reference.empty()) {
+        reference.reserve(points.size());
+        for (const auto& p : points) reference.push_back(uint8_t(is_inside_ex(polygons,p)));
+    }
+    return reference;
+}
+
 // use project_onto which is more accurate but more expensive
 static bool move_out_expolys(const ExPolygons& polygons, Point& from, double distance, double max_move_distance)
 {
@@ -640,11 +746,24 @@ TreeSupport::TreeSupport(PrintObject& object, const SlicingParameters &slicing_p
     : m_object(&object), m_slicing_params(slicing_params), m_support_params(object),
       m_object_config(&object.config()), m_demand_mask(demand_mask), m_extra_obstacles(extra_obstacles)
 {
+    throw_on_cancel = [this]() {
+        if (m_object->print()->canceled())
+            throw CanceledException();
+    };
+    m_profiler = std::make_shared<TreeSupportProfiler>();
     m_print_config = &m_object->print()->config();
     m_raft_layers = slicing_params.base_raft_layers + slicing_params.interface_raft_layers;
     support_type = is_mixed(m_object_config->support_type.value) ? stTreeAuto : m_object_config->support_type.value;
     if (style_override != smsDefault)
         m_support_params.support_style = style_override;
+    if (is_mixed(m_object_config->support_type.value)) {
+        // SupportParameters is constructed from the Mixed object, so its common
+        // wall count otherwise follows normal support. Tree toolpaths reuse that
+        // common value on the bed-contact layer; switch it to the dedicated tree
+        // count while this generator owns the tree channel.
+        m_support_params.support_wall_count = m_support_params.tree_support_wall_count;
+        m_support_params.with_sheath = m_support_params.support_wall_count > 0;
+    }
 
     SupportMaterialPattern support_pattern  = m_object_config->support_base_pattern;
     if (m_support_params.support_style == smsTreeHybrid && support_pattern == smpDefault)
@@ -807,8 +926,7 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
     tbb::parallel_for(tbb::blocked_range<size_t>(0, m_object->layer_count()),
         [&](const tbb::blocked_range<size_t>& range) {
             for (size_t layer_nr = range.begin(); layer_nr < range.end(); layer_nr++) {
-                if (m_object->print()->canceled())
-                    break;
+                throw_on_cancel();
                 Layer* layer = m_object->get_layer(layer_nr);
                 // Filter out areas whose diameter that is smaller than extrusion_width, but we don't want to lose any details.
                 layer->lslices_extrudable = intersection_ex(layer->lslices, offset2_ex(layer->lslices, -extrusion_width_scaled / 2, extrusion_width_scaled));
@@ -824,8 +942,7 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
     tbb::parallel_for(tbb::blocked_range<size_t>(0, m_object->layer_count()),
         [&](const tbb::blocked_range<size_t>& range) {
             for (size_t layer_nr = range.begin(); layer_nr < range.end(); layer_nr++) {
-                if (m_object->print()->canceled())
-                    break;
+                throw_on_cancel();
 
                 if (!is_auto(stype) && layer_nr > enforce_support_layers)
                     continue;
@@ -920,8 +1037,7 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
     // check if the sharp tails should be extended higher
     if (is_auto(stype) && config_detect_sharp_tails) {
         for (size_t layer_nr = 0; layer_nr < m_object->layer_count(); layer_nr++) {
-            if (m_object->print()->canceled())
-                break;
+            throw_on_cancel();
 
             Layer* layer = m_object->get_layer(layer_nr);
             Layer* lower_layer = layer->lower_layer;
@@ -995,8 +1111,7 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
 
     // group overhang clusters
     for (size_t layer_nr = 0; layer_nr < m_object->layer_count(); layer_nr++) {
-        if (m_object->print()->canceled())
-            break;
+        throw_on_cancel();
         Layer* layer = m_object->get_layer(layer_nr);
         for (auto& overhang : overhangs_all_layers[layer_nr]) {
             OverhangCluster* cluster = find_and_insert_cluster(overhangClusters, overhang, layer_nr, extrusion_width_scaled);
@@ -1060,8 +1175,7 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
     int layers_with_overhangs = 0;
     int layers_with_enforcers = 0;
     for (int layer_nr = 0; layer_nr < m_object->layer_count(); layer_nr++) {
-        if (m_object->print()->canceled())
-            break;
+        throw_on_cancel();
 
         auto layer = m_object->get_layer(layer_nr);
         auto lower_layer = layer->lower_layer;
@@ -1376,6 +1490,7 @@ static void make_perimeter_and_infill(ExtrusionEntitiesPtr& dst, const ExPolygon
 
 void TreeSupport::generate_toolpaths()
 {
+    SupportProfileStage total_timing("support-tree-toolpath", "Generate all classic tree toolpaths", m_object->support_layer_count());
     const PrintObjectConfig &object_config = m_object->config();
     coordf_t support_extrusion_width = m_support_params.support_extrusion_width;
     coordf_t nozzle_diameter = m_print_config->nozzle_diameter.get_at(object_config.support_filament - 1);
@@ -1420,6 +1535,7 @@ void TreeSupport::generate_toolpaths()
 
     raft_areas = std::move(offset_ex(raft_areas, scale_(object_config.raft_first_layer_expansion)));
 
+    SupportProfileStage raft_base_timing("support-tree-toolpath", "Generate classic tree raft base toolpaths", m_slicing_params.base_raft_layers);
     size_t layer_nr = 0;
     for (; layer_nr < m_slicing_params.base_raft_layers; layer_nr++) {
         SupportLayer *ts_layer = m_object->get_support_layer(layer_nr);
@@ -1446,6 +1562,7 @@ void TreeSupport::generate_toolpaths()
         fill_expolygons_generate_paths(ts_layer->support_fills.entities, raft_areas1,
             filler_raft, fill_params, erSupportMaterial, support_flow);
     }
+    raft_base_timing.finish(m_slicing_params.base_raft_layers);
 
     // subtract the non-raft support bases, otherwise we'll get support base on top of raft interfaces which is not stable
     ExPolygons first_non_raft_base;
@@ -1462,6 +1579,7 @@ void TreeSupport::generate_toolpaths()
 
 
     // raft interfaces
+    SupportProfileStage raft_interface_timing("support-tree-toolpath", "Generate classic tree raft interface toolpaths", m_slicing_params.interface_raft_layers);
     for (layer_nr = m_slicing_params.base_raft_layers;
          layer_nr < m_slicing_params.base_raft_layers + m_slicing_params.interface_raft_layers;
          layer_nr++)
@@ -1484,8 +1602,10 @@ void TreeSupport::generate_toolpaths()
         fill_expolygons_generate_paths(ts_layer->support_fills.entities, raft_base_areas,
             filler_interface, fill_params, erSupportMaterial, support_flow);
     }
+    raft_interface_timing.finish(m_slicing_params.interface_raft_layers);
 
     // layers between raft and object
+    SupportProfileStage raft_gap_timing("support-tree-toolpath", "Generate classic tree raft contact gap toolpaths", m_raft_layers);
     for (; layer_nr < m_raft_layers; layer_nr++) {
         SupportLayer *ts_layer = m_object->get_support_layer(layer_nr);
         Flow support_flow(support_extrusion_width, ts_layer->height, nozzle_diameter);
@@ -1495,6 +1615,7 @@ void TreeSupport::generate_toolpaths()
         for (auto& poly : first_non_raft_base)
             make_perimeter_and_infill(ts_layer->support_fills.entities, poly, std::min(size_t(1), wall_count), support_flow, erSupportMaterial, filler_raft, interface_density, false);
     }
+    raft_gap_timing.finish(m_raft_layers);
 
     if (m_object->support_layer_count() <= m_raft_layers)
         return;
@@ -1509,8 +1630,8 @@ void TreeSupport::generate_toolpaths()
         [&](const tbb::blocked_range<size_t>& range)
         {
             for (size_t layer_id = range.begin(); layer_id < range.end(); layer_id++) {
-                if (m_object->print()->canceled())
-                    break;
+                throw_on_cancel();
+                SupportProfileStage layer_timing("support-tree-toolpath", "Generate classic tree support layer toolpaths", 1);
 
                 //m_object->print()->set_status(70, (boost::format(_u8L("Support: generate toolpath at layer %d")) % layer_id).str());
 
@@ -1530,6 +1651,12 @@ void TreeSupport::generate_toolpaths()
                 filler_Roof1stLayer->set_bounding_box(bbox_object);
 
                 for (auto& area_group : ts_layer->area_groups) {
+                    const char *area_stage_name =
+                        area_group.type == SupportLayer::Roof1stLayer ? "Generate classic tree first roof toolpaths" :
+                        area_group.type == SupportLayer::FloorType ? "Generate classic tree bottom interface toolpaths" :
+                        area_group.type == SupportLayer::RoofType ? "Generate classic tree top interface toolpaths" :
+                        "Generate classic tree base walls and infill";
+                    SupportProfileStage area_timing("support-tree-area-toolpath", area_stage_name, 1);
                     ExPolygon& poly = *area_group.area;
                     ExPolygons polys;
                     FillParams fill_params;
@@ -1758,15 +1885,20 @@ void TreeSupport::generate_toolpaths()
                         if (!base_eec->empty())
                             ts_layer->support_fills.entities.push_back(base_eec.release());
                     }
+                    area_timing.finish(ts_layer->support_fills.entities.size(),
+                        "support_layer=" + std::to_string(layer_id));
                 }
 
                 // sort extrusions to reduce travel, also make sure walls go before infills
                 if (ts_layer->support_fills.no_sort == false) {
                     chain_and_reorder_extrusion_entities(ts_layer->support_fills.entities);
                 }
+                layer_timing.finish(ts_layer->support_fills.entities.size(),
+                    "support_layer=" + std::to_string(layer_id));
             }
         }
     );
+    total_timing.finish(m_object->support_layer_count());
 }
 
 void TreeSupport::move_bounds_to_contact_nodes(std::vector<TreeSupport3D::SupportElements> &move_bounds,
@@ -1774,6 +1906,7 @@ void TreeSupport::move_bounds_to_contact_nodes(std::vector<TreeSupport3D::Suppor
                                   const TreeSupport3D::TreeSupportSettings    &config)
 {
     m_ts_data = print_object.alloc_tree_support_preview_cache();
+    m_ts_data->set_profiler(m_profiler);
     // convert move_bounds back to Support Nodes for tree skeleton preview
     this->contact_nodes.resize(move_bounds.size());
     for (int layer_nr = move_bounds.size() - 1; layer_nr >= 0; layer_nr--) {
@@ -1803,20 +1936,25 @@ void TreeSupport::generate()
     if (!is_tree(m_object_config->support_type.value) && m_demand_mask == nullptr) return;
 
     if (m_support_params.support_style == smsTreeOrganic) {
+        SupportProfileStage organic_timing("support-tree", "Generate organic tree", m_object->layer_count());
         generate_tree_support_3D(*m_object, this, this->throw_on_cancel, m_demand_mask);
+        organic_timing.finish(m_object->support_layers().size());
         return;
     }
 
-    profiler.stage_start(STAGE_total);
+    m_profiler->stage_start(STAGE_total);
 
     // Generate overhang areas
-    profiler.stage_start(STAGE_DETECT_OVERHANGS);
+    m_profiler->stage_start(STAGE_DETECT_OVERHANGS);
     m_object->print()->set_status(55, _u8L("Generating support"));
+    SupportProfileStage overhang_timing("support-tree", "Detect overhangs", m_object->layer_count());
     detect_overhangs();
-    profiler.stage_finish(STAGE_DETECT_OVERHANGS);
+    overhang_timing.finish(m_highest_overhang_layer + 1);
+    m_profiler->stage_finish(STAGE_DETECT_OVERHANGS);
 
     create_tree_support_layers();
     m_ts_data = m_object->alloc_tree_support_preview_cache();
+    m_ts_data->set_profiler(m_profiler);
     if (m_extra_obstacles != nullptr)
         m_ts_data->set_extra_obstacles(*m_extra_obstacles);
     m_ts_data->is_slim = is_slim;
@@ -1825,36 +1963,51 @@ void TreeSupport::generate()
     // if (!tmp.empty()) m_ts_data->m_machine_border = tmp[0];
 
     std::vector<TreeSupport3D::SupportElements> move_bounds(m_highest_overhang_layer + 1);
-    profiler.stage_start(STAGE_GENERATE_CONTACT_NODES);
+    m_profiler->stage_start(STAGE_GENERATE_CONTACT_NODES);
     m_object->print()->set_status(56, _u8L("Support: generate contact points"));
+    SupportProfileStage contacts_timing("support-tree", "Generate contact nodes", m_highest_overhang_layer + 1);
     generate_contact_points();
-    profiler.stage_finish(STAGE_GENERATE_CONTACT_NODES);
+    contacts_timing.finish(contact_nodes.size());
+    m_profiler->stage_finish(STAGE_GENERATE_CONTACT_NODES);
 
+    SupportProfileStage layer_plan_timing("support-tree", "Plan support layer heights", contact_nodes.size());
     m_ts_data->layer_heights = plan_layer_heights();
+    layer_plan_timing.finish(m_ts_data->layer_heights.size());
 
     //Drop nodes to lower layers.
-    profiler.stage_start(STAGE_DROP_DOWN_NODES);
+    m_profiler->stage_start(STAGE_DROP_DOWN_NODES);
     m_object->print()->set_status(60, _u8L("Generating support"));
+    SupportProfileStage propagation_timing("support-tree", "Propagate tree nodes", contact_nodes.size());
     drop_nodes();
-    profiler.stage_finish(STAGE_DROP_DOWN_NODES);
+    propagation_timing.finish(contact_nodes.size());
+    m_profiler->stage_finish(STAGE_DROP_DOWN_NODES);
 
+    SupportProfileStage smoothing_timing("support-tree", "Smooth tree nodes", contact_nodes.size());
     smooth_nodes();// , tree_support_3d_config);
+    smoothing_timing.finish(contact_nodes.size());
 
     //Generate support areas.
-    profiler.stage_start(STAGE_DRAW_CIRCLES);
+    m_profiler->stage_start(STAGE_DRAW_CIRCLES);
     m_object->print()->set_status(65, _u8L("Generating support"));
+    SupportProfileStage areas_timing("support-tree", "Build support areas", contact_nodes.size());
     draw_circles();
-    profiler.stage_finish(STAGE_DRAW_CIRCLES);
+    areas_timing.finish(m_object->support_layers().size());
+    m_profiler->stage_finish(STAGE_DRAW_CIRCLES);
 
 
 
-    profiler.stage_start(STAGE_GENERATE_TOOLPATHS);
+    m_profiler->stage_start(STAGE_GENERATE_TOOLPATHS);
     m_object->print()->set_status(70, _u8L("Generating support"));
+    SupportProfileStage toolpaths_timing("support-tree", "Generate tree toolpaths", m_object->support_layers().size());
     generate_toolpaths();
-    profiler.stage_finish(STAGE_GENERATE_TOOLPATHS);
+    toolpaths_timing.finish(m_object->support_layers().size());
+    m_profiler->stage_finish(STAGE_GENERATE_TOOLPATHS);
 
-    profiler.stage_finish(STAGE_total);
-    BOOST_LOG_TRIVIAL(info) << "tree support time " << profiler.report();
+    m_profiler->stage_finish(STAGE_total);
+    const std::string profile_report = m_profiler->report();
+    BOOST_LOG_TRIVIAL(info) << "tree support time " << profile_report;
+    if (tree_profiling_enabled())
+        std::cerr << "MAGPIE_TREE_PROFILE " << profile_report << '\n';
 }
 
 coordf_t TreeSupport::calc_branch_radius(coordf_t base_radius, size_t layers_to_top, size_t tip_layers, double diameter_angle_scale_factor)
@@ -2056,6 +2209,9 @@ Polygons TreeSupport::get_trim_support_regions(
 
 void TreeSupport::draw_circles()
 {
+    if (contact_nodes.empty())
+        return;
+
     const PrintObjectConfig &config = m_object->config();
     const Print* print = m_object->print();
     bool has_brim = print->has_brim();
@@ -2065,19 +2221,12 @@ void TreeSupport::draw_circles()
     bool on_buildplate_only = m_object_config->support_on_build_plate_only.value;
     Polygon branch_circle; //Pre-generate a circle with correct diameter so that we don't have to recompute those (co)sines every time.
 
-    // Use square support if there are too many nodes per layer because circle support needs much longer time to compute
-    // Hower circle support can be printed faster, so we prefer circle for fewer nodes case.
-    const bool SQUARE_SUPPORT = avg_node_per_layer > 200;
-    const int  CIRCLE_RESOLUTION = SQUARE_SUPPORT ? 4 : 100; // The number of vertices in each circle.
+    constexpr int CIRCLE_RESOLUTION = 100;
 
 
     for (int i = 0; i < CIRCLE_RESOLUTION; i++)
     {
-        double angle;
-        if (SQUARE_SUPPORT)
-            angle = (double) i / CIRCLE_RESOLUTION * TAU + M_PI_4 + nodes_angle;
-        else
-            angle = (double) i / CIRCLE_RESOLUTION * TAU;
+        const double angle = (double) i / CIRCLE_RESOLUTION * TAU;
         branch_circle.append(Point(cos(angle) * branch_radius_scaled, sin(angle) * branch_radius_scaled));
     }
 
@@ -2094,9 +2243,9 @@ void TreeSupport::draw_circles()
     const coordf_t layer_height = config.layer_height.value;
     const size_t top_interface_layers = m_support_params.num_top_interface_layers;
     const size_t bottom_interface_layers = number_of_support_interface_bottom_layers(config);
-    const double nozzle_diameter = m_object->print()->config().nozzle_diameter.get_at(0);
-    const coordf_t line_width = config.get_abs_value("support_line_width", nozzle_diameter);
-    const coordf_t line_width_scaled           = scale_(line_width);
+    const double nozzle_diameter = m_support_params.support_material_flow.nozzle_diameter();
+    const coordf_t line_width = m_support_params.support_material_flow.width();
+    const coordf_t line_width_scaled = m_support_params.support_material_flow.scaled_width();
     const bool with_lightning_infill = m_support_params.base_fill_pattern == ipLightning;
     coordf_t support_extrusion_width = m_support_params.support_extrusion_width;
     const float tree_brim_width = config.tree_support_brim_width.value;
@@ -2110,8 +2259,7 @@ void TreeSupport::draw_circles()
         {
             for (size_t layer_nr = range.begin(); layer_nr < range.end(); layer_nr++)
             {
-                if (print->canceled())
-                    break;
+                throw_on_cancel();
 
                 const std::vector<SupportNode*>& curr_layer_nodes = contact_nodes[layer_nr];
                 SupportLayer* ts_layer = m_object->get_support_layer(layer_nr + m_raft_layers);
@@ -2169,8 +2317,7 @@ void TreeSupport::draw_circles()
                 ExPolygons area_poly;  // the polygon node area which will be printed as normal support
                 for (const SupportNode* p_node : curr_layer_nodes)
                 {
-                    if (print->canceled())
-                        break;
+                    throw_on_cancel();
 
                     const SupportNode& node = *p_node;
                     // ORCA: Cap top interface height in mm based on per-node support layer height.
@@ -2195,7 +2342,7 @@ void TreeSupport::draw_circles()
                         double moveY = node.movement.y() / (scale * branch_radius_scaled);
                         //BOOST_LOG_TRIVIAL(debug) << format("scale,moveX,moveY: %.3f,%.3f,%.3f", scale, moveX, moveY);
 
-                        if (!SQUARE_SUPPORT && std::abs(moveX)>0.001 && std::abs(moveY)>0.001) { // draw ellipse along movement direction
+                        if (std::abs(moveX)>0.001 && std::abs(moveY)>0.001) { // draw ellipse along movement direction
                             const double vsize_inv = 0.5 / (0.01 + std::sqrt(moveX * moveX + moveY * moveY));
                             double       matrix[2*2]  = {
                                 scale * (1 + moveX * moveX * vsize_inv),scale * (0 + moveX * moveY * vsize_inv),
@@ -2275,12 +2422,6 @@ void TreeSupport::draw_circles()
                 base_areas = diff_ex(base_areas, ClipperUtils::clip_clipper_polygons_with_subject_bbox(roofs, get_extents(base_areas)));
                 base_areas = intersection_ex(base_areas, m_machine_border);
 
-                if (SQUARE_SUPPORT) {
-                    // simplify support contours
-                    ExPolygons base_areas_simplified;
-                    for (auto &area : base_areas) { area.simplify(scale_(line_width / 2), &base_areas_simplified); }
-                    base_areas = std::move(base_areas_simplified);
-                }
                 // ORCA:
                 // Bottom interface / bottom gap must be anchored to the *true* support-to-model contact surface.
                 // Do NOT window the contact search by gap or interface height.
@@ -2535,7 +2676,7 @@ void TreeSupport::draw_circles()
             std::vector<Polygons> contours;
             std::vector<Polygons> overhangs;
             for (int layer_nr = 1; layer_nr < contact_nodes.size(); layer_nr++) {
-                if (print->canceled()) break;
+                throw_on_cancel();
                 const std::vector<SupportNode*>& curr_layer_nodes = contact_nodes[layer_nr];
                 SupportLayer* ts_layer = m_object->get_support_layer(layer_nr + m_raft_layers);
                 assert(ts_layer != nullptr);
@@ -2623,7 +2764,7 @@ void TreeSupport::draw_circles()
             // polygon pointer: depth, direction, farPoint
             std::map<const Polygon*, std::tuple<int, Point, Point>> holePropagationInfos;
             for (int layer_nr = contact_nodes.size() - 1; layer_nr > 0; layer_nr--) {
-                if (print->canceled()) break;
+                throw_on_cancel();
                 //m_object->print()->set_status(66, (boost::format(_u8L("Support: fix holes at layer %d")) % layer_nr).str());
 
                 const std::vector<SupportNode*>& curr_layer_nodes = contact_nodes[layer_nr];
@@ -2741,6 +2882,8 @@ void TreeSupport::drop_nodes()
     // Use Minimum Spanning Tree to connect the points on each layer and move them while dropping them down.
     const coordf_t support_extrusion_width = m_support_params.support_extrusion_width;
     const coordf_t layer_height = config.layer_height.value;
+    if (!std::isfinite(layer_height) || layer_height <= EPSILON)
+        throw std::runtime_error("Tree support requires a positive finite layer height");
     const double angle = config.tree_support_branch_angle.value * M_PI / 180.;
     // Wall counts above two increase branch thickness only. Keep the legacy
     // one/two-wall movement behavior so a high count cannot distort the tree.
@@ -2768,7 +2911,13 @@ void TreeSupport::drop_nodes()
     };
 
     std::vector<LayerHeightData> &layer_heights = m_ts_data->layer_heights;
-    if (layer_heights.empty()) return;
+    if (contact_nodes.size() < 2 || layer_heights.empty())
+        return;
+    // Raft-indexed plans intentionally have empty tail slots after the last
+    // object layer. Only a real node outside the height plan is invalid.
+    for (size_t layer_nr = layer_heights.size(); layer_nr < contact_nodes.size(); ++layer_nr)
+        if (!contact_nodes[layer_nr].empty())
+            throw std::runtime_error("Tree support layer plan is shorter than its active contact-node plan");
 
     // precalculate avoidance of all possible radii.
     // This will cause computing more (radius, layer_nr) pairs, but it's worth to do so since we are doning this in parallel.
@@ -2777,49 +2926,119 @@ void TreeSupport::drop_nodes()
         typedef std::chrono::duration<double, std::ratio<1> > second_;
         std::chrono::time_point<clock_> t0{ clock_::now() };
 
-        // get all the possible radiis
-        std::vector<std::set<coordf_t> > all_layer_radius(contact_nodes.size());
+        SupportProfileStage cache_plan_timing(
+            "support-tree-cache", "Plan collision and avoidance cache jobs", contact_nodes.size());
+
+        // Collect the highest object layer needed for each quantized radius.
+        // Avoidance for (radius, layer) recursively depends on every lower layer.
+        // Dispatching independent layer/radius pairs lets multiple workers race
+        // through the same recursive chain before the concurrent cache is filled,
+        // which becomes catastrophically expensive on fine layer heights.
+        std::map<coordf_t, size_t> highest_layer_for_radius;
+        std::set<size_t> zero_radius_layers;
         std::vector<std::set<coordf_t>> all_layer_node_dist(contact_nodes.size());
         for (size_t layer_nr = contact_nodes.size() - 1; layer_nr > 0; layer_nr--) {
-            auto& layer_radius = all_layer_radius[layer_nr];
             auto& layer_node_dist = all_layer_node_dist[layer_nr];
             for (auto* p_node : contact_nodes[layer_nr]) {
                 layer_node_dist.emplace(p_node->dist_mm_to_top);
             }
             size_t layer_nr_next = layer_nr - 1;
-            if (layer_nr_next <= contact_nodes.size() - 1 && layer_nr_next > 0) {
+            if (layer_nr_next > 0) {
                 for (auto node_dist : layer_node_dist)
                     all_layer_node_dist[layer_nr_next].emplace(node_dist + layer_heights[layer_nr].height);
             }
             for (auto node_dist : layer_node_dist) {
-                layer_radius.emplace(calc_radius(node_dist));
+                const coordf_t radius = m_ts_data->ceil_radius(calc_radius(node_dist));
+                const size_t object_layer = layer_heights[layer_nr].obj_layer_nr;
+                zero_radius_layers.emplace(object_layer);
+                auto [it, inserted] = highest_layer_for_radius.emplace(radius, object_layer);
+                if (!inserted)
+                    it->second = std::max(it->second, object_layer);
             }
         }
 
-        // parallel pre-compute avoidance
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, contact_nodes.size() - 1), [&](const tbb::blocked_range<size_t> &range) {
-            for (size_t layer_nr = range.begin(); layer_nr < range.end(); layer_nr++) {
-            for (auto node_radius : all_layer_radius[layer_nr]) {
-                size_t obj_layer_nr= layer_heights[layer_nr].obj_layer_nr;
-                m_ts_data->get_avoidance(node_radius, obj_layer_nr);
-                get_collision(0, obj_layer_nr);
-                get_collision(node_radius, obj_layer_nr);
-            }
+        std::vector<std::pair<coordf_t, size_t>> radius_jobs(
+            highest_layer_for_radius.begin(), highest_layer_for_radius.end());
+
+        // Collision offsets are independent for every (radius, object layer)
+        // pair. Flatten them first so all workers stay busy even when radii
+        // have very different highest layers. Radius zero is also queried by
+        // the node movement pass; prewarm only the layers known to be active.
+        std::vector<std::pair<coordf_t, size_t>> collision_jobs;
+        size_t collision_job_count = zero_radius_layers.size();
+        for (const auto &[node_radius, highest_object_layer] : radius_jobs)
+            collision_job_count += highest_object_layer + 1;
+        collision_jobs.reserve(collision_job_count);
+        for (const auto &[node_radius, highest_object_layer] : radius_jobs) {
+            for (size_t object_layer = 0; object_layer <= highest_object_layer; ++object_layer)
+                collision_jobs.emplace_back(node_radius, object_layer);
         }
-        });
+        for (size_t object_layer : zero_radius_layers)
+            collision_jobs.emplace_back(0., object_layer);
+        cache_plan_timing.finish(collision_jobs.size());
+
+        const auto collision_started = clock_::now();
+        SupportProfileStage collision_timing(
+            "support-tree-cache", "Precompute collision cache", collision_jobs.size());
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, collision_jobs.size(), 16),
+            [&](const tbb::blocked_range<size_t> &range) {
+                for (size_t job_index = range.begin(); job_index < range.end(); ++job_index) {
+                    throw_on_cancel();
+                    const auto [node_radius, object_layer] = collision_jobs[job_index];
+                    m_ts_data->get_collision(node_radius, object_layer);
+                }
+            }
+        );
+        collision_timing.finish(collision_jobs.size());
+        const double collision_duration{
+            std::chrono::duration_cast<second_>(clock_::now() - collision_started).count() };
+
+        // Once collision is complete, avoidance only has the intentional
+        // previous-layer dependency. Parallelize radii and fill each chain
+        // bottom-up exactly once.
+        size_t avoidance_job_count = 0;
+        for (const auto &[node_radius, highest_object_layer] : radius_jobs) {
+            (void) node_radius;
+            avoidance_job_count += highest_object_layer + 1;
+        }
+        const auto avoidance_started = clock_::now();
+        SupportProfileStage avoidance_timing(
+            "support-tree-cache", "Precompute avoidance cache", avoidance_job_count);
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, radius_jobs.size(), 1),
+            [&](const tbb::blocked_range<size_t> &range) {
+                for (size_t job_index = range.begin(); job_index < range.end(); ++job_index) {
+                    throw_on_cancel();
+                    const auto [node_radius, highest_object_layer] = radius_jobs[job_index];
+                    for (size_t object_layer = 0; object_layer <= highest_object_layer; ++object_layer) {
+                        throw_on_cancel();
+                        m_ts_data->get_avoidance(node_radius, object_layer);
+                    }
+                }
+            }
+        );
+        avoidance_timing.finish(avoidance_job_count);
+        const double avoidance_duration{
+            std::chrono::duration_cast<second_>(clock_::now() - avoidance_started).count() };
 
         double duration{ std::chrono::duration_cast<second_>(clock_::now() - t0).count() };
         BOOST_LOG_TRIVIAL(debug) << "finish pre calculate_avoidance. before m_avoidance_cache.size()=" << m_ts_data->m_avoidance_cache.size()
-            << ", takes " << duration << " secs.";
+            << ", radius_jobs=" << radius_jobs.size() << ", takes " << duration << " secs.";
+        if (tree_profiling_enabled())
+            std::cerr << "MAGPIE_TREE_PRECOMPUTE wall_ms=" << (duration * 1000.)
+                      << "; collision_wall_ms=" << (collision_duration * 1000.)
+                      << "; avoidance_wall_ms=" << (avoidance_duration * 1000.)
+                      << "; collision_jobs=" << collision_jobs.size()
+                      << "; radius_jobs=" << radius_jobs.size()
+                      << "; avoidance_cache_entries=" << m_ts_data->m_avoidance_cache.size() << '\n';
     }
 
     m_spanning_trees.resize(contact_nodes.size());
     //m_mst_line_x_layer_contour_caches.resize(contact_nodes.size());
 
+    SupportProfileStage routing_timing("support-tree", "Route propagated nodes", contact_nodes.size());
     for (size_t layer_nr = contact_nodes.size() - 1; layer_nr > 0; layer_nr--) // Skip layer 0, since we can't drop down the vertices there.
     {
-        if (m_object->print()->canceled())
-            break;
+        throw_on_cancel();
 
         auto& layer_contact_nodes = contact_nodes[layer_nr];
         if (layer_contact_nodes.empty())
@@ -2839,7 +3058,7 @@ void TreeSupport::drop_nodes()
         Polygons layer_contours = std::move(m_ts_data->get_contours_with_holes(obj_layer_nr));
         //std::unordered_map<Line, bool, LineHash>& mst_line_x_layer_contour_cache = m_mst_line_x_layer_contour_caches[layer_nr];
         tbb::concurrent_unordered_map<Line, bool, LineHash> mst_line_x_layer_contour_cache;
-        auto is_line_cut_by_contour = [&mst_line_x_layer_contour_cache,&layer_contours](Point a, Point b)
+        auto is_line_cut_by_contour = [this, &mst_line_x_layer_contour_cache, &layer_contours](Point a, Point b)
         {
             auto iter = mst_line_x_layer_contour_cache.find({ a, b });
             if (iter != mst_line_x_layer_contour_cache.end()) {
@@ -2847,12 +3066,12 @@ void TreeSupport::drop_nodes()
                     return true;
             }
             else {
-                profiler.tic();
+                const auto started = TreeSupportProfiler::Clock::now();
                 Line ln(b, a);
                 Lines pls_intersect = intersection_ln(ln, layer_contours);
                 mst_line_x_layer_contour_cache.insert({ {a, b}, !pls_intersect.empty() });
                 mst_line_x_layer_contour_cache.insert({ ln, !pls_intersect.empty() });
-                profiler.stage_add(STAGE_intersection_ln);
+                m_profiler->stage_add(STAGE_intersection_ln, TreeSupportProfiler::Clock::now() - started);
                 if (!pls_intersect.empty())
                     return true;
             }
@@ -2911,7 +3130,7 @@ void TreeSupport::drop_nodes()
         }
 
         //Create a MST for every part.
-        profiler.tic();
+        const auto mst_started = TreeSupportProfiler::Clock::now();
         //std::vector<MinimumSpanningTree>& spanning_trees = m_spanning_trees[layer_nr];
         std::vector<MinimumSpanningTree> spanning_trees;
         for (const std::unordered_map<Point, SupportNode*, PointHash>& group : nodes_per_part)
@@ -2923,63 +3142,7 @@ void TreeSupport::drop_nodes()
             }
             spanning_trees.emplace_back(points_to_buildplate);
         }
-        profiler.stage_add(STAGE_MinimumSpanningTree);
-
-#ifdef SLIC3R_ENABLE_VULKAN_SLICER
-        if (Gpu::VulkanSlicerBackend::compute_enabled()) {
-            std::vector<Gpu::VulkanAabb> gpu_contour_bounds;
-            for (const Polygon& contour : layer_contours) {
-                if (contour.size() < 2)
-                    continue;
-                for (size_t index = 0; index < contour.size(); ++index) {
-                    const Point& a = contour[index];
-                    const Point& b = contour[(index + 1) % contour.size()];
-                    gpu_contour_bounds.push_back({
-                        { std::min<int64_t>(a.x(), b.x()), std::min<int64_t>(a.y(), b.y()) },
-                        { std::max<int64_t>(a.x(), b.x()), std::max<int64_t>(a.y(), b.y()) }
-                    });
-                }
-            }
-
-            std::vector<Line> gpu_tree_lines;
-            for (size_t group_index = 0; group_index < nodes_per_part.size(); ++group_index) {
-                const MinimumSpanningTree& mst = spanning_trees[group_index];
-                for (const auto& entry : nodes_per_part[group_index]) {
-                    for (const Point& neighbour : mst.adjacent_nodes(entry.first)) {
-                        const Point& point = entry.first;
-                        if (point.x() > neighbour.x() ||
-                            (point.x() == neighbour.x() && point.y() >= neighbour.y()))
-                            continue;
-                        gpu_tree_lines.emplace_back(point, neighbour);
-                    }
-                }
-            }
-
-            std::vector<Gpu::VulkanAabb> gpu_tree_bounds;
-            gpu_tree_bounds.reserve(gpu_tree_lines.size());
-            for (const Line& line : gpu_tree_lines) {
-                gpu_tree_bounds.push_back({
-                    { std::min<int64_t>(line.a.x(), line.b.x()), std::min<int64_t>(line.a.y(), line.b.y()) },
-                    { std::max<int64_t>(line.a.x(), line.b.x()), std::max<int64_t>(line.a.y(), line.b.y()) }
-                });
-            }
-
-            const Gpu::VulkanAabbBatch gpu_tree_batch =
-                Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
-                    gpu_tree_bounds, gpu_contour_bounds, 0,
-                    Gpu::VulkanAabbOperation::TreeSupport);
-            if (gpu_tree_batch.resolved &&
-                gpu_tree_batch.may_overlap.size() == gpu_tree_lines.size()) {
-                for (size_t index = 0; index < gpu_tree_lines.size(); ++index) {
-                    if (gpu_tree_batch.may_overlap[index] != 0)
-                        continue;
-                    const Line& line = gpu_tree_lines[index];
-                    mst_line_x_layer_contour_cache.insert({ line, false });
-                    mst_line_x_layer_contour_cache.insert({ Line(line.b, line.a), false });
-                }
-            }
-        }
-#endif
+        m_profiler->stage_add(STAGE_MinimumSpanningTree, TreeSupportProfiler::Clock::now() - mst_started);
 
 #ifdef SUPPORT_TREE_DEBUG_TO_SVG
         coordf_t branch_radius_temp = 0;
@@ -2992,7 +3155,10 @@ void TreeSupport::drop_nodes()
             const MinimumSpanningTree& mst = spanning_trees[group_index];
             //In the first pass, merge all nodes that are close together.
             std::vector<std::pair<const Point, SupportNode*>> nodes_vec(nodes_this_part.begin(), nodes_this_part.end());
-            tbb::parallel_for_each(nodes_vec.begin(), nodes_vec.end(), [&](const std::pair<const Point, SupportNode*>& entry) {
+            // Both passes mutate neighbour validity and the insertion order of
+            // the next layer. Keep them serial so worker timing cannot change
+            // the resulting support topology.
+            std::for_each(nodes_vec.begin(), nodes_vec.end(), [&](const std::pair<const Point, SupportNode*>& entry) {
                 SupportNode* p_node = entry.second;
                 SupportNode& node = *p_node;
                 if (!p_node->valid)
@@ -3080,7 +3246,7 @@ void TreeSupport::drop_nodes()
             );
 
             //In the second pass, move all middle nodes.
-            tbb::parallel_for_each(nodes_vec.begin(), nodes_vec.end(), [&](const std::pair<const Point, SupportNode*>& entry) {
+            std::for_each(nodes_vec.begin(), nodes_vec.end(), [&](const std::pair<const Point, SupportNode*>& entry) {
 
                 SupportNode* p_node = entry.second;
                 const SupportNode& node = *p_node;
@@ -3314,6 +3480,7 @@ void TreeSupport::drop_nodes()
     }
 
     BOOST_LOG_TRIVIAL(debug) << "after m_avoidance_cache.size()=" << m_ts_data->m_avoidance_cache.size();
+    routing_timing.finish(contact_nodes.size());
 }
 
 void TreeSupport::smooth_nodes()
@@ -3326,7 +3493,7 @@ void TreeSupport::smooth_nodes()
         }
     }
     
-    float max_move = scale_(m_object_config->support_line_width / 2);
+    float max_move = float(m_support_params.support_material_flow.scaled_width()) / 2.f;
     // if the branch is very tall, the tip also needs extra wall
     float thresh_tall_branch = 100;
     float thresh_dist_to_top = 30;
@@ -3619,12 +3786,9 @@ void TreeSupport::generate_contact_points()
         }
     }
 
-    int      nonempty_layers = 0;
-    tbb::concurrent_vector<Slic3r::Vec3f> all_nodes;
     tbb::parallel_for(tbb::blocked_range<size_t>(1, m_object->layers().size()), [&](const tbb::blocked_range<size_t>& range) {
         for (size_t layer_nr = range.begin(); layer_nr < range.end(); layer_nr++) {
-            if (m_object->print()->canceled())
-                break;
+            throw_on_cancel();
             Layer* layer = m_object->get_layer(layer_nr);
             auto& curr_nodes = contact_nodes[layer_nr-1];
 
@@ -3730,6 +3894,19 @@ void TreeSupport::generate_contact_points()
                     // add inner supports
                     overhang_bounds.inflated(-radius_scaled);
                     ExPolygons overhang_inner = offset_ex(overhang, -radius_scaled);
+                    Points cuda_candidates;
+                    std::vector<uint8_t> cuda_inside;
+                    if (Gpu::CudaSlicerBackend::operation_enabled("point_in_polygon")) {
+                        for (const Point& candidate : grid_points)
+                            if (overhang_bounds.contains(candidate)) cuda_candidates.push_back(candidate);
+                        cuda_inside = cuda_inside_ex(overhang_inner, cuda_candidates);
+                    }
+                    if (!cuda_inside.empty()) {
+                        // Preserve input order and all existing node insertion decisions.
+                        for (size_t i = 0; i < cuda_candidates.size(); ++i)
+                            if (cuda_inside[i]) insert_point(cuda_candidates[i], overhang, radius, false, add_interface);
+                        continue;
+                    }
                     for (Point candidate : grid_points) {
                         if (overhang_bounds.contains(candidate)) {
                             // BBS: move_inside_expoly shouldn't be used if candidate is already inside, as it moves point to boundary and the inside is not well supported!
@@ -3746,8 +3923,6 @@ void TreeSupport::generate_contact_points()
                 if (node)
                     node->skin_direction = pt_and_normal.second;
             }
-            if (!curr_nodes.empty()) nonempty_layers++;
-            for (auto node : curr_nodes) { all_nodes.emplace_back(node->position(0), node->position(1), scale_(node->print_z)); }
 #ifdef SUPPORT_TREE_DEBUG_TO_SVG
             if (!curr_nodes.empty())
             draw_contours_and_nodes_to_svg(debug_out_path("init_contact_points_%.2f.svg", bottom_z), layer->loverhangs,layer->lslices_extrudable, m_ts_data->m_layer_outlines_below[layer_nr],
@@ -3755,29 +3930,6 @@ void TreeSupport::generate_contact_points()
 #endif
         }}
     ); // end tbb::parallel_for
-
-
-
-    int nNodes = all_nodes.size();
-    avg_node_per_layer = nodes_angle = 0;
-    if (nNodes > 0) {
-        avg_node_per_layer = nNodes / nonempty_layers;
-        // get orientation of nodes by line fitting
-        // line: y=kx+b, where
-        //       k=tan(nodes_angle)=(n\sum{xy}-\sum{x}\sum{y})/(n\sum{x^2}-\sum{x}^2)
-        float mx = 0, my = 0, mxy = 0, mx2 = 0;
-        for (auto &pt : all_nodes) {
-            float x = unscale_(pt(0));
-            float y = unscale_(pt(1));
-            mx += x;
-            my += y;
-            mxy += x * y;
-            mx2 += x * x;
-        }
-        nodes_angle = atan2(nNodes * mxy - mx * my, nNodes * mx2 - SQ(mx));
-
-        BOOST_LOG_TRIVIAL(info) << "avg_node_per_layer=" << avg_node_per_layer << ", nodes_angle=" << nodes_angle;
-    }
 }
 
 void TreeSupport::insert_dropped_node(std::vector<SupportNode*>& nodes_layer, SupportNode* p_node)
@@ -3827,24 +3979,31 @@ void TreeSupportData::set_extra_obstacles(const std::vector<Polygons> &extra_obs
 
 const ExPolygons& TreeSupportData::get_collision(coordf_t radius, size_t layer_nr) const
 {
-    profiler.tic();
+    const auto started = TreeSupportProfiler::Clock::now();
     radius = ceil_radius(radius);
     RadiusLayerPair key{radius, layer_nr};
     const auto it = m_collision_cache.find(key);
-    const ExPolygons& collision = it != m_collision_cache.end() ? it->second : calculate_collision(key);
-    profiler.stage_add(STAGE_get_collision);
+    const bool cache_hit = it != m_collision_cache.end();
+    if (m_profiler)
+        m_profiler->record_collision_lookup(cache_hit);
+    const ExPolygons& collision = cache_hit ? it->second : calculate_collision(key);
+    if (m_profiler)
+        m_profiler->stage_add(STAGE_get_collision, TreeSupportProfiler::Clock::now() - started);
     return collision;
 }
 
 const ExPolygons& TreeSupportData::get_avoidance(coordf_t radius, size_t layer_nr, int recursions) const
 {
-    profiler.tic();
+    const auto started = TreeSupportProfiler::Clock::now();
     radius = ceil_radius(radius);
     RadiusLayerPair key{radius, layer_nr, recursions };
     const auto it = m_avoidance_cache.find(key);
-    const ExPolygons& avoidance = it != m_avoidance_cache.end() ? it->second : calculate_avoidance(key);
-
-    profiler.stage_add(STAGE_GET_AVOIDANCE);
+    const bool cache_hit = it != m_avoidance_cache.end();
+    if (m_profiler)
+        m_profiler->record_avoidance_lookup(cache_hit);
+    const ExPolygons& avoidance = cache_hit ? it->second : calculate_avoidance(key);
+    if (m_profiler)
+        m_profiler->stage_add(STAGE_GET_AVOIDANCE, TreeSupportProfiler::Clock::now() - started);
     return avoidance;
 }
 
@@ -3902,6 +4061,7 @@ coordf_t TreeSupportData::ceil_radius(coordf_t radius) const
 const ExPolygons& TreeSupportData::calculate_collision(const RadiusLayerPair& key) const
 {
     assert(key.layer_nr < m_layer_outlines.size());
+    const auto started = TreeSupportProfiler::Clock::now();
 
     ExPolygons collision_areas = offset_ex(m_layer_outlines[key.layer_nr], scale_(key.radius+m_xy_distance));
     if (key.layer_nr < m_extra_obstacles.size() && !m_extra_obstacles[key.layer_nr].empty()) {
@@ -3913,6 +4073,8 @@ const ExPolygons& TreeSupportData::calculate_collision(const RadiusLayerPair& ke
     collision_areas = expolygons_simplify(collision_areas, scale_(m_radius_sample_resolution));
     // collision_areas.emplace_back(m_machine_border);
     const auto ret = m_collision_cache.insert({ key, std::move(collision_areas) });
+    if (m_profiler)
+        m_profiler->record_collision_calculation(ret.second, TreeSupportProfiler::Clock::now() - started);
     return ret.first->second;
 }
 
@@ -3921,6 +4083,7 @@ const ExPolygons& TreeSupportData::calculate_avoidance(const RadiusLayerPair& ke
     const auto &radius = key.radius;
     const auto &layer_nr = key.layer_nr;
     ExPolygons avoidance_areas;
+    TreeSupportProfiler::Clock::duration offset_elapsed {};
     if (layer_nr > 0) {
         // Avoidance for a given layer depends on all layers beneath it so could have very deep recursion depths if
         // called at high layer heights. We can limit the reqursion depth to N by checking if the layer N
@@ -3934,12 +4097,19 @@ const ExPolygons& TreeSupportData::calculate_avoidance(const RadiusLayerPair& ke
             get_avoidance(radius, layer_nr - max_recursion_depth);
         }
 
-        avoidance_areas = offset_ex(get_avoidance(radius, layer_nr - 1), scale_(-m_max_move_distances[layer_nr-1]));
+        const ExPolygons &previous_avoidance = get_avoidance(radius, layer_nr - 1);
+        const auto offset_started = TreeSupportProfiler::Clock::now();
+        avoidance_areas = offset_ex(previous_avoidance, scale_(-m_max_move_distances[layer_nr-1]));
+        offset_elapsed = TreeSupportProfiler::Clock::now() - offset_started;
     }
     const ExPolygons &collision       = get_collision(radius, layer_nr);
     avoidance_areas.insert(avoidance_areas.end(), collision.begin(), collision.end());
+    const auto union_started = TreeSupportProfiler::Clock::now();
     avoidance_areas = std::move(union_ex(avoidance_areas));
+    const auto union_elapsed = TreeSupportProfiler::Clock::now() - union_started;
     auto ret = m_avoidance_cache.insert({key, std::move(avoidance_areas)});
+    if (m_profiler)
+        m_profiler->record_avoidance_calculation(ret.second, offset_elapsed, union_elapsed);
     //assert(ret.second);
     return ret.first->second;
 }

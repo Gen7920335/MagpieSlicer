@@ -17,7 +17,7 @@ This document contains conditional project-specific contracts. Read or search on
 - Keep physical extruder/tool indices, filament/material indices, and UI selection indices as explicit domains. Convert only at named boundaries.
 - Classic and Arachne wall generation must consume the same multi-nozzle planning semantics.
 - Preview and G-code routing must consume the same resolved tool assignment used by geometry generation.
-- Prusa-style normal, Cura-style normal, Tree/Organic, and Tsunami support must remain selectable and independent.
+- Prusa-style normal, Cura-style normal, Tree/Organic, Mixed, and Resin-style support must remain selectable and independent.
 - Low-temperature interface sequencing must remain isolated from the normal G-code path, with explicit and restored temporary state.
 - Vulkan is optional and CPU-authoritative. GPU output must be exact or conservative and validated by deterministic CPU logic.
 - Stable Magpie and profiler builds must retain separate application, binary, configuration, installer, registry, and package identities.
@@ -45,6 +45,9 @@ This document contains conditional project-specific contracts. Read or search on
 - Model-contact interface is layer 1.
 - Clamp or disable unavailable interface ranges safely.
 - Tree support wall loops support 0 (automatic) through 10 requested walls, limited only by feasible branch width.
+- Normal Prusa/Cura support wall loops are independent from tree branch walls; 0 disables normal support walls and 1 through 10 request feasible perimeter loops.
+- Cura support joins nearby support regions during top-down area propagation. Joining adds connector geometry without deleting the original regions, and join distance 0 preserves the unjoined geometry.
+- `support_angle` rotates normal support infill in XY; rectilinear grid alternates the configured angle and its perpendicular direction.
 - Cura solid support raft is opt-in and fills only the Cura support bed-contact first layer. It must not implicitly enable support.
 
 # 5. Low-Temperature Interface Contract

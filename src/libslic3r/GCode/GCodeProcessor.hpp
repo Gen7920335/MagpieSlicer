@@ -89,7 +89,7 @@ class Print;
         PrintEstimatedStatistics() { reset(); }
 
         void reset() {
-            for (auto m : modes) {
+            for (auto &m : modes) {
                 m.reset();
             }
             volumes_per_color_change.clear();
@@ -116,9 +116,9 @@ class Print;
     {
         std::string        _objName1;
         std::string        _objName2;
-        double             _height;
-        const void *_obj1; // nullptr means wipe tower
-        const void *_obj2;
+        double             _height { 0.0 };
+        const void *_obj1 { nullptr }; // nullptr means wipe tower
+        const void *_obj2 { nullptr };
         int                layer = -1;
         ConflictResult(const std::string &objName1, const std::string &objName2, double height, const void *obj1, const void *obj2)
             : _objName1(objName1), _objName2(objName2), _height(height), _obj1(obj1), _obj2(obj2)
@@ -285,22 +285,33 @@ class Print;
             printable_area = other.printable_area;
             bed_exclude_area = other.bed_exclude_area;
             wrapping_exclude_area = other.wrapping_exclude_area;
+            extruder_areas = other.extruder_areas;
+            extruder_heights = other.extruder_heights;
             toolpath_outside = other.toolpath_outside;
             label_object_enabled = other.label_object_enabled;
             long_retraction_when_cut = other.long_retraction_when_cut;
             timelapse_warning_code = other.timelapse_warning_code;
+            support_traditional_timelapse = other.support_traditional_timelapse;
             printable_height = other.printable_height;
+            z_offset = other.z_offset;
             settings_ids = other.settings_ids;
             filaments_count = other.filaments_count;
+            backtrace_enabled = other.backtrace_enabled;
             extruder_colors = other.extruder_colors;
             filament_diameters = other.filament_diameters;
+            required_nozzle_HRC = other.required_nozzle_HRC;
             filament_densities = other.filament_densities;
             filament_costs = other.filament_costs;
+            filament_vitrification_temperature = other.filament_vitrification_temperature;
+            filament_maps = other.filament_maps;
             print_statistics = other.print_statistics;
             custom_gcode_per_print_z = other.custom_gcode_per_print_z;
             spiral_vase_mode = other.spiral_vase_mode;
             warnings = other.warnings;
+            nozzle_hrc = other.nozzle_hrc;
+            nozzle_type = other.nozzle_type;
             bed_type = other.bed_type;
+            conflict_result = other.conflict_result;
             gcode_check_result = other.gcode_check_result;
             limit_filament_maps = other.limit_filament_maps;
             filament_printable_reuslt = other.filament_printable_reuslt;

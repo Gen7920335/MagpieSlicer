@@ -17,6 +17,8 @@ function Require-Match {
 Require-Match 'version.inc' 'option\(MAGPIE_SLICING_PROFILER' 'Missing profiler build option.'
 Require-Match 'version.inc' 'Magpie Slicer Profiler' 'Missing isolated profiler application identity.'
 Require-Match 'CMakeLists.txt' 'MAGPIE_SLICING_PROFILER=1' 'Missing profiler compile definition.'
+Require-Match 'CMakeLists.txt' 'option\(MAGPIE_SLICING_TIMING[^\r\n]*OFF\)' 'Timing must remain opt-in without changing application identity.'
+Require-Match 'CMakeLists.txt' 'MAGPIE_SLICING_TIMING=1' 'Missing common timing compile definition.'
 Require-Match 'src/libslic3r/CMakeLists.txt' 'SlicingProfiler\.cpp' 'Profiler implementation is not linked.'
 Require-Match 'src/libslic3r/PrintBase.hpp' 'begin_state_step\(false' 'Print-step timing hook is missing.'
 Require-Match 'src/libslic3r/PrintBase.hpp' 'begin_state_step\(true' 'Print-object timing hook is missing.'
@@ -33,7 +35,7 @@ $guardedGuiFiles = @(
     'src/slic3r/GUI/GLCanvas3D.cpp'
 )
 foreach ($path in $guardedGuiFiles) {
-    Require-Match $path '#ifdef MAGPIE_SLICING_PROFILER' "Profiler UI is not compile-time guarded in $path."
+    Require-Match $path '#ifdef MAGPIE_SLICING_TIMING' "Timing UI is not compile-time guarded in $path."
 }
 
 if ($failures.Count -gt 0) {

@@ -21,9 +21,11 @@
 #include "libslic3r/SLAPrint.hpp"
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/GCode/PostProcessor.hpp"
+#include "libslic3r/GCode/Thumbnails.hpp"
 #include "libslic3r/Format/SL1.hpp"
 #include "libslic3r/Gpu/VulkanSlicer.hpp"
-#ifdef MAGPIE_SLICING_PROFILER
+#include "libslic3r/Gpu/CudaSlicer.hpp"
+#ifdef MAGPIE_SLICING_TIMING
 #include "libslic3r/SlicingProfiler.hpp"
 #endif
 #include "libslic3r/Thread.hpp"
@@ -45,6 +47,16 @@
 #include "slic3r/GUI/Plater.hpp"
 
 namespace Slic3r {
+
+static Vec2ds thumbnail_sizes_from_config(const ConfigBase &config)
+{
+    const auto definitions = GCodeThumbnails::make_and_check_thumbnail_list(config).first;
+    Vec2ds sizes;
+    sizes.reserve(definitions.size());
+    for (const auto &definition : definitions)
+        sizes.emplace_back(definition.second);
+    return sizes;
+}
 
 bool SlicingProcessCompletedEvent::critical_error() const
 {
@@ -203,14 +215,21 @@ void BackgroundSlicingProcess::process_fff()
     assert(m_print == m_fff_print);
     PresetBundle &preset_bundle = *wxGetApp().preset_bundle;
     m_fff_print->is_BBL_printer() = preset_bundle.is_bbl_vendor();
-    const std::string vulkan_mode = wxGetApp().app_config->get("vulkan_slicer_mode");
-#ifdef MAGPIE_SLICING_PROFILER
+    const std::string vulkan_mode = m_session_vulkan_mode;
+    // Saved GUI choices are authoritative; CLI environment flags cannot override Off.
+    Gpu::CudaSlicerBackend::begin_slicing_session(
+        m_session_cuda_mode != "off", m_session_cuda_mode == "max", m_session_cuda_mode == "max");
+#ifdef MAGPIE_SLICING_TIMING
     const bool profile_has_new_slice = !m_print->finished();
-    SlicingProfileSession profile_session(vulkan_mode);
+    const bool timing_auto_save = m_session_timing_auto_save;
+    const std::string timing_detail = m_session_timing_detail;
+    SlicingProfileSession profile_session(Gpu::CudaSlicerBackend::enabled() ? "cuda" : vulkan_mode,
+        timing_detail == "off" ? SlicingProfileDetail::Off :
+        timing_detail == "stages" ? SlicingProfileDetail::Stages : SlicingProfileDetail::Detailed);
 #endif
 	//BBS: add the logic to process from an existed gcode file
 	if (m_print->finished()) {
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         ScopedSlicingProfileEvent previous_gcode_event("pipeline", "Process previous G-code", SlicingProfileBackend::CPU);
 #endif
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: skip slicing, to process previous gcode file")%__LINE__;
@@ -241,12 +260,24 @@ void BackgroundSlicingProcess::process_fff()
 		m_gcode_result->reset();
 
         Gpu::VulkanSlicerBackend::begin_slicing_session();
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         {
         ScopedSlicingProfileEvent vulkan_prepare_event("pipeline", "Prepare Vulkan backend", SlicingProfileBackend::System);
 #endif
-        const bool vulkan_compute_enabled =
-            Gpu::VulkanSlicerBackend::compiled_with_vulkan() && vulkan_mode != "off";
+        const DynamicPrintConfig &full_print_config = m_fff_print->full_print_config();
+        const bool global_tree_support = full_print_config.opt_bool("enable_support") &&
+                                         uses_tree_channel(full_print_config.opt_enum<SupportType>("support_type"));
+        const bool tree_support_slice = global_tree_support || std::any_of(
+            m_fff_print->objects().begin(), m_fff_print->objects().end(),
+            [](const PrintObject *object) {
+                return object != nullptr && object->config().enable_support.value &&
+                       uses_tree_channel(object->config().support_type.value);
+            });
+        // Retain the existing Vulkan Tree/Mixed guard. Explicit CUDA mode uses
+        // separately validated independent math and preserves the CPU commit
+        // order, while topology planning and merging stay on the CPU.
+        const bool vulkan_compute_enabled = Gpu::VulkanSlicerBackend::compiled_with_vulkan() &&
+                                            vulkan_mode != "off" && !tree_support_slice && !Gpu::CudaSlicerBackend::enabled();
         Gpu::VulkanSlicerBackend::set_compute_enabled(vulkan_compute_enabled);
         Gpu::VulkanSlicerBackend::set_compute_mode(
             vulkan_mode == "max" ? Gpu::VulkanSlicerComputeMode::Maximum :
@@ -254,13 +285,15 @@ void BackgroundSlicingProcess::process_fff()
         if (vulkan_compute_enabled && !Gpu::VulkanSlicerBackend::prepare_for_slicing()) {
             BOOST_LOG_TRIVIAL(warning) << "[Magpie Vulkan] "
                 << Gpu::VulkanSlicerBackend::query_runtime_stats().last_diagnostic;
+        } else if (tree_support_slice && vulkan_mode != "off" && !Gpu::CudaSlicerBackend::enabled()) {
+            BOOST_LOG_TRIVIAL(info) << "[Magpie Vulkan] Tree/Mixed support slice retained on CPU for deterministic topology.";
         }
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         }
 #endif
 
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: gcode_result reseted, will start print::process")%__LINE__;
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         {
         ScopedSlicingProfileEvent print_process_event("pipeline", "Print process", SlicingProfileBackend::CPU);
 #endif
@@ -270,7 +303,7 @@ void BackgroundSlicingProcess::process_fff()
             Gpu::VulkanSlicerBackend::release_unused_staging_memory(true);
             throw;
         }
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         }
 #endif
         Gpu::VulkanSlicerBackend::release_unused_staging_memory();
@@ -287,28 +320,28 @@ void BackgroundSlicingProcess::process_fff()
 
 		//BBS: add plate index into render params
 		m_temp_output_path = this->get_current_plate()->get_tmp_gcode_path();
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         {
         ScopedSlicingProfileEvent gcode_event("pipeline", "Generate G-code and thumbnails", SlicingProfileBackend::CPU);
 #endif
 		m_fff_print->export_gcode(m_temp_output_path, m_gcode_result, [this](const ThumbnailsParams& params) { return this->render_thumbnails(params); });
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         }
 #endif
 
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         {
         ScopedSlicingProfileEvent post_process_event("pipeline", "Post-process G-code", SlicingProfileBackend::CPU);
 #endif
 		if(m_fff_print->is_BBL_printer())
 			run_post_process_scripts(m_temp_output_path, false, "File", m_temp_output_path, m_fff_print->full_print_config());
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         }
 #endif
 
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": export gcode finished");
 	}
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
     {
     ScopedSlicingProfileEvent finalize_event("pipeline", "Finalize export or upload", SlicingProfileBackend::CPU);
 #endif
@@ -327,7 +360,7 @@ void BackgroundSlicingProcess::process_fff()
 	    }
 		this->set_step_done(bspsGCodeFinalize);
 	}
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
     }
     SlicingProfileVulkanStats profile_stats;
     if (profile_has_new_slice) {
@@ -347,7 +380,13 @@ void BackgroundSlicingProcess::process_fff()
         profile_stats.total_host_ms = runtime.total_host_ms;
     }
     SlicingProfiler::instance().set_vulkan_stats(profile_stats);
+    SlicingProfiler::instance().set_gpu_stats(SlicingProfileGpuApi::CUDA, Gpu::CudaSlicerBackend::runtime_stats());
     profile_session.finish();
+    if (timing_auto_save && SlicingProfiler::instance().has_report()) {
+        std::string error;
+        if (!SlicingProfiler::instance().export_json_to_directory(data_dir() + "/slicing-timing", &error))
+            BOOST_LOG_TRIVIAL(error) << "Unable to save slicing timing log: " << error;
+    }
 #endif
 }
 
@@ -374,7 +413,7 @@ void BackgroundSlicingProcess::process_sla()
 
 			//BBS: add plate id for thumbnail generation
             ThumbnailsList thumbnails = this->render_thumbnails(
-				ThumbnailsParams{ current_print()->full_print_config().option<ConfigOptionPoints>("thumbnails")->values, true, true, true, true, 0 });
+				ThumbnailsParams{ thumbnail_sizes_from_config(current_print()->full_print_config()), true, true, true, true, 0 });
 
             Zipper zipper(export_path);
             m_sla_archive.export_print(zipper, *m_sla_print);																											         // true, false, true, true); // renders also supports and pad
@@ -622,6 +661,13 @@ bool BackgroundSlicingProcess::start()
 		return false;
 	if (! this->idle())
 		throw Slic3r::RuntimeError("Cannot start a background task, the worker thread is not idle.");
+    const auto& app_config = *wxGetApp().app_config;
+    m_session_vulkan_mode = app_config.get("vulkan_slicer_mode");
+    m_session_cuda_mode = app_config.get("cuda_slicer_mode");
+#ifdef MAGPIE_SLICING_TIMING
+    m_session_timing_detail = app_config.get("slicing_timing_detail");
+    m_session_timing_auto_save = app_config.get_bool("slicing_timing_auto_save");
+#endif
 	m_state = STATE_STARTED;
 	m_print->set_cancel_callback([this](){ this->stop_internal(); });
 	lck.unlock();
@@ -1026,7 +1072,7 @@ void BackgroundSlicingProcess::prepare_upload()
         m_upload_job.upload_data.upload_path = m_sla_print->print_statistics().finalize_output_path(m_upload_job.upload_data.upload_path.string());
         
         ThumbnailsList thumbnails = this->render_thumbnails(
-        	ThumbnailsParams{current_print()->full_print_config().option<ConfigOptionPoints>("thumbnails")->values, true, true, true, true});
+            ThumbnailsParams{thumbnail_sizes_from_config(current_print()->full_print_config()), true, true, true, true});
 																												 // true, false, true, true); // renders also supports and pad
         Zipper zipper{source_path.string()};
         m_sla_archive.export_print(zipper, *m_sla_print, m_upload_job.upload_data.upload_path.string());

@@ -1,6 +1,14 @@
 param(
     [string] $SlicerPath,
+    [string] $SupportTestPath,
     [string] $OutputRoot,
+    [string] $ModelPath,
+    [ValidateRange(0, 90)]
+    [int] $SupportAngle = 60,
+    [ValidateRange(0, 100)]
+    [int] $CoverageThreshold = 80,
+    [ValidateSet(0, 1)]
+    [int] $SelectiveMerge = 1,
     [int] $SliceTimeoutSeconds = 240
 )
 
@@ -23,6 +31,25 @@ foreach ($required in @($SlicerPath, $BaseMachinePath, $BaseProcessPath)) {
     }
 }
 
+if ([string]::IsNullOrWhiteSpace($SupportTestPath)) {
+    $SupportTestPath = @(
+        (Join-Path $RepoRoot 'build-vulkan\tests\fff_print\Release\fff_print_tests.exe'),
+        (Join-Path $RepoRoot 'build\tests\fff_print\Release\fff_print_tests.exe')
+    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+}
+if ([string]::IsNullOrWhiteSpace($SupportTestPath) -or
+    -not (Test-Path -LiteralPath $SupportTestPath -PathType Leaf)) {
+    throw 'A current fff_print_tests.exe is required for independent Mixed channel and wall-loop verification.'
+}
+$SupportTestPath = [IO.Path]::GetFullPath($SupportTestPath)
+$nativeOutput = & $SupportTestPath '[MixedIndependent]' --reporter compact 2>&1
+$nativeExitCode = $LASTEXITCODE
+$nativeOutput | ForEach-Object { Write-Output $_ }
+if ($nativeExitCode -ne 0) {
+    throw "Independent Mixed channel/wall-loop tests failed with exit code $nativeExitCode"
+}
+Write-Output 'NATIVE_MIXED_CHANNEL_AND_WALL_TESTS=PASSED'
+
 function Find-FilamentProfile([string] $name) {
     foreach ($profileRoot in @((Join-Path $RepoRoot 'resources\profiles'), (Join-Path $env:APPDATA 'MagpieSlicer\system'))) {
         if (-not (Test-Path -LiteralPath $profileRoot -PathType Container)) { continue }
@@ -44,7 +71,8 @@ function Set-JsonProperty($object, [string] $property, $value) {
 $cases = @(
     [pscustomobject]@{ Name='overhang_prusa_organic'; Model='tests\data\overhang.obj'; Normal='prusa'; Tree='organic' },
     [pscustomobject]@{ Name='frog_prusa_hybrid'; Model='tests\data\frog_legs.obj'; Normal='prusa'; Tree='tree_hybrid' },
-    [pscustomobject]@{ Name='ipadstand_cura_strong'; Model='tests\data\ipadstand.obj'; Normal='cura'; Tree='tree_strong' }
+    [pscustomobject]@{ Name='ipadstand_cura_strong'; Model='tests\data\ipadstand.obj'; Normal='cura'; Tree='tree_strong' },
+    [pscustomobject]@{ Name='bunny_cura_organic'; Model='resources\handy_models\Stanford_Bunny.drc'; Normal='cura'; Tree='organic' }
 )
 $filaments = @('Snapmaker PLA @U1','Snapmaker ABS @U1','Snapmaker PETG @U1','Snapmaker TPU @U1') |
     ForEach-Object { Find-FilamentProfile $_ }
@@ -52,7 +80,11 @@ $results = [Collections.Generic.List[object]]::new()
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
 foreach ($case in $cases) {
-    $modelPath = Join-Path $RepoRoot $case.Model
+    $modelPath = if ([string]::IsNullOrWhiteSpace($ModelPath)) {
+        Join-Path $RepoRoot $case.Model
+    } else {
+        [IO.Path]::GetFullPath($ModelPath)
+    }
     if (-not (Test-Path -LiteralPath $modelPath -PathType Leaf)) { throw "Model not found: $modelPath" }
     $caseRoot = Join-Path $OutputRoot $case.Name
     New-Item -ItemType Directory -Force -Path $caseRoot | Out-Null
@@ -70,9 +102,9 @@ foreach ($case in $cases) {
     Set-JsonProperty $process 'support_type' 'mixed(auto)'
     Set-JsonProperty $process 'mixed_normal_support_generator' $case.Normal
     Set-JsonProperty $process 'mixed_tree_support_style' $case.Tree
-    Set-JsonProperty $process 'mixed_normal_coverage_threshold' '80%'
-    Set-JsonProperty $process 'mixed_selective_merge' '1'
-    Set-JsonProperty $process 'support_threshold_angle' '45'
+    Set-JsonProperty $process 'mixed_normal_coverage_threshold' "$CoverageThreshold%"
+    Set-JsonProperty $process 'mixed_selective_merge' ([string] $SelectiveMerge)
+    Set-JsonProperty $process 'support_threshold_angle' ([string] $SupportAngle)
     Set-JsonProperty $process 'support_interface_top_layers' '2'
     Set-JsonProperty $process 'support_interface_bottom_layers' '0'
     Set-JsonProperty $process 'use_smaller_nozzles_in_crisp_corners' '0'
@@ -105,7 +137,13 @@ foreach ($case in $cases) {
         $gcode = Get-Content -LiteralPath $gcodePath -Raw
     }
     if ($gcode -notmatch '(?m)^; support_type = mixed\(auto\)$') { $errors.Add('Mixed support type was not embedded') }
-    if ($gcode -notmatch '(?m)^; mixed_selective_merge = 1$') { $errors.Add('Selective merge was not embedded') }
+    if ($gcode -notmatch "(?m)^; mixed_normal_coverage_threshold = $CoverageThreshold%$") {
+        $errors.Add('Coverage threshold was not embedded')
+    }
+    if ($gcode -notmatch "(?m)^; mixed_selective_merge = $SelectiveMerge$") {
+        $errors.Add('Selective merge was not embedded')
+    }
+    if ($gcode -notmatch "(?m)^; support_threshold_angle = $SupportAngle$") { $errors.Add('Support angle was not embedded') }
     if ($gcode -notmatch '(?im)(?:^;TYPE:Support|; support material)') { $errors.Add('Support extrusion was not generated') }
     if ($gcode -match '(?i)(?:^|\s)[XYZEIJKRF][+-]?(?:nan|inf(?:inity)?)(?=\s|;|$)') {
         $errors.Add('Non-finite G-code value was generated')
@@ -114,6 +152,8 @@ foreach ($case in $cases) {
         Case = $case.Name
         Normal = $case.Normal
         Tree = $case.Tree
+        CoverageThreshold = $CoverageThreshold
+        SelectiveMerge = $SelectiveMerge
         GcodeBytes = if ($gcodePath) { (Get-Item -LiteralPath $gcodePath).Length } else { 0 }
         Passed = $errors.Count -eq 0
         Errors = $errors -join '; '

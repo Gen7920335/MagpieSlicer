@@ -3552,7 +3552,8 @@ void SelectMachineDialog::update_show_status(MachineObject* obj_)
         for (const FilamentInfo& item : m_ams_mapping_result) {
             try
             {
-                int chamber_temp = chamber_temperatures->values[item.id];
+                int chamber_temp = chamber_temperatures != nullptr && !chamber_temperatures->values.empty() ?
+                    chamber_temperatures->get_at(item.id >= 0 ? static_cast<size_t>(item.id) : 0) : 0;
                 if (chamber_temp >= 40) {
                     high_temp_filaments.insert(item.get_display_filament_type());// high printing chamber temperature
                 }

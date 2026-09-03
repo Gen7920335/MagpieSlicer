@@ -5,10 +5,10 @@ option(MAGPIE_VULKAN_TEST_BRANDING "Use an isolated identity for Vulkan test bui
 option(MAGPIE_SLICING_PROFILER "Build the isolated Magpie slicing profiler development version" OFF)
 
 # Public Magpie releases append a two-field Magpie sequence to the Orca base
-# version. For Orca 2.5.0, Magpie line 0 revision 7 is therefore 2.5.0.0.7.
+# version. For Orca 2.5.0, Magpie line 0 revision 9 is therefore 2.5.0.0.9.
 set(MAGPIE_ORCA_BASE_VERSION "2.5.0")
 set(MAGPIE_RELEASE_LINE 0)
-set(MAGPIE_RELEASE_REVISION 7)
+set(MAGPIE_RELEASE_REVISION 9)
 set(MAGPIE_RELEASE_VERSION
     "${MAGPIE_ORCA_BASE_VERSION}.${MAGPIE_RELEASE_LINE}.${MAGPIE_RELEASE_REVISION}")
 math(EXPR MAGPIE_WINDOWS_BUILD_VERSION

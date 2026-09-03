@@ -993,7 +993,22 @@ bool PlaterPresetComboBox::switch_to_tab()
             }
         }
         tab->get_combo_box()->set_filament_idx(m_filament_idx);
-        static_cast<TabFilament *>(tab)->set_hotend_index(size_t(std::max(0, m_filament_idx)));
+        size_t hotend_index = 0;
+        const PresetBundle &preset_bundle = *wxGetApp().preset_bundle;
+        if (const auto *nozzles = preset_bundle.printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter")) {
+            if (!nozzles->values.empty()) {
+                const size_t filament_index = size_t(std::max(0, m_filament_idx));
+                hotend_index = std::min(filament_index, nozzles->values.size() - 1);
+                if (const auto *filament_map = preset_bundle.project_config.option<ConfigOptionInts>("filament_map")) {
+                    if (filament_index < filament_map->values.size()) {
+                        const int mapped_toolhead = filament_map->values[filament_index];
+                        if (mapped_toolhead > 0 && size_t(mapped_toolhead) <= nozzles->values.size())
+                            hotend_index = size_t(mapped_toolhead - 1);
+                    }
+                }
+            }
+        }
+        static_cast<TabFilament *>(tab)->set_hotend_index(hotend_index);
     }
 
     /*

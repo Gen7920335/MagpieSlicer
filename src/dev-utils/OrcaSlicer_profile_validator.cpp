@@ -48,7 +48,7 @@ void generate_custom_presets(PresetBundle* preset_bundle, AppConfig& app_config)
             if (type == Preset::TYPE_FILAMENT) {
                 parent->config.set_key_value("filament_start_gcode",
                                              new ConfigOptionStrings({"this_is_orca_test_filament_start_gcode_mock"}));
-                parent->config.set_key_value("filament_notes", new ConfigOptionString(vendor.vendor->name));
+                parent->config.set_key_value("filament_notes", new ConfigOptionStrings({vendor.vendor->name}));
             } else if (type == Preset::TYPE_PRINT) {
                 parent->config.set_key_value("filename_format", new ConfigOptionString("this_is_orca_test_filename_format_mock"));
                 parent->config.set_key_value("notes", new ConfigOptionString(vendor.vendor->name));

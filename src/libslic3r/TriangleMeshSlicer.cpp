@@ -3,6 +3,7 @@
 #include "Tesselate.hpp"
 #include "TriangleMesh.hpp"
 #include "TriangleMeshSlicer.hpp"
+#include "Gpu/CudaSlicer.hpp"
 #include "Utils.hpp"
 // BBS
 #include "MeshBoolean.hpp"
@@ -482,18 +483,23 @@ void slice_facet_at_zs(
     // Scaled or unscaled zs. If vertices have their zs scaled or transform_vertex_fn scales them, then zs have to be scaled as well.
     const std::vector<float>                         &zs,
     std::vector<IntersectionLines>                   &lines,
-    std::array<std::mutex, 64>                       &lines_mutex)
+    std::array<std::mutex, 64>                       &lines_mutex,
+    const std::array<stl_vertex, 3>                  *cached_vertices = nullptr,
+    const Gpu::CudaMeshZRange                        *cuda_range = nullptr)
 {
-    stl_vertex vertices[3] { transform_vertex_fn(mesh_vertices[indices(0)]), transform_vertex_fn(mesh_vertices[indices(1)]), transform_vertex_fn(mesh_vertices[indices(2)]) };
+    stl_vertex vertices[3];
+    if (cached_vertices) std::copy(cached_vertices->begin(), cached_vertices->end(), vertices);
+    else for (int i = 0; i < 3; ++i) vertices[i] = transform_vertex_fn(mesh_vertices[indices(i)]);
 
     // find facet extents
     const float min_z = fminf(vertices[0].z(), fminf(vertices[1].z(), vertices[2].z()));
     const float max_z = fmaxf(vertices[0].z(), fmaxf(vertices[1].z(), vertices[2].z()));
 
     // find layer extents
-    auto min_layer = std::lower_bound(zs.begin(), zs.end(), min_z); // first layer whose slice_z is >= min_z
-    auto max_layer = std::upper_bound(min_layer, zs.end(), max_z); // first layer whose slice_z is > max_z
-    int  idx_vertex_lowest = (vertices[1].z() == min_z) ? 1 : ((vertices[2].z() == min_z) ? 2 : 0);
+    auto min_layer = cuda_range ? zs.begin() + cuda_range->first : std::lower_bound(zs.begin(), zs.end(), min_z);
+    auto max_layer = cuda_range ? zs.begin() + cuda_range->last : std::upper_bound(min_layer, zs.end(), max_z);
+    int idx_vertex_lowest = cuda_range ? int(cuda_range->lowest_vertex) :
+        ((vertices[1].z() == min_z) ? 1 : ((vertices[2].z() == min_z) ? 2 : 0));
 
     for (auto it = min_layer; it != max_layer; ++ it) {
         IntersectionLine il;
@@ -518,13 +524,31 @@ static inline std::vector<IntersectionLines> slice_make_lines(
 {
     std::vector<IntersectionLines>  lines(zs.size(), IntersectionLines());
     std::array<std::mutex, 64>      lines_mutex;
+    const bool cuda_ranges = Gpu::CudaSlicerBackend::operation_enabled("mesh_layer_ranges");
     tbb::parallel_for(
-        tbb::blocked_range<int>(0, int(indices.size())),
-        [&vertices, &transform_vertex_fn, &indices, &face_edge_ids, &zs, &lines, &lines_mutex, throw_on_cancel_fn](const tbb::blocked_range<int> &range) {
+        tbb::blocked_range<int>(0, int(indices.size()), cuda_ranges ? 4096 : 1),
+        [&vertices, &transform_vertex_fn, &indices, &face_edge_ids, &zs, &lines, &lines_mutex, throw_on_cancel_fn, cuda_ranges](const tbb::blocked_range<int> &range) {
+            std::vector<std::array<stl_vertex, 3>> cached;
+            Gpu::CudaMeshZBatch batch;
+            if (cuda_ranges && Gpu::CudaSlicerBackend::should_dispatch(range.size())) {
+                throw_on_cancel_fn();
+                cached.resize(range.size());
+                std::vector<Gpu::CudaMeshZRequest> requests;
+                requests.reserve(range.size());
+                for (int face_idx = range.begin(); face_idx < range.end(); ++face_idx) {
+                    if ((face_idx & 4095) == 0) throw_on_cancel_fn();
+                    auto& f = cached[face_idx-range.begin()];
+                    for (int i = 0; i < 3; ++i) f[i] = transform_vertex_fn(vertices[indices[face_idx](i)]);
+                    requests.push_back({f[0].z(),f[1].z(),f[2].z()});
+                }
+                batch = Gpu::CudaSlicerBackend::dispatch_mesh_layer_ranges(requests, zs);
+            }
             for (int face_idx = range.begin(); face_idx < range.end(); ++ face_idx) {
                 if ((face_idx & 0x0ffff) == 0)
                     throw_on_cancel_fn();
-                slice_facet_at_zs(vertices, transform_vertex_fn, indices[face_idx], face_edge_ids[face_idx], zs, lines, lines_mutex);
+                const size_t local = face_idx-range.begin();
+                slice_facet_at_zs(vertices, transform_vertex_fn, indices[face_idx], face_edge_ids[face_idx], zs, lines, lines_mutex,
+                    cached.empty() ? nullptr : &cached[local], batch.resolved ? &batch.ranges[local] : nullptr);
             }
         }
     );
@@ -1051,8 +1075,8 @@ struct OpenPolyline {
     IntersectionReference   start;
     IntersectionReference   end;
     Points                  points;
-    double                  length;
-    bool                    consumed;
+    double                  length { 0.0 };
+    bool                    consumed { false };
 };
 
 // called by make_loops() to connect sliced triangles into closed loops and open polylines by the triangle connectivity.

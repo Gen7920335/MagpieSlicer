@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <map>
 #include <string>
 
 namespace Slic3r {
@@ -13,8 +14,14 @@ enum class SlicingProfileBackend {
     GPU,
     Hybrid,
     CPUFallback,
-    System
+    System,
+    CUDA,
+    Vulkan
 };
+
+enum class SlicingProfileDetail { Off, Stages, Detailed };
+
+enum class SlicingProfileGpuApi { Vulkan, CUDA };
 
 struct SlicingProfileToken {
     uint64_t value { 0 };
@@ -30,7 +37,7 @@ struct SlicingProfileStatus {
     uint64_t    elapsed_us { 0 };
 };
 
-struct SlicingProfileVulkanStats {
+struct SlicingProfileGpuStats {
     std::string selected_device;
     std::string execution_profile;
     std::string validation_mode;
@@ -44,7 +51,24 @@ struct SlicingProfileVulkanStats {
     uint64_t    skipped_workloads { 0 };
     double      total_gpu_ms { 0.0 };
     double      total_host_ms { 0.0 };
+    // Host wall milliseconds, including synchronization where applicable.
+    // Negative values mean unmeasured, never a measured zero-cost phase.
+    double      initialization_ms { -1.0 };
+    double      allocation_ms { -1.0 };
+    double      packing_ms { -1.0 };
+    double      upload_ms { -1.0 };
+    double      download_ms { -1.0 };
+    double      validation_ms { -1.0 };
+    double      fallback_ms { -1.0 };
+    double      queue_wait_ms { -1.0 }; // Host wait for the shared CUDA runtime mutex.
+    double      kernel_wall_ms { -1.0 }; // Launch + wait; overlaps device kernel time.
+    double      preflight_ms { -1.0 }; // Rejected work before dispatch packing.
+    uint64_t    uploaded_bytes { 0 };
+    uint64_t    downloaded_bytes { 0 };
+    std::map<std::string, uint64_t> diagnostic_counts;
 };
+
+using SlicingProfileVulkanStats = SlicingProfileGpuStats;
 
 class SlicingProfiler {
 public:
@@ -53,7 +77,7 @@ public:
     SlicingProfiler(const SlicingProfiler&) = delete;
     SlicingProfiler& operator=(const SlicingProfiler&) = delete;
 
-    void begin_session(const std::string& requested_mode);
+    void begin_session(const std::string& requested_mode, SlicingProfileDetail detail = SlicingProfileDetail::Detailed);
     void finish_session(const std::string& outcome = "completed");
     void cancel_session(const std::string& reason);
 
@@ -72,8 +96,11 @@ public:
     void cancel_state_step(bool object_step, int step, const void* owner);
 
     void set_vulkan_stats(const SlicingProfileVulkanStats& stats);
+    void set_gpu_stats(SlicingProfileGpuApi api, const SlicingProfileGpuStats& stats);
     SlicingProfileStatus status() const;
     bool has_report() const;
+    std::string summary_text() const;
+    bool export_json_to_directory(const std::string& directory, std::string* error = nullptr) const;
     bool export_json(const std::string& path, std::string* error = nullptr) const;
 
 private:
@@ -91,6 +118,8 @@ public:
                               SlicingProfileBackend backend,
                               size_t work_items = 0);
     ~ScopedSlicingProfileEvent();
+    // Close a phase before later work in the same scope. Idempotent.
+    void finish();
 
     ScopedSlicingProfileEvent(const ScopedSlicingProfileEvent&) = delete;
     ScopedSlicingProfileEvent& operator=(const ScopedSlicingProfileEvent&) = delete;
@@ -110,7 +139,7 @@ private:
 
 class SlicingProfileSession {
 public:
-    explicit SlicingProfileSession(const std::string& requested_mode);
+    explicit SlicingProfileSession(const std::string& requested_mode, SlicingProfileDetail detail = SlicingProfileDetail::Detailed);
     ~SlicingProfileSession();
 
     SlicingProfileSession(const SlicingProfileSession&) = delete;

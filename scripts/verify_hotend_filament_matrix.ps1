@@ -11,7 +11,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 
 if ([string]::IsNullOrWhiteSpace($SlicerPath)) { $SlicerPath = Join-Path $RepoRoot 'build\src\Release\magpie-slicer.exe' }
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) { $OutputRoot = Join-Path $RepoRoot 'build\verification\hotend-filament-matrix' }
-if ([string]::IsNullOrWhiteSpace($ModelPath)) { $ModelPath = Join-Path $RepoRoot 'sandboxes\multinozzle_test\sharp_box.stl' }
+if ([string]::IsNullOrWhiteSpace($ModelPath)) { $ModelPath = Join-Path $RepoRoot 'tests\data\test_stl\ASCII\20mmbox-LF.stl' }
 
 $BaseMachinePath = Join-Path $RepoRoot 'sandboxes\multinozzle_test\auto_tool2_020_base1_machine.json'
 $BaseProcessPath = Join-Path $RepoRoot 'sandboxes\multinozzle_test\auto_tool2_020_base1_process.json'

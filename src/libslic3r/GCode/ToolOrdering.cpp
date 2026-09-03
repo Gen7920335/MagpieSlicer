@@ -81,9 +81,15 @@ static FlushMatrix flush_matrix_for_nozzle(const PrintConfig &config, size_t noz
     if (!use_configured_values || nozzle_count == 0 || nozzle_id >= nozzle_count || filament_count == 0)
         return matrix;
 
-    const std::vector<float> flat_matrix(
-        cast<float>(get_flush_volumes_matrix(config.flush_volumes_matrix.values, nozzle_id, nozzle_count)));
     const size_t expected_size = filament_count * filament_count;
+    std::vector<float> flat_matrix;
+    const auto &stored = config.flush_volumes_matrix.values;
+    if (expected_size > 0 && !stored.empty() && stored.size() % expected_size == 0) {
+        const size_t matrix_count = stored.size() / expected_size;
+        const size_t matrix_index = matrix_count == 1 ? 0 : std::min(nozzle_id, matrix_count - 1);
+        const size_t begin = matrix_index * expected_size;
+        flat_matrix = cast<float>(std::vector<double>(stored.begin() + begin, stored.begin() + begin + expected_size));
+    }
     if (flat_matrix.size() != expected_size)
         return matrix;
 

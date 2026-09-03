@@ -648,6 +648,39 @@ TEST_CASE("Multi-nozzle settings remain owned by printer and process presets", "
           std::vector<std::string>{ "5:12:1", "10:20:2" });
 }
 
+TEST_CASE("Single filament full config follows the plater slot preset",
+          "[Preset][Config][FilamentSelection]")
+{
+    PresetBundle bundle;
+    const std::string pla_name = "Audit PLA";
+    const std::string pva_name = "Audit PVA";
+    Preset &pla = add_inmemory_preset(bundle.filaments, pla_name);
+    pla.config.option<ConfigOptionStrings>("filament_type")->values = { "PLA" };
+    pla.config.option<ConfigOptionBools>("filament_is_support")->values = { false };
+    pla.filament_id = "audit-pla";
+
+    Preset &pva = add_inmemory_preset(bundle.filaments, pva_name);
+    pva.config.option<ConfigOptionStrings>("filament_type")->values = { "PVA" };
+    pva.config.option<ConfigOptionBools>("filament_is_support")->values = { true };
+    pva.config.option<ConfigOptionBools>("filament_soluble")->values = { true };
+    pva.filament_id = "audit-pva";
+
+    REQUIRE(bundle.filaments.select_preset_by_name(pla_name, false));
+    bundle.filament_presets = { pva_name };
+
+    const DynamicPrintConfig full = bundle.full_config();
+    CHECK(full.option<ConfigOptionStrings>("filament_settings_id")->values ==
+          std::vector<std::string>{ pva_name });
+    CHECK(full.option<ConfigOptionStrings>("filament_type")->values ==
+          std::vector<std::string>{ "PVA" });
+    CHECK(full.option<ConfigOptionBools>("filament_is_support")->values ==
+          std::vector<unsigned char>{ true });
+    CHECK(full.option<ConfigOptionBools>("filament_soluble")->values ==
+          std::vector<unsigned char>{ true });
+    CHECK(full.option<ConfigOptionStrings>("filament_ids")->values ==
+          std::vector<std::string>{ "audit-pva" });
+}
+
 TEST_CASE("Custom printer settings survive JSON save and reload", "[Preset][Roundtrip][CustomSettings]")
 {
     const size_t level = GENERATE(0u, 1u, 2u, 3u);

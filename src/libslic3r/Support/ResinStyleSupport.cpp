@@ -6,6 +6,7 @@
 #include "../Print.hpp"
 #include "SupportCommon.hpp"
 #include "SupportMaterial.hpp"
+#include "SupportTiming.hpp"
 #include "../SLA/SupportIslands/SampleConfigFactory.hpp"
 #include "../SLA/SupportPointGenerator.hpp"
 #include "../SLA/SupportTree.hpp"
@@ -138,12 +139,14 @@ size_t support_point_layer_index(
 
 void ResinStyleSupport::generate()
 {
+    SupportProfileStage total_timing("support-resin", "Generate complete resin style support", m_object.layer_count());
     const PrintObjectConfig &cfg = m_object.config();
     if (!cfg.enable_support.value || !is_resin(cfg.support_type.value) || m_object.layers().empty())
         return;
 
     if (m_object.print()->canceled())
         throw CanceledException();
+    SupportProfileStage mesh_timing("support-resin", "Prepare resin support mesh and slices", m_object.layer_count());
     const ResinStrategyValues values = strategy_values(cfg);
 
     // Build the same centered object-space mesh used by FFF slicing, then move
@@ -162,16 +165,19 @@ void ResinStyleSupport::generate()
         model_slices.emplace_back(layer->lslices);
         heights.emplace_back(float(layer->slice_z + m_slicing_parameters.object_print_z_min));
     }
+    mesh_timing.finish(model_slices.size());
 
     // A non-zero FFF threshold narrows the SLA generator's automatic point
     // candidates to areas that the preceding layer cannot support at that
     // angle. Zero deliberately preserves the native SLA island/peninsula
     // detector for backward compatibility.
     std::vector<Polygons> threshold_demand;
+    SupportProfileStage demand_timing("support-resin", "Build resin threshold demand", model_slices.size());
     if (cfg.support_threshold_angle.value > 0) {
         threshold_demand.resize(model_slices.size());
         threshold_demand.front() = to_polygons(model_slices.front());
         for (size_t layer_id = 1; layer_id < model_slices.size(); ++layer_id) {
+            SupportProfileStage layer_timing("support-resin-demand", "Build resin threshold layer", model_slices[layer_id].size());
             const coord_t supported_offset = support_overhang_offset_from_threshold(
                 m_object.layers()[layer_id - 1]->height,
                 cfg.support_threshold_angle.value);
@@ -179,15 +185,19 @@ void ResinStyleSupport::generate()
                 to_polygons(model_slices[layer_id - 1]), float(supported_offset),
                 ClipperLib::jtSquare, 0.);
             threshold_demand[layer_id] = diff(to_polygons(model_slices[layer_id]), supported);
+            layer_timing.finish(threshold_demand[layer_id].size(), "object_layer=" + std::to_string(layer_id));
         }
     }
+    demand_timing.finish(threshold_demand.size());
 
     sla::ThrowOnCancel cancel = [this]() {
         if (m_object.print()->canceled())
             throw CanceledException();
     };
+    SupportProfileStage generator_data_timing("support-resin", "Prepare resin support point generator", model_slices.size());
     sla::SupportPointGeneratorData generator_data = sla::prepare_generator_data(
         std::move(model_slices), heights, sla::PrepareSupportConfig{}, cancel);
+    generator_data_timing.finish(heights.size());
 
     const PrintConfig &print_cfg = m_object.print()->config();
     const double nozzle = print_cfg.nozzle_diameter.get_at(cfg.support_filament.value - 1);
@@ -200,6 +210,7 @@ void ResinStyleSupport::generate()
     point_cfg.island_configuration = sla::SampleConfigFactory::apply_density(
         sla::SampleConfigFactory::create(point_cfg.head_diameter), point_cfg.density_relative);
 
+    SupportProfileStage points_timing("support-resin", "Generate resin support contact points", heights.size());
     sla::LayerSupportPoints layer_points = sla::generate_support_points(
         generator_data, point_cfg, cancel);
     const double allowed_move = heights.size() > 1 ?
@@ -208,6 +219,7 @@ void ResinStyleSupport::generate()
     AABBMesh indexed_mesh(mesh);
     sla::SupportPoints points = sla::move_on_mesh_surface(
         layer_points, indexed_mesh, allowed_move, cancel);
+    points_timing.finish(points.size());
 
     // Match PrusaSlicer's zero-elevation behavior: points on the bed-facing
     // bottom are redundant when the model itself is not floating.
@@ -220,6 +232,7 @@ void ResinStyleSupport::generate()
 
     // Apply FFF support volumes and painted enforcer/blocker facets to the
     // latest automatic point set before building the tree.
+    SupportProfileStage painting_timing("support-resin", "Apply resin enforcers blockers and threshold", points.size());
     std::vector<Polygons> enforcers = m_object.slice_support_enforcers();
     std::vector<Polygons> blockers  = m_object.slice_support_blockers();
     enforcers.resize(heights.size());
@@ -239,6 +252,7 @@ void ResinStyleSupport::generate()
         if (enforced || (!blocked && !cfg.resin_support_enforcers_only.value && passes_threshold))
             filtered_points.emplace_back(std::move(support_point));
     }
+    painting_timing.finish(filtered_points.size());
 
     sla::SupportTreeConfig tree_cfg;
     tree_cfg.enabled = true;
@@ -271,8 +285,10 @@ void ResinStyleSupport::generate()
     sla::JobController controller;
     controller.stopcondition = [this]() { return m_object.print()->canceled(); };
     controller.cancelfn = cancel;
+    SupportProfileStage tree_timing("support-resin", "Build resin support tree", filtered_points.size());
     auto [tree_mesh, tree_output] = sla::create_support_tree(supportable, controller);
     (void) tree_mesh;
+    tree_timing.finish(filtered_points.size());
 
     // Restrict native FFF contact patches to printable discs around the actual
     // resin support heads. Existing interface material, Z gaps, XY clearance,
@@ -280,6 +296,7 @@ void ResinStyleSupport::generate()
     std::vector<Polygons> demand_mask(heights.size());
     const coord_t contact_radius = coord_t(scale_(0.5 * std::max(values.head_front_diameter, printable_diameter)));
     const coord_t circle_error = std::max<coord_t>(1, coord_t(scale_(0.02)));
+    SupportProfileStage mask_timing("support-resin", "Build resin FFF contact mask", filtered_points.size());
     for (const sla::SupportPoint &support_point : filtered_points) {
         const size_t layer_id = support_point_layer_index(m_object, heights, support_point);
         Polygon disc = make_circle(contact_radius, circle_error);
@@ -289,7 +306,9 @@ void ResinStyleSupport::generate()
     for (Polygons &layer_mask : demand_mask)
         if (!layer_mask.empty())
             layer_mask = union_(layer_mask);
+    mask_timing.finish(demand_mask.size());
 
+    SupportProfileStage fff_timing("support-resin", "Convert resin tree into FFF support", demand_mask.size());
     PrintObjectSupportMaterial fff_support(
         &m_object, m_slicing_parameters, &demand_mask, false);
     fff_support.generate_from_resin_body(
@@ -297,9 +316,11 @@ void ResinStyleSupport::generate()
         [&tree_output](coordf_t z) {
             return sla::slice_support_tree_at_height(tree_output, float(z));
         });
+    fff_timing.finish(m_object.support_layer_count());
 
     BOOST_LOG_TRIVIAL(info) << "Resin style support generated "
                             << filtered_points.size() << " contact points";
+    total_timing.finish(m_object.support_layer_count());
 }
 
 } // namespace Slic3r

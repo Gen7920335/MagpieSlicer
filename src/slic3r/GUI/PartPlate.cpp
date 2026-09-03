@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 #include <vector>
 #include <string>
@@ -448,6 +449,11 @@ void PartPlate::calc_triangles(const ExPolygon &poly)
 void PartPlate::calc_exclude_triangles(const ExPolygon &poly)
 {
     m_exclude_triangles.reset();
+
+    // A printer without exclusion zones legitimately produces an empty
+    // polygon. There is no render model to build in that case.
+    if (poly.empty() || poly.contour.points.size() < 3 || poly.contour.area() == 0.)
+        return;
 
     if (!init_model_from_poly(m_exclude_triangles, poly, GROUND_Z))
 		BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ":Unable to create exclude triangles\n";
@@ -1650,8 +1656,8 @@ std::vector<int> PartPlate::get_extruders(bool conside_custom_gcode) const
             nums_extruders = color_option->values.size();
 			if (m_model->plates_custom_gcodes.find(m_plate_index) != m_model->plates_custom_gcodes.end()) {
 				for (auto item : m_model->plates_custom_gcodes.at(m_plate_index).gcodes) {
-					if (item.type == CustomGCode::Type::ToolChange && item.extruder <= nums_extruders)
-						plate_extruders.push_back(item.extruder);
+						if (item.type == CustomGCode::Type::ToolChange && item.extruder > 0 && item.extruder <= nums_extruders)
+							plate_extruders.push_back(item.extruder);
 				}
 			}
 		}
@@ -1811,7 +1817,7 @@ std::vector<int> PartPlate::get_extruders_under_cli(bool conside_custom_gcode, D
             nums_extruders = color_option->values.size();
             if (m_model->plates_custom_gcodes.find(m_plate_index) != m_model->plates_custom_gcodes.end()) {
                 for (auto item : m_model->plates_custom_gcodes.at(m_plate_index).gcodes) {
-                    if (item.type == CustomGCode::Type::ToolChange && item.extruder <= nums_extruders)
+                    if (item.type == CustomGCode::Type::ToolChange && item.extruder > 0 && item.extruder <= nums_extruders)
                         plate_extruders.push_back(item.extruder);
                 }
             }
@@ -1864,8 +1870,8 @@ std::vector<int> PartPlate::get_extruders_without_support(bool conside_custom_gc
 			nums_extruders = color_option->values.size();
 			if (m_model->plates_custom_gcodes.find(m_plate_index) != m_model->plates_custom_gcodes.end()) {
 				for (auto item : m_model->plates_custom_gcodes.at(m_plate_index).gcodes) {
-					if (item.type == CustomGCode::Type::ToolChange && item.extruder <= nums_extruders)
-						plate_extruders.push_back(item.extruder);
+						if (item.type == CustomGCode::Type::ToolChange && item.extruder > 0 && item.extruder <= nums_extruders)
+							plate_extruders.push_back(item.extruder);
 				}
 			}
 		}
@@ -1889,7 +1895,7 @@ std::vector<int> PartPlate::get_extruders_without_support(bool conside_custom_gc
 int PartPlate::get_physical_extruder_by_filament_id(const DynamicConfig& g_config, int idx) const
 {
 	const std::vector<int>& filament_map = get_real_filament_maps(g_config);
-	if (filament_map.size() < idx)
+	if (idx <= 0 || static_cast<size_t>(idx) > filament_map.size())
 	{
 		return -1;
 	}
@@ -1901,6 +1907,8 @@ int PartPlate::get_physical_extruder_by_filament_id(const DynamicConfig& g_confi
 	}
 
 	int zero_base_logical_idx = filament_map[idx - 1] - 1;
+	if (zero_base_logical_idx < 0 || static_cast<size_t>(zero_base_logical_idx) >= the_map->values.size())
+		return -1;
 	return the_map->values[zero_base_logical_idx];
 }
 
@@ -1975,8 +1983,8 @@ bool PartPlate::check_mixture_of_pla_and_petg(const DynamicPrintConfig &config)
     // nozzle each material is on; warn only when PLA and PETG would pass through the
     // *same* nozzle.
     //
-    // NOTE: if MMU-on-toolchanger support is added (#10586), the nozzle-mapping logic
-    // will need to be revisited because multiple filaments may then share one tool slot.
+    // The project filament map is authoritative because multiple logical materials may
+    // share one physical nozzle even when the printer exposes several toolheads.
     bool is_toolchanger = false;
     auto *tool_change_time = config.option<ConfigOptionFloat>("machine_tool_change_time");
     if (tool_change_time && tool_change_time->value > 0)
@@ -1989,17 +1997,23 @@ bool PartPlate::check_mixture_of_pla_and_petg(const DynamicPrintConfig &config)
     std::vector<int> used_filaments = get_extruders(true); // 1-based
     if (!used_filaments.empty()) {
         const auto *filament_types = config.option<ConfigOptionStrings>("filament_type");
+        if (filament_types == nullptr)
+            return true;
+        const std::vector<int> filament_map = get_real_filament_maps(config);
         for (auto filament_idx : used_filaments) {
             int filament_id = filament_idx - 1;
-            if (filament_id < (int)filament_types->values.size()) {
+            if (filament_id >= 0 && filament_id < (int) filament_types->values.size()) {
                 const std::string &filament_type = filament_types->values[filament_id];
+                int nozzle_id = filament_id;
+                if (size_t(filament_id) < filament_map.size() && filament_map[size_t(filament_id)] > 0)
+                    nozzle_id = filament_map[size_t(filament_id)] - 1;
                 if (filament_type == "PLA") {
                     has_pla = true;
-                    nozzle_has_pla[filament_id] = true;
+                    nozzle_has_pla[nozzle_id] = true;
                 }
                 if (filament_type == "PETG") {
                     has_petg = true;
-                    nozzle_has_petg[filament_id] = true;
+                    nozzle_has_petg[nozzle_id] = true;
                 }
             } else {
                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " check error:array bound";
@@ -2011,9 +2025,8 @@ bool PartPlate::check_mixture_of_pla_and_petg(const DynamicPrintConfig &config)
         return true; // no mixture — no warning
 
     if (is_toolchanger) {
-        // Warn only if any single nozzle slot carries both PLA and PETG (e.g. future MMU
-        // on toolchanger).  On a pure toolchanger each slot is independent, so this loop
-        // will never fire and the warning is correctly suppressed. (#12073)
+        // Warn only if any single physical nozzle carries both PLA and PETG. On a pure
+        // toolchanger each slot is independent, so this loop will not fire. (#12073)
         for (const auto &kv : nozzle_has_pla) {
             if (nozzle_has_petg.count(kv.first))
                 return false; // same nozzle → warn
@@ -2069,8 +2082,12 @@ bool PartPlate::check_mixture_filament_compatible(const DynamicPrintConfig &conf
 
 bool PartPlate::check_compatible_of_nozzle_and_filament(const DynamicPrintConfig &config, const std::vector<std::string> &filament_presets, std::string &error_msg)
 {
-    float nozzle_diameter = config.option<ConfigOptionFloats>("nozzle_diameter")->values[0];
-    auto  volume_type_opt = config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
+    const auto *nozzle_diameter_opt = config.option<ConfigOptionFloats>("nozzle_diameter");
+    const float nozzle_diameter = nozzle_diameter_opt != nullptr && !nozzle_diameter_opt->values.empty() ?
+                                      nozzle_diameter_opt->values[0] : 0.4f;
+    const auto *volume_type_opt = config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
+    const std::vector<int> nozzle_volume_values = volume_type_opt != nullptr && !volume_type_opt->values.empty() ?
+                                                      volume_type_opt->values : std::vector<int>{nvtStandard};
 
     auto get_filament_alias = [](std::string preset_name) -> std::string {
         size_t      at_pos = preset_name.find('@');
@@ -2080,9 +2097,6 @@ bool PartPlate::check_compatible_of_nozzle_and_filament(const DynamicPrintConfig
         size_t last = alias.find_last_not_of(' ');
         return alias.substr(first, last - first + 1);
     };
-
-    bool with_same_volume_type = std::all_of(volume_type_opt->values.begin(), volume_type_opt->values.end(),
-                                             [first_value = volume_type_opt->values[0]](int value) { return value == first_value; });
 
     std::set<std::string> selected_filament_alias;
     for (auto &filament_preset : filament_presets) { selected_filament_alias.insert(get_filament_alias(filament_preset)); }
@@ -2117,7 +2131,7 @@ bool PartPlate::check_compatible_of_nozzle_and_filament(const DynamicPrintConfig
 
     error_msg.clear();
 
-    std::set<int>                                     nozzle_volumes(volume_type_opt->values.begin(), volume_type_opt->values.end());
+    std::set<int>                                     nozzle_volumes(nozzle_volume_values.begin(), nozzle_volume_values.end());
     std::map<NozzleVolumeType, std::set<std::string>> incompatible_selected_map;
 
     for (auto volume_type_value : nozzle_volumes) {
@@ -2195,6 +2209,8 @@ Vec3d PartPlate::estimate_wipe_tower_size(const DynamicPrintConfig & config, con
     const ConfigOption* layer_height_opt = config.option("layer_height");
     if (layer_height_opt)
         layer_height = layer_height_opt->getFloat();
+    if (!std::isfinite(layer_height) || layer_height <= 0.)
+        layer_height = 0.08;
 
     // empty plate
     if (plate_extruder_size == 0)
@@ -2216,10 +2232,16 @@ Vec3d PartPlate::estimate_wipe_tower_size(const DynamicPrintConfig & config, con
     //const DynamicPrintConfig &dconfig = wxGetApp().preset_bundle->prints.get_edited_preset().config;
     auto timelapse_type    = config.option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
     bool need_wipe_tower = (timelapse_type ? (timelapse_type->value == TimelapseType::tlSmooth) : false) | enable_wrapping_detection;
-    double extra_spacing     = config.option("prime_tower_infill_gap")->getFloat() / 100.;
+    const ConfigOption *infill_gap_opt = config.option("prime_tower_infill_gap");
+    double extra_spacing = infill_gap_opt != nullptr ? infill_gap_opt->getFloat() / 100. : 1.5;
+    if (!std::isfinite(extra_spacing) || extra_spacing < 0.)
+        extra_spacing = 1.5;
     const ConfigOptionEnum<WipeTowerWallType>* use_rib_wall_opt = config.option<ConfigOptionEnum<WipeTowerWallType>>("wipe_tower_wall_type");
     bool use_rib_wall = use_rib_wall_opt ? use_rib_wall_opt->value == WipeTowerWallType::wtwRib: false;
-    double rib_width = config.option("wipe_tower_rib_width")->getFloat();
+    const ConfigOption *rib_width_opt = config.option("wipe_tower_rib_width");
+    double rib_width = rib_width_opt != nullptr ? rib_width_opt->getFloat() : 8.;
+    if (!std::isfinite(rib_width) || rib_width < 0.)
+        rib_width = 8.;
     double depth;
     double filament_change_volume=0.;
     {
@@ -2227,14 +2249,19 @@ Vec3d PartPlate::estimate_wipe_tower_size(const DynamicPrintConfig & config, con
         auto                filament_change_lengths_opt = m_print->config().option<ConfigOptionFloats>("filament_change_length");
         if (filament_change_lengths_opt) filament_change_lengths = filament_change_lengths_opt->values;
         double length = filament_change_lengths.empty() ? 0 : *std::max_element(filament_change_lengths.begin(), filament_change_lengths.end());
+        if (!std::isfinite(length) || length < 0.)
+            length = 0.;
         double diameter = 1.75;
         std::vector<double> diameters;
         auto                filament_diameter_opt = m_print->config().option<ConfigOptionFloats>("filament_diameter");
         if (filament_diameter_opt) diameters = filament_diameter_opt->values;
         diameter = diameters.empty() ? diameter : *std::max_element(diameters.begin(), diameters.end());
+        if (!std::isfinite(diameter) || diameter <= 0.)
+            diameter = 1.75;
         filament_change_volume = length * PI * diameter * diameter / 4.;
     }
-    double volume = wipe_volume * (extruder_count == 2 ? plate_extruder_size : (plate_extruder_size - 1));
+    const double safe_wipe_volume = std::isfinite(wipe_volume) && wipe_volume > 0. ? wipe_volume : 0.;
+    double volume = safe_wipe_volume * (extruder_count == 2 ? plate_extruder_size : (plate_extruder_size - 1));
     if (extruder_count == 2) volume += filament_change_volume * (int) (plate_extruder_size / 2);
     if (use_rib_wall) {
         depth = std::sqrt(volume / layer_height * extra_spacing);
@@ -2248,12 +2275,13 @@ Vec3d PartPlate::estimate_wipe_tower_size(const DynamicPrintConfig & config, con
         }
     }
     else {
-        depth  =  volume/ (layer_height * w) *extra_spacing;
+        const double tower_width = std::isfinite(w) && w > 0. ? w : 60.;
+        depth = volume / (layer_height * tower_width) * extra_spacing;
         if (need_wipe_tower || depth > EPSILON) {
             float min_wipe_tower_depth = WipeTower::get_limit_depth_by_height(max_height);
             depth = std::max((double)min_wipe_tower_depth, depth);
         }
-        wipe_tower_size(0) = w;
+        wipe_tower_size(0) = tower_width;
         wipe_tower_size(1) = depth;
     }
 
@@ -2262,27 +2290,43 @@ Vec3d PartPlate::estimate_wipe_tower_size(const DynamicPrintConfig & config, con
 
 arrangement::ArrangePolygon PartPlate::estimate_wipe_tower_polygon(const DynamicPrintConfig& config, int plate_index, Vec3d& wt_pos, Vec3d& wt_size, int extruder_count, int plate_extruder_size, bool use_global_objects) const
 {
-	float x = dynamic_cast<const ConfigOptionFloats*>(config.option("wipe_tower_x"))->get_at(plate_index);
-	float y = dynamic_cast<const ConfigOptionFloats*>(config.option("wipe_tower_y"))->get_at(plate_index);
-	float w = dynamic_cast<const ConfigOptionFloat*>(config.option("prime_tower_width"))->value;
+	const auto *tower_x_opt = dynamic_cast<const ConfigOptionFloats*>(config.option("wipe_tower_x"));
+	const auto *tower_y_opt = dynamic_cast<const ConfigOptionFloats*>(config.option("wipe_tower_y"));
+	const auto *tower_width_opt = dynamic_cast<const ConfigOptionFloat*>(config.option("prime_tower_width"));
+	const auto *prime_volume_opt = dynamic_cast<const ConfigOptionFloat*>(config.option("prime_volume"));
+    const auto *tower_brim_opt = dynamic_cast<const ConfigOptionFloat*>(config.option("prime_tower_brim_width"));
+    const size_t position_index = plate_index >= 0 ? static_cast<size_t>(plate_index) : 0;
+	float x = tower_x_opt != nullptr && !tower_x_opt->values.empty() ? tower_x_opt->get_at(position_index) : 15.f;
+	float y = tower_y_opt != nullptr && !tower_y_opt->values.empty() ? tower_y_opt->get_at(position_index) : 220.f;
+	if (!std::isfinite(x)) x = 15.f;
+	if (!std::isfinite(y)) y = 220.f;
+	float w = tower_width_opt != nullptr && std::isfinite(tower_width_opt->value) && tower_width_opt->value > 0. ?
+                  tower_width_opt->value : 60.f;
 	//float a = dynamic_cast<const ConfigOptionFloat*>(config.option("wipe_tower_rotation_angle"))->value;
-	float v = dynamic_cast<const ConfigOptionFloat*>(config.option("prime_volume"))->value;
-    float tower_brim_width = dynamic_cast<const ConfigOptionFloat*>(config.option("prime_tower_brim_width"))->value;
+	float v = prime_volume_opt != nullptr && std::isfinite(prime_volume_opt->value) && prime_volume_opt->value > 0. ?
+                  prime_volume_opt->value : 45.f;
+    float tower_brim_width = tower_brim_opt != nullptr && std::isfinite(tower_brim_opt->value) ? tower_brim_opt->value : 3.f;
     const ConfigOptionBool * wrapping_opt = dynamic_cast<const ConfigOptionBool *>(config.option("enable_wrapping_detection"));
 	bool enable_wrapping = (wrapping_opt != nullptr) && wrapping_opt->value;
 	wt_size = estimate_wipe_tower_size(config, w, v, extruder_count, plate_extruder_size, use_global_objects, enable_wrapping);
 	int plate_width=m_width, plate_depth=m_depth;
 	float depth = wt_size(1);
-	float margin = WIPE_TOWER_MARGIN + tower_brim_width, wp_brim_width = 0.f;
+	float wp_brim_width = tower_brim_width;
 	const ConfigOption* wipe_tower_brim_width_opt = config.option("prime_tower_brim_width");
 	if (wipe_tower_brim_width_opt) {
 		wp_brim_width = wipe_tower_brim_width_opt->getFloat();
         if (wp_brim_width < 0) wp_brim_width = WipeTower::get_auto_brim_by_height((float) wt_size.z());
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format("arrange wipe_tower: wp_brim_width %1%") % wp_brim_width;
 	}
+	if (!std::isfinite(wp_brim_width) || wp_brim_width < 0.f)
+		wp_brim_width = 0.f;
 
-	x = std::clamp(x, margin, (float)plate_width - w - margin - wp_brim_width);
-    y = std::clamp(y, margin, (float)plate_depth - depth - margin - wp_brim_width);
+	const float min_x = WIPE_TOWER_MARGIN + wp_brim_width;
+	const float max_x = static_cast<float>(plate_width) - w - WIPE_TOWER_MARGIN - wp_brim_width;
+	const float min_y = WIPE_TOWER_MARGIN + wp_brim_width;
+	const float max_y = static_cast<float>(plate_depth) - depth - WIPE_TOWER_MARGIN - wp_brim_width;
+	x = max_x >= min_x ? std::clamp(x, min_x, max_x) : std::max(0.f, (static_cast<float>(plate_width) - w) / 2.f);
+    y = max_y >= min_y ? std::clamp(y, min_y, max_y) : std::max(0.f, (static_cast<float>(plate_depth) - depth) / 2.f);
     wt_pos(0) = x;
     wt_pos(1) = y;
     wt_pos(2) = 0.f;
@@ -5125,7 +5169,8 @@ int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_n
 			config.has("sparse_infill_density") && config.option<ConfigOptionPercent>("sparse_infill_density")->value == 0 &&
 			config.has("enable_support") && !config.opt_bool("enable_support") &&
 			config.has("enforce_support_layers") && config.opt_int("enforce_support_layers") == 0 &&
-			config.has("ensure_vertical_shell_thickness") && config.opt_bool("ensure_vertical_shell_thickness") &&
+			config.has("ensure_vertical_shell_thickness") &&
+			config.opt_enum<EnsureVerticalShellThickness>("ensure_vertical_shell_thickness") != evstNone &&
 			config.has("detect_thin_wall") && !config.opt_bool("detect_thin_wall") &&
 			config.has("timelapse_type") && config.opt_enum<TimelapseType>("timelapse_type") == TimelapseType::tlTraditional)
 			return true;

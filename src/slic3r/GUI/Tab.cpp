@@ -871,7 +871,8 @@ void Tab::parse_extruder_selection(int selection, int &extruder_id, NozzleVolume
     int current_index = 0;
 
     for (int i = 0; i < extruder_nums; ++i) {
-        NozzleVolumeType volume_type = NozzleVolumeType(nozzle_volumes->values[i]);
+        NozzleVolumeType volume_type = nozzle_volumes != nullptr && !nozzle_volumes->values.empty() ?
+            NozzleVolumeType(nozzle_volumes->get_at(i)) : NozzleVolumeType::nvtStandard;
 
         // TODO: Orca: Support hybrid
         //if (volume_type == NozzleVolumeType::nvtHybrid) {
@@ -907,9 +908,10 @@ int Tab::calculate_selection_index_for_extruder(int extruder_id, NozzleVolumeTyp
     int index = 0;
 
     for (int i = 0; i < extruder_nums; ++i) {
+        const NozzleVolumeType volume_type = nozzle_volumes != nullptr && !nozzle_volumes->values.empty() ?
+            NozzleVolumeType(nozzle_volumes->get_at(i)) : NozzleVolumeType::nvtStandard;
         if (i == extruder_id) {
             // TODO: Orca: Support hybrid
-            NozzleVolumeType volume_type = NozzleVolumeType(nozzle_volumes->values[i]);
             /*if (volume_type == NozzleVolumeType::nvtHybrid) {
                 return nozzle_type == NozzleVolumeType::nvtHighFlow ? index + 1 : index;
             } else*/ {
@@ -917,7 +919,6 @@ int Tab::calculate_selection_index_for_extruder(int extruder_id, NozzleVolumeTyp
             }
         }
 
-        NozzleVolumeType volume_type = NozzleVolumeType(nozzle_volumes->values[i]);
         index += /*(volume_type == NozzleVolumeType::nvtHybrid) ? 2 :*/ 1;
     }
 
@@ -2276,8 +2277,14 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
             if (dialog.ShowModal() == wxID_YES) {
                 auto &filament_presets = Slic3r::GUI::wxGetApp().preset_bundle->filament_presets;
                 auto &filaments        = Slic3r::GUI::wxGetApp().preset_bundle->filaments;
-                Slic3r::Preset *filament         = filaments.find_preset(filament_presets[interface_filament_id]);
-                std::string     filament_type    = filament->config.option<ConfigOptionStrings>("filament_type")->values[0];
+                std::string filament_type;
+                if (interface_filament_id >= 0 && static_cast<size_t>(interface_filament_id) < filament_presets.size()) {
+                    if (const Slic3r::Preset *filament = filaments.find_preset(filament_presets[interface_filament_id])) {
+                        if (const auto *types = filament->config.option<ConfigOptionStrings>("filament_type");
+                            types != nullptr && !types->values.empty())
+                            filament_type = types->values.front();
+                    }
+                }
 
                 new_conf.set_key_value("support_top_z_distance", new ConfigOptionFloat(0));
                 new_conf.set_key_value("support_interface_spacing", new ConfigOptionFloat(0));
@@ -3227,10 +3234,12 @@ void TabPrint::build()
         optgroup = page->new_optgroup(L("Advanced"), L"param_advanced");
         optgroup->append_single_option_line("support_top_z_distance", "support_settings_advanced#z-distance");
         optgroup->append_single_option_line("support_bottom_z_distance", "support_settings_advanced#z-distance");
+        optgroup->append_single_option_line("support_wall_count", "support_settings_advanced#support-wall-loops");
         optgroup->append_single_option_line("tree_support_wall_count", "support_settings_advanced#support-wall-loops");
         optgroup->append_single_option_line("support_base_pattern", "support_settings_advanced#base-pattern");
         optgroup->append_single_option_line("support_base_pattern_spacing", "support_settings_advanced#base-pattern-spacing");
         optgroup->append_single_option_line("cura_solid_support_raft", "support_settings_advanced#base-pattern-spacing");
+        optgroup->append_single_option_line("cura_support_join_distance", "support_settings_advanced#base-pattern-spacing");
         optgroup->append_single_option_line("support_angle", "support_settings_advanced#pattern-angle");
         optgroup->append_single_option_line("support_interface_top_layers", "support_settings_advanced#interface-layers");
         optgroup->append_single_option_line("support_interface_bottom_layers", "support_settings_advanced#interface-layers");
@@ -3337,18 +3346,6 @@ void TabPrint::build()
         optgroup->append_single_option_line("tree_support_angle_slow", "support_settings_tree#preferred-branch-angle");
         optgroup->append_single_option_line("tree_support_auto_brim", "support_settings_tree");
         optgroup->append_single_option_line("tree_support_brim_width", "support_settings_tree");
-
-        optgroup = page->new_optgroup(L("Tsunami supports"), L"param_support");
-        optgroup->append_single_option_line("tsunami_branch_angle");
-        optgroup->append_single_option_line("tsunami_micro_branch_enabled");
-        optgroup->append_single_option_line("tsunami_micro_branch_angle");
-        optgroup->append_single_option_line("tsunami_micro_branch_size");
-        optgroup->append_single_option_line("tsunami_trunk_height");
-        optgroup->append_single_option_line("tsunami_rib_spacing");
-        optgroup->append_single_option_line("tsunami_trunk_thickness");
-        optgroup->append_single_option_line("tsunami_min_bed_contact_area");
-        optgroup->append_single_option_line("tsunami_max_bed_contact_area");
-        optgroup->append_single_option_line("tsunami_branch_minimum_spacing");
 
     page = add_options_page(L("Multimaterial"), "custom-gcode_multi_material"); // ORCA: icon only visible on placeholders
         optgroup = page->new_optgroup(L("Prime tower"), L"param_tower");
@@ -3559,25 +3556,26 @@ void TabPrint::toggle_options()
 
     Field *field = m_active_page->get_field("support_style");
     auto   support_type = m_config->opt_enum<SupportType>("support_type");
-    if (!is_mixed(support_type)) {
-        if (auto choice = dynamic_cast<Choice*>(field)) {
-            auto def = print_config_def.get("support_style");
-            std::vector<int> enum_set_normal = {smsDefault, smsGrid, smsSnug };
-            std::vector<int> enum_set_tree   = { smsDefault, smsTreeSlim, smsTreeStrong, smsTreeHybrid, smsTreeOrganic };
-            auto &           set             = is_tree(support_type) ? enum_set_tree : enum_set_normal;
-            auto &           opt             = const_cast<ConfigOptionDef &>(field->m_opt);
-            auto             cb              = dynamic_cast<ComboBox *>(choice->window);
-            auto             n               = cb->GetValue();
-            opt.enum_values.clear();
-            opt.enum_labels.clear();
-            cb->Clear();
-            for (auto i : set) {
-                opt.enum_values.push_back(def->enum_values[i]);
-                opt.enum_labels.push_back(def->enum_labels[i]);
-                cb->Append(_(def->enum_labels[i]));
-            }
-            cb->SetValue(n);
+    if (auto choice = dynamic_cast<Choice*>(field)) {
+        auto def = print_config_def.get("support_style");
+        std::vector<int> enum_set_normal = {smsDefault, smsGrid, smsSnug };
+        std::vector<int> enum_set_tree   = { smsDefault, smsTreeSlim, smsTreeStrong, smsTreeHybrid, smsTreeOrganic };
+        // Mixed's tree style has its own setting. support_style controls only
+        // the normal channel, so entering Mixed must rebuild the normal list
+        // even when the previous support type was Tree.
+        auto &set = is_tree(support_type) && !is_mixed(support_type) ? enum_set_tree : enum_set_normal;
+        auto &opt = const_cast<ConfigOptionDef &>(field->m_opt);
+        auto  cb  = dynamic_cast<ComboBox *>(choice->window);
+        auto  n   = cb->GetValue();
+        opt.enum_values.clear();
+        opt.enum_labels.clear();
+        cb->Clear();
+        for (auto i : set) {
+            opt.enum_values.push_back(def->enum_values[i]);
+            opt.enum_labels.push_back(def->enum_labels[i]);
+            cb->Append(_(def->enum_labels[i]));
         }
+        cb->SetValue(n);
     }
 
     const auto optional_bool = [this](const char *key) {
@@ -4620,7 +4618,12 @@ void TabFilament::update_filament_overrides_page(const DynamicPrintConfig* print
             int machine_enabled_level = printers_config->option<ConfigOptionInt>(
                 "enable_long_retraction_when_cut")->value;
             bool machine_enabled = machine_enabled_level == LongRectrationLevel::EnableFilament;
-            bool filament_enabled = m_config->option<ConfigOptionBools>("filament_long_retractions_when_cut")->values[extruder_idx] == 1;
+            const auto *filament_long_retractions =
+                m_config->option<ConfigOptionBoolsNullable>("filament_long_retractions_when_cut");
+            const bool filament_enabled = filament_long_retractions != nullptr &&
+                size_t(extruder_idx) < filament_long_retractions->values.size() &&
+                !filament_long_retractions->is_nil(size_t(extruder_idx)) &&
+                filament_long_retractions->get_at(size_t(extruder_idx));
             toggle_line(opt_key, filament_enabled && machine_enabled, extruder_idx + 256);
             field->toggle(is_checked && filament_enabled && machine_enabled);
         } else {
@@ -7160,10 +7163,10 @@ bool Tab::select_preset(
                 { Preset::Type::TYPE_FILAMENT,      &m_preset_bundle->filaments,    ptFFF },
                 //{ Preset::Type::TYPE_SLA_MATERIAL,  &m_preset_bundle->sla_materials,ptSLA }
             };
-            Preset *to_be_selected = m_presets->find_preset(preset_name, false, true);
-            ConfigOptionStrings* cur_opt2 = dynamic_cast <ConfigOptionStrings *>(m_presets->get_edited_preset().config.option("printer_extruder_variant"));
-            ConfigOptionStrings* to_select_opt2 = dynamic_cast <ConfigOptionStrings *>(to_be_selected->config.option("printer_extruder_variant"));
-            bool no_transfer_variant = cur_opt2->values != to_select_opt2->values;
+            const auto *cur_opt2 = m_presets->get_edited_preset().config.option<ConfigOptionStrings>("printer_extruder_variant");
+            const auto *to_select_opt2 = new_printer_preset.config.option<ConfigOptionStrings>("printer_extruder_variant");
+            const bool no_transfer_variant = cur_opt2 == nullptr || to_select_opt2 == nullptr ||
+                                             cur_opt2->values != to_select_opt2->values;
             for (PresetUpdate &pu : updates) {
                 pu.old_preset_dirty = (old_printer_technology == pu.technology) && pu.presets->current_is_dirty();
                 pu.new_preset_compatible = (new_printer_technology == pu.technology) && is_compatible_with_printer(pu.presets->get_edited_preset_with_vendor_profile(), new_printer_preset_with_vendor_profile);
@@ -8194,10 +8197,11 @@ wxSizer* Tab::compatible_widget_create(wxWindow* parent, PresetDependencies &dep
 void TabPrinter::set_extruder_volume_type(int extruder_id, NozzleVolumeType type)
 {
     // -1 means single extruder, so we should default use extruder id 0
-    if (extruder_id == -1)
+    if (extruder_id < 0)
         extruder_id = 0;
-    auto nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
-    assert(nozzle_volumes->values.size() > (size_t)extruder_id);
+    auto nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type", true);
+    if (nozzle_volumes->values.size() <= static_cast<size_t>(extruder_id))
+        nozzle_volumes->values.resize(static_cast<size_t>(extruder_id) + 1, NozzleVolumeType::nvtStandard);
     nozzle_volumes->values[extruder_id] = type;
     on_value_change((boost::format("nozzle_volume_type#%1%") % extruder_id).str(), int(type));
 
@@ -8260,7 +8264,7 @@ void TabPrinter::cache_extruder_cnt(const DynamicPrintConfig* config/* = nullptr
 
     // get extruders count
     auto* nozzle_diameter = dynamic_cast<const ConfigOptionFloats*>(cached_config.option("nozzle_diameter"));
-    m_cache_extruder_count = nozzle_diameter->values.size(); //m_extruders_count;
+    m_cache_extruder_count = nozzle_diameter != nullptr ? nozzle_diameter->values.size() : 0; //m_extruders_count;
 }
 
 bool TabPrinter::apply_extruder_cnt_from_cache()
@@ -8425,9 +8429,9 @@ void Tab::update_extruder_variants(int extruder_id, bool reload)
 {
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << extruder_id;
     if (m_extruder_switch) {
-        auto    nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
+        auto    nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type", true);
         int extruder_nums = m_preset_bundle->get_printer_extruder_count();
-        nozzle_volumes->values.resize(extruder_nums);
+        nozzle_volumes->values.resize(extruder_nums, NozzleVolumeType::nvtStandard);
         if (extruder_nums == 2) {
             auto options = generate_extruder_options();
             m_extruder_switch->SetOptions(options);
@@ -8533,7 +8537,8 @@ std::vector<wxString> Tab::generate_extruder_options()
         int ext_id = (i == 0) ? DEPUTY_EXTRUDER_ID : MAIN_EXTRUDER_ID;
         wxString extruder_name = _L(DevPrinterConfigUtil::get_toolhead_display_name(
             pt, ext_id, ToolHeadComponent::Nozzle, ToolHeadNameCase::TitleCase, true));
-        NozzleVolumeType volume_type = NozzleVolumeType(nozzle_volumes->values[i]);
+        NozzleVolumeType volume_type = !nozzle_volumes->values.empty() ?
+            NozzleVolumeType(nozzle_volumes->get_at(i)) : NozzleVolumeType::nvtStandard;
         
         // TODO: Orca: Support hybrid
         /*if (volume_type == NozzleVolumeType::nvtHybrid) {
@@ -8552,10 +8557,10 @@ NozzleVolumeType Tab::get_actual_nozzle_volume_type(int extruder_id)
     int extruder_count = m_preset_bundle->get_printer_extruder_count();
     auto nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
     if (extruder_count == 1) {
-        if (extruder_id < 0)
+        if (extruder_id < 0 || nozzle_volumes == nullptr || nozzle_volumes->values.empty())
             return NozzleVolumeType::nvtStandard;
 
-        return NozzleVolumeType(nozzle_volumes->values[extruder_id]);
+        return NozzleVolumeType(nozzle_volumes->get_at(extruder_id));
     }
 
     if (extruder_id < 0 || extruder_id >= extruder_count)
@@ -8572,7 +8577,7 @@ bool Tab::get_extruder_sync_enable_state(int extruder_id)
     Preset& printer_preset = m_preset_bundle->printers.get_edited_preset();
     auto nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
     auto extruders = printer_preset.config.option<ConfigOptionEnumsGeneric>("extruder_type");
-    if (nozzle_volumes->values.size() < 2 || extruders->values.size() < 2) {
+    if (nozzle_volumes == nullptr || extruders == nullptr || nozzle_volumes->values.size() < 2 || extruders->values.size() < 2) {
         return false;
     }
 

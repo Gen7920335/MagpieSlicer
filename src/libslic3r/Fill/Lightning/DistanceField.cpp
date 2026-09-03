@@ -4,7 +4,7 @@
 #include "DistanceField.hpp" //Class we're implementing.
 #include "../FillRectilinear.hpp"
 #include "../../ClipperUtils.hpp"
-#include "../../Gpu/VulkanSlicer.hpp"
+#include "../../Gpu/SlicerCompute.hpp"
 
 #include <tbb/parallel_for.h>
 
@@ -105,13 +105,41 @@ DistanceField::DistanceField(const coord_t& radius, const Polygons& current_outl
                 { std::max<int64_t>(edge.a.x(), edge.b.x()), std::max<int64_t>(edge.a.y(), edge.b.y()) }
             });
         }
-        const Gpu::VulkanAabbBatch distance_candidates =
-            Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+        std::vector<double> cuda_distances;
+        if (Gpu::CudaSlicerBackend::operation_enabled("point_segment_distance") &&
+            Gpu::CudaSlicerBackend::should_dispatch(sampled_points.size()) && !boundary_edges.empty() &&
+            boundary_edges.size() <= 256 * 1024 && sampled_points.size() <= (64 * 1024 * 1024) / boundary_edges.size()) {
+#ifdef MAGPIE_SLICING_TIMING
+            ScopedSlicingProfileEvent reference_timing("cuda", "lightning_distance_reference", SlicingProfileBackend::CPU, sampled_points.size());
+#endif
+            // Validated mode retains the established CPU reference. Max GPU
+            // computes it only if CUDA rejects or cannot complete the batch.
+            if (!Gpu::CudaSlicerBackend::skips_cpu_validation()) {
+                cuda_distances.assign(sampled_points.size(), std::numeric_limits<double>::max());
+                tbb::parallel_for(tbb::blocked_range<size_t>(0, sampled_points.size()), [&](const auto& range) {
+                    for (size_t i = range.begin(); i < range.end(); ++i)
+                        for (const Line& edge : boundary_edges)
+                            cuda_distances[i] = std::min(cuda_distances[i], edge.distance_to_squared(sampled_points[i]));
+                });
+            }
+#ifdef MAGPIE_SLICING_TIMING
+            reference_timing.finish();
+#endif
+            std::vector<Gpu::Point> points;
+            std::vector<Gpu::Segment> edges;
+            points.reserve(sampled_points.size()); edges.reserve(boundary_edges.size());
+            for (const auto& p : sampled_points) points.push_back({p.x(),p.y()});
+            for (const auto& e : boundary_edges) edges.push_back({{e.a.x(),e.a.y()},{e.b.x(),e.b.y()}});
+            auto batch = Gpu::CudaSlicerBackend::dispatch_point_segment_distances(points, edges, cuda_distances);
+            if (batch.resolved) cuda_distances = std::move(batch.distances_squared);
+        }
+        const Gpu::VulkanAabbBatch distance_candidates = cuda_distances.empty() ?
+            Gpu::SlicerCompute::dispatch_indexed_aabb_candidates(
                 distance_queries, remaining_edge_bounds, std::max<coord_t>(1, m_cell_size * 4),
-                Gpu::VulkanAabbOperation::DistanceField);
+                Gpu::VulkanAabbOperation::DistanceField) : Gpu::VulkanAabbBatch{};
         const bool seeds_cover_all_edges = remaining_edge_bounds.empty() && !seed_indices.empty();
 
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, sampled_points.size()), [&self = *this, &sampled_points = std::as_const(sampled_points), &unsupported_points_prev_size = std::as_const(unsupported_points_prev_size), &boundary_edges = std::as_const(boundary_edges), &seed_distance2 = std::as_const(seed_distance2), &distance_candidates = std::as_const(distance_candidates), seeds_cover_all_edges](const tbb::blocked_range<size_t> &range) -> void {
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, sampled_points.size()), [&self = *this, &sampled_points = std::as_const(sampled_points), &unsupported_points_prev_size = std::as_const(unsupported_points_prev_size), &boundary_edges = std::as_const(boundary_edges), &seed_distance2 = std::as_const(seed_distance2), &distance_candidates = std::as_const(distance_candidates), &cuda_distances, seeds_cover_all_edges](const tbb::blocked_range<size_t> &range) -> void {
             for (size_t sp_idx = range.begin(); sp_idx < range.end(); ++sp_idx) {
                 const Point &sp = sampled_points[sp_idx];
                 const bool seed_is_final = seeds_cover_all_edges ||
@@ -119,7 +147,8 @@ DistanceField::DistanceField(const coord_t& radius, const Polygons& current_outl
                      distance_candidates.may_overlap.size() == sampled_points.size() &&
                      distance_candidates.may_overlap[sp_idx] == 0);
                 double d2 = seed_is_final ? seed_distance2[sp_idx] : std::numeric_limits<double>::max();
-                if (!seed_is_final) {
+                if (!cuda_distances.empty()) d2 = cuda_distances[sp_idx];
+                else if (!seed_is_final) {
                     for (const Line &edge : boundary_edges)
                         d2 = std::min(d2, edge.distance_to_squared(sp));
                 }

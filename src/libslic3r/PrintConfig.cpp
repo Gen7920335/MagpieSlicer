@@ -346,7 +346,6 @@ static t_config_enum_values s_keys_map_SupportType{
     { "normal(manual)", stNormal },
     { "normal_cura(manual)", stNormalCura },
     { "tree(manual)", stTree },
-    { "tsunami(auto)", stTsunamiAuto },
     { "mixed(auto)", stMixedAuto },
     { "resin(auto)", stResinAuto }
 };
@@ -813,7 +812,9 @@ void PrintConfigDef::init_common_params()
     def->tooltip  = L("Maximum printable height of this extruder which is limited by mechanism of printer.");
     def->sidetext = L("mm");	// millimeters, CIS languages need translation
     def->min      = 0;
-    def->max      = 1000;
+    // Keep this consistent with printable_height. Large-format profiles such as
+    // the SeeMeCNC BOSSdelta500 legitimately exceed one metre.
+    def->max      = 214700;
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloatsNullable{0});
 
@@ -3857,7 +3858,7 @@ void PrintConfigDef::init_fff_params()
     def->sidetext = L("mm");	// millimeters, CIS languages need translation
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0));
-    
+
     def = this->add("gap_infill_speed", coFloats);
     def->label = L("Gap infill");
     def->category = L("Speed");
@@ -5516,7 +5517,8 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Experimental feature: Retraction length before cutting off during filament change.");
     def->mode = comDevelop;
     def->min = 10;
-    def->max = 18;
+    // Bundled cutter profiles require up to 30 mm (Creality K2 / SPARKX).
+    def->max = 30;
     def->set_default_value(new ConfigOptionFloats {18});
 
     def = this->add("long_retractions_when_ec", coBools);
@@ -6357,7 +6359,7 @@ void PrintConfigDef::init_fff_params()
     def = this->add("support_type", coEnum);
     def->label = L("Type");
     def->category = L("Support");
-    def->tooltip = L("Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), Tsunami (auto), and Resin style (auto) are used to generate support automatically. "
+    def->tooltip = L("Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), and Resin style (auto) are used to generate support automatically. "
                      "If a manual style is selected, only support enforcers are generated. "
                      "Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. "
                      "Resin style (auto) uses the current PrusaSlicer resin point and tree strategies through the FFF support pipeline. "
@@ -6369,7 +6371,6 @@ void PrintConfigDef::init_fff_params()
     def->enum_values.push_back("normal(manual)");
     def->enum_values.push_back("normal_cura(manual)");
     def->enum_values.push_back("tree(manual)");
-    def->enum_values.push_back("tsunami(auto)");
     def->enum_values.push_back("mixed(auto)");
     def->enum_values.push_back("resin(auto)");
     def->enum_labels.push_back(L("Normal (Prusa style, auto)"));
@@ -6378,7 +6379,6 @@ void PrintConfigDef::init_fff_params()
     def->enum_labels.push_back(L("Normal (Prusa style, manual)"));
     def->enum_labels.push_back(L("Normal (Cura style, manual)"));
     def->enum_labels.push_back(L("Tree (manual)"));
-    def->enum_labels.push_back(L("Tsunami (auto)"));
     def->enum_labels.push_back(L("Mixed (auto)"));
     def->enum_labels.push_back(L("Resin style (auto)"));
     def->mode = comSimple;
@@ -6407,7 +6407,7 @@ void PrintConfigDef::init_fff_params()
     def = this->add("mixed_normal_coverage_threshold", coPercent);
     def->label = L("Normal support coverage threshold");
     def->category = L("Support");
-    def->tooltip = L("A connected support-demand region uses normal support when this percentage can be reached vertically from the build plate. Otherwise it uses tree support.");
+    def->tooltip = L("When Selective merge is disabled, a connected support-demand region uses normal support when this percentage can be reached vertically from the build plate. Otherwise the whole region uses tree support.");
     def->sidetext = L("%");
     def->min = 0;
     def->max = 100;
@@ -6417,7 +6417,7 @@ void PrintConfigDef::init_fff_params()
     def = this->add("mixed_selective_merge", coBool);
     def->label = L("Selective merge");
     def->category = L("Support");
-    def->tooltip = L("When a support-demand region is below the normal coverage threshold, use build-plate-origin normal support for its reachable portion and tree support for only the remaining portion. When disabled, the whole region uses tree support.");
+    def->tooltip = L("Use normal support first for every reachable part of a support-demand region, then use tree support only for the blocked residual. The normal support coverage threshold is ignored while this is enabled.");
     def->mode = comSimple;
     def->set_default_value(new ConfigOptionBool(false));
 
@@ -6635,6 +6635,16 @@ void PrintConfigDef::init_fff_params()
     def->max = 359;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0));
+
+    def = this->add("support_wall_count", coInt);
+    def->label = L("Normal support wall loops");
+    def->category = L("Support");
+    def->tooltip = L("Number of perimeter loops generated around normal Prusa or Cura support. "
+                     "0 disables support walls and leaves only the selected support pattern.");
+    def->min = 0;
+    def->max = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
 
     def = this->add("support_on_build_plate_only", coBool);
     def->label = L("On build plate only");
@@ -7001,6 +7011,18 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("cura_support_join_distance", coFloat);
+    def->label = L("Cura support join distance");
+    def->category = L("Support");
+    def->tooltip = L("Connect nearby Cura-style support regions whose gap is within this distance. "
+                     "The original support regions are preserved; only connecting material is added. "
+                     "0 disables joining.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 20;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(2.0));
+
     def = this->add("support_base_pattern_spacing", coFloat);
     def->label = L("Base pattern spacing");
     def->category = L("Support");
@@ -7095,121 +7117,6 @@ void PrintConfigDef::init_fff_params()
     def->max = 60;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(40.));
-
-    def = this->add("tsunami_branch_angle", coFloat);
-    def->label = L("Tsunami branch angle");
-    def->category = L("Support");
-    def->tooltip = L("Target angle from vertical. Lateral growth is applied only at the active U-turn frontier.");
-    def->sidetext = u8"°"; // degrees, don't need translation
-    def->min = 0;
-    def->max = 60;
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(40.));
-
-    def = this->add("tsunami_micro_branch_enabled", coBool);
-    def->label = L("Tsunami micro branch");
-    def->category = L("Support");
-    def->tooltip = L("Closes a completed Tsunami branch U-turn into a vertical terminal ring used as the base for a local tree support tip.");
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionBool(false));
-
-    def = this->add("tsunami_micro_branch_angle", coFloat);
-    def->label = L("Tsunami micro branch angle");
-    def->category = L("Support");
-    def->tooltip = L("Maximum angle from vertical used only by the local tree tips above a Tsunami terminal ring.");
-    def->sidetext = u8"°"; // degrees, don't need translation
-    def->min = 0;
-    def->max = 60;
-    def->mode = comAdvanced;
-    // Per-layer growth is the smaller of tan(angle) * layer_height and the
-    // printability cap extrusion_width * (1 - minimum_layer_support_ratio). Below
-    // the angle where those cross the angle is the binding constraint and buys no
-    // printability; above it nothing changes. For 0.2 mm layers at 0.42 mm width
-    // they cross near 46 deg, and a measured sweep on the hollow gear fixture gave
-    // identical geometry at 45 and 60 deg while 25 deg left 52.95 mm2 of overhang
-    // outside every micro tip's reach. Not calibrated against printed parts.
-    def->set_default_value(new ConfigOptionFloat(45.));
-
-    def = this->add("tsunami_micro_branch_size", coFloat);
-    def->label = L("Tsunami micro branch size");
-    def->category = L("Support");
-    def->tooltip = L("Nominal spacing of the local tree contact tips above a Tsunami terminal ring. Tip diameter is calculated automatically from this value and the extrusion width.");
-    def->sidetext = L("mm");
-    def->min = 0.8;
-    def->max = 10;
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(2.));
-
-    def = this->add("tsunami_trunk_height", coFloat);
-    def->label = L("Tsunami trunk height");
-    def->category = L("Support");
-    def->tooltip = L("Height printed with an unchanged XY toolpath before U-turn growth begins.");
-    def->sidetext = L("mm");
-    def->min = 0;
-    def->max = 100;
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(5.));
-
-    def = this->add("tsunami_rib_spacing", coFloat);
-    def->label = L("Tsunami rib spacing");
-    def->category = L("Support");
-    def->tooltip = L("Distance between immutable vertical straight ribs. This is the trunk's wave pitch "
-                     "along the model outline, and also the width of a branch module.");
-    def->sidetext = L("mm");
-    def->min = 0.4;
-    def->max = 20;
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(2.5));
-
-    def = this->add("tsunami_trunk_thickness", coFloat);
-    def->label = L("Tsunami trunk thickness");
-    def->category = L("Support");
-    def->tooltip = L("Total radial width of the trunk band measured across the model outline it follows, "
-                     "including the U-turns at both ends. Together with the rib spacing this determines "
-                     "the straight rib depth, which is not set directly.");
-    def->sidetext = L("mm");
-    def->min = 0.8;
-    def->max = 50;
-    def->mode = comAdvanced;
-    // Keeps a typical trunk's first-layer footprint inside the default maximum
-    // bed contact area, and leaves roughly 2.75 mm of straight rib at the default
-    // rib spacing. The width actually needed for anchoring and overturning
-    // resistance has NOT been measured. Treat as uncalibrated.
-    def->set_default_value(new ConfigOptionFloat(4.));
-
-    def = this->add("tsunami_min_bed_contact_area", coFloat);
-    def->label = L("Minimum Tsunami bed contact area");
-    def->category = L("Support");
-    def->tooltip = L("Rejects Tsunami root candidates whose estimated first-layer extrusion area is smaller than this value.");
-    def->sidetext = L("mm²");
-    def->min = 0;
-    def->max = 1000;
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(1.));
-
-    def = this->add("tsunami_max_bed_contact_area", coFloat);
-    def->label = L("Maximum Tsunami bed contact area");
-    def->category = L("Support");
-    def->tooltip = L("Limits the estimated first-layer extrusion area used by a Tsunami root.");
-    def->sidetext = L("mm²");
-    def->min = 0;
-    def->max = 10000;
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(100.));
-
-    def = this->add("tsunami_branch_minimum_spacing", coFloat);
-    def->label = L("Tsunami branch minimum spacing");
-    def->category = L("Support");
-    def->tooltip = L("Minimum clear XY distance between the actual extrusion exteriors of non-connected Tsunami branches, "
-                     "not their centerlines. Applies to straight ribs, U-turns, inter-branch connectors, terminal rings, "
-                     "and planned future growth on every layer where their swept footprints coexist. "
-                     "Branches closer than this may fuse together or become difficult to remove.");
-    def->sidetext = L("mm");
-    def->min = 0;
-    def->max = 5;
-    def->mode = comAdvanced;
-    //Same removability rationale as support_object_xy_distance: spacing too small lets branches touch/fuse and become hard to remove.
-    def->set_default_value(new ConfigOptionFloat(0.35));
 
     def = this->add("tree_support_branch_angle_organic", coFloat);
     def->label = L("Tree support branch angle");
@@ -7327,7 +7234,7 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionFloat(2.));
 
     def = this->add("tree_support_wall_count", coInt);
-    def->label = L("Support wall loops");
+    def->label = L("Tree support wall loops");
     def->category = L("Support");
     def->tooltip = L("Number of perimeter loops generated around tree support branches. 0 means auto. "
                      "If a branch is too narrow, only the loops that fit will be generated.");
@@ -8795,7 +8702,11 @@ void PrintConfigDef::init_sla_params()
 void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &value)
 {
     //BBS: handle legacy options
-    if (opt_key == "curr_bed_type" && value == "SuperTack Plate") {
+    if (opt_key == "support_type" && value == "tsunami(auto)") {
+        value = "normal(auto)";
+    } else if (opt_key.rfind("tsunami_", 0) == 0) {
+        opt_key.clear();
+    } else if (opt_key == "curr_bed_type" && value == "SuperTack Plate") {
         value = "Supertack Plate";
     } else if (opt_key == "enable_wipe_tower") {
         opt_key = "enable_prime_tower";
@@ -8845,6 +8756,10 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
         opt_key = "support_interface_filament";
     } else if (opt_key == "support_material_angle") {
         opt_key = "support_angle";
+    } else if (opt_key == "support_wall_loops") {
+        // This retired Magpie key belonged to Tree support.  Keep old projects
+        // on the same channel instead of silently turning on normal walls.
+        opt_key = "tree_support_wall_count";
     } else if (opt_key == "support_material_enforce_layers") {
         opt_key = "enforce_support_layers";
     } else if ((opt_key == "initial_layer_print_height"   ||

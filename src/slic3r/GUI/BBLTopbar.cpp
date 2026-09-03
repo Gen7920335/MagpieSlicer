@@ -15,6 +15,7 @@
 #include "WebViewDialog.hpp"
 #include "PartPlate.hpp"
 #include "libslic3r/Gpu/VulkanSlicer.hpp"
+#include "libslic3r/Gpu/CudaSlicer.hpp"
 
 #include <boost/log/trivial.hpp>
 
@@ -41,6 +42,7 @@ enum CUSTOM_ID
     ID_PUBLISH,
     ID_CALIB,
     ID_VULKAN_MODE,
+    ID_CUDA_MODE,
     ID_TOOL_BAR = 3200,
     ID_AMS_NOTEBOOK,
 };
@@ -330,13 +332,21 @@ void BBLTopbar::Init(wxFrame* parent)
         m_vulkan_mode_choice->Append(_L("Vulkan: Max GPU"));
         m_vulkan_mode_choice->Append(_L("Vulkan: Off"));
         m_vulkan_mode_choice->SetSelection(mode == "on" ? 1 : (mode == "max" ? 2 : (mode == "off" ? 3 : 0)));
-        m_vulkan_mode_choice->SetToolTip(_L("Select calibrated, preferred, maximum, or disabled Vulkan slicing"));
+        m_vulkan_mode_choice->SetToolTip(_L("Select calibrated, preferred, maximum, or disabled Vulkan slicing. Selecting Vulkan turns CUDA off. Changes apply to the next slice."));
         m_vulkan_mode_choice->SetMinSize(FromDIP(wxSize(132, -1)));
         this->AddControl(m_vulkan_mode_choice, _L("Vulkan slicing mode"));
-        Gpu::VulkanSlicerBackend::set_compute_enabled(mode != "off");
-        Gpu::VulkanSlicerBackend::set_compute_mode(
-            mode == "max" ? Gpu::VulkanSlicerComputeMode::Maximum :
-            (mode == "on" ? Gpu::VulkanSlicerComputeMode::Priority : Gpu::VulkanSlicerComputeMode::Balanced));
+
+    }
+
+    if (Gpu::CudaSlicerBackend::compiled_with_cuda()) {
+        this->AddSpacer(FromDIP(6));
+        m_cuda_mode_choice = new wxChoice(this, ID_CUDA_MODE);
+        m_cuda_mode_choice->Append(_L("CUDA: Off"));
+        m_cuda_mode_choice->Append(_L("CUDA: On"));
+        m_cuda_mode_choice->SetSelection(wxGetApp().app_config->get("cuda_slicer_mode") == "on" ? 1 : 0);
+        m_cuda_mode_choice->SetToolTip(_L("Use CUDA for supported workloads with full CPU result validation. Selecting CUDA turns Vulkan off. Changes apply to the next slice."));
+        m_cuda_mode_choice->SetMinSize(FromDIP(wxSize(115, -1)));
+        this->AddControl(m_cuda_mode_choice, _L("CUDA slicing acceleration"));
     }
 
     this->AddSpacer(FromDIP(25));
@@ -418,17 +428,23 @@ void BBLTopbar::Init(wxFrame* parent)
             static const std::array<const char*, 4> modes { "auto", "on", "max", "off" };
             const int selection = std::clamp(event.GetSelection(), 0, 3);
             const std::string mode = modes[size_t(selection)];
-            wxGetApp().app_config->set("vulkan_slicer_mode", mode);
-            Gpu::VulkanSlicerBackend::set_compute_enabled(mode != "off");
-            Gpu::VulkanSlicerBackend::set_compute_mode(
-                mode == "max" ? Gpu::VulkanSlicerComputeMode::Maximum :
-                (mode == "on" ? Gpu::VulkanSlicerComputeMode::Priority : Gpu::VulkanSlicerComputeMode::Balanced));
+            wxGetApp().app_config->set_slicing_acceleration_mode("vulkan_slicer_mode", mode);
         });
         m_vulkan_mode_choice->Bind(wxEVT_UPDATE_UI, [this](wxUpdateUIEvent&) {
             const std::string mode = wxGetApp().app_config->get("vulkan_slicer_mode");
             const int selection = mode == "on" ? 1 : (mode == "max" ? 2 : (mode == "off" ? 3 : 0));
             if (m_vulkan_mode_choice->GetSelection() != selection)
                 m_vulkan_mode_choice->SetSelection(selection);
+        });
+    }
+    if (m_cuda_mode_choice) {
+        m_cuda_mode_choice->Bind(wxEVT_CHOICE, [](wxCommandEvent& event) {
+            wxGetApp().app_config->set_slicing_acceleration_mode("cuda_slicer_mode", event.GetSelection() == 1 ? "on" : "off");
+        });
+        m_cuda_mode_choice->Bind(wxEVT_UPDATE_UI, [this](wxUpdateUIEvent&) {
+            const int selection = wxGetApp().app_config->get("cuda_slicer_mode") == "on" ? 1 : 0;
+            if (m_cuda_mode_choice->GetSelection() != selection)
+                m_cuda_mode_choice->SetSelection(selection);
         });
     }
     //this->Bind(wxEVT_AUITOOLBAR_TOOL_DROPDOWN, &BBLTopbar::OnModelStoreClicked, this, ID_MODEL_STORE);

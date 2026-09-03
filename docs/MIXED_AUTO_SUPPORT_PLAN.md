@@ -1,15 +1,15 @@
 # Mixed (Auto) Support Implementation Plan
 
-Status: implementation and targeted runtime verification complete; installer/release work not performed
+Status: implementation and targeted runtime verification complete; original feature shipped in 2.5.0.0.3; latest stabilization is in the local, unpublished 2.5.0.0.8 installer. The final-candidate full Bunny/60-degree matrix remains unverified; see [current evidence boundaries](MAGPIE_STATE_AND_BACKUP_2026-08-31.md).
 
-Target branch: `release/2.5.0.0.3`
+Current branch: `release/2.5.0.0.7`
 
 ## 0. 승인용 요약
 
-- 구현을 시작했으며 설정/UI, 공통 수요 planner, 필터된 생성기, 혼합 레이어 병합 및 focused test 코드까지 반영했다. 빌드·런타임 검증은 아직 실행하지 않았다.
+- 설정/UI, 공통 수요 planner, 필터된 생성기, 혼합 레이어 병합, 페인팅과 focused test까지 구현했다. 현재 island 판정과 성능 안정화도 빌드·실슬라이싱으로 검증했다.
 - Mixed raft는 일반 채널의 raft path를 기준으로 삼고, 트리 채널 path에서 기준 path의 실제 압출 폭과 겹치는 구간을 잘라낸 뒤 잔여 path만 합친다. 따라서 부분 겹침에서도 어느 한 footprint를 버리지 않으며 동일 위치 중복 압출을 만들지 않는다.
 - 기존 `Tree Hybrid`는 트리 엔진 안에서 큰 평면 아래에 일반형 노드를 섞는 스타일일 뿐, Prusa/Cura 일반 서포트와 트리 서포트를 함께 사용하는 기능이 아니다.
-- 새 `Mixed (Auto)`는 서포트 필요 영역을 3차원 연결 덩어리 단위로 나눈 뒤 기본적으로 각 덩어리 전체를 일반 또는 트리 중 하나에만 배정한다.
+- 새 `Mixed (Auto)`는 선택한 오르카 기본 검출기가 만든 레이어별 서포트 섬을 그대로 판정 단위로 사용하고, 각 섬을 일반 또는 트리 중 하나에 배정한다. 인접 레이어를 다시 연결해 별도 3차원 덩어리를 만들지 않는다.
 - `Selective merge`를 켜면 역치 미만인 덩어리 내부를 다시 공간 분할하여, 베드에서 수직 도달 가능한 부분은 일반으로 만들고 막힌 잔여 부분만 트리로 만든다. 기본값은 OFF다.
 - 일반 커버율은 `베드에서 수직으로 올라올 때 하부 출력물에 막히지 않는 면적 / 해당 덩어리 전체 면적 * 100`으로 한 번만 계산한다.
 - 커버율이 역치와 같거나 크면 일반, 작으면 트리로 배정한다. 따라서 역치 80%에서 정확히 20%가 막힌 덩어리는 일반 서포트가 된다.
@@ -17,7 +17,7 @@ Target branch: `release/2.5.0.0.3`
 - 예전 프로젝트의 `hybrid(auto)`는 이미 `tree(auto) + tree_hybrid` 호환값이므로 새 모드는 내부적으로 `mixed(auto)`를 사용한다.
 - 두 엔진의 완성된 G-code를 단순 중첩하지 않는다. 공통 판정 계획으로 입력 영역을 분리하고, 같은 Z의 서포트 레이어를 명시적인 혼합 상태로 안전하게 합친다.
 - 1차 레이어, 브림, 리트랙션, 미리보기, 캐시, 이종 서포트/인터페이스 재질까지 혼합 레이어 소비자를 전부 점검한다.
-- 구현과 빌드·테스트는 사용자의 완료 지시에 따라 수행했다. 설치파일 생성과 푸시는 이 작업 범위에 포함하지 않았다.
+- 최초 Mixed 기능은 2.5.0.0.3 설치파일에 포함됐다. 현재 작업 트리의 vanilla island 판정, GUI 복구와 Tree 성능 안정화는 2026-08-28 로컬 2.5.0.0.8 설치 후보에 포함했다. 푸시하지 않았으며, 수정 후 28종 overhang smoke를 전체 Bunny 60도 검증으로 간주하지 않는다.
 
 ## 1. Goal
 
@@ -46,8 +46,8 @@ When `Support type = Mixed (Auto)` is selected, show these two additional dropdo
    - proposed default: 100%
 4. `Selective merge`
    - default: off
-   - off: a below-threshold connected component goes entirely to tree support;
-   - on: a below-threshold component is split spatially, with its vertically reachable portion assigned to normal support and its remaining portion assigned to tree support.
+   - off: a below-threshold vanilla support island goes entirely to tree support;
+   - on: a below-threshold island is split spatially, with its vertically reachable portion assigned to normal support and its remaining portion assigned to tree support.
 
 The normal-generator dropdown selects the actual normal geometry engine, not merely an infill pattern. Existing common support settings such as filament, interface, spacing, and base pattern continue to apply. The generic `support_style` control is hidden while Mixed (Auto) is active because the mixed-mode tree style has its own unambiguous selector and the normal channel uses the selected engine's default style behavior.
 
@@ -69,16 +69,16 @@ Detect automatic support-demand polygons once with the selected normal generator
 
 All polygon operations remain in Orca's scaled integer coordinate system.
 
-### 3.2 Connected region
+### 3.2 Vanilla support island
 
-A region is a 3D connected component of support-demand polygons:
+A region is one normalized `ExPolygon` island from the selected normal generator's per-layer support-demand output:
 
-- polygons on the same layer are connected when their dilated shapes overlap;
-- polygons on adjacent layers are connected when their dilated shapes overlap;
-- the initial dilation distance is one effective support extrusion width;
-- polygons separated by more than one layer are not joined merely because their XY projections overlap.
+- Prusa uses the islands emitted by the regular `top_contact_layers()` / `overhang_polygons` path;
+- Cura uses the islands emitted by `CuraSupportDemand::combined()`;
+- `union_ex()` normalizes overlaps on each layer and preserves distinct islands;
+- Mixed does not reconnect islands on adjacent layers.
 
-The existing `OverhangCluster` implementations in `SupportMaterial.cpp` and `TreeSupport.cpp` are reference behavior only. They insert into the first matching cluster and do not merge two existing clusters bridged by a later polygon, so the Mixed planner must use a deterministic union-find implementation instead of copying either implementation.
+The earlier 3D union-find design was rejected after reproducing an all-tree Stanford Bunny result at 50%. A narrow demand polygon on a later layer could bridge two otherwise independent lower-layer regions, recursively collapsing much of the model into one decision. It also duplicated connectivity work already owned by the vanilla Prusa/Cura detectors. Per-layer vanilla islands match the user-visible support-region meaning and prevent that cross-layer amplification.
 
 ### 3.3 Build-plate reachability
 
@@ -89,7 +89,7 @@ For demand polygon `D` on object layer `L`:
 - `reachable_area` is the area of `reachable(D, L)`;
 - `demand_area` is the area of `D`.
 
-For a connected component `C`:
+For a vanilla support island `C`:
 
 ```text
 coverage(C) = 100 * sum(reachable_area) / sum(demand_area)
@@ -98,18 +98,18 @@ coverage(C) = 100 * sum(reachable_area) / sum(demand_area)
 Classification is inclusive:
 
 ```text
-coverage(C) >= threshold  -> entire component goes to normal support
-coverage(C) <  threshold  -> entire component goes to tree support
+coverage(C) >= threshold  -> entire island goes to normal support
+coverage(C) <  threshold  -> entire island goes to tree support
 ```
 
 With `Selective merge = on`, the inclusive threshold decision remains the first gate:
 
 ```text
-coverage(C) >= threshold -> entire component goes to normal support
+coverage(C) >= threshold -> entire island goes to normal support
 coverage(C) <  threshold -> normal = reachable(C), tree = demand(C) - reachable(C)
 ```
 
-This preserves the established threshold meaning. At threshold 80%, a component with exactly 80% reachable area still goes entirely to normal support. A component with 79% reachable area is split only when Selective merge is enabled; when disabled, it goes entirely to tree support. Threshold 0% therefore always produces normal support and never invokes spatial splitting.
+This preserves the established threshold meaning. At threshold 80%, an island with exactly 80% reachable area still goes entirely to normal support. An island with 79% reachable area is split only when Selective merge is enabled; when disabled, it goes entirely to tree support. Threshold 0% therefore always produces normal support and never invokes spatial splitting.
 
 The split masks must be an exact partition of canonical demand after polygon normalization:
 
@@ -122,9 +122,9 @@ Any physical transition allowance belongs to downstream support-body/toolpath ge
 
 Examples:
 
-- threshold 80%, 20% blocked: coverage is 80%, so the entire component uses normal support;
-- threshold 100%: only completely vertically reachable components use normal support;
-- threshold 0%: every non-empty component uses normal support.
+- threshold 80%, 20% blocked: coverage is 80%, so the entire island uses normal support;
+- threshold 100%: only completely vertically reachable islands use normal support;
+- threshold 0%: every non-empty island uses normal support.
 
 The cumulative lower-model shadow used here must be the same function used to restrict the normal channel to build-plate-origin support. One geometric quantity must have one owner and one implementation.
 
@@ -142,18 +142,18 @@ Keep polygon coordinates scaled and accumulate the existing `double` polygon-are
 - Both normal and classic tree code contain an `OverhangCluster` implementation that groups neighboring overhangs across layers.
 - Orca already has three separate dispatch paths: Prusa normal, Cura normal, and tree.
 
-What Orca does not have is a planner that assigns one connected demand component to one of two generators and safely merges both generators' layer output.
+What Orca does not have is a planner that assigns one detected support island to one of two generators and safely merges both generators' layer output.
 
 ### 4.2 Official upstream findings
 
 - Bambu Studio describes existing Tree Hybrid as tree support with normal nodes under large flat overhangs, not as two selectable generators: https://github.com/bambulab/BambuStudio/issues/2669
 - Orca users have separately requested simultaneous tree and normal support; the documented response points to Tree Hybrid but notes that it provides no such control: https://github.com/OrcaSlicer/OrcaSlicer/discussions/8076
 - Bambu's source explicitly states that Tree Hybrid contains normal nodes: https://github.com/bambulab/BambuStudio/blob/master/src/libslic3r/Support/TreeSupport.cpp
-- CuraEngine's normal support pipeline detects overhangs and propagates support areas downward, which is conceptually reusable but does not provide the requested per-component percentage classifier: https://github.com/Ultimaker/CuraEngine/blob/main/src/support.cpp
+- CuraEngine's normal support pipeline detects overhangs and propagates support areas downward, which is conceptually reusable but does not provide the requested per-island percentage classifier: https://github.com/Ultimaker/CuraEngine/blob/main/src/support.cpp
 - Cura's tree implementation provides the collision/influence-area machinery already ported into Orca: https://github.com/Ultimaker/CuraEngine/blob/main/src/TreeSupport.cpp
 - A reported accidental simultaneous normal/tree result in Bambu demonstrates why independently generated toolpaths must not simply be overlaid: https://github.com/bambulab/BambuStudio/issues/9265
 
-Conclusion: reuse Orca's engines and geometry primitives, but implement the component planner and mixed-output contract locally. There is no official upstream implementation matching the requested threshold semantics that can be cleanly imported.
+Conclusion: reuse Orca's engines, their detected per-layer support islands, and geometry primitives; implement only the threshold assignment and mixed-output contract locally. There is no official upstream implementation matching the requested threshold semantics that can be cleanly imported.
 
 ## 5. Architecture decision
 
@@ -161,7 +161,7 @@ Conclusion: reuse Orca's engines and geometry primitives, but implement the comp
 
 Advantages: smallest code change; already mixes circular and polygonal nodes.
 
-Rejected because it cannot select the real Prusa or Cura normal generator and does not implement percentage-based component ownership.
+Rejected because it cannot select the real Prusa or Cura normal generator and does not implement percentage-based island ownership.
 
 ### Alternative B: run both full generators and concatenate their final toolpaths
 
@@ -173,7 +173,7 @@ Rejected because both engines currently assume exclusive ownership of `PrintObje
 
 Selected approach:
 
-1. Create an immutable `MixedSupportPlan` containing per-layer normal-demand and tree-demand masks plus component classification metadata. Selective merge may give both masks geometry from one below-threshold component, but every point still has exactly one owner.
+1. Create an immutable `MixedSupportPlan` containing per-layer normal-demand and tree-demand masks plus vanilla-island classification metadata. Selective merge may give both masks geometry from one below-threshold island, but every point still has exactly one owner.
 2. Let the selected normal generator consume only the normal mask.
 3. Let the selected tree generator consume only the tree mask.
 4. Preserve each generator's geometry and path behavior below its assigned contacts.
@@ -207,7 +207,7 @@ Work:
 
 Gate: old profiles load identically and feature-off behavior is byte-for-byte configuration-compatible.
 
-### Stage 2: shared demand clustering and coverage planner
+### Stage 2: shared vanilla-island coverage planner
 
 New focused files are preferred, for example:
 
@@ -216,11 +216,11 @@ New focused files are preferred, for example:
 
 Work:
 
-- replace the order-dependent existing clustering behavior with a deterministic union-find planner;
+- consume the selected Prusa/Cura detector's normalized per-layer islands without reconnecting adjacent layers;
 - expose one cumulative build-plate-shadow function;
 - build normal/tree demand masks from the exact formula in section 3;
-- when selective merge is enabled, spatially partition only below-threshold components into reachable normal and unreachable tree masks;
-- log component ID, demand area, reachable area, coverage, threshold, and assignment at debug level;
+- when selective merge is enabled, spatially partition only below-threshold islands into reachable normal and unreachable tree masks;
+- log island ID, demand area, reachable area, coverage, threshold, and assignment at debug level;
 - make the plan immutable after construction.
 
 Gate: pure geometry tests pass for disconnected, adjacent-layer, undercut, 0%, exact-boundary, and 100% cases.
@@ -286,7 +286,7 @@ Automated matrix:
 - normal generator: Prusa, Cura;
 - tree style: Organic, Slim, Strong, Hybrid;
 - threshold: 0, 80, 100, and boundary epsilon cases;
-- region geometry: fully reachable, partially blocked, fully blocked, multiple disconnected components, adjacent-layer component, same-XY non-adjacent components;
+- region geometry: fully reachable, partially blocked, fully blocked, multiple disconnected islands, adjacent-layer bridging regression, and same-XY islands on different layers;
 - annotations: blocker, enforcer, painted support;
 - `On build plate only`: off and on;
 - raft: off and on;
@@ -315,7 +315,7 @@ Build, test execution, installer creation, release commit, and push are outside 
 - **Single support type per layer:** replace binary assumptions with an explicit mixed state and audit every consumer.
 - **Raft ownership:** use one shared raft owner; do not let both channels generate duplicate rafts.
 - **Cancellation and cache state:** ensure both channel runs use the existing cancellation callback and clear only their own temporary state.
-- **Performance:** cache cumulative shadows, cluster bounds, and per-layer masks; do not recompute polygon unions inside each component comparison.
+- **Performance:** cache cumulative shadows and per-layer masks; do not recompute polygon unions inside each island comparison.
 
 ## 8. Approval decisions before coding
 
@@ -325,7 +325,7 @@ The implementation can proceed with the proposed defaults unless changed:
 2. normal choices: Prusa and Cura only;
 3. tree choices: Organic, Slim, Strong, and Tree Hybrid;
 4. comparison at the threshold is inclusive (`>=` means normal);
-5. classification unit is one 3D connected demand component;
+5. classification unit is one normalized vanilla support island on one layer;
 6. new serialized support type is `mixed(auto)`;
 7. in Mixed (Auto), the normal channel is always evaluated and generated as vertical build-plate-origin support; the existing `On build plate only` option additionally controls whether tree branches may terminate on the model.
 
@@ -466,18 +466,16 @@ struct MixedSupportPlan {
 - 트리 생성기는 독자 오버행 검출을 다시 하지 않고 `tree_mask`만 소비한다.
 - 자동 수요와 강제 수요는 마스크 안에서도 구분해 각 엔진의 enforcer 전파 규칙을 보존한다.
 
-### 10.4 연결요소 알고리즘
+### 10.4 기본 서포트 섬 보존 알고리즘
 
-기존 첫 일치 클러스터 삽입 대신 다음 결정적 알고리즘을 사용한다.
+선택한 기본 검출기가 레이어별로 반환한 수요를 다음처럼 직접 사용한다.
 
-1. 모든 수요 폴리곤에 안정적인 ID를 `layer, bbox min, bbox max, 원래 순번` 순으로 부여한다.
-2. 유효 서포트 extrusion width만큼 한 번 dilate하고 bbox를 저장한다.
-3. 레이어별 R-tree를 만들어 같은 레이어와 바로 인접한 레이어의 bbox 후보만 조회한다.
-4. bbox 후보끼리 실제 폴리곤 overlap을 검사한다.
-5. 겹치면 disjoint-set union으로 묶는다.
-6. union 결과 root를 안정 정렬해 component ID를 확정한다.
+1. 각 레이어 수요에 `union_ex()`를 적용해 겹침을 정규화한다.
+2. 반환된 각 `ExPolygon`을 독립적인 Mixed 판정 섬으로 둔다.
+3. 결정적 로그와 테스트를 위해 `layer, bbox min, bbox max, vertex count, points` 순으로 안정 정렬한다.
+4. 인접 레이어의 폴리곤과 별도 overlap 검사를 하지 않으며 R-tree/DSU 연결 단계를 두지 않는다.
 
-이 방식은 뒤에 들어온 폴리곤이 두 기존 덩어리를 잇는 경우도 올바르게 합치며, 전수 비교를 피한다.
+이 방식은 Prusa/Cura 기본 검출기의 영역 소유권을 보존한다. 이후 레이어의 가느다란 수요가 앞선 레이어의 독립 영역을 재귀적으로 합쳐 전체 모델을 한 채널로 보내는 회귀를 방지한다.
 
 ### 10.5 커버율 계산
 
@@ -496,11 +494,11 @@ shadow[L] = union(shadow[L-1], offset(object_slice[L-1], 0.01 mm))
 reachable_area * 100 >= threshold * demand_area
 ```
 
-면적은 scaled-coordinate polygon의 기존 `double` 결과를 `long double`에 누적한다. 절대 epsilon이 아니라 component 면적에 비례한 상대 허용오차를 마지막 비교 한 곳에서만 적용한다.
+면적은 scaled-coordinate polygon의 기존 `double` 결과를 `long double`에 누적한다. 절대 epsilon이 아니라 섬 면적에 비례한 상대 허용오차를 마지막 비교 한 곳에서만 적용한다.
 
 빠른 경로:
 
-- threshold 0: 모든 component를 일반으로 배정하고 shadow difference를 생략;
+- threshold 0: 모든 섬을 일반으로 배정하고 shadow difference를 생략;
 - 빈 수요: 두 생성기를 모두 생략;
 - 한 채널 mask가 비면 해당 생성기 전체를 생략.
 
@@ -548,7 +546,7 @@ void clear_support_detection_state();
 - Organic은 sparse normal line을 hard obstacle로 주입하면 influence-area solver가 전체 가지를 잃는 경우가 있어 obstacle 주입을 하지 않는다. 대신 같은 Z 병합에서 normal envelope 바깥의 tree centerline만 보존한다.
 - Classic은 `TreeSupportData`에 별도 extra-obstacle 필드를 추가하고 collision/avoidance cache key 계산에 포함한다.
 - 같은 Z에서 normal이 물리적 겹침의 소유자이며, tree path는 `normal envelope + tree path 반폭`으로 clip되어 중복 압출 없이 맞닿는다.
-- obstacle로 인해 tree component 전체가 경로를 잃으면 조용히 누락하지 않고 진단 오류를 기록한다. 1차 정책은 해당 component를 normal로 재배정하지 않고 실패로 보고한다. 자동 재배정은 커버 역치 의미를 깨므로 별도 기능으로 미룬다.
+- obstacle로 인해 tree 섬 전체가 경로를 잃으면 조용히 누락하지 않고 진단 오류를 기록한다. 1차 정책은 해당 섬을 normal로 재배정하지 않고 실패로 보고한다. 자동 재배정은 커버 역치 의미를 깨므로 별도 기능으로 미룬다.
 
 ### 10.8 단일 raft 계약
 
@@ -603,10 +601,10 @@ void clear_support_detection_state();
 
 ### Patch 3: planner와 순수 기하 테스트
 
-- buildplate shadow, R-tree 후보 탐색, DSU, coverage 계산;
+- buildplate shadow와 vanilla 레이어별 support island coverage 계산;
 - 0/80/100 및 epsilon 경계 테스트;
-- 두 클러스터를 뒤늦게 잇는 bridge polygon 회귀 테스트;
-- 입력 순서를 섞어도 component와 배정 결과가 같은지 테스트.
+- 인접 레이어의 bridge polygon이 독립 island를 하나로 합치지 않는 회귀 테스트;
+- 입력 순서를 섞어도 island와 배정 결과가 같은지 테스트.
 
 중단 조건: 순서 독립성 또는 exact-threshold 테스트 실패.
 
@@ -662,7 +660,7 @@ void clear_support_detection_state();
 
 ## 12. 구현 중 반드시 지킬 불변식
 
-1. Selective merge OFF에서는 한 수요 component가 normal과 tree에 동시에 들어가지 않는다. ON에서는 한 component가 공간 분할될 수 있지만 한 XY 점의 소유자는 항상 하나뿐이다.
+1. Selective merge OFF에서는 한 수요 island가 normal과 tree에 동시에 들어가지 않는다. ON에서는 한 island가 공간 분할될 수 있지만 한 XY 점의 소유자는 항상 하나뿐이다.
 2. 수요 판정은 한 번만 하며 두 엔진이 다시 판정하지 않는다.
 3. 누적 하부 그림자 계산 함수는 하나만 존재한다.
 4. 저장된 객체 config는 generation 도중 불변이다.
@@ -681,11 +679,11 @@ void clear_support_detection_state();
 - 실행 중 `PrintObjectConfig::support_type`이나 `support_style`을 임시 변경하지 않는다.
 - 두 생성기를 같은 `support_layers()`에 바로 실행하지 않는다.
 - 완성된 G-code나 extrusion path를 충돌 검사 없이 이어 붙이지 않는다.
-- 레이어마다 normal/tree를 다시 선택해 한 덩어리의 중간에서 타입을 바꾸지 않는다.
+- vanilla detector가 만든 한 레이어의 island보다 더 잘게 임의 분할해 타입을 바꾸지 않는다. Selective merge ON의 명시적 공간 분할만 예외다.
 - Selective merge에서 normal/tree canonical mask를 의도적으로 겹치게 만들어 접합부를 해결하지 않는다.
 - `support_on_build_plate_only` 적용 뒤 남은 영역으로 coverage를 계산하지 않는다.
 - 기존 `OverhangCluster`를 그대로 복사하지 않는다.
-- 매 component마다 누적 그림자 union을 다시 계산하지 않는다.
+- 매 island마다 누적 그림자 union을 다시 계산하지 않는다.
 - 좌표를 mm float로 바꿔 boolean 연산하거나 면적 판정을 하지 않는다.
 - raft를 두 채널에서 각각 생성하지 않는다.
 - classic tree의 `area_groups` 포인터를 polygon 이동 뒤 보존하지 않는다.
@@ -696,7 +694,7 @@ void clear_support_detection_state();
 
 ### Loop 1: 의미 정확성
 
-초안의 레이어별 판정 가능성을 제거하고 3D connected component 단위로 고정했다. exact threshold는 normal로 가는 inclusive 비교로 고정했다.
+초안의 3D connected component 판정은 Stanford Bunny 50%에서 좁은 상층 bridge가 독립 영역을 재귀적으로 합쳐 전부 tree로 보내는 결함이 확인되어 폐기했다. 최종 구현은 Prusa/Cura vanilla detector가 만든 레이어별 support island를 그대로 판정 단위로 사용한다. exact threshold는 normal로 가는 inclusive 비교로 고정했다.
 
 ### Loop 2: 구조 안전성
 
@@ -704,7 +702,7 @@ void clear_support_detection_state();
 
 ### Loop 3: 결정성과 성능
 
-기존 첫 일치 `OverhangCluster` 재사용안을 폐기했다. R-tree 후보 축소 + union-find로 바꾸고, 누적 shadow 1회 계산, bbox fast path, threshold 0 fast path, 빈 채널 생략을 추가했다.
+별도 `OverhangCluster`, R-tree, union-find 재구성을 모두 폐기했다. vanilla demand를 `union_ex()`로 정규화한 뒤 각 `ExPolygon`을 안정 정렬하고 독립 판정하며, 누적 shadow 1회 계산, bbox fast path, threshold 0 fast path, 빈 채널 생략을 사용한다.
 
 ### Loop 4: 호환성
 
@@ -720,15 +718,14 @@ planner 추가 비용 목표:
 
 - 전체 Mixed support 시간의 10% 이하 또는 500 ms 이하 중 큰 값;
 - peak memory는 수요 polygon 원본 크기의 3배 이내;
-- 같은 모델/설정 반복 실행 시 component 배정 hash 동일.
+- 같은 모델/설정 반복 실행 시 island 배정 hash 동일.
 
 debug timing을 다음 구간으로 나눈다.
 
 ```text
 demand_detection
 shadow_prefix
-component_candidates
-component_union
+island_normalization
 coverage_classification
 normal_generation
 obstacle_projection
@@ -740,7 +737,7 @@ layer_merge
 성능 예산을 넘으면 순서대로 최적화한다.
 
 1. bbox reject 비율과 불필요한 boolean difference 수 확인;
-2. R-tree query 후보 수 확인;
+2. vanilla island 정규화에서 중복 union 여부 확인;
 3. polygon 복사 대신 move/reference 수명 정리;
 4. 레이어별 coverage difference 병렬화;
 5. collision cache에서 obstacle union 반복 여부 제거.
@@ -752,7 +749,7 @@ layer_merge
 다음 항목이 모두 충족돼야 구현 완료다.
 
 - UI와 serialization round-trip;
-- Prusa/Cura 수요 기준의 component 배정 테스트;
+- Prusa/Cura vanilla 수요 island 기준의 배정 테스트;
 - 8개 normal/tree 조합에서 두 채널 생성;
 - exact threshold와 입력순서 독립성;
 - 채널 간 path envelope 중복 없음;
@@ -767,13 +764,23 @@ layer_merge
 ## 17. 실행 검증 결과
 
 - Release `fff_print_tests` 타깃 빌드 성공.
-- `[Mixed]`: 9 test cases, 486 assertions 통과.
+- `[Mixed]`: 10 test cases, 492 assertions 통과.
 - 실제 선택적 분할 fixture에서 Prusa/Cura × Organic/Slim/Strong/Tree Hybrid 8개 조합의 support layer와 G-code 생성 통과.
 - Prusa+Organic 및 Cura+Strong 대표 조합에서 2-layer raft 설정, 부분 겹침 raft 병합, 유일한 Z 순서, 각 raft 레이어 extrusion, G-code 생성 통과.
 - 0.2/0.4/0.6/0.8 mm nozzle × Organic/Slim/Strong/Tree Hybrid 16개 조합에서 양 채널 support layer와 G-code 생성, 112 assertions 통과.
-- `[SupportMaterial]~[TsunamiSupport]`: 기존 Normal/Cura/Tree/인터페이스/raft/온도 드롭 타워 포함 33 test cases, 5,840 assertions 통과.
-- Release 애플리케이션 타깃 `OrcaSlicer` 전체 빌드 및 `MagpieSlicer.dll` 링크 성공.
-- 전체 `[SupportMaterial]` 실행에서 기존 Tsunami 전용 테스트 실패가 재현되어 해당 폐기 예정 기능은 Mixed 회귀 판정에서 제외했다. Mixed가 아닌 기존 실패이며 이 작업에서 수정하지 않았다.
+- 전체 `[SupportMaterial]`: 기존 Normal/Cura/Tree/인터페이스/raft/온도 드롭 타워와 Stanford Bunny 회귀를 포함해 48 test cases, 6,303 assertions 통과.
+- 전체 CTest: 380/380 통과, 실패 0건.
+- Stanford Bunny DRC, 0.4 mm nozzle, 임계각 60도, Mixed 50%, Cura normal + Organic tree에서 Selective merge OFF와 ON을 각각 독립 실행했다. 두 실행 모두 1,462개의 vanilla island를 판정했고 normal/tree 수요와 실제 두 support 채널 생성을 확인했다.
+- 같은 Bunny 조건에서 threshold 0%는 normal 전용이고 tree 수요가 0임을 확인했다.
+- Bunny 처리 시간은 OFF 약 7.32초, ON 약 19.69초였다. 두 경우 모두 완료됐으며 정지나 응답 없음은 재현되지 않았다.
+- CLI 실슬라이싱 매트릭스는 OFF 3/3, ON 3/3 통과했다. 각 모드에서 Prusa+Organic, Prusa+Tree Hybrid, Cura+Tree Strong 조합의 G-code 생성과 `mixed_normal_coverage_threshold=50`, `mixed_selective_merge` 저장값을 확인했다.
+- 2026-08-27 응답 없음 회귀는 Mixed Selective Merge가 만든 압출 폭 미만의 Cura normal mask 조각을 출력 가능성 정리 전에 모든 하위 레이어로 복사·합집합하던 직렬 전파에서 발생했다. 최종 출력에서 어차피 제거되는 조각을 Mixed mask 경로에 한해 seed와 각 전파 단계에서 조기에 제거하고, standalone Cura 경로는 변경하지 않았다.
+- 재현 조건인 Stanford Bunny, 0.4 mm nozzle, 0.16 mm layer, 임계각 90도, Mixed 90%, Cura+Organic, Selective Merge ON, 상단/하단 인터페이스 5/2에서 기존 GUI 작업은 약 5분 15초와 private memory 약 3.8 GiB까지 증가했다. 수정 후 동일 설정의 자동 회귀 테스트는 18.76초, peak private memory 1004.6 MiB로 완료됐다.
+- 수정 후 `[SupportMaterial][Mixed]`는 12 cases, 529 assertions 통과했고 standalone `[CuraStyle]`은 3 cases, 15 assertions 통과했다. 임계각/커버 역치 90%, Selective Merge ON CLI 매트릭스는 Cura+Organic을 포함해 4/4 G-code 생성에 성공했다.
+- Mixed UI는 normal 채널에서 실제로 사용되는 `support_style`을 다시 표시한다. `independent_support_layer_height`는 Organic과 호환되지 않으므로 행을 삭제하지 않고 표시한 채 비활성화한다.
+- 실행 중인 구 DLL을 종료하지 않기 위해 Release 앱은 `build/verification/mixed-fix-app`에 별도 링크했다. `MagpieSlicer.dll` SHA-256은 `C125C3F2CE9EB9E77212DE7686B2587BFFB0E2A925678959577BC73336E1B9DA`, `magpie-slicer.exe` SHA-256은 `419A5A2F49CDA308072EEF5D3CD94A7E51E2B8822FF040B3111E7B1E97434187`이다.
+- 이 검증에서는 설치파일/포터블 패키지를 새로 만들거나 push하지 않았다.
+- 이후 Tree 성능 변경이 포함된 최종 소스에서는 focused Mixed/Tree test와 12-case Bunny matrix를 다시 통과했지만 전체 CTest와 전체 `[SupportMaterial]`은 재실행하지 않았다. 위 380/380 및 48 cases/6,303 assertions는 Mixed 안정화 snapshot의 증거로 구분한다.
 
 ## 18. Mixed 서포트 페인팅 설계와 구현
 
@@ -786,7 +793,7 @@ Mixed에서 수동 페인트는 기존 support enforcer/blocker 데이터에 생
 
 Mixed 페인터 UI는 다음 상태를 사용한다.
 
-- 미도색: 자동 component 판정;
+- 미도색: 자동 island 판정;
 - 초록: 일반 서포트 강제;
 - 파랑: 트리 서포트 강제;
 - 빨강: 서포트 차단;

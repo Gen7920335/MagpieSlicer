@@ -1,5 +1,17 @@
 # Magpie Slicer Code Audit
 
+> **Snapshot notice (2026-08-28):** 이 문서의 본문은 Magpie head
+> `f181069e2f6d1de8619725bc15125752e4e44c13`을 기준으로 작성한 과거 감사
+> snapshot이다. 현재 `release/2.5.0.0.7` 작업 트리의 support 통합, Tsunami
+> 제거, Mixed/Resin GUI 복구와 Tree 성능 안정화는
+> [MAGPIE_FEATURE_CHANGES_2.5.0.0.8.md](MAGPIE_FEATURE_CHANGES_2.5.0.0.8.md)에
+> 정리한다. 아래 findings를 현재 코드에서 재확인하지 않고 현행 결함으로 단정하지 않는다.
+>
+> **현재 자동 감사 기록:** 2026-08-28 작업 트리를 대상으로 다시 확인한 결함,
+> 반증, 동적 재현, 통과 범위와 검증기 자체 문제는
+> [`artifacts/code-audit-20260828/findings.md`](../artifacts/code-audit-20260828/findings.md)에
+> 계속 누적한다. 이 기록이 아래 과거 snapshot보다 우선한다.
+
 ## Scope
 
 - Baseline: OrcaSlicer commit `1d61962ea720b9b45caa3887057d2e6ec7821e64`

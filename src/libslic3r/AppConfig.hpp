@@ -78,6 +78,9 @@ public:
 		GCodeViewer
 	};
 
+    // UI choices persist here; running slicing sessions keep their snapshot.
+    void set_slicing_acceleration_mode(const std::string& key, const std::string& mode);
+
     //BBS: remove GCodeViewer as seperate APP logic
 	explicit AppConfig() :
 		m_dirty(false),

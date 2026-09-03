@@ -1,5 +1,10 @@
 param(
-    [string] $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+    [string] $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
+    [string] $SlicerPath,
+    [string] $ModelPath,
+    [string] $MachineBaseline,
+    [string] $ProcessBaseline,
+    [string] $FilamentBaseline
 )
 
 $ErrorActionPreference = "Stop"
@@ -202,13 +207,27 @@ function Test-GCode {
     }
 }
 
-$runner = Join-Path $RepoRoot "build-vulkan\src\Release\magpie-core-cli.exe"
+$runner = if ([string]::IsNullOrWhiteSpace($SlicerPath)) {
+    Join-Path $RepoRoot "build-vulkan\src\Release\magpie-slicer.exe"
+} else {
+    [IO.Path]::GetFullPath($SlicerPath)
+}
 $releaseDll = Join-Path $RepoRoot "build-vulkan\src\Release\MagpieSlicer.dll"
 $baselineRoot = Join-Path $RepoRoot "build\verification\snapmaker-1to1-with-filament\20260731-080033"
-$machineBaseline = Join-Path $baselineRoot "machine.json"
-$processBaseline = Join-Path $baselineRoot "process.json"
-$filamentBaseline = Join-Path $baselineRoot "filament.json"
-$model = Join-Path $RepoRoot "tools\verification\assets\u1_adhesion_cube.stl"
+$machineBaseline = if ([string]::IsNullOrWhiteSpace($MachineBaseline)) {
+    Join-Path $baselineRoot "machine.json"
+} else { [IO.Path]::GetFullPath($MachineBaseline) }
+$processBaseline = if ([string]::IsNullOrWhiteSpace($ProcessBaseline)) {
+    Join-Path $baselineRoot "process.json"
+} else { [IO.Path]::GetFullPath($ProcessBaseline) }
+$filamentBaseline = if ([string]::IsNullOrWhiteSpace($FilamentBaseline)) {
+    Join-Path $baselineRoot "filament.json"
+} else { [IO.Path]::GetFullPath($FilamentBaseline) }
+$model = if ([string]::IsNullOrWhiteSpace($ModelPath)) {
+    $recorded = Join-Path $RepoRoot "tools\verification\assets\u1_adhesion_cube.stl"
+    if (Test-Path -LiteralPath $recorded -PathType Leaf) { $recorded }
+    else { Join-Path $RepoRoot "tests\data\test_stl\ASCII\20mmbox-LF.stl" }
+} else { [IO.Path]::GetFullPath($ModelPath) }
 $profileRoot = Join-Path $RepoRoot "resources\profiles\Snapmaker\machine"
 $commonProfile = Get-Content -Raw -LiteralPath (Join-Path $profileRoot "fdm_U1.json") | ConvertFrom-Json
 
@@ -289,9 +308,10 @@ foreach ($variant in $variants) {
         Set-ConfigValue $filament "nozzle_temperature" ([string] $case.NozzleTemp)
         Set-ConfigValue $filament "nozzle_temperature_initial_layer" ([string] $case.NozzleTemp)
         foreach ($bedKey in @("hot_plate_temp_initial_layer", "textured_plate_temp_initial_layer", "cool_plate_temp_initial_layer", "eng_plate_temp_initial_layer")) {
-            if ($null -ne $filament.PSObject.Properties[$bedKey]) {
-                Set-ConfigValue $filament $bedKey ([string] $case.BedTemp)
-            }
+            # A flattened baseline may legitimately omit a plate-specific key.
+            # Add every tested key so the case does not silently fall back to the
+            # schema temperature while the assertion expects Case.BedTemp.
+            Set-ConfigValue $filament $bedKey ([string] $case.BedTemp)
         }
 
         $machinePath = Join-Path $caseRoot "machine.json"

@@ -159,7 +159,7 @@
 		"100%"
 	],
 	"filament_soluble": [
-		"0"
+		"1"
 	],
 	"filament_start_gcode": [
 		"; filament start gcode\n;right_extruder_material: PVA"

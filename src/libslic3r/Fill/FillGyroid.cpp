@@ -1,5 +1,5 @@
 #include "../ClipperUtils.hpp"
-#include "../Gpu/VulkanSlicer.hpp"
+#include "../Gpu/SlicerCompute.hpp"
 #include "../MarchingSquares.hpp"
 #include "../ShortestPath.hpp"
 #include "../Surface.hpp"
@@ -351,7 +351,7 @@ void FillGyroid::_fill_surface_single(
     // Apply multiline offset if needed
     multiline_fill(polylines, params, spacing);
 
-    if (Gpu::VulkanSlicerBackend::compute_enabled() && !polylines.empty()) {
+    if (Gpu::SlicerCompute::compute_enabled() && !polylines.empty()) {
         std::vector<Gpu::VulkanAabb> boundary_bounds;
         for (size_t contour_index = 0; contour_index <= expolygon.holes.size(); ++contour_index) {
             const Polygon &contour = contour_index == 0 ? expolygon.contour : expolygon.holes[contour_index - 1];
@@ -367,6 +367,7 @@ void FillGyroid::_fill_surface_single(
             }
         }
         const bool maximum_gpu =
+            Gpu::CudaSlicerBackend::enabled() ||
             Gpu::VulkanSlicerBackend::compute_mode() == Gpu::VulkanSlicerComputeMode::Maximum;
         if (!boundary_bounds.empty() &&
             polylines.size() <= std::numeric_limits<size_t>::max() / boundary_bounds.size() &&
@@ -381,7 +382,7 @@ void FillGyroid::_fill_surface_single(
                 });
             }
             const Gpu::VulkanAabbBatch clipping_candidates =
-                Gpu::VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
+                Gpu::SlicerCompute::dispatch_indexed_aabb_candidates(
                     polyline_bounds, boundary_bounds, std::max<coord_t>(1, scale_(this->spacing * 4.0)),
                     Gpu::VulkanAabbOperation::Gyroid);
             if (clipping_candidates.resolved &&

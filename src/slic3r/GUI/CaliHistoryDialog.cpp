@@ -39,10 +39,11 @@ bool support_nozzle_volume(const MachineObject* obj)
         return false;
     Preset * machine_preset = get_printer_preset(obj);
     if (machine_preset) {
-        int extruder_nums = machine_preset->config.option<ConfigOptionFloatsNullable>("nozzle_diameter")->values.size();
-        auto nozzle_volume_opt = machine_preset->config.option<ConfigOptionFloatsNullable>("nozzle_volume");
-        if (nozzle_volume_opt) {
-            int printer_variant_size = nozzle_volume_opt->values.size();
+        const auto *nozzle_diameter_opt = machine_preset->config.option<ConfigOptionFloats>("nozzle_diameter");
+        const auto *nozzle_volume_opt   = machine_preset->config.option<ConfigOptionFloatsNullable>("nozzle_volume");
+        if (nozzle_diameter_opt != nullptr && !nozzle_diameter_opt->values.empty() && nozzle_volume_opt != nullptr) {
+            const size_t extruder_nums       = nozzle_diameter_opt->values.size();
+            const size_t printer_variant_size = nozzle_volume_opt->values.size();
             return (printer_variant_size / extruder_nums) > 1;
         }
     }

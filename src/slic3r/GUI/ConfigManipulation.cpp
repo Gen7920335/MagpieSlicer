@@ -523,8 +523,11 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
         auto   support_style = config->opt_enum<SupportMaterialStyle>("support_style");
         std::set<int> enum_set_normal = { smsDefault, smsGrid, smsSnug };
         std::set<int> enum_set_tree   = { smsDefault, smsTreeSlim, smsTreeStrong, smsTreeHybrid, smsTreeOrganic };
-        auto &           set             = is_tree(support_type) ? enum_set_tree : enum_set_normal;
-        if (!is_mixed(support_type) && set.find(support_style) == set.end()) {
+        // Mixed owns its tree style in mixed_tree_support_style. support_style
+        // therefore always describes the normal channel and must use the normal
+        // Grid/Snug value set, including after switching from Tree to Mixed.
+        auto &set = is_tree(support_type) && !is_mixed(support_type) ? enum_set_tree : enum_set_normal;
+        if (set.find(support_style) == set.end()) {
             DynamicPrintConfig new_conf = *config;
             new_conf.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(smsDefault));
             apply(config, &new_conf);
@@ -794,7 +797,6 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     SupportType support_type = config->opt_enum<SupportType>("support_type");
     const bool support_type_is_mixed = is_mixed(support_type);
     const bool support_type_is_resin = is_resin(support_type);
-    const bool support_type_is_tsunami = is_tsunami(support_type);
     const bool support_is_mixed = config->opt_bool("enable_support") && support_type_is_mixed;
     const bool support_is_resin = config->opt_bool("enable_support") && support_type_is_resin;
     const auto *mixed_normal_option =
@@ -809,7 +811,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     bool have_support_soluble = have_support_material && config->opt_float("support_top_z_distance") == 0;
     auto support_style = config->opt_enum<SupportMaterialStyle>("support_style");
     for (auto el : { "support_style", "support_base_pattern",
-        "support_base_pattern_spacing", "support_expansion", "support_angle",
+        "support_base_pattern_spacing", "support_expansion", "support_angle", "support_wall_count",
         "support_interface_pattern", "support_interface_top_layers", "support_interface_bottom_layers",
         "bridge_no_support", "max_bridge_length", "support_top_z_distance", "support_bottom_z_distance",
         "support_type", "support_on_build_plate_only", "support_critical_regions_only", "support_interface_not_for_body",
@@ -817,6 +819,10 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
         toggle_field(el, have_support_material);
     toggle_field("cura_solid_support_raft", have_support_material &&
         (is_normal_cura(support_type) || (support_is_mixed && mixed_normal_generator == mnsgCura)));
+    const bool uses_cura_normal_channel =
+        is_normal_cura(support_type) || (support_type_is_mixed && mixed_normal_generator == mnsgCura);
+    toggle_line("cura_support_join_distance", uses_cura_normal_channel);
+    toggle_field("cura_support_join_distance", have_support_material && uses_cura_normal_channel);
     toggle_field("support_threshold_angle",
         support_type == stTreeAuto || (have_support_material && is_auto(support_type)));
     toggle_field("support_threshold_overlap", !support_type_is_resin &&
@@ -834,26 +840,15 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("mixed_tree_support_style", support_type_is_mixed);
     toggle_line("mixed_normal_coverage_threshold", support_type_is_mixed);
     toggle_line("mixed_selective_merge", support_type_is_mixed);
-    toggle_line("support_style", !support_type_is_mixed && !support_type_is_resin);
-
-    const auto *tsunami_micro_option =
-        config->option<ConfigOptionBool>("tsunami_micro_branch_enabled");
-    const bool tsunami_enabled = have_support_material && support_type_is_tsunami;
-    const bool tsunami_micro_enabled = tsunami_enabled && tsunami_micro_option != nullptr &&
-        tsunami_micro_option->value;
-    for (const char *key : {
-             "tsunami_branch_angle", "tsunami_micro_branch_enabled",
-             "tsunami_trunk_height", "tsunami_rib_spacing",
-             "tsunami_trunk_thickness", "tsunami_min_bed_contact_area",
-             "tsunami_max_bed_contact_area", "tsunami_branch_minimum_spacing" }) {
-        toggle_line(key, support_type_is_tsunami);
-        toggle_field(key, tsunami_enabled);
-    }
-    for (const char *key : { "tsunami_micro_branch_angle", "tsunami_micro_branch_size" }) {
-        toggle_line(key, support_type_is_tsunami && tsunami_micro_option != nullptr &&
-            tsunami_micro_option->value);
-        toggle_field(key, tsunami_micro_enabled);
-    }
+    toggle_field("mixed_normal_coverage_threshold",
+        have_support_material && support_type_is_mixed && !config->opt_bool("mixed_selective_merge"));
+    // Mixed support still uses support_style for the normal channel's path
+    // generation (Grid / Snug).  Hiding it left an active Cura/Prusa setting
+    // stuck at the preset value and made Mixed expose fewer normal-support
+    // controls than the selected normal generator.
+    toggle_line("support_style", !support_type_is_resin);
+    toggle_line("support_wall_count", is_normal_support(support_type) || support_type_is_mixed);
+    toggle_line("tree_support_wall_count", is_tree(support_type) || support_type_is_mixed);
 
     // User presets created before Resin style existed do not contain any of
     // the resin-specific keys. Treat a missing tree type as the schema default
@@ -904,7 +899,10 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
         toggle_line(el, support_is_organic);
     // ORCA: Independent support layer height is not compatible with organic tree supports,
     // as they rely on the support layers being the same as the object layers to determine where to place branches.
-    toggle_line("independent_support_layer_height", have_support_material && !support_is_organic);
+    // Keep the option visible in Mixed so switching from Cura does not appear to
+    // delete settings; disable it only while the effective tree style is Organic.
+    toggle_line("independent_support_layer_height", have_support_material);
+    toggle_field("independent_support_layer_height", have_support_material && !support_is_organic);
 
     toggle_field("tree_support_brim_width", support_has_tree && !config->opt_bool("tree_support_auto_brim"));
     // tree support use max_bridge_length instead of bridge_no_support
@@ -912,8 +910,10 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("bridge_no_support", !support_is_tree || support_is_mixed);
     toggle_line("support_critical_regions_only", is_auto(support_type) && support_has_tree);
 
-    for (auto el : { "support_interface_filament",
-        "support_interface_loop_pattern", "support_bottom_interface_spacing" })
+    // Material assignment may be prepared before enabling support or interface
+    // layers. Selecting a filament does not enable either kind of geometry.
+    toggle_field("support_interface_filament", true);
+    for (auto el : { "support_interface_loop_pattern", "support_bottom_interface_spacing" })
         toggle_field(el, have_support_material && have_support_interface);
 
     bool can_ironing_support = have_raft || (have_support_material && config->opt_int("support_interface_top_layers") > 0);

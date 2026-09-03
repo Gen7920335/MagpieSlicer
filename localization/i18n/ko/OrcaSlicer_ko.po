@@ -15408,11 +15408,23 @@ msgstr "가지 직경 각도"
 msgid "The angle of the branches' diameter as they gradually become thicker towards the bottom. An angle of 0 will cause the branches to have uniform thickness over their length. A bit of an angle can increase stability of the organic support."
 msgstr "아래로 갈수록 가지의 직경이 점차 굵어지는 각도. 각도가 0이면 가지가 균일한 두께를 가지는 가지가 됩니다. 약간의 각도는 유기체 서포트의 안정성을 증가시킬 수 있습니다."
 
-msgid "Support wall loops"
-msgstr "서포트 벽 루프"
+msgid "Normal support wall loops"
+msgstr "일반 서포트 벽 루프"
 
-msgid "This setting specifies the count of support walls in the range of [0,2]. 0 means auto."
-msgstr "이 설정은 [0,2] 범위에서 지지벽의 개수를 지정합니다. 0은 자동을 의미합니다."
+msgid "Number of perimeter loops generated around normal Prusa or Cura support. 0 disables support walls and leaves only the selected support pattern."
+msgstr "일반 Prusa 또는 Cura 서포트 둘레에 생성할 벽 루프 수입니다. 0이면 서포트 벽을 끄고 선택한 서포트 패턴만 사용합니다."
+
+msgid "Tree support wall loops"
+msgstr "트리 서포트 벽 루프"
+
+msgid "Number of perimeter loops generated around tree support branches. 0 means auto. If a branch is too narrow, only the loops that fit will be generated."
+msgstr "트리 서포트 가지 둘레에 생성할 벽 루프 수입니다. 0이면 자동입니다. 가지가 너무 좁으면 들어갈 수 있는 수만큼만 생성합니다."
+
+msgid "Cura support join distance"
+msgstr "Cura 서포트 연결 거리"
+
+msgid "Connect nearby Cura-style support regions whose gap is within this distance. The original support regions are preserved; only connecting material is added. 0 disables joining."
+msgstr "간격이 이 거리 이내인 가까운 Cura 방식 서포트 영역을 연결합니다. 기존 서포트 영역은 보존하고 연결 재료만 추가합니다. 0이면 연결하지 않습니다."
 
 msgid "Tree support with infill"
 msgstr "채우기가 있는 트리 서포트"
@@ -21620,9 +21632,6 @@ msgstr ""
 #~ msgid "Density of internal sparse infill, 100% means solid throughout"
 #~ msgstr "내부 드문 내부 채우기 밀도, 100은 전체가 꽉찬 내부 채우기임을 의미합니다"
 
-#~ msgid "Tree support wall loops"
-#~ msgstr "트리 서포트 벽 루프"
-
 #~ msgid "This setting specify the count of walls around tree support"
 #~ msgstr "이 설정은 트리 서포트의 벽 수를 지정합니다"
 
@@ -21857,8 +21866,8 @@ msgstr ""
 #~ "시작 > 0 단계 >= 0\n"
 #~ "끝 > 시작 + 단계)"
 
-msgid "Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), Tsunami (auto), and Resin style (auto) are used to generate support automatically. If a manual style is selected, only support enforcers are generated. Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. Resin style (auto) uses the current PrusaSlicer resin point and tree strategies through the FFF support pipeline. Normal (Cura style) is an experimental OrcaProject support-area generator."
-msgstr "일반(Prusa 스타일, 자동), 일반(Cura 스타일, 자동), 트리(자동), Mixed(자동), Tsunami(자동), 레진 스타일(자동)은 서포트를 자동 생성합니다. 수동 스타일을 선택하면 서포트 강제 영역만 생성됩니다. Mixed(자동)는 연결된 각 서포트 필요 영역을 일반 또는 트리 생성기에 배정합니다. 레진 스타일(자동)은 최신 PrusaSlicer 레진 포인트·트리 전략을 FFF 서포트 파이프라인에서 사용합니다. 일반(Cura 스타일)은 실험적인 OrcaProject 서포트 영역 생성기입니다."
+msgid "Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), and Resin style (auto) are used to generate support automatically. If a manual style is selected, only support enforcers are generated. Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. Resin style (auto) uses the current PrusaSlicer resin point and tree strategies through the FFF support pipeline. Normal (Cura style) is an experimental OrcaProject support-area generator."
+msgstr "일반(Prusa 스타일, 자동), 일반(Cura 스타일, 자동), 트리(자동), Mixed(자동), 레진 스타일(자동)은 서포트를 자동 생성합니다. 수동 스타일을 선택하면 서포트 강제 영역만 생성됩니다. Mixed(자동)는 연결된 각 서포트 필요 영역을 일반 또는 트리 생성기에 배정합니다. 레진 스타일(자동)은 최신 PrusaSlicer 레진 포인트·트리 전략을 FFF 서포트 파이프라인에서 사용합니다. 일반(Cura 스타일)은 실험적인 OrcaProject 서포트 영역 생성기입니다."
 
 msgid "Mixed (auto)"
 msgstr "Mixed (자동)"
@@ -21878,14 +21887,14 @@ msgstr "Mixed (자동)에서 사용할 트리 서포트 스타일을 선택합�
 msgid "Normal support coverage threshold"
 msgstr "일반 서포트 커버 퍼센테이지 역치"
 
-msgid "A connected support-demand region uses normal support when this percentage can be reached vertically from the build plate. Otherwise it uses tree support."
-msgstr "연결된 서포트 필요 영역 중 베드에서 수직으로 도달 가능한 비율이 이 값 이상이면 일반 서포트를 사용하고, 그렇지 않으면 트리 서포트를 사용합니다."
+msgid "When Selective merge is disabled, a connected support-demand region uses normal support when this percentage can be reached vertically from the build plate. Otherwise the whole region uses tree support."
+msgstr "셀렉티브 머지를 끈 경우, 빌드 플레이트에서 수직으로 도달할 수 있는 비율이 이 값 이상이면 해당 영역 전체에 일반 서포트를 사용합니다. 그렇지 않으면 영역 전체에 트리 서포트를 사용합니다."
 
 msgid "Selective merge"
 msgstr "셀렉티브 머지"
 
-msgid "When a support-demand region is below the normal coverage threshold, use build-plate-origin normal support for its reachable portion and tree support for only the remaining portion. When disabled, the whole region uses tree support."
-msgstr "서포트 필요 영역의 일반 커버 비율이 역치보다 낮을 때, 베드에서 도달 가능한 부분은 일반 서포트로 만들고 나머지 부분만 트리 서포트로 만들어 융합합니다. 끄면 해당 영역 전체에 트리 서포트를 사용합니다."
+msgid "Use normal support first for every reachable part of a support-demand region, then use tree support only for the blocked residual. The normal support coverage threshold is ignored while this is enabled."
+msgstr "서포트 필요 영역에서 일반 서포트가 도달 가능한 부분을 먼저 일반 서포트로 만들고, 막혀서 도달할 수 없는 나머지 부분에만 트리 서포트를 사용합니다. 이 기능을 켜면 일반 서포트 커버 임계값은 적용하지 않습니다."
 
 #~ msgid ""
 #~ "Please input valid values:\n"
@@ -22043,3 +22052,108 @@ msgstr "서로 연결할 수 있는 기둥 사이의 최대 거리입니다. 0�
 
 msgid "Raises the entire FFF object by this amount. This remains active and visible even when support generation is disabled."
 msgstr "FFF 출력물 전체를 이 높이만큼 띄웁니다. 서포트 생성을 꺼도 이 설정은 계속 적용되고 표시됩니다."
+
+msgid "Mixed support: analyzing overhangs"
+msgstr "혼합 서포트: 오버행 분석 중"
+
+msgid "Mixed support: classifying normal and tree regions"
+msgstr "혼합 서포트: 일반 및 트리 영역 분류 중"
+
+msgid "Mixed support: generating normal support"
+msgstr "혼합 서포트: 일반 서포트 생성 중"
+
+msgid "Mixed support: generating tree support"
+msgstr "혼합 서포트: 트리 서포트 생성 중"
+
+msgid "Mixed support: merging support channels"
+msgstr "혼합 서포트: 서포트 채널 병합 중"
+
+msgid "Cura support: propagating support regions"
+msgstr "Cura 서포트: 서포트 영역 전파 중"
+
+msgid "Cura support: generating support toolpaths"
+msgstr "Cura 서포트: 서포트 툴패스 생성 중"
+
+#: Magpie CUDA and slicing timing settings
+msgid "CUDA: Off"
+msgstr "CUDA: 끄기"
+
+#: Magpie CUDA and slicing timing settings
+msgid "CUDA: On"
+msgstr "CUDA: 켜기"
+
+#: Magpie CUDA and slicing timing settings
+msgid "CUDA slicing acceleration"
+msgstr "CUDA 슬라이싱 가속"
+
+#: Magpie CUDA and slicing timing settings
+msgid "Use CUDA for supported workloads with full CPU result validation. Selecting CUDA turns Vulkan off. Changes apply to the next slice."
+msgstr "지원되는 연산에 CUDA를 사용하며 모든 결과를 CPU 결과와 대조합니다. CUDA를 선택하면 Vulkan은 꺼집니다. 변경 사항은 다음 슬라이싱부터 적용됩니다."
+
+#: Magpie CUDA and slicing timing settings
+msgid "Select calibrated, preferred, maximum, or disabled Vulkan slicing. Selecting Vulkan turns CUDA off. Changes apply to the next slice."
+msgstr "Vulkan 슬라이싱을 자동, 우선 사용, 최대 GPU 또는 끄기로 설정합니다. Vulkan을 선택하면 CUDA는 꺼집니다. 변경 사항은 다음 슬라이싱부터 적용됩니다."
+
+#: Magpie CUDA and slicing timing settings
+msgid "Slicing time recording"
+msgstr "슬라이싱 시간 기록"
+
+#: Magpie CUDA and slicing timing settings
+msgid "Timing detail"
+msgstr "시간 기록 수준"
+
+#: Magpie CUDA and slicing timing settings
+msgid "Major stages"
+msgstr "주요 단계"
+
+#: Magpie CUDA and slicing timing settings
+msgid "Detailed"
+msgstr "상세"
+
+#: Magpie CUDA and slicing timing settings
+msgid "Off disables timing logs but keeps the slice timer. Major stages records pipeline and object steps. Detailed also records CPU/GPU operations, durations, work counts and diagnostics. Changes apply to the next slice."
+msgstr "끄기는 시간 로그만 끄고 전체 슬라이싱 시간 표시는 유지합니다. 주요 단계는 처리 과정과 객체별 단계를 기록합니다. 상세는 CPU/GPU 연산, 소요 시간, 처리 건수와 진단 정보도 기록합니다. 변경 사항은 다음 슬라이싱부터 적용됩니다."
+
+#: Magpie CUDA and slicing timing settings
+msgid "Automatically save timing logs"
+msgstr "시간 로그 자동 저장"
+
+#: Magpie CUDA and slicing timing settings
+msgid "Save a separate JSON log for each completed FFF slicing session in the slicing-timing folder inside the application data folder. Logs are kept until you delete them. Manual export is also available beside the slice timer."
+msgstr "완료된 FFF 슬라이싱마다 앱 데이터 폴더의 slicing-timing 폴더에 별도의 JSON 로그를 저장합니다. 로그는 직접 삭제할 때까지 보관됩니다. 슬라이싱 시간 표시 옆에서 수동으로 내보낼 수도 있습니다."
+
+#: Magpie CUDA and slicing timing settings
+msgid "Slicing timing details"
+msgstr "슬라이싱 시간 상세 기록"
+
+#: Magpie CUDA and slicing timing settings
+msgid "Timing details"
+msgstr "시간 상세 보기"
+
+#: Magpie CUDA and slicing timing settings
+msgid "Export timing log"
+msgstr "시간 로그 내보내기"
+
+#: Magpie CUDA and slicing timing settings
+msgid "Export slicing timing log"
+msgstr "슬라이싱 시간 로그 내보내기"
+
+#: Magpie static validation guards
+msgid "Filament diameter is missing for the selected material."
+msgstr "선택한 재료의 필라멘트 직경 설정이 없습니다."
+
+#: Magpie static validation guards
+msgid "Filament diameter must be greater than zero."
+msgstr "필라멘트 직경은 0보다 커야 합니다."
+
+#: Magpie static validation guards
+msgid "The active filament is not present in the current material list."
+msgstr "현재 재료 목록에 사용 중인 필라멘트가 없습니다."
+
+#: Magpie static validation guards
+msgid "No calibration filament was selected"
+msgstr "캘리브레이션할 필라멘트를 선택하지 않았습니다."
+
+#: Magpie static validation guards
+msgid "Unable to calibrate: a required preset is missing"
+msgstr "캘리브레이션할 수 없습니다. 필요한 프리셋이 없습니다."

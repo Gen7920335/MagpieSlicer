@@ -985,7 +985,10 @@ void GUI_App::post_init()
                 this->preset_updater->sync(http_url, language, network_ver, sys_preset ? preset_bundle : nullptr);
             }
 
-            this->check_new_version_sf();
+            // Magpie releases do not follow the upstream Orca application feed.
+            // Keep profile/plugin synchronization above and the explicit
+            // Help > Check for Updates action, but never show an upstream app
+            // download prompt merely because the application started.
             const auto cloud_provider = get_printer_cloud_provider();
             if (is_user_login(cloud_provider) && !app_config->get_stealth_mode()) {
               // this->check_privacy_version(0);
@@ -9551,13 +9554,13 @@ bool is_soluble_filament(int extruder_id)
     auto &filament_presets = Slic3r::GUI::wxGetApp().preset_bundle->filament_presets;
     auto &filaments        = Slic3r::GUI::wxGetApp().preset_bundle->filaments;
 
-    if (extruder_id >= filament_presets.size()) return false;
+    if (extruder_id < 0 || static_cast<size_t>(extruder_id) >= filament_presets.size()) return false;
 
     Slic3r::Preset *filament = filaments.find_preset(filament_presets[extruder_id]);
     if (filament == nullptr) return false;
 
     Slic3r::ConfigOptionBools *support_option = dynamic_cast<Slic3r::ConfigOptionBools *>(filament->config.option("filament_soluble"));
-    if (support_option == nullptr) return false;
+    if (support_option == nullptr || support_option->values.empty()) return false;
 
     return support_option->get_at(0);
 };
@@ -9565,13 +9568,20 @@ bool is_soluble_filament(int extruder_id)
 bool has_filaments(const std::vector<string>& model_filaments) {
     auto &filament_presets = Slic3r::GUI::wxGetApp().preset_bundle->filament_presets;
     if (!Slic3r::GUI::wxGetApp().plater()) return false;
-    auto model_objects = Slic3r::GUI::wxGetApp().plater()->model().objects;
+    const auto &model_objects = Slic3r::GUI::wxGetApp().plater()->model().objects;
     const Slic3r::DynamicPrintConfig &config = wxGetApp().preset_bundle->full_config();
     Model::setExtruderParams(config, filament_presets.size());
 
-    auto get_filament_name = [](int id) { return Model::extruderParamsMap.find(id) != Model::extruderParamsMap.end() ? Model::extruderParamsMap.at(id).materialName : "PLA"; };
+    auto get_filament_name = [](int id) {
+        const auto it = Model::extruderParamsMap.find(id);
+        return it != Model::extruderParamsMap.end() ? it->second.materialName : std::string{};
+    };
     for (const ModelObject *mo : model_objects) {
-        for (auto vol : mo->volumes) {
+        if (mo == nullptr)
+            continue;
+        for (const ModelVolume *vol : mo->volumes) {
+            if (vol == nullptr)
+                continue;
             auto ve = vol->get_extruders();
             for (auto id : ve) {
                 auto name = get_filament_name(id);
@@ -9587,12 +9597,14 @@ bool is_support_filament(int extruder_id, bool strict_check)
     auto &filament_presets = Slic3r::GUI::wxGetApp().preset_bundle->filament_presets;
     auto &filaments        = Slic3r::GUI::wxGetApp().preset_bundle->filaments;
 
-    if (extruder_id >= filament_presets.size()) return false;
+    if (extruder_id < 0 || static_cast<size_t>(extruder_id) >= filament_presets.size()) return false;
 
     Slic3r::Preset *filament = filaments.find_preset(filament_presets[extruder_id]);
     if (filament == nullptr) return false;
 
-    std::string filament_type = filament->config.option<ConfigOptionStrings>("filament_type")->values[0];
+    const auto *filament_types = filament->config.option<ConfigOptionStrings>("filament_type");
+    if (filament_types == nullptr || filament_types->values.empty()) return false;
+    const std::string &filament_type = filament_types->values.front();
 
     Slic3r::ConfigOptionBools *support_option = dynamic_cast<Slic3r::ConfigOptionBools *>(filament->config.option("filament_is_support"));
 
@@ -9605,7 +9617,7 @@ bool is_support_filament(int extruder_id, bool strict_check)
         }
         if (has_filaments(model_filaments)) return true;
     }
-    if (support_option == nullptr) return false;
+    if (support_option == nullptr || support_option->values.empty()) return false;
     return support_option->get_at(0);
 };
 

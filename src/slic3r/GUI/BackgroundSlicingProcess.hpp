@@ -269,6 +269,14 @@ private:
         std::mutex 				mutex;
     	std::condition_variable	condition;
     };
+    // Captured on the UI thread before waking the worker, then immutable until idle.
+    std::string m_session_vulkan_mode { "auto" };
+    std::string m_session_cuda_mode { "off" };
+#ifdef MAGPIE_SLICING_TIMING
+    std::string m_session_timing_detail { "detailed" };
+    bool m_session_timing_auto_save { false };
+#endif
+
     // Only one UI task may be planned by the background thread to be executed on the UI thread, as the background
     // thread is blocking until the UI thread calculation finishes.
     std::shared_ptr<UITask> 	m_ui_task;

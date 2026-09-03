@@ -584,6 +584,12 @@ bool SupportTreeBuildsteps::create_ground_pillar(const Vec3d &hjp,
 std::optional<DiffBridge> SupportTreeBuildsteps::search_widening_path(
     const Vec3d &jp, const Vec3d &dir, double radius, double new_radius)
 {
+    // A zero maximum bridge length means bridge routing is disabled.  Avoid
+    // constructing an optimizer whose positive radius-derived lower bound is
+    // greater than that configured upper bound.
+    if (m_cfg.max_bridge_length_mm <= EPSILON)
+        return {};
+
     double w = radius + 2 * m_cfg.head_back_radius_mm;
     double stopval = w + jp.z() - m_builder.ground_level;
     Optimizer<AlgNLoptSubplex> solver(get_criteria(m_cfg).stop_score(stopval));
@@ -807,8 +813,11 @@ void SupportTreeBuildsteps::classify()
                             const PointIndexEl &e2) {
         double d2d = distance(to_2d(e1.first), to_2d(e2.first));
         double d3d = distance(e1.first, e2.first);
-        return d2d < 2 * m_cfg.base_radius_mm
-               && d3d < m_cfg.max_bridge_length_mm;
+        // Clustering must always consume its seed. With a zero maximum bridge
+        // length, keep every distinct point separate but accept the seed itself.
+        return e1.second == e2.second ||
+               (d2d < 2 * m_cfg.base_radius_mm
+                && d3d < m_cfg.max_bridge_length_mm);
     };
 
     m_pillar_clusters = cluster(ground_head_indices, pointfn, predicate,
@@ -916,6 +925,11 @@ bool SupportTreeBuildsteps::connect_to_ground(Head &head, const Vec3d &dir)
 bool SupportTreeBuildsteps::connect_to_ground(Head &head)
 {
     if (connect_to_ground(head, head.dir)) return true;
+
+    // With bridge routing disabled, changing only the direction cannot move
+    // the endpoint away from the failed direct-pillar location.
+    if (m_cfg.max_bridge_length_mm <= EPSILON)
+        return false;
 
     // Optimize bridge direction:
     // Straight path failed so we will try to search for a suitable

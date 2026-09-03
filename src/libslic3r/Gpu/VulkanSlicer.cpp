@@ -1,5 +1,5 @@
 #include "VulkanSlicer.hpp"
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
 #include "../SlicingProfiler.hpp"
 #endif
 
@@ -1638,8 +1638,15 @@ private:
                     << m_max_requests_per_submission << ".";
             return fail(message.str());
         }
+#ifdef MAGPIE_SLICING_TIMING
+        ScopedSlicingProfileEvent allocation_event("vulkan-phase", "Intersection buffer allocation or reuse", SlicingProfileBackend::System);
+#endif
         if (!ensure_staging_buffers(requests.size()))
             return fail("Vulkan could not prepare reusable host-visible infill-intersection buffers.");
+#ifdef MAGPIE_SLICING_TIMING
+        allocation_event.finish();
+        ScopedSlicingProfileEvent packing_event("vulkan-phase", "Intersection preflight and mapped input packing", SlicingProfileBackend::CPU);
+#endif
 
         const bool validate_cpu_reference =
             configured_validation_mode() != VulkanIntersectionValidationMode::Qualified;
@@ -1683,6 +1690,10 @@ private:
                              request.stable_id };
         }
 
+#ifdef MAGPIE_SLICING_TIMING
+        packing_event.finish();
+        ScopedSlicingProfileEvent submission_event("vulkan-phase", "Intersection command submission and wait", SlicingProfileBackend::System);
+#endif
         const VkDeviceSize input_size = VkDeviceSize(requests.size() * sizeof(PackedVerticalIntersectionRequest));
         const VkDeviceSize output_size = VkDeviceSize(requests.size() * sizeof(PackedVerticalIntersectionResult));
         const VkDescriptorBufferInfo input_info { m_input_buffer, 0, input_size };
@@ -1720,6 +1731,10 @@ private:
                 batch.gpu_elapsed_ms = double(timestamps[1] - timestamps[0]) * m_timestamp_period_ns / 1'000'000.0;
         }
 
+#ifdef MAGPIE_SLICING_TIMING
+        submission_event.finish();
+        ScopedSlicingProfileEvent validation_event("vulkan-phase", "Intersection mapped readback and exact validation", SlicingProfileBackend::CPU);
+#endif
         const auto* output = static_cast<const PackedVerticalIntersectionResult*>(m_output_mapping);
         batch.intersections.reserve(requests.size());
         for (size_t index = 0; index < requests.size(); ++index) {
@@ -1946,12 +1961,12 @@ VulkanVerticalIntersectionBatch VulkanSlicerBackend::dispatch_vertical_intersect
         batch.diagnostic = "Vulkan infill compute is disabled in Preferences.";
         return batch;
     }
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
     ScopedSlicingProfileEvent profile_event("vulkan", "Exact vertical intersections",
                                             SlicingProfileBackend::GPU, requests.size());
 #endif
     VulkanVerticalIntersectionBatch batch = vulkan_intersection_context().dispatch(requests);
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
     profile_event.set_result(batch.dispatched ? SlicingProfileBackend::GPU : SlicingProfileBackend::CPUFallback,
                              batch.gpu_elapsed_ms, requests.size(), batch.diagnostic);
 #endif
@@ -1977,12 +1992,12 @@ VulkanTreeContourBatch VulkanSlicerBackend::dispatch_tree_contour_candidates(
         batch.diagnostic = "Vulkan tree contour compute is disabled in Preferences.";
         return batch;
     }
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
     ScopedSlicingProfileEvent profile_event("vulkan", "Tree contour broad phase",
                                             SlicingProfileBackend::GPU, requests.size());
 #endif
     VulkanTreeContourBatch batch = vulkan_intersection_context().dispatch_tree_contours(requests, contour_edges);
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
     profile_event.set_result(batch.dispatched ? SlicingProfileBackend::Hybrid : SlicingProfileBackend::CPUFallback,
                              -1.0, requests.size(), batch.diagnostic);
 #endif
@@ -2155,12 +2170,12 @@ VulkanAabbBatch VulkanSlicerBackend::dispatch_indexed_aabb_candidates(
     case VulkanAabbOperation::Spatial: break;
     }
 #ifdef SLIC3R_ENABLE_VULKAN_SLICER
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
     ScopedSlicingProfileEvent profile_event("vulkan", operation_name,
                                             SlicingProfileBackend::GPU, compact_targets.size());
 #endif
     indexed = vulkan_intersection_context().dispatch_tree_contours(compact_queries, compact_targets);
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
     profile_event.set_result(indexed.dispatched ? SlicingProfileBackend::Hybrid : SlicingProfileBackend::CPUFallback,
                              -1.0, compact_targets.size(), indexed.diagnostic);
 #endif

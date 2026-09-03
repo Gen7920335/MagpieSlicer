@@ -240,7 +240,8 @@ void extend_default_config_length(DynamicPrintConfig& config, const bool set_nil
     // because non-BBL multi-extruder printers currently do not support extruder variant.
     if (config.has("nozzle_diameter")) {
         auto* nozzle_diameter = dynamic_cast<const ConfigOptionFloats*>(config.option("nozzle_diameter"));
-        machine_variant_length = nozzle_diameter->values.size();
+        if (nozzle_diameter != nullptr && !nozzle_diameter->values.empty())
+            machine_variant_length = nozzle_diameter->values.size();
     }
 
     if(config.has("filament_extruder_variant"))
@@ -1089,7 +1090,7 @@ static std::vector<std::string> s_Preset_print_options{
     "outer_wall_acceleration", "initial_layer_acceleration", "top_surface_acceleration", "default_acceleration", "skirt_type", "skirt_loops", "skirt_speed","min_skirt_length", "skirt_distance", "skirt_start_angle", "skirt_height","single_loop_draft_shield", "draft_shield",
     "brim_width", "brim_object_gap", "brim_flow_ratio", "brim_use_efc_outline", "combine_brims", "brim_type", "brim_ears_max_angle", "brim_ears_detection_length", "enable_support", "support_type", "mixed_normal_support_generator", "mixed_tree_support_style", "mixed_normal_coverage_threshold", "mixed_selective_merge", "support_threshold_angle", "support_threshold_overlap","enforce_support_layers",
     "raft_layers", "raft_first_layer_density", "raft_first_layer_expansion", "raft_contact_distance", "raft_expansion",
-    "support_base_pattern", "support_base_pattern_spacing", "cura_solid_support_raft", "support_expansion", "support_style",
+    "support_base_pattern", "support_base_pattern_spacing", "cura_solid_support_raft", "cura_support_join_distance", "support_expansion", "support_wall_count", "support_style",
     // BBS
     "print_extruder_id",
     "print_extruder_variant",
@@ -3434,8 +3435,12 @@ bool PresetCollection::update_dirty()
 template<class T>
 void add_correct_opts_to_diff(const std::string &opt_key, t_config_option_keys& vec, const ConfigBase &other, const ConfigBase &this_c, bool strict)
 {
-    const T* opt_init = static_cast<const T*>(other.option(opt_key));
-    const T* opt_cur = static_cast<const T*>(this_c.option(opt_key));
+    const T* opt_init = dynamic_cast<const T*>(other.option(opt_key));
+    const T* opt_cur = dynamic_cast<const T*>(this_c.option(opt_key));
+    if (opt_init == nullptr || opt_cur == nullptr) {
+        vec.emplace_back(opt_key);
+        return;
+    }
     int opt_init_max_id = opt_init->values.size() - 1;
     if (opt_init_max_id < 0) {
         for (int i = 0; i < int(opt_cur->values.size()); i++)

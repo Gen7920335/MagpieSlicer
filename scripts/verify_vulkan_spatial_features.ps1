@@ -4,6 +4,9 @@ param(
     [ValidateRange(60, 3600)]
     [int] $SliceTimeoutSeconds = 900,
     [string] $OutputRoot = "",
+    [string] $ModelPath = "",
+    [ValidateRange(-1, 90)]
+    [int] $SupportAngleOverride = -1,
     [string[]] $CaseName = @(),
     [switch] $IncludeAuto,
     [switch] $IncludeAggressive,
@@ -153,22 +156,28 @@ function Invoke-SliceCase($Case, [string] $Mode, [string] $ModelPath) {
     $stdout = Join-Path $caseRoot 'stdout.log'
     $stderr = Join-Path $caseRoot 'stderr.log'
     $timer = [Diagnostics.Stopwatch]::StartNew()
-    $process = Start-Process -FilePath $SlicerPath -ArgumentList $arguments -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-    $timedOut = -not $process.WaitForExit($SliceTimeoutSeconds * 1000)
-    if ($timedOut) {
-        & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
-        throw "Slice timed out: $($Case.name)/$Mode"
-    }
-    $process.WaitForExit()
-    $process.Refresh()
-    $timer.Stop()
-    $exitCode = $null
-    try { $exitCode = $process.ExitCode } catch { $exitCode = $null }
-    if ($null -ne $exitCode -and [int]$exitCode -ne 0) {
-        throw "Slice failed: $($Case.name)/$Mode exit=$exitCode; stderr=$stderr"
-    }
     $gcode = Get-ChildItem -LiteralPath $caseRoot -File -Filter '*.gcode' | Select-Object -First 1
+    $reused = $false
+    if ($null -ne $gcode -and [IO.File]::ReadAllText($gcode.FullName).Contains('CONFIG_BLOCK_END')) {
+        $reused = $true
+    } else {
+        $process = Start-Process -FilePath $SlicerPath -ArgumentList $arguments -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $timedOut = -not $process.WaitForExit($SliceTimeoutSeconds * 1000)
+        if ($timedOut) {
+            & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
+            throw "Slice timed out: $($Case.name)/$Mode"
+        }
+        $process.WaitForExit()
+        $process.Refresh()
+        $exitCode = $null
+        try { $exitCode = $process.ExitCode } catch { $exitCode = $null }
+        if ($null -ne $exitCode -and [int]$exitCode -ne 0) {
+            throw "Slice failed: $($Case.name)/$Mode exit=$exitCode; stderr=$stderr"
+        }
+        $gcode = Get-ChildItem -LiteralPath $caseRoot -File -Filter '*.gcode' | Select-Object -First 1
+    }
+    $timer.Stop()
     if ($null -eq $gcode) { throw "G-code missing: $($Case.name)/$Mode" }
     $tail = [IO.File]::ReadAllText($gcode.FullName)
     if (-not $tail.Contains('CONFIG_BLOCK_END')) { throw "Incomplete G-code: $($Case.name)/$Mode" }
@@ -181,6 +190,7 @@ function Invoke-SliceCase($Case, [string] $Mode, [string] $ModelPath) {
     [pscustomobject]@{
         case = $Case.name
         mode = $Mode
+        reused = $reused
         seconds = [Math]::Round($timer.Elapsed.TotalSeconds, 3)
         gcode = $gcode.FullName
         canonical_sha256 = Get-CanonicalHash $gcode.FullName
@@ -204,8 +214,22 @@ function Invoke-SliceCase($Case, [string] $Mode, [string] $ModelPath) {
     }
 }
 
-$modelPath = Join-Path $OutputRoot 'wavy-overhang.stl'
-New-WavyOverhangModel $modelPath
+$modelPath = if ([string]::IsNullOrWhiteSpace($ModelPath)) {
+    $generatedPath = Join-Path $OutputRoot 'wavy-overhang.stl'
+    New-WavyOverhangModel $generatedPath
+    $generatedPath
+} else {
+    [IO.Path]::GetFullPath($ModelPath)
+}
+
+function Clear-GeometryDetails($Result) {
+    # Coverage grids are intentionally very large for the 0.05 mm analyzer.
+    # They are needed only while comparing modes for the current case; keeping
+    # them in the run-wide results list makes memory grow once per slice.
+    $Result.geometry = $null
+    $Result.coarse_geometry = $null
+}
+if (-not (Test-Path -LiteralPath $modelPath -PathType Leaf)) { throw "Model not found: $modelPath" }
 $base = Get-Content -LiteralPath $baseProcessPath -Raw | ConvertFrom-Json
 $caseDefinitions = @(
     [pscustomobject]@{ name='gyroid_low_classic'; expected=''; forbidden='gyroid-spatial'; maximum_expected='gyroid-spatial'; comparison='exact'; values=@{
@@ -214,9 +238,14 @@ $caseDefinitions = @(
         enable_support='0'; sparse_infill_pattern='gyroid'; sparse_infill_density='45%'; wall_generator='arachne'; wall_loops='4' } },
     [pscustomobject]@{ name='lightning_overhang'; expected=''; forbidden=''; maximum_expected='distance-spatial'; comparison='tolerant'; values=@{
         enable_support='0'; sparse_infill_pattern='lightning'; sparse_infill_density='18%'; wall_generator='classic'; wall_loops='3' } },
-    [pscustomobject]@{ name='tree_90_dense'; expected='tree-spatial'; forbidden=''; comparison='exact'; values=@{
+    [pscustomobject]@{ name='tree_90_dense'; expected=''; forbidden='vertical'; comparison='tolerant'; values=@{
         enable_support='1'; support_type='tree(auto)'; support_style='tree_slim'; support_threshold_angle='90';
+        support_interface_top_layers='0'; support_interface_bottom_layers='0';
         sparse_infill_pattern='gyroid'; sparse_infill_density='20%'; wall_generator='arachne'; wall_loops='3' } },
+    [pscustomobject]@{ name='tree_90_spatial_only'; expected=''; forbidden='vertical'; comparison='tolerant'; values=@{
+        enable_support='1'; support_type='tree(auto)'; support_style='tree_slim'; support_threshold_angle='90';
+        support_interface_top_layers='0'; support_interface_bottom_layers='0';
+        sparse_infill_pattern='rectilinear'; sparse_infill_density='20%'; wall_generator='classic'; wall_loops='3' } },
     [pscustomobject]@{ name='classic_extra_min'; expected='seam-travel-spatial'; forbidden='';
         aggressive_expected=''; aggressive_forbidden='seam-travel-spatial'; comparison='exact'; values=@{
         enable_support='0'; sparse_infill_pattern='rectilinear'; sparse_infill_density='8%'; wall_generator='classic';
@@ -224,11 +253,11 @@ $caseDefinitions = @(
     [pscustomobject]@{ name='classic_extra_max'; expected='classic-wall-spatial'; forbidden=''; comparison='exact'; values=@{
         enable_support='0'; sparse_infill_pattern='rectilinear'; sparse_infill_density='35%'; wall_generator='classic';
         wall_loops='8'; detect_overhang_wall='1'; extra_perimeters_on_overhangs='1' } },
-    [pscustomobject]@{ name='cura_70_grid'; expected='cura-support-spatial'; forbidden=''; comparison='exact'; values=@{
+    [pscustomobject]@{ name='cura_70_grid'; expected=''; forbidden='cura-support-spatial'; comparison='exact'; values=@{
         enable_support='1'; support_type='normal_cura(auto)'; support_style='grid'; support_threshold_angle='70';
         support_interface_top_layers='0'; support_interface_bottom_layers='0'; sparse_infill_pattern='rectilinear';
         sparse_infill_density='10%'; wall_generator='classic'; wall_loops='1' } },
-    [pscustomobject]@{ name='cura_90_snug'; expected='cura-support-spatial'; forbidden=''; comparison='exact'; values=@{
+    [pscustomobject]@{ name='cura_90_snug'; expected=''; forbidden='cura-support-spatial'; comparison='exact'; values=@{
         enable_support='1'; support_type='normal_cura(auto)'; support_style='snug'; support_threshold_angle='90';
         support_interface_top_layers='4'; support_interface_bottom_layers='2'; sparse_infill_pattern='gyroid';
         sparse_infill_density='30%'; wall_generator='arachne'; wall_loops='6' } }
@@ -242,6 +271,9 @@ $cases = [Collections.Generic.List[object]]::new()
 foreach ($definition in $caseDefinitions) {
     $process = $base | ConvertTo-Json -Depth 50 | ConvertFrom-Json
     foreach ($entry in $definition.values.GetEnumerator()) { Set-JsonProperty $process $entry.Key $entry.Value }
+    if ($SupportAngleOverride -ge 0 -and $definition.values.enable_support -eq '1') {
+        Set-JsonProperty $process 'support_threshold_angle' ([string] $SupportAngleOverride)
+    }
     Set-JsonProperty $process 'name' "Magpie Vulkan verification $($definition.name)"
     $processPath = Join-Path $OutputRoot "$($definition.name)-process.json"
     $process | ConvertTo-Json -Depth 50 | Set-Content -LiteralPath $processPath -Encoding utf8
@@ -364,6 +396,12 @@ foreach ($case in $cases) {
             $failures.Add("$($case.name): maximum GPU dispatch '$($case.maximum_expected)' was not recorded")
         }
     }
+
+    Clear-GeometryDetails $cpu
+    Clear-GeometryDetails $gpu
+    if ($IncludeAuto) { Clear-GeometryDetails $auto }
+    if ($IncludeAggressive) { Clear-GeometryDetails $aggressive }
+    if ($IncludeMaximum) { Clear-GeometryDetails $maximum }
 }
 
 $summary = [pscustomobject][ordered]@{

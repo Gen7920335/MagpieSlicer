@@ -1538,9 +1538,11 @@ void GCodeViewer::load_as_preview(libvgcode::GCodeInputData&& data)
         const size_t move_type = static_cast<size_t>(vertex.type);
         if (move_type < m_move_type_counts.size()) {
             ++m_move_type_counts[move_type];
-            for (size_t mode = 0; mode < vertex.times.size(); ++mode)
+            const size_t time_mode_count = std::min(vertex.times.size(), m_move_type_times[move_type].size());
+            for (size_t mode = 0; mode < time_mode_count; ++mode)
                 m_move_type_times[move_type][mode] += vertex.times[mode];
-            if (vertex.type == libvgcode::EMoveType::Retract || vertex.type == libvgcode::EMoveType::Unretract) {
+            if ((vertex.type == libvgcode::EMoveType::Retract || vertex.type == libvgcode::EMoveType::Unretract) &&
+                normal_time_mode_idx < vertex.times.size()) {
                 m_move_type_distances[move_type] += std::fabs(vertex.feedrate) * vertex.times[normal_time_mode_idx];
             } else if (i > 0) {
                 const float dx = vertex.position[0] - data.vertices[i - 1].position[0];
@@ -4259,20 +4261,31 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
             //BBS: replace model custom gcode with current plate custom gcode
             std::vector<CustomGCode::Item> custom_gcode_per_print_z = wxGetApp().is_editor() ? wxGetApp().plater()->model().get_curr_plate_custom_gcodes().gcodes : m_custom_gcode_per_print_z;
             const size_t extruders_count = get_extruders_count();
-            std::vector<ColorRGBA> last_color(extruders_count);
-            for (size_t i = 0; i < extruders_count; ++i) {
-                last_color[i] = libvgcode::convert(m_viewer.get_tool_colors()[i]);
+            const auto& tool_colors = m_viewer.get_tool_colors();
+            std::vector<ColorRGBA> last_color(std::max<size_t>(1, extruders_count), ColorRGBA::WHITE());
+            for (size_t i = 0; i < extruders_count && i < tool_colors.size(); ++i) {
+                last_color[i] = libvgcode::convert(tool_colors[i]);
             }
             int last_extruder_id = 1;
-            int color_change_idx = 0;
+            size_t color_change_idx = 0;
+            const auto normalize_extruder = [&last_color, &last_extruder_id](int extruder) {
+                return extruder > 0 && static_cast<size_t>(extruder) <= last_color.size() ? extruder : last_extruder_id;
+            };
+            const auto consume_used_filament = [&used_filaments, &color_change_idx, &get_used_filament_from_volume](size_t extruder_index) {
+                const size_t volume_index = color_change_idx++;
+                return volume_index < used_filaments.size() ?
+                    get_used_filament_from_volume(used_filaments[volume_index], extruder_index) :
+                    std::pair<double, double>{0.0, 0.0};
+            };
             for (const auto& time_rec : times) {
                 switch (time_rec.first)
                 {
                 case CustomGCode::PausePrint: {
                     auto it = std::find_if(custom_gcode_per_print_z.begin(), custom_gcode_per_print_z.end(), [time_rec](const CustomGCode::Item& item) { return item.type == time_rec.first; });
                     if (it != custom_gcode_per_print_z.end()) {
-                        items.push_back({ PartialTime::EType::Print, it->extruder, last_color[it->extruder - 1], ColorRGBA::BLACK(), time_rec.second });
-                        items.push_back({ PartialTime::EType::Pause, it->extruder, ColorRGBA::BLACK(), ColorRGBA::BLACK(), time_rec.second });
+                        const int extruder = normalize_extruder(it->extruder);
+                        items.push_back({ PartialTime::EType::Print, extruder, last_color[extruder - 1], ColorRGBA::BLACK(), time_rec.second });
+                        items.push_back({ PartialTime::EType::Pause, extruder, ColorRGBA::BLACK(), ColorRGBA::BLACK(), time_rec.second });
                         custom_gcode_per_print_z.erase(it);
                     }
                     break;
@@ -4280,16 +4293,17 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
                 case CustomGCode::ColorChange: {
                     auto it = std::find_if(custom_gcode_per_print_z.begin(), custom_gcode_per_print_z.end(), [time_rec](const CustomGCode::Item& item) { return item.type == time_rec.first; });
                     if (it != custom_gcode_per_print_z.end()) {
-                        items.push_back({ PartialTime::EType::Print, it->extruder, last_color[it->extruder - 1], ColorRGBA::BLACK(), time_rec.second, get_used_filament_from_volume(used_filaments[color_change_idx++], it->extruder - 1) });
+                        const int extruder = normalize_extruder(it->extruder);
+                        items.push_back({ PartialTime::EType::Print, extruder, last_color[extruder - 1], ColorRGBA::BLACK(), time_rec.second, consume_used_filament(extruder - 1) });
                         ColorRGBA color;
                         decode_color(it->color, color);
-                        items.push_back({ PartialTime::EType::ColorChange, it->extruder, last_color[it->extruder - 1], color, time_rec.second });
-                        last_color[it->extruder - 1] = color;
-                        last_extruder_id = it->extruder;
+                        items.push_back({ PartialTime::EType::ColorChange, extruder, last_color[extruder - 1], color, time_rec.second });
+                        last_color[extruder - 1] = color;
+                        last_extruder_id = extruder;
                         custom_gcode_per_print_z.erase(it);
                     }
                     else
-                        items.push_back({ PartialTime::EType::Print, last_extruder_id, last_color[last_extruder_id - 1], ColorRGBA::BLACK(), time_rec.second, get_used_filament_from_volume(used_filaments[color_change_idx++], last_extruder_id - 1) });
+                        items.push_back({ PartialTime::EType::Print, last_extruder_id, last_color[last_extruder_id - 1], ColorRGBA::BLACK(), time_rec.second, consume_used_filament(last_extruder_id - 1) });
 
                     break;
                 }

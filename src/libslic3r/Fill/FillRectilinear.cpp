@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstdlib>
 #include <limits>
 #include <random>
@@ -17,6 +18,7 @@
 #include "../ExPolygon.hpp"
 #include "../Geometry.hpp"
 #include "../Gpu/VulkanSlicer.hpp"
+#include "../Gpu/CudaSlicer.hpp"
 #include "../Surface.hpp"
 #include "../ShortestPath.hpp"
 #include "../VariableWidth.hpp"
@@ -759,7 +761,7 @@ enum DirectionMask
     DIR_BACKWARD = 2
 };
 
-#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+#if defined(SLIC3R_ENABLE_VULKAN_SLICER) || defined(SLIC3R_ENABLE_CUDA_SLICER)
 static bool vulkan_slice_diagnostics_enabled()
 {
     static const bool enabled = [] {
@@ -828,7 +830,7 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(
         segs[i].idx = i;
         segs[i].pos = x0 + i * line_spacing;
     }
-#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+#if defined(SLIC3R_ENABLE_VULKAN_SLICER) || defined(SLIC3R_ENABLE_CUDA_SLICER)
     std::vector<Gpu::VulkanVerticalIntersectionRequest> vulkan_requests;
     std::vector<DeferredVerticalIntersection> deferred_intersections;
     bool collect_vulkan_requests = false;
@@ -842,12 +844,13 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(
         const size_t upper_bound = contour_edge_count > maximum_gpu_candidate_requests / n_vlines ?
             maximum_gpu_candidate_requests : contour_edge_count * n_vlines;
         collect_vulkan_requests = upper_bound != 0 &&
-            Gpu::VulkanSlicerBackend::should_dispatch_vertical_intersections(upper_bound);
+            (Gpu::CudaSlicerBackend::enabled() ? Gpu::CudaSlicerBackend::should_dispatch(upper_bound) :
+                Gpu::VulkanSlicerBackend::should_dispatch_vertical_intersections(upper_bound));
         if (collect_vulkan_requests) {
             const size_t reserve = std::min(upper_bound, initial_gpu_request_reserve);
             vulkan_requests.reserve(reserve);
             deferred_intersections.reserve(reserve);
-        } else if (upper_bound != 0) {
+        } else if (upper_bound != 0 && !Gpu::CudaSlicerBackend::enabled()) {
             Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(upper_bound);
         }
     }
@@ -911,9 +914,10 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(
                     is.pos_p = p2.y();
                     is.pos_q = 1;
                 } else {
-#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+#if defined(SLIC3R_ENABLE_VULKAN_SLICER) || defined(SLIC3R_ENABLE_CUDA_SLICER)
                     if (collect_vulkan_requests && vulkan_requests.size() == maximum_gpu_candidate_requests) {
-                        Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(vulkan_requests.size());
+                        if (!Gpu::CudaSlicerBackend::enabled())
+                            Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(vulkan_requests.size());
                         resolve_vertical_intersections_on_cpu(vulkan_requests, deferred_intersections, segs);
                         vulkan_requests.clear();
                         deferred_intersections.clear();
@@ -944,12 +948,12 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(
                     // Make an intersection point from the 't'.
                     is.pos_p *= int64_t(p2.y() - p1.y());
                     is.pos_p += p1.y() * int64_t(is.pos_q);
-#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+#if defined(SLIC3R_ENABLE_VULKAN_SLICER) || defined(SLIC3R_ENABLE_CUDA_SLICER)
                     }
 #endif
                 }
                 // +-1 to take rounding into account.
-#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+#if defined(SLIC3R_ENABLE_VULKAN_SLICER) || defined(SLIC3R_ENABLE_CUDA_SLICER)
                 if (!collect_vulkan_requests)
 #endif
                 {
@@ -961,19 +965,22 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(
         }
     }
 
-#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+#if defined(SLIC3R_ENABLE_VULKAN_SLICER) || defined(SLIC3R_ENABLE_CUDA_SLICER)
     if (!vulkan_requests.empty()) {
         bool accepted_gpu_batch = false;
         Gpu::VulkanVerticalIntersectionBatch gpu_intersections;
-        if (Gpu::VulkanSlicerBackend::should_dispatch_vertical_intersections(vulkan_requests.size())) {
-            gpu_intersections = Gpu::VulkanSlicerBackend::dispatch_vertical_intersections(vulkan_requests);
+        const bool use_cuda = Gpu::CudaSlicerBackend::enabled();
+        if (use_cuda ? Gpu::CudaSlicerBackend::should_dispatch(vulkan_requests.size()) :
+                Gpu::VulkanSlicerBackend::should_dispatch_vertical_intersections(vulkan_requests.size())) {
+            gpu_intersections = use_cuda ? Gpu::CudaSlicerBackend::dispatch_vertical_intersections(vulkan_requests) :
+                Gpu::VulkanSlicerBackend::dispatch_vertical_intersections(vulkan_requests);
             accepted_gpu_batch = gpu_intersections.dispatched &&
                 gpu_intersections.intersections.size() == vulkan_requests.size();
             for (size_t index = 0; accepted_gpu_batch && index < gpu_intersections.intersections.size(); ++index) {
                 const Gpu::VulkanVerticalIntersection &result = gpu_intersections.intersections[index];
                 accepted_gpu_batch = result.valid && result.stable_id == index && result.denominator > 0;
             }
-        } else {
+        } else if (!use_cuda) {
             Gpu::VulkanSlicerBackend::note_skipped_vertical_intersection_workload(vulkan_requests.size());
         }
 
@@ -990,10 +997,14 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(
                     std::max(vulkan_requests[index].segment.a.y, vulkan_requests[index].segment.b.y) + 1);
             }
         } else {
+            const auto fallback_started = std::chrono::steady_clock::now();
             resolve_vertical_intersections_on_cpu(vulkan_requests, deferred_intersections, segs);
+            if (use_cuda)
+                Gpu::CudaSlicerBackend::note_cpu_fallback(std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - fallback_started).count());
         }
 
-        if (gpu_intersections.dispatched) {
+        if (gpu_intersections.dispatched && !use_cuda) {
         Gpu::VulkanSlicerBackend::note_vertical_intersection_usage(
             accepted_gpu_batch ? vulkan_requests.size() : 0,
             accepted_gpu_batch ? vulkan_requests.size() : 0,
@@ -3188,7 +3199,11 @@ bool FillRectilinear::fill_surface_by_multilines(const Surface *surface, FillPar
         (this->print_object_config->enable_support.value ||
          this->print_object_config->enforce_support_layers.value > 0 ||
          this->print_object_config->raft_layers.value > 0);
-    const bool allow_vulkan = !support_generation_active && !is_support(params.extrusion_role);
+    // CUDA validates every independent intersection against the CPU result and
+    // commits it in the existing order. Node planning and merging remain CPU,
+    // so the explicitly selected GUI CUDA mode may also process support infill.
+    const bool allow_vulkan = Gpu::CudaSlicerBackend::enabled() ||
+        (!support_generation_active && !is_support(params.extrusion_role));
     for (const SweepParams &sweep : sweep_params) {
         // Rotate polygons so that we can work with vertical lines here
         float angle = rotate_vector.first + sweep.angle_base;

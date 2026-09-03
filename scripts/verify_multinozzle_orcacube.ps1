@@ -1,6 +1,7 @@
 param(
     [string] $SlicerPath,
     [string] $OutputRoot,
+    [string] $RunRoot,
     [string] $ModelPath,
     [int] $SliceTimeoutSeconds = 180,
     [string] $CaseFilter = '*'
@@ -375,7 +376,11 @@ $filamentProfiles = @(
     (Find-FilamentProfile 'Snapmaker PETG @U1'),
     (Find-FilamentProfile 'Snapmaker TPU @U1')
 )
-$runRoot = Join-Path $OutputRoot (Get-Date -Format 'yyyyMMdd-HHmmss')
+$runRoot = if ([string]::IsNullOrWhiteSpace($RunRoot)) {
+    Join-Path $OutputRoot (Get-Date -Format 'yyyyMMdd-HHmmss')
+} else {
+    [IO.Path]::GetFullPath($RunRoot)
+}
 New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
 $results = [Collections.Generic.List[object]]::new()
 $layerHeight = 0.10
@@ -463,16 +468,22 @@ foreach ($case in $cases) {
     $modelArg = [char]34 + $ModelPath + [char]34
     $initialFilamentMap = (1..$filamentProfiles.Count) -join ','
     $arguments = @('--slice', '0', '--debug', '1', '--filament-map', $initialFilamentMap, '--load-settings', $settingsArg, '--load-filaments', $filamentsArg, '--outputdir', $outputArg, $modelArg)
-    $processHandle = Start-Process -FilePath $SlicerPath -ArgumentList $arguments -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
-    if (-not $processHandle.WaitForExit($SliceTimeoutSeconds * 1000)) {
-        $processHandle.Kill()
-        throw "Slice timed out after $SliceTimeoutSeconds seconds: $($case.Name)"
+    $gcodePath = Get-ChildItem -LiteralPath $caseRoot -File -Filter '*.gcode' | Where-Object {
+        (Get-Content -LiteralPath $_.FullName -Tail 20) -contains '; CONFIG_BLOCK_END'
+    } | Select-Object -First 1 -ExpandProperty FullName
+    $exitCode = 0
+    if ([string]::IsNullOrWhiteSpace($gcodePath)) {
+        $processHandle = Start-Process -FilePath $SlicerPath -ArgumentList $arguments -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        if (-not $processHandle.WaitForExit($SliceTimeoutSeconds * 1000)) {
+            $processHandle.Kill()
+            throw "Slice timed out after $SliceTimeoutSeconds seconds: $($case.Name)"
+        }
+        $processHandle.Refresh()
+        $exitCode = $processHandle.ExitCode
+        $gcodePath = Get-ChildItem -LiteralPath $caseRoot -File -Filter '*.gcode' | Select-Object -First 1 -ExpandProperty FullName
     }
-    $processHandle.Refresh()
-    $exitCode = $processHandle.ExitCode
 
     $errors = [Collections.Generic.List[string]]::new()
-    $gcodePath = Get-ChildItem -LiteralPath $caseRoot -File -Filter '*.gcode' | Select-Object -First 1 -ExpandProperty FullName
     if ($null -eq $exitCode) { $exitCode = if ($null -ne $gcodePath) { 0 } else { 1 } }
     if ($exitCode -ne 0) { $errors.Add("CLI exit code $exitCode") }
     if ([string]::IsNullOrWhiteSpace($gcodePath)) { $errors.Add('G-code was not generated') }

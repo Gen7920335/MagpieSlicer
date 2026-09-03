@@ -205,7 +205,7 @@ enum SupportMaterialInterfacePattern {
 // BBS
 enum SupportType {
     stNormalAuto, stNormalCuraAuto, stTreeAuto, stNormal, stNormalCura, stTree,
-    stTsunamiAuto, stMixedAuto, stResinAuto
+    stMixedAuto = 7, stResinAuto
 };
 inline bool is_mixed(SupportType stype)
 {
@@ -214,10 +214,6 @@ inline bool is_mixed(SupportType stype)
 inline bool is_tree(SupportType stype)
 {
     return std::set<SupportType>{stTreeAuto, stTree}.count(stype) != 0;
-};
-inline bool is_tsunami(SupportType stype)
-{
-    return stype == stTsunamiAuto;
 };
 inline bool is_resin(SupportType stype)
 {
@@ -256,7 +252,7 @@ inline bool is_tree_slim(SupportType type, SupportMaterialStyle style)
 };
 inline bool is_auto(SupportType stype)
 {
-    return std::set<SupportType>{stNormalAuto, stTreeAuto, stNormalCuraAuto, stTsunamiAuto, stMixedAuto, stResinAuto}.count(stype) != 0;
+    return std::set<SupportType>{stNormalAuto, stTreeAuto, stNormalCuraAuto, stMixedAuto, stResinAuto}.count(stype) != 0;
 };
 
 enum ResinSupportTreeType {
@@ -1123,9 +1119,11 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,               support_interface_sublayer_angle))
     ((ConfigOptionInt,                 support_interface_sublayer_temperature))
     ((ConfigOptionBool,                cura_solid_support_raft))
+    ((ConfigOptionFloat,               cura_support_join_distance))
     // Spacing between support material lines (the hatching distance).
     ((ConfigOptionFloat,               support_base_pattern_spacing))
     ((ConfigOptionFloat,               support_expansion))
+    ((ConfigOptionInt,                 support_wall_count))
     ((ConfigOptionFloatsNullable,      support_speed))
     ((ConfigOptionEnum<SupportMaterialStyle>, support_style))
 
@@ -1190,16 +1188,6 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionPercent,            tree_support_top_rate))
     ((ConfigOptionFloat,              tree_support_branch_diameter_organic))
     ((ConfigOptionFloat,              tree_support_branch_angle_organic))
-    ((ConfigOptionFloat,              tsunami_branch_angle))
-    ((ConfigOptionBool,               tsunami_micro_branch_enabled))
-    ((ConfigOptionFloat,              tsunami_micro_branch_angle))
-    ((ConfigOptionFloat,              tsunami_micro_branch_size))
-    ((ConfigOptionFloat,              tsunami_trunk_height))
-    ((ConfigOptionFloat,              tsunami_rib_spacing))
-    ((ConfigOptionFloat,              tsunami_trunk_thickness))
-    ((ConfigOptionFloat,              tsunami_min_bed_contact_area))
-    ((ConfigOptionFloat,              tsunami_max_bed_contact_area))
-    ((ConfigOptionFloat,              tsunami_branch_minimum_spacing))
     ((ConfigOptionEnum<GapFillTarget>,gap_fill_target))
     ((ConfigOptionFloat,              min_length_factor))
 
@@ -2326,9 +2314,15 @@ private:
 template<class T>
 static std::vector<T> get_flush_volumes_matrix(const std::vector<T> &fv_matrix, size_t extruder_id = -1, size_t nozzle_nums = 1)
 {
-    if (extruder_id != -1 && nozzle_nums != 1) {
-        return std::vector<T>(fv_matrix.begin() + size_t(fv_matrix.size() / nozzle_nums * extruder_id + EPSILON),
-                                   fv_matrix.begin() + size_t(fv_matrix.size() / nozzle_nums * (extruder_id + 1) + EPSILON));
+    if (extruder_id != size_t(-1) && nozzle_nums != 1) {
+        if (nozzle_nums == 0 || extruder_id >= nozzle_nums)
+            return {};
+        const size_t matrix_size = fv_matrix.size() / nozzle_nums;
+        const size_t begin       = matrix_size * extruder_id;
+        const size_t end         = begin + matrix_size;
+        if (begin > fv_matrix.size() || end > fv_matrix.size())
+            return {};
+        return std::vector<T>(fv_matrix.begin() + begin, fv_matrix.begin() + end);
     }
     return fv_matrix;
 }
@@ -2339,9 +2333,13 @@ static std::vector<T> get_flush_volumes_matrix(const std::vector<T> &fv_matrix, 
 template<class T>
 static void set_flush_volumes_matrix(std::vector<T> &out_matrix, const std::vector<T> &fv_matrix, size_t extruder_id = -1, size_t nozzle_nums = 1)
 {
-    bool is_multi_extruder = false;
-    if (extruder_id != -1 && nozzle_nums != 1) {
-        std::copy(fv_matrix.begin(), fv_matrix.end(), out_matrix.begin() + size_t(out_matrix.size() / nozzle_nums * extruder_id + EPSILON));
+    if (extruder_id != size_t(-1) && nozzle_nums != 1) {
+        if (nozzle_nums == 0 || extruder_id >= nozzle_nums)
+            return;
+        const size_t expected_size = fv_matrix.size() * nozzle_nums;
+        if (out_matrix.size() != expected_size)
+            out_matrix.resize(expected_size, T{});
+        std::copy(fv_matrix.begin(), fv_matrix.end(), out_matrix.begin() + fv_matrix.size() * extruder_id);
     }
     else {
         out_matrix = std::vector<T>(fv_matrix.begin(), fv_matrix.end());

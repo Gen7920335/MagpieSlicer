@@ -1,5 +1,10 @@
 # Magpie Slicer 2.5.0.0.7
 
+> Historical release note: this file describes the published 2.5.0.0.7
+> installer. The current unreleased worktree removes Tsunami completely and
+> contains later Mixed/Tree stabilization. See
+> [the current feature-change document](docs/MAGPIE_FEATURE_CHANGES_2.5.0.0.7.md).
+
 This is the seventh Magpie release on the OrcaSlicer 2.5.0 base: Orca `2.5.0` + Magpie `.0.7`.
 
 ## Fix

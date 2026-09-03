@@ -1,9 +1,25 @@
 param(
     [string] $SlicerPath,
+    [string] $SupportTestPath,
     [string] $OutputRoot,
+    [string] $RunRoot,
     [int] $SliceTimeoutSeconds = 180,
     [int] $ImageWidth = 3600,
-    [double] $NozzleDiameter = 0.4
+    [double] $NozzleDiameter = 0.4,
+    [string] $ModelPath,
+    [ValidateRange(0, 90)]
+    [int] $SupportAngle = 90,
+    [ValidateSet('tree_slim', 'organic')]
+    [string[]] $Styles = @('tree_slim', 'organic'),
+    [ValidateRange(0, 10)]
+    [int[]] $WallCounts = (0..10),
+    [ValidateRange(0.1, 100)]
+    [double] $BranchDiameter = 10,
+    [ValidateSet('tree(auto)', 'mixed(auto)')]
+    [string] $SupportType = 'tree(auto)',
+    [ValidateRange(0, 100)]
+    [double] $MixedCoverageThreshold = 50,
+    [switch] $SkipGrowthAssertions
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,6 +36,28 @@ $BaseMachinePath = Join-Path $RepoRoot 'sandboxes\multinozzle_test\auto_tool2_02
 $BaseProcessPath = Join-Path $RepoRoot 'sandboxes\multinozzle_test\auto_tool2_020_base1_process.json'
 foreach ($path in @($SlicerPath, $BaseMachinePath, $BaseProcessPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required file not found: $path" }
+}
+
+if ($SupportType -eq 'mixed(auto)') {
+    if ([string]::IsNullOrWhiteSpace($SupportTestPath)) {
+        $SupportTestPath = @(
+            (Join-Path $RepoRoot 'build-vulkan\tests\fff_print\Release\fff_print_tests.exe'),
+            (Join-Path $RepoRoot 'build\tests\fff_print\Release\fff_print_tests.exe')
+        ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    }
+    if ([string]::IsNullOrWhiteSpace($SupportTestPath) -or
+        -not (Test-Path -LiteralPath $SupportTestPath -PathType Leaf)) {
+        throw 'Mixed tree-wall verification requires a current fff_print_tests.exe.'
+    }
+    $SupportTestPath = [IO.Path]::GetFullPath($SupportTestPath)
+    $nativeOutput = & $SupportTestPath '[MixedTreeWalls]' --reporter compact 2>&1
+    $nativeExitCode = $LASTEXITCODE
+    $nativeOutput | ForEach-Object { Write-Output $_ }
+    if ($nativeExitCode -ne 0) {
+        throw "Mixed tree-wall loop verification failed with exit code $nativeExitCode"
+    }
+    Write-Output 'MIXED_TREE_WALL_LOOP_TEST=PASSED'
+    exit 0
 }
 
 Add-Type -AssemblyName System.Drawing
@@ -313,10 +351,20 @@ function Render-StyleGrid(
     }
 }
 
-$runRoot = Join-Path $OutputRoot (Get-Date -Format 'yyyyMMdd-HHmmss')
+$runRoot = if ([string]::IsNullOrWhiteSpace($RunRoot)) {
+    Join-Path $OutputRoot (Get-Date -Format 'yyyyMMdd-HHmmss')
+} else {
+    [IO.Path]::GetFullPath($RunRoot)
+}
 New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
-$modelPath = Join-Path $runRoot 'tree-wall-count-probe.obj'
-Write-TreeWallProbe $modelPath
+$modelPath = if ([string]::IsNullOrWhiteSpace($ModelPath)) {
+    $generatedPath = Join-Path $runRoot 'tree-wall-count-probe.obj'
+    Write-TreeWallProbe $generatedPath
+    $generatedPath
+} else {
+    [IO.Path]::GetFullPath($ModelPath)
+}
+if (-not (Test-Path -LiteralPath $modelPath -PathType Leaf)) { throw "Model not found: $modelPath" }
 $filaments = @(
     (Find-FilamentProfile 'Snapmaker PLA @U1'),
     (Find-FilamentProfile 'Snapmaker ABS @U1'),
@@ -328,9 +376,9 @@ $layerHeightText = Format-Number ([Math]::Min(0.2, $NozzleDiameter * 0.533333333
 
 $results = [Collections.Generic.List[object]]::new()
 $renderCases = @{}
-foreach ($style in @('tree_slim','organic')) {
+foreach ($style in $Styles) {
     $renderCases[$style] = [Collections.Generic.List[object]]::new()
-    foreach ($wallCount in 0..10) {
+    foreach ($wallCount in $WallCounts) {
         $caseRoot = Join-Path $runRoot "$style-$wallCount"
         New-Item -ItemType Directory -Force -Path $caseRoot | Out-Null
         $machinePath = Join-Path $caseRoot 'machine.json'
@@ -360,12 +408,14 @@ foreach ($style in @('tree_slim','organic')) {
         foreach ($setting in @{
             layer_height=$layerHeightText; initial_layer_print_height=$layerHeightText; enable_support='1';
             line_width=$nozzleText;
-            support_type='tree(auto)'; support_style=$style; support_threshold_angle='90';
+            support_type=$SupportType; support_style=$style; support_threshold_angle=[string]$SupportAngle;
+            mixed_normal_support_generator='cura'; mixed_tree_support_style='organic';
+            mixed_normal_coverage_threshold=((Format-Number $MixedCoverageThreshold) + '%'); mixed_selective_merge='1';
             support_interface_top_layers='0'; support_interface_bottom_layers='0';
             support_base_pattern='default'; support_base_pattern_spacing='2.5';
             support_on_build_plate_only='1'; independent_support_layer_height='0';
             tree_support_wall_count=[string]$wallCount; tree_support_with_infill='0';
-            tree_support_branch_diameter='10'; tree_support_branch_diameter_organic='10';
+            tree_support_branch_diameter=(Format-Number $BranchDiameter); tree_support_branch_diameter_organic=(Format-Number $BranchDiameter);
             tree_support_tip_diameter=$nozzleText; tree_support_branch_distance='5';
             tree_support_branch_distance_organic='5'; support_line_width=$nozzleText;
             use_smaller_nozzles_in_crisp_corners='0'
@@ -386,13 +436,18 @@ foreach ($style in @('tree_slim','organic')) {
             '--outputdir',([char]34 + $caseRoot + [char]34),
             ([char]34 + $modelPath + [char]34)
         )
-        $handle = Start-Process -FilePath $SlicerPath -ArgumentList $arguments -NoNewWindow -PassThru `
-            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-        if (-not $handle.WaitForExit($SliceTimeoutSeconds * 1000)) {
-            $handle.Kill()
-            throw "Slice timeout: $style wall count $wallCount"
+        $gcode = Get-ChildItem -LiteralPath $caseRoot -File -Filter '*.gcode' | Where-Object {
+            (Get-Content -LiteralPath $_.FullName -Tail 20) -contains '; CONFIG_BLOCK_END'
+        } | Select-Object -First 1
+        if ($null -eq $gcode) {
+            $handle = Start-Process -FilePath $SlicerPath -ArgumentList $arguments -NoNewWindow -PassThru `
+                -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            if (-not $handle.WaitForExit($SliceTimeoutSeconds * 1000)) {
+                $handle.Kill()
+                throw "Slice timeout: $style wall count $wallCount"
+            }
+            $gcode = Get-ChildItem -LiteralPath $caseRoot -File -Filter '*.gcode' | Select-Object -First 1
         }
-        $gcode = Get-ChildItem -LiteralPath $caseRoot -File -Filter '*.gcode' | Select-Object -First 1
         if ($null -eq $gcode) {
             throw "G-code was not generated for $style wall count $wallCount. $(Get-Content $stderr -Raw)"
         }
@@ -431,25 +486,27 @@ foreach ($style in @('tree_slim','organic')) {
 }
 
 $errors = [Collections.Generic.List[string]]::new()
-foreach ($style in @('tree_slim','organic')) {
+foreach ($style in $Styles) {
     $cases = @($results | Where-Object Style -eq $style | Sort-Object WallCount)
     foreach ($case in $cases) {
         if (-not $case.Passed) { $errors.Add("$style count $($case.WallCount) failed basic G-code validation") }
     }
-    $explicit = @($cases | Where-Object WallCount -gt 0)
-    $distinctLengths = @($explicit | ForEach-Object { [Math]::Round($_.ExtrusionLength,1) } | Sort-Object -Unique)
-    if ($distinctLengths.Count -lt 6) {
-        $errors.Add("$style produced only $($distinctLengths.Count) distinct fifth-layer path lengths for counts 1..10")
-    }
-    if ($explicit[-1].ExtrusionLength -le $explicit[0].ExtrusionLength * 1.5) {
-        $errors.Add("$style count 10 did not add enough fifth-layer wall extrusion over count 1")
-    }
-    for ($index = 1; $index -lt $explicit.Count; ++$index) {
-        # Organic branches may saturate at the available branch width. A topology
-        # rebuild at saturation can change total path length slightly without
-        # removing a printable wall, so reject only a material (>1%) regression.
-        if ($explicit[$index].ExtrusionLength -lt $explicit[$index - 1].ExtrusionLength * 0.99) {
-            $errors.Add("$style fifth-layer extrusion decreased from count $($explicit[$index-1].WallCount) to $($explicit[$index].WallCount)")
+    if (-not $SkipGrowthAssertions) {
+        $explicit = @($cases | Where-Object WallCount -gt 0)
+        $distinctLengths = @($explicit | ForEach-Object { [Math]::Round($_.ExtrusionLength,1) } | Sort-Object -Unique)
+        if ($distinctLengths.Count -lt 6) {
+            $errors.Add("$style produced only $($distinctLengths.Count) distinct fifth-layer path lengths for counts 1..10")
+        }
+        if ($explicit[-1].ExtrusionLength -le $explicit[0].ExtrusionLength * 1.5) {
+            $errors.Add("$style count 10 did not add enough fifth-layer wall extrusion over count 1")
+        }
+        for ($index = 1; $index -lt $explicit.Count; ++$index) {
+            # Organic branches may saturate at the available branch width. A topology
+            # rebuild at saturation can change total path length slightly without
+            # removing a printable wall, so reject only a material (>1%) regression.
+            if ($explicit[$index].ExtrusionLength -lt $explicit[$index - 1].ExtrusionLength * 0.99) {
+                $errors.Add("$style fifth-layer extrusion decreased from count $($explicit[$index-1].WallCount) to $($explicit[$index].WallCount)")
+            }
         }
     }
     $imagePath = Join-Path $runRoot "$style-fifth-support-layer.png"

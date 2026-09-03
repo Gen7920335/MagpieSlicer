@@ -5,75 +5,18 @@
 #include "CuraStyleSupport.hpp"
 #include "SupportMaterial.hpp"
 #include "SupportParameters.hpp"
-#include "../BoundingBox.hpp"
 #include "../ClipperUtils.hpp"
 
-#include <boost/geometry.hpp>
-#include <boost/geometry/index/rtree.hpp>
 #include <boost/log/trivial.hpp>
 
 #include <algorithm>
-#include <numeric>
-#include <unordered_map>
 
 namespace Slic3r {
 namespace {
 
-namespace bg  = boost::geometry;
-namespace bgi = boost::geometry::index;
-
-using SpatialPoint = bg::model::point<double, 2, bg::cs::cartesian>;
-using SpatialBox   = bg::model::box<SpatialPoint>;
-using SpatialEntry = std::pair<SpatialBox, size_t>;
-using SpatialIndex = bgi::rtree<SpatialEntry, bgi::rstar<16, 4>>;
-
-SpatialBox spatial_box(const BoundingBox &bbox)
-{
-    return SpatialBox(
-        SpatialPoint(double(bbox.min.x()), double(bbox.min.y())),
-        SpatialPoint(double(bbox.max.x()), double(bbox.max.y())));
-}
-
-class DisjointSet
-{
-public:
-    explicit DisjointSet(size_t count) : m_parent(count), m_rank(count, 0)
-    {
-        std::iota(m_parent.begin(), m_parent.end(), size_t(0));
-    }
-
-    size_t find(size_t value)
-    {
-        while (m_parent[value] != value) {
-            m_parent[value] = m_parent[m_parent[value]];
-            value = m_parent[value];
-        }
-        return value;
-    }
-
-    void unite(size_t lhs, size_t rhs)
-    {
-        lhs = find(lhs);
-        rhs = find(rhs);
-        if (lhs == rhs)
-            return;
-        if (m_rank[lhs] < m_rank[rhs])
-            std::swap(lhs, rhs);
-        m_parent[rhs] = lhs;
-        if (m_rank[lhs] == m_rank[rhs])
-            ++m_rank[lhs];
-    }
-
-private:
-    std::vector<size_t>   m_parent;
-    std::vector<unsigned> m_rank;
-};
-
 struct DemandPolygon {
     size_t      layer_id { 0 };
     ExPolygon   polygon;
-    ExPolygons  connected_area;
-    BoundingBox bbox;
     long double demand_area { 0. };
     long double reachable_area { 0. };
     ExPolygons  reachable;
@@ -86,12 +29,20 @@ bool any_polygons(const std::vector<Polygons> &layers)
 
 } // namespace
 
-std::vector<Polygons> detect_mixed_support_demand(const PrintObject &object)
+std::vector<Polygons> detect_mixed_support_demand(
+    const PrintObject &object, CuraSupportDemand *cura_demand)
 {
     std::vector<Polygons> demand(object.layer_count());
     if (object.config().mixed_normal_support_generator.value == mnsgCura) {
         CuraStyleSupportGenerator detector(&object, object.slicing_parameters());
-        return detector.detect_support_demand();
+        CuraSupportDemand analysis = detector.analyze_support_demand();
+        demand = analysis.combined([&object]() {
+            if (object.print()->canceled())
+                throw CanceledException();
+        });
+        if (cura_demand != nullptr)
+            *cura_demand = std::move(analysis);
+        return demand;
     }
 
     SupportGeneratorLayerStorage storage;
@@ -161,7 +112,13 @@ MixedSupportPlan MixedSupportPlan::build_for_geometry(
     plan.m_buildplate_shadow = buildplate_shadow;
     plan.m_buildplate_shadow.resize(layer_count);
     plan.m_normal_paint_fallback.resize(layer_count);
-    connection_offset = std::max<coord_t>(SCALED_EPSILON, connection_offset);
+    // The regular Prusa/Cura support detectors have already separated each
+    // layer's support demand into islands. Do not reconnect those islands
+    // across adjacent layers here: a thin bridge on another layer can join
+    // otherwise independent overhangs and incorrectly send all of them to the
+    // tree channel. Keep the argument for API compatibility with callers that
+    // derive it from the active support extrusion width.
+    (void) connection_offset;
 
     std::vector<DemandPolygon> polygons;
     for (size_t layer_id = 0; layer_id < std::min(layer_count, support_demand.size()); ++layer_id) {
@@ -183,10 +140,6 @@ MixedSupportPlan MixedSupportPlan::build_for_geometry(
             DemandPolygon item;
             item.layer_id = layer_id;
             item.polygon = std::move(polygon);
-            item.connected_area = offset_ex(item.polygon, connection_offset);
-            if (item.connected_area.empty())
-                item.connected_area = { item.polygon };
-            item.bbox = get_extents(item.connected_area);
             item.demand_area = std::max<long double>(0., item.polygon.area());
             polygons.emplace_back(std::move(item));
         }
@@ -195,31 +148,8 @@ MixedSupportPlan MixedSupportPlan::build_for_geometry(
     if (polygons.empty())
         return plan;
 
-    std::vector<SpatialIndex> indices(layer_count);
-    DisjointSet components(polygons.size());
-    for (size_t polygon_id = 0; polygon_id < polygons.size(); ++polygon_id) {
-        const DemandPolygon &polygon = polygons[polygon_id];
-        const size_t first_layer = polygon.layer_id == 0 ? 0 : polygon.layer_id - 1;
-        for (size_t layer_id = first_layer; layer_id <= polygon.layer_id; ++layer_id) {
-            std::vector<SpatialEntry> candidates;
-            indices[layer_id].query(bgi::intersects(spatial_box(polygon.bbox)), std::back_inserter(candidates));
-            std::sort(candidates.begin(), candidates.end(), [](const SpatialEntry &lhs, const SpatialEntry &rhs) {
-                return lhs.second < rhs.second;
-            });
-            for (const SpatialEntry &candidate : candidates)
-                if (overlaps(polygon.connected_area, polygons[candidate.second].connected_area))
-                    components.unite(polygon_id, candidate.second);
-        }
-        indices[polygon.layer_id].insert({ spatial_box(polygon.bbox), polygon_id });
-    }
-
     const double threshold = std::clamp(normal_coverage_threshold_percent, 0., 100.);
     for (DemandPolygon &polygon : polygons) {
-        if (threshold == 0.) {
-            polygon.reachable_area = polygon.demand_area;
-            polygon.reachable = { polygon.polygon };
-            continue;
-        }
         const Polygons &shadow = plan.m_buildplate_shadow[polygon.layer_id];
         if (shadow.empty() || !get_extents(shadow).overlap(get_extents(polygon.polygon))) {
             polygon.reachable_area = polygon.demand_area;
@@ -230,19 +160,13 @@ MixedSupportPlan MixedSupportPlan::build_for_geometry(
         }
     }
 
-    std::unordered_map<size_t, size_t> decision_by_root;
     for (size_t polygon_id = 0; polygon_id < polygons.size(); ++polygon_id) {
-        const size_t root = components.find(polygon_id);
-        auto [it, inserted] = decision_by_root.emplace(root, plan.m_decisions.size());
-        if (inserted) {
-            MixedSupportComponentDecision decision;
-            decision.id = plan.m_decisions.size();
-            plan.m_decisions.emplace_back(std::move(decision));
-        }
-        MixedSupportComponentDecision &decision = plan.m_decisions[it->second];
+        MixedSupportComponentDecision decision;
+        decision.id = plan.m_decisions.size();
         decision.polygon_ids.push_back(polygon_id);
         decision.demand_area += polygons[polygon_id].demand_area;
         decision.reachable_area += polygons[polygon_id].reachable_area;
+        plan.m_decisions.emplace_back(std::move(decision));
     }
 
     for (MixedSupportComponentDecision &decision : plan.m_decisions) {
@@ -250,11 +174,21 @@ MixedSupportPlan MixedSupportPlan::build_for_geometry(
             double(100.L * decision.reachable_area / decision.demand_area) : 100.;
         const long double lhs = decision.reachable_area * 100.L;
         const long double rhs = static_cast<long double>(threshold) * decision.demand_area;
-        // Relative tolerance in scaled area-percent units. It is applied only at the final channel boundary.
+        // Relative tolerance in scaled area units. Selective Merge always gives
+        // the reachable portion to normal support first and sends only the
+        // blocked residual to tree support. The coverage threshold remains the
+        // whole-component selector when Selective Merge is disabled.
         const long double tolerance = std::max<long double>(1.L, decision.demand_area) * 1e-12L;
-        decision.channel = lhs + tolerance >= rhs ? MixedSupportChannel::Normal : MixedSupportChannel::Tree;
-        decision.selectively_split = selective_merge && decision.channel == MixedSupportChannel::Tree &&
-            decision.reachable_area > tolerance;
+        const long double blocked_area = std::max<long double>(0., decision.demand_area - decision.reachable_area);
+        const bool has_reachable = decision.reachable_area > tolerance;
+        const bool has_blocked = blocked_area > tolerance;
+        if (selective_merge) {
+            decision.selectively_split = has_reachable && has_blocked;
+            decision.channel = decision.selectively_split ? MixedSupportChannel::Mixed :
+                (has_reachable ? MixedSupportChannel::Normal : MixedSupportChannel::Tree);
+        } else {
+            decision.channel = lhs + tolerance >= rhs ? MixedSupportChannel::Normal : MixedSupportChannel::Tree;
+        }
         for (size_t polygon_id : decision.polygon_ids) {
             const DemandPolygon &polygon = polygons[polygon_id];
             if (decision.selectively_split) {
@@ -267,8 +201,6 @@ MixedSupportPlan MixedSupportPlan::build_for_geometry(
                 append(destination, to_polygons(polygon.polygon));
             }
         }
-        if (decision.selectively_split)
-            decision.channel = MixedSupportChannel::Mixed;
         const long double scaled_area_to_mm2 =
             static_cast<long double>(SCALING_FACTOR) * static_cast<long double>(SCALING_FACTOR);
         BOOST_LOG_TRIVIAL(debug)
@@ -291,8 +223,8 @@ MixedSupportPlan MixedSupportPlan::build_for_geometry(
                 to_polygons(intersection_ex(demand, (*painted_tree)[layer_id])) : Polygons{};
 
             // Projected facet masks may overlap even though each source facet owns one channel.
-            // Tree wins that ambiguous projection because it preserves the build-plate-only
-            // invariant of the normal channel and can route around model geometry.
+            // Tree wins that ambiguous projection so an explicit tree annotation is never
+            // silently replaced by normal support.
             const Polygons normal_only = tree_paint.empty() ? normal_paint :
                 to_polygons(diff_ex(normal_paint, tree_paint));
             Polygons painted = normal_only;

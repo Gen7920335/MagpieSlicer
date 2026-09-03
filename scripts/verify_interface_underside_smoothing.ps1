@@ -1,7 +1,11 @@
 param(
     [string] $SlicerPath,
     [string] $OutputRoot,
-    [int] $SliceTimeoutSeconds = 180
+    [int] $SliceTimeoutSeconds = 180,
+    [string] $ModelPath,
+    [ValidateRange(-1, 90)]
+    [int] $SupportAngleOverride = -1,
+    [string[]] $CaseFilter = @('*')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,7 +20,10 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
 
 $SlicerPath = [IO.Path]::GetFullPath($SlicerPath)
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
-$ModelPath = Join-Path $RepoRoot 'tests\data\overhang.obj'
+if ([string]::IsNullOrWhiteSpace($ModelPath)) {
+    $ModelPath = Join-Path $RepoRoot 'tests\data\overhang.obj'
+}
+$ModelPath = [IO.Path]::GetFullPath($ModelPath)
 $BaseMachinePath = Join-Path $RepoRoot 'sandboxes\multinozzle_test\auto_tool2_020_base1_machine.json'
 $BaseProcessPath = Join-Path $RepoRoot 'sandboxes\multinozzle_test\auto_tool2_020_base1_process.json'
 foreach ($path in @($SlicerPath, $ModelPath, $BaseMachinePath, $BaseProcessPath)) {
@@ -184,7 +191,11 @@ $cases = @(
     [pscustomobject]@{ Name='cura_nozzle_015'; Type='normal_cura(auto)'; Layers=5; Spacing=0.0; Pattern='triangles'; Style='default'; Nozzle=0.15 },
     [pscustomobject]@{ Name='prusa_regression'; Type='normal(auto)'; Layers=5; Spacing=0.2; Pattern='triangles'; Style='default'; Nozzle=0.4 },
     [pscustomobject]@{ Name='tree_regression'; Type='tree(auto)'; Layers=5; Spacing=0.2; Pattern='triangles'; Style='default'; Nozzle=0.4 }
-)
+) | Where-Object {
+    $name = $_.Name
+    @($CaseFilter | Where-Object { $name -like $_ }).Count -gt 0
+}
+if ($cases.Count -eq 0) { throw "No verification cases matched: $CaseFilter" }
 
 $filaments = @('Snapmaker PLA @U1','Snapmaker ABS @U1','Snapmaker PETG @U1','Snapmaker TPU @U1') |
     ForEach-Object { Find-FilamentProfile $_ }
@@ -210,7 +221,7 @@ foreach ($case in $cases) {
     Set-JsonProperty $process 'enable_support' '1'
     Set-JsonProperty $process 'support_type' $case.Type
     Set-JsonProperty $process 'support_style' $case.Style
-    Set-JsonProperty $process 'support_threshold_angle' '90'
+    Set-JsonProperty $process 'support_threshold_angle' $(if ($SupportAngleOverride -ge 0) { [string]$SupportAngleOverride } else { '90' })
     Set-JsonProperty $process 'support_interface_top_layers' ([string] $case.Layers)
     Set-JsonProperty $process 'support_interface_bottom_layers' '0'
     Set-JsonProperty $process 'support_interface_pattern' $case.Pattern

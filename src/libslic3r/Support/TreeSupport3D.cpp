@@ -20,6 +20,7 @@
 #include "Polyline.hpp"
 #include "MutablePolygon.hpp"
 #include "SupportCommon.hpp"
+#include "SupportTiming.hpp"
 #include "TriangleMeshSlicer.hpp"
 #include "TreeSupport.hpp"
 #include "I18N.hpp"
@@ -687,7 +688,7 @@ static std::optional<std::pair<Point, size_t>> polyline_sample_next_point_at_dis
 //    const int support_shift = roof ? 0 : support_infill_distance / 2;
 
     const Flow            &flow   = roof ? support_params.support_material_interface_flow : support_params.support_material_flow;
-    std::unique_ptr<Fill>  filler = std::unique_ptr<Fill>(Fill::new_from_type(roof ? support_params.interface_fill_pattern : support_params.base_fill_pattern));
+    std::unique_ptr<Fill>  filler = std::unique_ptr<Fill>(Fill::new_from_type(roof ? support_params.contact_fill_pattern : support_params.base_fill_pattern));
     FillParams             fill_params;
 
     filler->layer_id = layer_idx;
@@ -1960,11 +1961,12 @@ static void increase_areas_one_layer(
                              "Parent " << &parent << ": Radius: " << support_element_collision_radius(config, parent.state) << " at layer: " << layer_idx << " NextTarget: " << parent.state.layer_idx <<
                              " Distance to top: " << parent.state.distance_to_top << " Elephant foot increases " << parent.state.elephant_foot_increases << "  use_min_xy_dist " << parent.state.use_min_xy_dist <<
                              " to buildplate " << parent.state.to_buildplate << " gracious " << parent.state.to_model_gracious << " safe " << parent.state.can_use_safe_radius << " until move " << parent.state.dont_move_until;
-                    tree_supports_show_error("Potentially lost branch!"sv, true);
-#ifdef TREE_SUPPORTS_TRACK_LOST
-                    if (result)
-                        result->lost = true;
-#endif // TREE_SUPPORTS_TRACK_LOST
+                    if (result) {
+                        BOOST_LOG_TRIVIAL(warning)
+                            << "Recovered a degenerate tree influence area without losing the branch.";
+                    } else {
+                        tree_supports_show_error("Unable to recover tree influence area; branch was lost."sv, true);
+                    }
                 } else
                     result = increase_single_area(volumes, config, settings, layer_idx, parent,
                         settings.increase_speed == slow_speed ? offset_slow : offset_fast, to_bp_data, to_model_data, inc_wo_collision, 0, mergelayer);
@@ -3402,6 +3404,7 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
     // Process every mesh group. These groups can not be processed parallel, as the processing in each group is parallelized, and nested parallelization is disables and slow.
     for (std::pair<TreeSupportSettings, std::vector<size_t>> &processing : grouped_meshes)
     {
+        SupportProfileStage group_timing("support-tree-organic", "Generate organic tree mesh group", processing.second.size());
         // process each combination of meshes
         // this struct is used to easy retrieve setting. No other function except those in TreeModelVolumes and generate_initial_areas() have knowledge of the existence of multiple meshes being processed.
         //FIXME this is a copy
@@ -3439,6 +3442,7 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
         //FIXME generating overhangs just for the first mesh of the group.
         assert(processing.second.size() == 1);
 
+        SupportProfileStage demand_timing("support-tree-organic", "Detect organic tree overhang demand", print_object.layer_count());
         std::vector<Polygons>        overhangs;
         if (tree_support->m_demand_mask != nullptr) {
             const int num_raft_layers = int(config.raft_layers.size());
@@ -3481,8 +3485,11 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
                 }
             }
         }
+        demand_timing.finish(overhangs.size());
         // ### Precalculate avoidances, collision etc.
+        SupportProfileStage precalculate_timing("support-tree-organic", "Precalculate organic collision and avoidance volumes", overhangs.size());
         size_t num_support_layers = precalculate(print, overhangs, processing.first, processing.second, volumes, throw_on_cancel);
+        precalculate_timing.finish(num_support_layers);
         bool   has_support = num_support_layers > 0;
         bool   has_raft    = config.raft_layers.size() > 0;
         num_support_layers = std::max(num_support_layers, config.raft_layers.size());
@@ -3491,6 +3498,14 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
             continue;
 
         SupportParameters            support_params(print_object);
+        if (is_mixed(print_object.config().support_type.value)) {
+            // Organic geometry reads tree_support_wall_count through
+            // TreeSupportMeshGroupSettings, but its final toolpaths are emitted
+            // through this freshly constructed SupportParameters instance. In
+            // Mixed mode the common count otherwise belongs to the normal
+            // channel, making even a wide tree trunk fall back to one wall.
+            support_params.support_wall_count = support_params.tree_support_wall_count;
+        }
         support_params.with_sheath = true;
 // Don't override the support density of tree supports, as the support density is used for raft.
 // The trees will have the density zeroed in tree_supports_generate_paths()
@@ -3535,34 +3550,44 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
             std::vector<SupportElements> move_bounds(num_support_layers);
 
             // ### Place tips of the support tree
+            SupportProfileStage initial_areas_timing("support-tree-organic", "Generate initial organic influence areas", overhangs.size());
             for (size_t mesh_idx : processing.second)
                 generate_initial_areas(*print.get_object(mesh_idx), volumes, config, overhangs, 
                     move_bounds, interface_placer, throw_on_cancel);
+            initial_areas_timing.finish(move_bounds.size());
             auto t_gen = std::chrono::high_resolution_clock::now();
 
 
             // ### Propagate the influence areas downwards. This is an inherently serial operation.
             print.set_status(60, _L("Generating support"));
+            SupportProfileStage pathing_timing("support-tree-organic", "Propagate organic influence areas", move_bounds.size());
             create_layer_pathing(volumes, config, move_bounds, throw_on_cancel);
+            pathing_timing.finish(move_bounds.size());
             auto t_path = std::chrono::high_resolution_clock::now();
 
             // ### Set a point in each influence area
+            SupportProfileStage node_timing("support-tree-organic", "Place organic branch nodes", move_bounds.size());
             create_nodes_from_area(volumes, config, move_bounds, throw_on_cancel);
+            node_timing.finish(move_bounds.size());
             auto t_place = std::chrono::high_resolution_clock::now();
 
             // ### draw these points as circles
             // this new function give correct result when raft is also enabled
+            SupportProfileStage branches_timing("support-tree-organic", "Draw organic branch and contact geometry", move_bounds.size());
             organic_draw_branches(
                 *print.get_object(processing.second.front()), volumes, config, move_bounds,
                 bottom_contacts, top_contacts, interface_placer, intermediate_layers, layer_storage,
                 throw_on_cancel);
+            branches_timing.finish(intermediate_layers.size() + top_contacts.size() + bottom_contacts.size());
 
             //tree_support->move_bounds_to_contact_nodes(move_bounds, print_object, config);
 
             remove_undefined_layers();
 
+            SupportProfileStage interface_timing("support-tree-organic", "Generate organic interface stack", intermediate_layers.size());
             std::tie(interface_layers, base_interface_layers) = generate_interface_layers(print_object.config(), support_params,
                 bottom_contacts, top_contacts, interface_layers, base_interface_layers, intermediate_layers, layer_storage);
+            interface_timing.finish(interface_layers.size() + base_interface_layers.size());
 
             auto t_draw = std::chrono::high_resolution_clock::now();
             auto dur_pre_gen = 0.001 * std::chrono::duration_cast<std::chrono::microseconds>(t_precalc - t_start).count();
@@ -3589,17 +3614,25 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
             continue;
 
         // Produce the support G-code.
+        SupportProfileStage raft_timing("support-tree-organic", "Generate organic raft geometry", intermediate_layers.size());
         SupportGeneratorLayersPtr raft_layers = generate_raft_base(print_object, support_params, print_object.slicing_parameters(), top_contacts, interface_layers, base_interface_layers, intermediate_layers, layer_storage);
+        raft_timing.finish(raft_layers.size());
+        SupportProfileStage assemble_timing("support-tree-organic", "Assemble organic support layers", raft_layers.size() + bottom_contacts.size() + top_contacts.size() + intermediate_layers.size() + interface_layers.size() + base_interface_layers.size());
         SupportGeneratorLayersPtr layers_sorted = generate_support_layers(print_object, raft_layers, bottom_contacts, top_contacts, intermediate_layers, interface_layers, base_interface_layers);
+        assemble_timing.finish(print_object.support_layer_count());
 
         // BBS: This is a hack to avoid the support being generated outside the bed area. See #4769.
+        SupportProfileStage bed_clip_timing("support-tree-organic", "Clip organic support to bed area", layers_sorted.size());
         tbb::parallel_for_each(layers_sorted.begin(), layers_sorted.end(), [&](SupportGeneratorLayer *layer) {
             if (layer) layer->polygons = intersection(layer->polygons, volumes.m_bed_area);
         });
+        bed_clip_timing.finish(layers_sorted.size());
 
         print.set_status(69, _L("Generating support"));
+        SupportProfileStage toolpaths_timing("support-tree-organic", "Generate organic support toolpaths", print_object.support_layer_count());
         generate_support_toolpaths(print_object.support_layers(), print_object.config(), support_params, print_object.slicing_parameters(),
             raft_layers, bottom_contacts, top_contacts, intermediate_layers, interface_layers, base_interface_layers);
+        toolpaths_timing.finish(print_object.support_layer_count());
 
         auto t_end = std::chrono::high_resolution_clock::now();
         BOOST_LOG_TRIVIAL(info) << "Total time of organic tree support: " << 0.001 * std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count() << " ms";
@@ -3633,6 +3666,7 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
         }
 #endif /* SLIC3R_DEBUG */
 
+        group_timing.finish(print_object.support_layer_count());
         ++ counter;
     }
 

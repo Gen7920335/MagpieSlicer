@@ -39,7 +39,6 @@ Select contracts from the task domain, referenced symbols, touched files, settin
 | Any production-code, configuration, serialization, geometry, G-code, compatibility, build, installer, or release task | The relevant section of `docs/PROJECT_CONTRACTS.md` |
 | Nozzle, hotend, extrusion width, wall count, Classic, Arachne, tool mapping, filament mapping, or interlocking | `docs/PROJECT_CONTRACTS.md` sections 2, 3, 7, 8, and 10 as applicable |
 | Prusa/Normal Support, Cura Support, Tree/Organic Support, interface, raft, support pattern, or support serialization | `docs/PROJECT_CONTRACTS.md` sections 2, 4, 7, 8, and 10 as applicable |
-| Tsunami, Root, Trunk, Branch Guide, Rib, Virtual Rib, Physical Rib, Orientation Field, U-turn, Active Frontier, terminal ring, or Micro Branch | The relevant section of `docs/TSUNAMI_SUPPORT_CONTRACT.md` and `docs/PROJECT_CONTRACTS.md` sections 2, 4, 7, 8, and 10 as applicable |
 | Low-temperature interface, temperature tower, AUX cooling, wiping, interface temperature, or reheating | `docs/PROJECT_CONTRACTS.md` sections 2, 5, 7, 8, and 10 as applicable |
 | Vulkan, GPU, CPU fallback, dispatch, overflow, device buffer, or profiler | `docs/PROJECT_CONTRACTS.md` sections 2, 8, 9, 11, and 12 as applicable |
 | Snapmaker, LESIC, branding, installer, packaging, application identity, file association, or release | `docs/PROJECT_CONTRACTS.md` sections 6, 10, 11, 12, and 13 as applicable |
@@ -56,7 +55,6 @@ Search or read the relevant heading first. Do not load an entire conditional doc
 
 Always inspect `CODEX_HANDOFF.md` when any of the following applies:
 
-- the task concerns Tsunami Support;
 - the task continues prior work;
 - the user refers to an existing implementation, previous attempt, known bug, failed approach, or remaining task;
 - relevant working-tree changes already exist;
@@ -116,7 +114,7 @@ A **step** is the smallest behaviorally coherent unit with:
 
 A step is **not** every file edit, function edit, compiler-fix iteration, or shell command.
 
-For staged pipelines, use the pipeline stage or one independently verifiable stage transition as the step. Tsunami-specific stage boundaries are defined in `docs/TSUNAMI_SUPPORT_CONTRACT.md`.
+For staged pipelines, use the pipeline stage or one independently verifiable stage transition as the step.
 
 A step passes only when all applicable conditions hold:
 

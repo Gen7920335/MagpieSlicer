@@ -8,6 +8,7 @@
 #include "libslic3r/AppConfig.hpp"
 #include "libslic3r/Format/DRC.hpp"
 #include "libslic3r/Gpu/VulkanSlicer.hpp"
+#include "libslic3r/Gpu/CudaSlicer.hpp"
 #include <wx/language.h>
 #include "OG_CustomCtrl.hpp"
 #include "wx/graphics.h"
@@ -334,10 +335,25 @@ wxBoxSizer *PreferencesDialog::create_item_combobox(wxString title, wxString too
 
     //// save config
     combobox->GetDropDown().Bind(wxEVT_COMBOBOX, [this, param, config_name_index](wxCommandEvent& e) {
-        app_config->set(param, config_name_index[e.GetSelection()]);
+        if (e.GetSelection() >= 0 && size_t(e.GetSelection()) < config_name_index.size()) {
+            if (param == "vulkan_slicer_mode" || param == "cuda_slicer_mode")
+                app_config->set_slicing_acceleration_mode(param, config_name_index[e.GetSelection()]);
+            else
+                app_config->set(param, config_name_index[e.GetSelection()]);
+        }
         e.Skip();
     });
 
+    if (param == "vulkan_slicer_mode" || param == "cuda_slicer_mode") {
+        combobox->Bind(wxEVT_UPDATE_UI, [this, param, config_name_index, combobox](wxUpdateUIEvent&) {
+            const auto current = app_config->get(param);
+            const auto it = std::find(config_name_index.begin(), config_name_index.end(), current);
+            if (it != config_name_index.end()) {
+                const int index = int(it - config_name_index.begin());
+                if (combobox->GetSelection() != index) combobox->SetSelection(index);
+            }
+        });
+    }
     return sizer;
 }
 
@@ -1800,8 +1816,9 @@ void PreferencesDialog::create_items()
     g_sizer = f_sizers.back();
     g_sizer->AddGrowableCol(0, 1);
 
-    if (Gpu::VulkanSlicerBackend::compiled_with_vulkan()) {
+    if (Gpu::VulkanSlicerBackend::compiled_with_vulkan() || Gpu::CudaSlicerBackend::compiled_with_cuda())
         g_sizer->Add(create_item_title(_L("Slicing acceleration")), 1, wxEXPAND);
+    if (Gpu::VulkanSlicerBackend::compiled_with_vulkan()) {
         auto item_vulkan_slicer_mode = create_item_combobox(
             _L("Vulkan slicing acceleration"),
             _L("Auto uses Vulkan only when it is expected to be faster. On prefers qualified Vulkan hardware. "
@@ -1811,6 +1828,24 @@ void PreferencesDialog::create_items()
             {"auto", "on", "max", "off"});
         g_sizer->Add(item_vulkan_slicer_mode);
     }
+
+    if (Gpu::CudaSlicerBackend::compiled_with_cuda()) {
+        g_sizer->Add(create_item_combobox(
+            _L("CUDA slicing acceleration"),
+            _L("On validates every CUDA result against a CPU reference. Max GPU sends every supported non-empty workload to CUDA and skips CPU result duplication; input safety checks and failed workloads still use the CPU. Selecting CUDA turns Vulkan off. Changes apply to the next slice."),
+            "cuda_slicer_mode", {_L("Off"), _L("On"), _L("Max GPU")}, {"off", "on", "max"}));
+    }
+#ifdef MAGPIE_SLICING_TIMING
+    g_sizer->Add(create_item_title(_L("Slicing time recording")), 1, wxEXPAND);
+    g_sizer->Add(create_item_combobox(
+        _L("Timing detail"),
+        _L("Off disables timing logs but keeps the slice timer. Major stages records pipeline and object steps. Detailed also records CPU/GPU operations, durations, work counts and diagnostics. Changes apply to the next slice."),
+        "slicing_timing_detail", {_L("Off"), _L("Major stages"), _L("Detailed")}, {"off", "stages", "detailed"}));
+    g_sizer->Add(create_item_checkbox(
+        _L("Automatically save timing logs"),
+        _L("Save a separate JSON log for each completed FFF slicing session in the slicing-timing folder inside the application data folder. Logs are kept until you delete them. Manual export is also available beside the slice timer."),
+        "slicing_timing_auto_save"));
+#endif
 
     //// GRAPHICS > Realistic view
     g_sizer->Add(create_item_title(_L("Realistic View")), 1, wxEXPAND);

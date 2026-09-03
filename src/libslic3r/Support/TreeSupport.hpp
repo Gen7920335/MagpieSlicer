@@ -22,6 +22,7 @@ namespace Slic3r
 {
 class PrintObject;
 class TreeSupport;
+class TreeSupportProfiler;
 class SupportLayer;
 
 struct LayerHeightData
@@ -201,6 +202,7 @@ public:
      */
     TreeSupportData(const PrintObject& object, coordf_t xy_distance, coordf_t radius_sample_resolution);
     void set_extra_obstacles(const std::vector<Polygons> &extra_obstacles);
+    void set_profiler(const std::shared_ptr<TreeSupportProfiler> &profiler) { m_profiler = profiler; }
     ~TreeSupportData() {
         clear_nodes();
     }
@@ -295,6 +297,7 @@ private:
     const ExPolygons& calculate_avoidance(const RadiusLayerPair& key) const;
 
     tbb::spin_mutex  m_mutex;
+    std::shared_ptr<TreeSupportProfiler> m_profiler;
 
 public:
     bool is_slim = false;
@@ -395,8 +398,6 @@ public:
         return m_ts_data->create_node(position, distance_to_top, obj_layer_nr, support_roof_layers_below, to_buildplate, parent, print_z_, height_, dist_mm_to_top_, radius_);
     }
 
-    int  avg_node_per_layer = 0;
-    float nodes_angle = 0;
     bool  has_sharp_tails = false;
     bool  has_cantilever = false;
     double max_cantilever_dist = 0;
@@ -428,6 +429,7 @@ private:
      */
     std::vector<std::vector<SupportNode*>> contact_nodes;
     std::shared_ptr<TreeSupportData> m_ts_data;
+    std::shared_ptr<TreeSupportProfiler> m_profiler;
     std::unique_ptr<TreeSupport3D::TreeModelVolumes> m_model_volumes;
     PrintObject    *m_object;
     const PrintObjectConfig* m_object_config;

@@ -32,7 +32,15 @@ comparison for development verification.
 
 ## Current scope
 
-Only exact vertical scanline intersections and conservative tree-support AABB
-candidates are backend capabilities. Polygon boolean/offset operations,
-Arachne and classic wall topology, support topology, path ordering, seams,
-multi-nozzle assignment and G-code generation remain CPU-authoritative.
+Exact vertical scanline intersections and conservative AABB candidate queries
+for non-topological toolpath stages are backend capabilities. A slice containing
+a Tree or Mixed support channel remains entirely on CPU: its parallel branch
+merge order is timing-sensitive, so preparing or applying otherwise exact GPU
+work can change support topology. Polygon boolean/offset operations, Arachne
+and classic wall topology, support topology, path ordering, seams, multi-nozzle
+assignment and G-code generation remain CPU-authoritative.
+
+Cura support compares each support layer only with the model on that same
+layer. This one-to-one AABB preflight stays on CPU so it can avoid both an
+all-layer candidate batch and construction of XY-gap polygons for layers that
+cannot overlap.

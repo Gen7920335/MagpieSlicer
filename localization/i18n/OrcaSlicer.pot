@@ -14559,10 +14559,22 @@ msgstr ""
 msgid "The angle of the branches' diameter as they gradually become thicker towards the bottom. An angle of 0 will cause the branches to have uniform thickness over their length. A bit of an angle can increase stability of the organic support."
 msgstr ""
 
-msgid "Support wall loops"
+msgid "Normal support wall loops"
 msgstr ""
 
-msgid "This setting specifies the count of support walls in the range of [0,2]. 0 means auto."
+msgid "Number of perimeter loops generated around normal Prusa or Cura support. 0 disables support walls and leaves only the selected support pattern."
+msgstr ""
+
+msgid "Tree support wall loops"
+msgstr ""
+
+msgid "Number of perimeter loops generated around tree support branches. 0 means auto. If a branch is too narrow, only the loops that fit will be generated."
+msgstr ""
+
+msgid "Cura support join distance"
+msgstr ""
+
+msgid "Connect nearby Cura-style support regions whose gap is within this distance. The original support regions are preserved; only connecting material is added. 0 disables joining."
 msgstr ""
 
 msgid "Tree support with infill"
@@ -18318,7 +18330,7 @@ msgstr ""
 msgid "Avoid warping\nDid you know that when printing materials that are prone to warping such as ABS, appropriately increasing the heatbed temperature can reduce the probability of warping?"
 msgstr ""
 
-msgid "Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), Tsunami (auto), and Resin style (auto) are used to generate support automatically. If a manual style is selected, only support enforcers are generated. Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. Resin style (auto) uses the current PrusaSlicer resin point and tree strategies through the FFF support pipeline. Normal (Cura style) is an experimental OrcaProject support-area generator."
+msgid "Normal (Prusa style, auto), Normal (Cura style, auto), Tree (auto), Mixed (auto), and Resin style (auto) are used to generate support automatically. If a manual style is selected, only support enforcers are generated. Mixed (auto) assigns each connected support-demand region to either a normal or tree generator. Resin style (auto) uses the current PrusaSlicer resin point and tree strategies through the FFF support pipeline. Normal (Cura style) is an experimental OrcaProject support-area generator."
 msgstr ""
 
 msgid "Mixed (auto)"
@@ -18339,13 +18351,13 @@ msgstr ""
 msgid "Normal support coverage threshold"
 msgstr ""
 
-msgid "A connected support-demand region uses normal support when this percentage can be reached vertically from the build plate. Otherwise it uses tree support."
+msgid "When Selective merge is disabled, a connected support-demand region uses normal support when this percentage can be reached vertically from the build plate. Otherwise the whole region uses tree support."
 msgstr ""
 
 msgid "Selective merge"
 msgstr ""
 
-msgid "When a support-demand region is below the normal coverage threshold, use build-plate-origin normal support for its reachable portion and tree support for only the remaining portion. When disabled, the whole region uses tree support."
+msgid "Use normal support first for every reachable part of a support-demand region, then use tree support only for the blocked residual. The normal support coverage threshold is ignored while this is enabled."
 msgstr ""
 #: src/slic3r/GUI/Gizmos/GLGizmoFdmSupports.cpp
 msgid "Paint support as"
@@ -18413,4 +18425,109 @@ msgid "Max pillar linking distance"
 msgstr ""
 
 msgid "Object elevation"
+msgstr ""
+
+msgid "Mixed support: analyzing overhangs"
+msgstr ""
+
+msgid "Mixed support: classifying normal and tree regions"
+msgstr ""
+
+msgid "Mixed support: generating normal support"
+msgstr ""
+
+msgid "Mixed support: generating tree support"
+msgstr ""
+
+msgid "Mixed support: merging support channels"
+msgstr ""
+
+msgid "Cura support: propagating support regions"
+msgstr ""
+
+msgid "Cura support: generating support toolpaths"
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "CUDA: Off"
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "CUDA: On"
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "CUDA slicing acceleration"
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Use CUDA for supported workloads with full CPU result validation. Selecting CUDA turns Vulkan off. Changes apply to the next slice."
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Select calibrated, preferred, maximum, or disabled Vulkan slicing. Selecting Vulkan turns CUDA off. Changes apply to the next slice."
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Slicing time recording"
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Timing detail"
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Major stages"
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Detailed"
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Off disables timing logs but keeps the slice timer. Major stages records pipeline and object steps. Detailed also records CPU/GPU operations, durations, work counts and diagnostics. Changes apply to the next slice."
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Automatically save timing logs"
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Save a separate JSON log for each completed FFF slicing session in the slicing-timing folder inside the application data folder. Logs are kept until you delete them. Manual export is also available beside the slice timer."
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Slicing timing details"
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Timing details"
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Export timing log"
+msgstr ""
+
+#: Magpie CUDA and slicing timing settings
+msgid "Export slicing timing log"
+msgstr ""
+
+#: Magpie static validation guards
+msgid "Filament diameter is missing for the selected material."
+msgstr ""
+
+#: Magpie static validation guards
+msgid "Filament diameter must be greater than zero."
+msgstr ""
+
+#: Magpie static validation guards
+msgid "The active filament is not present in the current material list."
+msgstr ""
+
+#: Magpie static validation guards
+msgid "No calibration filament was selected"
+msgstr ""
+
+#: Magpie static validation guards
+msgid "Unable to calibrate: a required preset is missing"
 msgstr ""

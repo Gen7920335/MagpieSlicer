@@ -1928,7 +1928,7 @@ float GLCanvas3D::get_collapse_toolbar_height() const
 float GLCanvas3D::get_slice_duration_overlay_width() const
 {
     const Plater* plater = wxGetApp().plater();
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
     if (plater == nullptr || (!plater->is_slice_timer_running() &&
         plater->get_slice_duration_label().empty() &&
         plater->get_slicing_profile_status_label().empty()))
@@ -5161,13 +5161,20 @@ void GLCanvas3D::do_move(const std::string& snapshot_type)
             continue;
 
         PartPlateList& ppl = wxGetApp().plater()->get_partplate_list();
+        PartPlate *plate = plate_id < ppl.get_plate_count() ? ppl.get_plate(plate_id) : nullptr;
+        if (plate == nullptr)
+            continue;
         DynamicConfig& proj_cfg = wxGetApp().preset_bundle->project_config;
-        Vec3d plate_origin = ppl.get_plate(plate_id)->get_origin();
+        Vec3d plate_origin = plate->get_origin();
         ConfigOptionFloat wipe_tower_x(wipe_tower_origin(0) - plate_origin(0));
         ConfigOptionFloat wipe_tower_y(wipe_tower_origin(1) - plate_origin(1));
 
         ConfigOptionFloats* wipe_tower_x_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_x", true);
         ConfigOptionFloats* wipe_tower_y_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_y", true);
+        if (wipe_tower_x_opt->values.empty())
+            wipe_tower_x_opt->values.push_back(40.f);
+        if (wipe_tower_y_opt->values.empty())
+            wipe_tower_y_opt->values.push_back(200.f);
         wipe_tower_x_opt->set_at(&wipe_tower_x, plate_id, 0);
         wipe_tower_y_opt->set_at(&wipe_tower_y, plate_id, 0);
     }
@@ -5178,8 +5185,11 @@ void GLCanvas3D::do_move(const std::string& snapshot_type)
             continue;
 
         PartPlateList &ppl = wxGetApp().plater()->get_partplate_list();
+        PartPlate *plate = plate_id < ppl.get_plate_count() ? ppl.get_plate(plate_id) : nullptr;
+        if (plate == nullptr)
+            continue;
         DynamicConfig &project_config = wxGetApp().preset_bundle->project_config;
-        const Vec3d plate_origin = ppl.get_plate(plate_id)->get_origin();
+        const Vec3d plate_origin = plate->get_origin();
         ConfigOptionFloat tower_x(tower_origin.x() - plate_origin.x());
         ConfigOptionFloat tower_y(tower_origin.y() - plate_origin.y());
         ConfigOptionFloats *tower_x_option =
@@ -9604,7 +9614,7 @@ void GLCanvas3D::_render_collapse_toolbar() const
     collapse_toolbar.render(*this);
 
     const std::string duration = plater.get_slice_duration_label();
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
     const std::string profile_status = plater.get_slicing_profile_status_label();
     if (!plater.is_slice_timer_running() && duration.empty() && profile_status.empty())
 #else
@@ -9632,18 +9642,23 @@ void GLCanvas3D::_render_collapse_toolbar() const
         ImGuiWindowFlags_NoTitleBar |
         ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoSavedSettings;
-#ifndef MAGPIE_SLICING_PROFILER
+#ifndef MAGPIE_SLICING_TIMING
     overlay_flags |= ImGuiWindowFlags_NoInputs;
 #endif
     imgui.begin(std::string("###slice_duration_overlay"), overlay_flags);
     imgui.text(plater.is_slice_timer_running()
         ? into_u8(_L("Slicing..."))
         : into_u8(_L("Slice time")) + ": " + duration);
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
     if (!profile_status.empty())
         imgui.text(profile_status);
-    if (plater.has_slicing_profile_report() && ImGui::Button("Export timing log"))
-        plater.export_slicing_profile();
+    if (plater.has_slicing_profile_report()) {
+        // A wx modal must not run inside the active ImGui render frame.
+        if (ImGui::Button(into_u8(_L("Timing details")).c_str()))
+            plater.CallAfter([&plater] { plater.show_slicing_profile_details(); });
+        if (ImGui::Button(into_u8(_L("Export timing log")).c_str()))
+            plater.CallAfter([&plater] { plater.export_slicing_profile(); });
+    }
 #endif
     imgui.end();
 }
@@ -10484,7 +10499,8 @@ void GLCanvas3D::_set_warning_notification(EWarning warning, bool state)
                 }
             }
             std::string extruder_name;
-            if(wxGetApp().preset_bundle->is_bbl_vendor()){
+            if(wxGetApp().preset_bundle->is_bbl_vendor() && extruder_id > 0 &&
+               static_cast<size_t>(extruder_id) <= extruder_name_list.size()){
                 extruder_name = extruder_name_list[extruder_id-1];
             }
             else{
@@ -10543,7 +10559,9 @@ void GLCanvas3D::_set_warning_notification(EWarning warning, bool state)
                     }
                 }
             }
-            std::string extruder_name = extruder_name_list[extruder_id-1];
+            std::string extruder_name = extruder_id > 0 && static_cast<size_t>(extruder_id) <= extruder_name_list.size() ?
+                                            extruder_name_list[extruder_id - 1] :
+                                            (boost::format(_u8L("Tool %d")) % extruder_id).str();
             if (error_iter->second.size() == 1) {
                 text += (boost::format(_u8L("Filament %s is placed in the %s, but the generated G-code path exceeds the printable height of the %s.")) % filaments % extruder_name % extruder_name).str();
             } else {
@@ -10754,17 +10772,22 @@ bool GLCanvas3D::is_flushing_matrix_error() {
     const std::vector<double> &config_matrix  = (project_config.option<ConfigOptionFloats>("flush_volumes_matrix"))->values;
     const std::vector<double> &config_multiplier = (project_config.option<ConfigOptionFloats>("flush_multiplier"))->values;
 
+    if (config_multiplier.empty() || config_matrix.empty() || config_matrix.size() % config_multiplier.size() != 0)
+        return true;
+
     for (auto multiplier : config_multiplier) {
         if (multiplier == 0) return true;
     }
 
-    int  matrix_len = config_matrix.size() / config_multiplier.size();
-    int  row_len    = std::sqrt(matrix_len);
+    const size_t matrix_len = config_matrix.size() / config_multiplier.size();
+    const size_t row_len    = static_cast<size_t>(std::sqrt(matrix_len));
+    if (matrix_len == 0 || row_len == 0 || row_len * row_len != matrix_len)
+        return true;
     for (int i = 0; i < config_matrix.size(); i++)
     {
-        int relative_id = i % matrix_len;
-        int row_id      = relative_id / row_len;
-        int col_id      = relative_id % row_len;
+        const size_t relative_id = static_cast<size_t>(i) % matrix_len;
+        const size_t row_id      = relative_id / row_len;
+        const size_t col_id      = relative_id % row_len;
         if (row_id != col_id && config_matrix[i] == 0) return true;
     }
     return false;
@@ -10937,12 +10960,19 @@ void GLCanvas3D::WipeTowerInfo::apply_wipe_tower(Vec2d pos, double rot) const
 {
     // BBS: add partplate logic
     DynamicConfig& proj_cfg = wxGetApp().preset_bundle->project_config;
-    Vec3d plate_origin = wxGetApp().plater()->get_partplate_list().get_plate(m_plate_idx)->get_origin();
+    PartPlate *plate = wxGetApp().plater()->get_partplate_list().get_plate(m_plate_idx);
+    if (plate == nullptr)
+        return;
+    Vec3d plate_origin = plate->get_origin();
     ConfigOptionFloat wipe_tower_x(pos(X) - plate_origin(0));
     ConfigOptionFloat wipe_tower_y(pos(Y) - plate_origin(1));
 
     ConfigOptionFloats* wipe_tower_x_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_x", true);
     ConfigOptionFloats* wipe_tower_y_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_y", true);
+    if (wipe_tower_x_opt->values.empty())
+        wipe_tower_x_opt->values.push_back(40.f);
+    if (wipe_tower_y_opt->values.empty())
+        wipe_tower_y_opt->values.push_back(200.f);
     wipe_tower_x_opt->set_at(&wipe_tower_x, m_plate_idx, 0);
     wipe_tower_y_opt->set_at(&wipe_tower_y, m_plate_idx, 0);
 

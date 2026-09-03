@@ -13,7 +13,7 @@
 #include "Model.hpp"
 #include "PlaceholderParser.hpp"
 #include "PrintConfig.hpp"
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
 #include "SlicingProfiler.hpp"
 #endif
 
@@ -601,7 +601,7 @@ public:
 protected:
     bool            set_started(PrintStepEnum step) {
         const bool started = m_state.set_started(step, this->state_mutex(), [this](){ this->throw_if_canceled(); });
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         if (started)
             SlicingProfiler::instance().begin_state_step(false, static_cast<int>(step), this);
 #endif
@@ -609,9 +609,9 @@ protected:
     }
 	PrintStateBase::TimeStamp set_done(PrintStepEnum step) {
 		std::pair<PrintStateBase::TimeStamp, bool> status = m_state.set_done(step, this->state_mutex(), [this](){ this->throw_if_canceled(); });
-#ifdef MAGPIE_SLICING_PROFILER
-        if (status.second)
-            SlicingProfiler::instance().finish_state_step(false, static_cast<int>(step), this);
+#ifdef MAGPIE_SLICING_TIMING
+        // set_done's boolean requests a warning UI refresh, not completion.
+        SlicingProfiler::instance().finish_state_step(false, static_cast<int>(step), this);
 #endif
         if (status.second)
             this->status_update_warnings(static_cast<int>(step), PrintStateBase::WarningLevel::NON_CRITICAL, std::string());
@@ -619,7 +619,7 @@ protected:
 	}
     bool            invalidate_step(PrintStepEnum step) {
         const bool invalidated = m_state.invalidate(step, this->cancel_callback());
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         if (invalidated)
             SlicingProfiler::instance().cancel_state_step(false, static_cast<int>(step), this);
 #endif
@@ -628,7 +628,7 @@ protected:
     template<typename StepTypeIterator>
     bool            invalidate_steps(StepTypeIterator step_begin, StepTypeIterator step_end) {
         const bool invalidated = m_state.invalidate_multiple(step_begin, step_end, this->cancel_callback());
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         if (invalidated)
             for (auto it = step_begin; it != step_end; ++it)
                 SlicingProfiler::instance().cancel_state_step(false, static_cast<int>(*it), this);
@@ -639,7 +639,7 @@ protected:
         { return invalidate_steps(il.begin(), il.end()); }
     bool            invalidate_all_steps() {
         const bool invalidated = m_state.invalidate_all(this->cancel_callback());
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         if (invalidated)
             for (size_t step = 0; step < COUNT; ++step)
                 SlicingProfiler::instance().cancel_state_step(false, static_cast<int>(step), this);
@@ -672,7 +672,7 @@ protected:
 
     bool            set_started(PrintObjectStepEnum step) {
         const bool started = m_state.set_started(step, PrintObjectBase::state_mutex(m_print), [this](){ this->throw_if_canceled(); });
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         if (started)
             SlicingProfiler::instance().begin_state_step(true, static_cast<int>(step), this);
 #endif
@@ -680,9 +680,9 @@ protected:
     }
 	PrintStateBase::TimeStamp set_done(PrintObjectStepEnum step) {
 		std::pair<PrintStateBase::TimeStamp, bool> status = m_state.set_done(step, PrintObjectBase::state_mutex(m_print), [this](){ this->throw_if_canceled(); });
-#ifdef MAGPIE_SLICING_PROFILER
-        if (status.second)
-            SlicingProfiler::instance().finish_state_step(true, static_cast<int>(step), this);
+#ifdef MAGPIE_SLICING_TIMING
+        // The step completed even when no warning UI update is needed.
+        SlicingProfiler::instance().finish_state_step(true, static_cast<int>(step), this);
 #endif
         if (status.second)
             this->status_update_warnings(m_print, static_cast<int>(step), PrintStateBase::WarningLevel::NON_CRITICAL, std::string());
@@ -691,7 +691,7 @@ protected:
 
     bool            invalidate_step(PrintObjectStepEnum step) {
         const bool invalidated = m_state.invalidate(step, PrintObjectBase::cancel_callback(m_print));
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         if (invalidated)
             SlicingProfiler::instance().cancel_state_step(true, static_cast<int>(step), this);
 #endif
@@ -700,7 +700,7 @@ protected:
     template<typename StepTypeIterator>
     bool            invalidate_steps(StepTypeIterator step_begin, StepTypeIterator step_end) {
         const bool invalidated = m_state.invalidate_multiple(step_begin, step_end, PrintObjectBase::cancel_callback(m_print));
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         if (invalidated)
             for (auto it = step_begin; it != step_end; ++it)
                 SlicingProfiler::instance().cancel_state_step(true, static_cast<int>(*it), this);
@@ -711,7 +711,7 @@ protected:
         { return invalidate_steps(il.begin(), il.end()); }
     bool            invalidate_all_steps() {
         const bool invalidated = m_state.invalidate_all(PrintObjectBase::cancel_callback(m_print));
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         if (invalidated)
             for (size_t step = 0; step < COUNT; ++step)
                 SlicingProfiler::instance().cancel_state_step(true, static_cast<int>(step), this);
@@ -720,7 +720,7 @@ protected:
     }
     bool            invalidate_all_steps_without_cancel() {
         const bool invalidated = m_state.invalidate_all([](){});
-#ifdef MAGPIE_SLICING_PROFILER
+#ifdef MAGPIE_SLICING_TIMING
         if (invalidated)
             for (size_t step = 0; step < COUNT; ++step)
                 SlicingProfiler::instance().cancel_state_step(true, static_cast<int>(step), this);

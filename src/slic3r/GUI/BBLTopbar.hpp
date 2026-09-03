@@ -102,6 +102,7 @@ private:
     wxAuiToolBarItem* m_redo_item;
     wxAuiToolBarItem* m_calib_item;
     wxChoice*          m_vulkan_mode_choice { nullptr };
+    wxChoice*          m_cuda_mode_choice { nullptr };
     wxAuiToolBarItem* maximize_btn;
 
     wxBitmap m_publish_bitmap;

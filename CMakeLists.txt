@@ -530,6 +530,11 @@ if (SLIC3R_PROFILE)
     add_definitions(-DSLIC3R_PROFILE)
 endif ()
 
+option(MAGPIE_SLICING_TIMING "Record slicing timings without changing application identity" OFF)
+if (MAGPIE_SLICING_TIMING OR MAGPIE_SLICING_PROFILER)
+    add_definitions(-DMAGPIE_SLICING_TIMING=1)
+endif ()
+
 if (MAGPIE_SLICING_PROFILER)
     message(STATUS "Building isolated Magpie Slicer Profiler development version")
     add_definitions(-DMAGPIE_SLICING_PROFILER=1)

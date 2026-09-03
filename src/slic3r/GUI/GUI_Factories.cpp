@@ -88,9 +88,9 @@ std::map<std::string, std::vector<SimpleSettingData>>  SettingsFactory::OBJECT_C
     { L("Support"), {{"brim_type", "",1},{"brim_width", "",2},{"brim_object_gap", "",3},{"brim_flow_ratio", "",4},{"brim_use_efc_outline", "",5},
                     {"enable_support", "",6},{"support_type", "",7},{"support_threshold_angle", "",8}, {"support_threshold_overlap", "",9}, {"support_on_build_plate_only", "",10},
                     {"support_filament", "",11},{"support_interface_filament", "",12},{"support_expansion", "",13},{"support_style", "",14},
-                    {"tree_support_brim_width", "",15}, {"tree_support_branch_angle", "",16},{"tree_support_branch_angle_organic","",17}, {"tree_support_wall_count", "",18},{"tree_support_branch_diameter_angle", "",19},//tree support
+                    {"support_wall_count", "",15}, {"tree_support_brim_width", "",16}, {"tree_support_branch_angle", "",17},{"tree_support_branch_angle_organic","",18}, {"tree_support_wall_count", "",19},{"tree_support_branch_diameter_angle", "",20},//tree support
                     {"support_bottom_z_distance", "",20},{"support_top_z_distance", "",21},{"support_base_pattern", "",22},{"support_base_pattern_spacing", "",23},
-                    {"cura_solid_support_raft", "",24},{"support_interface_top_layers", "",25},{"support_interface_bottom_layers", "",26},{"support_interface_spacing", "",27},{"support_bottom_interface_spacing", "",28},
+                    {"cura_solid_support_raft", "",24},{"cura_support_join_distance", "",25},{"support_interface_top_layers", "",26},{"support_interface_bottom_layers", "",27},{"support_interface_spacing", "",28},{"support_bottom_interface_spacing", "",29},
                     {"support_object_xy_distance", "",29}, {"bridge_no_support", "",30},{"max_bridge_length", "",31},{"support_critical_regions_only", "",32},{"support_remove_small_overhang","",33},
                     {"support_object_first_layer_gap","",34}
                     }},

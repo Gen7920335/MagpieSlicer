@@ -13,11 +13,11 @@ namespace Slic3r {
 class SVG
 {
 public:
-    bool arrows;
-    std::string fill, stroke;
+    bool arrows { false };
+    std::string fill { "grey" }, stroke { "black" };
     Point origin;
-    float height;
-    bool  flipY;
+    float height { 0.0f };
+    bool  flipY { false };
 
     SVG() = default;
     SVG(const char* afilename) :
@@ -84,7 +84,7 @@ public:
     
     private:
     std::string filename;
-    FILE* f;
+    FILE* f { nullptr };
     
     void path(const std::string &d, bool fill, coordf_t stroke_width, const float fill_opacity);
     std::string get_path_d(const MultiPoint &mp, bool closed = false) const;
