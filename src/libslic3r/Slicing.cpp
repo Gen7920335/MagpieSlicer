@@ -4,6 +4,7 @@
 #include "Slicing.hpp"
 #include "SlicingAdaptive.hpp"
 #include "PrintConfig.hpp"
+#include "Flow.hpp"
 #include "Model.hpp"
 
 // #define SLIC3R_DEBUG
@@ -74,8 +75,10 @@ SlicingParameters SlicingParameters::create_from_config(
     // which is consistent with the requirement that if support_filament == 0 resp. support_interface_filament == 0,
     // support will not trigger tool change, but it will use the current nozzle instead.
     // In that case all the nozzles have to be of the same diameter.
-    coordf_t support_material_extruder_dmr           = print_config.nozzle_diameter.get_at(object_config.support_filament.value - 1);
-    coordf_t support_material_interface_extruder_dmr = print_config.nozzle_diameter.get_at(object_config.support_interface_filament.value - 1);
+    coordf_t support_material_extruder_dmr = print_config.nozzle_diameter.get_at(
+        size_t(support_hotend_1based(print_config, object_config.support_filament.value)) - 1);
+    coordf_t support_material_interface_extruder_dmr = print_config.nozzle_diameter.get_at(
+        size_t(support_hotend_1based(print_config, object_config.support_interface_filament.value)) - 1);
 
     // ORCA: store Z distance
     const coordf_t support_top_z_gap    = object_config.support_top_z_distance.value;
@@ -123,12 +126,14 @@ SlicingParameters SlicingParameters::create_from_config(
     params.max_layer_height = std::numeric_limits<double>::max();
     if (object_config.enable_support.value || params.base_raft_layers > 0 || object_config.enforce_support_layers > 0) {
         // Has some form of support. Add the support layers to the minimum / maximum layer height limits.
+        const unsigned support_hotend = support_hotend_1based(print_config, object_config.support_filament.value);
+        const unsigned interface_hotend = support_hotend_1based(print_config, object_config.support_interface_filament.value);
         params.min_layer_height = std::max(
-            min_layer_height_from_nozzle(print_config, object_config.support_filament), 
-            min_layer_height_from_nozzle(print_config, object_config.support_interface_filament));
+            min_layer_height_from_nozzle(print_config, support_hotend),
+            min_layer_height_from_nozzle(print_config, interface_hotend));
         params.max_layer_height = std::min(
-            max_layer_height_from_nozzle(print_config, object_config.support_filament), 
-            max_layer_height_from_nozzle(print_config, object_config.support_interface_filament));
+            max_layer_height_from_nozzle(print_config, support_hotend),
+            max_layer_height_from_nozzle(print_config, interface_hotend));
         params.max_suport_layer_height = params.max_layer_height;
     }
 
@@ -136,9 +141,12 @@ SlicingParameters SlicingParameters::create_from_config(
         params.min_layer_height = std::max(params.min_layer_height, min_layer_height_from_nozzle(print_config, 0));
         params.max_layer_height = std::min(params.max_layer_height, max_layer_height_from_nozzle(print_config, 0));
     } else {
-        for (unsigned int extruder_id : object_extruders) {
-            params.min_layer_height = std::max(params.min_layer_height, min_layer_height_from_nozzle(print_config, extruder_id));
-            params.max_layer_height = std::min(params.max_layer_height, max_layer_height_from_nozzle(print_config, extruder_id));
+        // Object printing extruders are zero-based material IDs; the limits are
+        // indexed by one-based physical nozzles, just like the diameter above.
+        for (unsigned int filament_id : object_extruders) {
+            const unsigned hotend = unsigned(get_extruder_index(print_config, filament_id) + 1);
+            params.min_layer_height = std::max(params.min_layer_height, min_layer_height_from_nozzle(print_config, hotend));
+            params.max_layer_height = std::min(params.max_layer_height, max_layer_height_from_nozzle(print_config, hotend));
         }
     }
 
@@ -258,7 +266,10 @@ std::vector<coordf_t> layer_height_profile_from_ranges(
     for (t_layer_config_ranges::const_iterator it_range = layer_config_ranges.begin(); it_range != layer_config_ranges.end(); ++ it_range) {
         coordf_t lo = it_range->first.first;
         coordf_t hi = std::min(it_range->first.second, slicing_params.object_print_z_height());
-        coordf_t height = it_range->second.option("layer_height")->getFloat();
+        // Imported ranges may override only material or other settings. Preserve
+        // normal configuration inheritance instead of requiring a height key.
+        const ConfigOption *height_option = it_range->second.option("layer_height");
+        coordf_t height = height_option ? height_option->getFloat() : slicing_params.layer_height;
         if (! ranges_non_overlapping.empty())
             // Trim current low with the last high.
             lo = std::max(lo, ranges_non_overlapping.back().first.second);

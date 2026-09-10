@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "libslic3r/SlicingProfiler.hpp"
+#include "libslic3r/Support/SupportTiming.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -96,6 +97,46 @@ nlohmann::json completed_profile(const char* name)
     CHECK_FALSE(remove_error);
     return report;
 }
+}
+
+TEST_CASE("timing distinguishes zero results from an unspecified count", "[SlicingProfiler][ZeroResults]")
+{
+    auto &profiler = SlicingProfiler::instance();
+    profiler.begin_session("off");
+    const auto empty = profiler.begin_event("cpu", "direct-zero", SlicingProfileBackend::CPU, 7);
+    profiler.finish_event(empty, SlicingProfileBackend::CPU, -1.0, 0);
+    const auto unchanged = profiler.begin_event("cpu", "direct-keep", SlicingProfileBackend::CPU, 7);
+    profiler.finish_event(unchanged, SlicingProfileBackend::CPU);
+    {
+        ScopedSlicingProfileEvent zero("cpu", "scoped-zero", SlicingProfileBackend::CPU, 11);
+        zero.set_result(SlicingProfileBackend::CPU, -1.0, 0);
+    }
+    {
+        ScopedSlicingProfileEvent keep("cpu", "scoped-keep", SlicingProfileBackend::CPU, 11);
+        keep.set_result(SlicingProfileBackend::CPU);
+    }
+    {
+        SupportProfileStage zero("support", "support-zero", 13);
+        zero.finish(0);
+    }
+    {
+        SupportProfileStage keep("support", "support-keep", 13);
+        keep.finish();
+    }
+    profiler.finish_session();
+    const auto report = completed_profile("magpie-timing-zero-results.json");
+    const std::map<std::string, size_t> expected {
+        {"direct-zero", 0}, {"direct-keep", 7}, {"scoped-zero", 0},
+        {"scoped-keep", 11}, {"support-zero", 0}, {"support-keep", 13}
+    };
+    for (const char *section : {"events", "summary"}) {
+        REQUIRE(report.at(section).size() == expected.size());
+        for (const auto &event : report.at(section)) {
+            const auto name = event.at("name").get<std::string>();
+            CAPTURE(section, name);
+            CHECK(event.at("work_items") == expected.at(name));
+        }
+    }
 }
 
 TEST_CASE("slicing timing keeps CUDA and Vulkan measurements separate", "[SlicingProfiler]")

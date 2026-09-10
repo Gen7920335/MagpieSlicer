@@ -18531,3 +18531,8 @@ msgstr ""
 #: Magpie static validation guards
 msgid "Unable to calibrate: a required preset is missing"
 msgstr ""
+
+
+#: src/libslic3r/PrintObject.cpp
+msgid "Tree support could not route the assigned Mixed support demand. Normal support was retried, but some areas may remain unsupported. Check the preview before printing."
+msgstr ""

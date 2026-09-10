@@ -5305,17 +5305,16 @@ void PresetBundle::update_multi_material_filament_presets(size_t to_delete_filam
         multiplier_option->values.resize(nozzle_nums, 1.f);
     }
 
-    if ( (num_filaments * num_filaments) != size_t(old_matrix.size() / old_nozzle_nums) ) {
+    if (old_nozzle_nums != nozzle_nums ||
+        old_matrix.size() != num_filaments * num_filaments * nozzle_nums) {
         // First verify if purging volumes presets for each extruder matches number of extruders
         std::vector<double>& filaments = this->project_config.option<ConfigOptionFloats>("flush_volumes_vector")->values;
-        while (filaments.size() < 2* num_filaments) {
-            filaments.push_back(filaments.size()>1 ? filaments[0] : 140.);  // copy the values from the first extruder
-            filaments.push_back(filaments.size()>1 ? filaments[1] : 140.);
-        }
-        while (filaments.size() > 2* num_filaments) {
-            filaments.pop_back();
-            filaments.pop_back();
-        }
+        const double default_from = filaments.empty() ? 140. : filaments[0];
+        const double default_to = filaments.size() < 2 ? 140. : filaments[1];
+        const size_t old_vector_size = filaments.size();
+        filaments.resize(2 * num_filaments);
+        for (size_t i = old_vector_size; i < filaments.size(); ++i)
+            filaments[i] = i % 2 == 0 ? default_from : default_to;
 
         size_t old_matrix_size = old_number_of_filaments * old_number_of_filaments;
         size_t new_matrix_size = num_filaments * num_filaments;
@@ -5329,7 +5328,9 @@ void PresetBundle::update_multi_material_filament_presets(size_t to_delete_filam
                         // Orca: only copy from old_matrix when the old layout actually has data
                         // for this nozzle slot; otherwise initialize from the per-filament
                         // flush volumes the same way the (i,j) out-of-range branch does.
-                        if (nozzle_id < old_nozzle_nums) {
+                        if (nozzle_id < old_nozzle_nums && old_i < old_number_of_filaments &&
+                            old_j < old_number_of_filaments &&
+                            old_i * old_number_of_filaments + old_j + old_matrix_size * nozzle_id < old_matrix.size()) {
                             new_matrix[i * num_filaments + j + new_matrix_size * nozzle_id] = old_matrix[old_i * old_number_of_filaments + old_j + old_matrix_size * nozzle_id];
                         } else {
                             new_matrix[i * num_filaments + j + new_matrix_size * nozzle_id] = (i == j ? 0. : filaments[2 * i] + filaments[2 * j + 1]);

@@ -34,6 +34,8 @@ constexpr size_t maximum_input_stride_bytes = 128;
 constexpr size_t maximum_output_stride_bytes = 32;
 // Experimental dispatch floor, not a measured profitability threshold.
 constexpr size_t minimum_requests = 4096;
+constexpr const char* busy_fallback_diagnostic = "CUDA runtime busy; CPU fallback without waiting";
+constexpr const char* deferred_preflight_diagnostic = "CUDA preflight accounted while runtime busy";
 std::atomic<bool> session_enabled {false};
 std::atomic<bool> session_force_dispatch {false};
 std::atomic<bool> session_skip_cpu_validation {false};
@@ -44,6 +46,11 @@ bool environment_flag(const char* name) {
 struct Runtime {
     std::mutex mutex;
     SlicingProfileGpuStats stats;
+    std::atomic<uint64_t> busy_fallbacks {0};
+    std::atomic<uint64_t> busy_decision_us {0};
+    std::atomic<uint64_t> deferred_preflight_calls {0};
+    std::atomic<uint64_t> deferred_preflight_us {0};
+    std::atomic<uint64_t> deferred_fallback_us {0};
     void reset_stats() {
         stats = {};
         stats.execution_profile = session_skip_cpu_validation.load() ?
@@ -54,6 +61,11 @@ struct Runtime {
         stats.initialization_ms = stats.allocation_ms = stats.packing_ms = 0;
         stats.upload_ms = stats.download_ms = stats.validation_ms = stats.fallback_ms = 0;
         stats.queue_wait_ms = stats.kernel_wall_ms = stats.preflight_ms = 0;
+        busy_fallbacks.store(0, std::memory_order_relaxed);
+        busy_decision_us.store(0, std::memory_order_relaxed);
+        deferred_preflight_calls.store(0, std::memory_order_relaxed);
+        deferred_preflight_us.store(0, std::memory_order_relaxed);
+        deferred_fallback_us.store(0, std::memory_order_relaxed);
     }
     Runtime() { reset_stats(); }
 
@@ -282,10 +294,29 @@ bool CudaSlicerBackend::should_dispatch(size_t count) {
         (count >= minimum_requests || session_force_dispatch.load());
 }
 SlicingProfileGpuStats CudaSlicerBackend::runtime_stats() {
-    auto& r = runtime(); std::lock_guard<std::mutex> lock(r.mutex); return r.stats;
+    auto& r = runtime();
+    std::lock_guard<std::mutex> lock(r.mutex);
+    SlicingProfileGpuStats stats = r.stats;
+    const uint64_t busy = r.busy_fallbacks.load(std::memory_order_relaxed);
+    const uint64_t deferred_preflights = r.deferred_preflight_calls.load(std::memory_order_relaxed);
+    const double busy_ms = double(r.busy_decision_us.load(std::memory_order_relaxed)) / 1000.0;
+    const double deferred_preflight_ms = double(r.deferred_preflight_us.load(std::memory_order_relaxed)) / 1000.0;
+    stats.dispatch_calls += busy + deferred_preflights;
+    stats.skipped_workloads += busy + deferred_preflights;
+    stats.total_host_ms += busy_ms + deferred_preflight_ms;
+    stats.preflight_ms += deferred_preflight_ms;
+    if (busy > 0) stats.diagnostic_counts[busy_fallback_diagnostic] += busy;
+    if (deferred_preflights > 0) stats.diagnostic_counts[deferred_preflight_diagnostic] += deferred_preflights;
+    stats.fallback_ms += double(r.deferred_fallback_us.load(std::memory_order_relaxed)) / 1000.0;
+    return stats;
 }
 void CudaSlicerBackend::note_cpu_fallback(double wall_ms) {
-    auto& r = runtime(); std::lock_guard<std::mutex> lock(r.mutex);
+    auto& r = runtime();
+    std::unique_lock<std::mutex> lock(r.mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        r.deferred_fallback_us.fetch_add(uint64_t(std::max(0.0, wall_ms) * 1000.0), std::memory_order_relaxed);
+        return;
+    }
     r.stats.fallback_ms += wall_ms;
     publish(r.stats);
 }
@@ -311,7 +342,16 @@ VulkanAabbBatch CudaSlicerBackend::dispatch_indexed_aabb_candidates(
 #endif
     const auto wall_start = Clock::now();
     auto& r = runtime();
-    std::lock_guard<std::mutex> lock(r.mutex);
+    std::unique_lock<std::mutex> lock(r.mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        r.busy_fallbacks.fetch_add(1, std::memory_order_relaxed);
+        r.busy_decision_us.fetch_add(uint64_t(elapsed_ms(wall_start) * 1000.0), std::memory_order_relaxed);
+        batch.diagnostic = busy_fallback_diagnostic;
+#ifdef MAGPIE_SLICING_TIMING
+        timing.set_result(SlicingProfileBackend::CPUFallback, -1.0, queries.size(), batch.diagnostic);
+#endif
+        return batch;
+    }
     r.stats.queue_wait_ms += elapsed_ms(wall_start);
     ++r.stats.dispatch_calls;
     double gpu_ms = 0;
@@ -481,7 +521,19 @@ void record_preflight(const char* operation, size_t count, Clock::time_point sta
 {
     if (!CudaSlicerBackend::enabled()) return;
     const double preflight_ms = elapsed_ms(started);
-    auto& r = runtime(); std::lock_guard<std::mutex> lock(r.mutex);
+    auto& r = runtime();
+    std::unique_lock<std::mutex> lock(r.mutex, std::try_to_lock);
+#ifdef MAGPIE_SLICING_TIMING
+    // The enclosing request event carries duration; this zero-work decision
+    // annotates why there is no device dispatch without inventing GPU time.
+    ScopedSlicingProfileEvent decision("cuda-decision", operation, SlicingProfileBackend::CPUFallback, count);
+    decision.set_result(SlicingProfileBackend::CPUFallback, -1.0, count, reason);
+#endif
+    if (!lock.owns_lock()) {
+        r.deferred_preflight_calls.fetch_add(1, std::memory_order_relaxed);
+        r.deferred_preflight_us.fetch_add(uint64_t(preflight_ms * 1000.0), std::memory_order_relaxed);
+        return;
+    }
     ++r.stats.dispatch_calls;
     ++r.stats.skipped_workloads;
     r.stats.preflight_ms += preflight_ms;
@@ -489,12 +541,6 @@ void record_preflight(const char* operation, size_t count, Clock::time_point sta
     r.stats.last_diagnostic = reason;
     ++r.stats.diagnostic_counts[reason];
     publish(r.stats);
-#ifdef MAGPIE_SLICING_TIMING
-    // The enclosing request event carries duration; this zero-work decision
-    // annotates why there is no device dispatch without inventing GPU time.
-    ScopedSlicingProfileEvent decision("cuda-decision", operation, SlicingProfileBackend::CPUFallback, count);
-    decision.set_result(SlicingProfileBackend::CPUFallback, -1.0, count, reason);
-#endif
 }
 
 template<class Output, class Equal>
@@ -503,13 +549,24 @@ bool validated_packed_dispatch(const char* kernel, const char* operation, const 
                               double packing_ms, std::vector<Output>& result, std::string& diagnostic)
 {
     const auto wall_start = Clock::now();
-    auto& r = runtime(); std::lock_guard<std::mutex> lock(r.mutex);
-    r.stats.queue_wait_ms += elapsed_ms(wall_start);
-    ++r.stats.dispatch_calls;
-    r.stats.packing_ms += packing_ms;
 #ifdef MAGPIE_SLICING_TIMING
     ScopedSlicingProfileEvent timing("cuda", operation, SlicingProfileBackend::CPU, expected.size());
 #endif
+    auto& r = runtime();
+    std::unique_lock<std::mutex> lock(r.mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        r.busy_fallbacks.fetch_add(1, std::memory_order_relaxed);
+        r.busy_decision_us.fetch_add(uint64_t(elapsed_ms(wall_start) * 1000.0), std::memory_order_relaxed);
+        result.clear();
+        diagnostic = busy_fallback_diagnostic;
+#ifdef MAGPIE_SLICING_TIMING
+        timing.set_result(SlicingProfileBackend::CPUFallback, -1.0, expected.size(), diagnostic);
+#endif
+        return false;
+    }
+    r.stats.queue_wait_ms += elapsed_ms(wall_start);
+    ++r.stats.dispatch_calls;
+    r.stats.packing_ms += packing_ms;
     bool resolved = false;
 #if defined(SLIC3R_ENABLE_CUDA_SLICER) && defined(_WIN32)
     const auto before = r.stats.queue_submissions;
@@ -794,7 +851,16 @@ VulkanVerticalIntersectionBatch CudaSlicerBackend::dispatch_vertical_intersectio
 #endif
     const auto wall_start = Clock::now();
     auto& r = runtime();
-    std::lock_guard<std::mutex> lock(r.mutex);
+    std::unique_lock<std::mutex> lock(r.mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        r.busy_fallbacks.fetch_add(1, std::memory_order_relaxed);
+        r.busy_decision_us.fetch_add(uint64_t(elapsed_ms(wall_start) * 1000.0), std::memory_order_relaxed);
+        batch.diagnostic = busy_fallback_diagnostic;
+#ifdef MAGPIE_SLICING_TIMING
+        timing.set_result(SlicingProfileBackend::CPUFallback, -1.0, requests.size(), batch.diagnostic);
+#endif
+        return batch;
+    }
     r.stats.queue_wait_ms += elapsed_ms(wall_start);
     ++r.stats.dispatch_calls;
     auto finish = [&]() {

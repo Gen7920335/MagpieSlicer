@@ -8,6 +8,9 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <map>
+#include <utility>
+#include "SnapmakerMonitorUtils.hpp"
 
 #include <wx/panel.h>
 #include <wx/timer.h>
@@ -44,6 +47,9 @@ public:
     void refresh_now();
 
 private:
+    using NumericInputTarget = std::pair<wxSpinCtrlDouble *, double>;
+    void bind_numeric_input(wxSpinCtrlDouble *control);
+    void update_numeric_input(wxSpinCtrlDouble *control, double remote_value);
     void build_ui();
     void request_object_list();
     void request_status();
@@ -98,7 +104,8 @@ private:
     void on_pause_resume();
     void on_cancel();
     void on_skip_object();
-    void send_gcode_script(const std::string &script, const wxString &success_message);
+    void send_gcode_script(const std::string &script, const wxString &success_message,
+                          const std::vector<NumericInputTarget> &input_targets = {});
     void update_layer_view(int current_layer, int total_layers);
     void update_object_list(const std::vector<ExcludeObjectShape> &objects);
     void update_camera_rate();
@@ -116,6 +123,7 @@ private:
     bool m_camera_in_flight {false};
     bool m_objects_in_flight {false};
     bool m_command_in_flight {false};
+    bool m_emergency_in_flight {false};
     bool m_gcode_in_flight {false};
     bool m_console_in_flight {false};
     bool m_files_in_flight {false};
@@ -157,6 +165,8 @@ private:
     wxString m_camera_session_status;
     std::string m_print_state;
     std::string m_active_extruder_name;
+    std::string m_pressure_input_extruder_name;
+    std::map<wxSpinCtrlDouble *, SnapmakerNumericInputState> m_numeric_inputs;
     double m_active_extruder_temperature {0.0};
 
     CameraCanvas *m_camera {nullptr};
@@ -228,6 +238,7 @@ private:
     std::vector<Button *> m_extrude_buttons;
     std::vector<Button *> m_mesh_profile_buttons;
     std::vector<Button *> m_connected_buttons;
+    std::vector<Button *> m_manual_motion_buttons;
     std::vector<Button *> m_jog_buttons;
 };
 

@@ -1448,7 +1448,11 @@ class ModelWipeTower final : public ObjectBase
 public:
     // BBS: add partplate logic
 	std::vector<Vec2d>      positions;
-	double 	                rotation;
+	double 	                rotation = 0.;
+    // Only the two project-owned temperature tower position keys. Keeping the
+    // typed options preserves absent/empty and independently sized XY arrays.
+    // This belongs to the in-memory Undo archive, not the 3MF model format.
+    DynamicPrintConfig     temperature_drop_positions;
 
 private:
 	friend class cereal::access;
@@ -1470,7 +1474,7 @@ private:
     ModelWipeTower& operator=(ModelWipeTower &&rhs) = delete;
 
     // For serialization / deserialization of ModelWipeTower composed into another class into the Undo / Redo stack as a separate object.
-    template<typename Archive> void serialize(Archive &ar) { ar(positions, rotation); }
+    template<typename Archive> void serialize(Archive &ar) { ar(positions, rotation, temperature_drop_positions); }
 };
 
 // BBS structure stores extruder parameters and speed map of all models

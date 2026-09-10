@@ -11,6 +11,11 @@ namespace Slic3r {
 
 class DynamicPrintConfig;
 class Model;
+class ModelWipeTower;
+
+// Bridges project-owned tower coordinates to the existing in-memory Undo archive.
+void capture_project_tower_positions(const DynamicConfig &config, ModelWipeTower &tower);
+bool restore_project_tower_positions(const ModelWipeTower &tower, DynamicConfig &config);
 
 inline constexpr double TEMPERATURE_DROP_TOWER_AUTOMATIC_POSITION = -1.0;
 
@@ -43,10 +48,25 @@ bool normalize_optional_filament_map(
 std::vector<std::string> normalize_project_filament_arrays(
     DynamicConfig &config, size_t filament_count, size_t toolhead_count);
 
+std::vector<std::string> normalize_project_tool_enums(DynamicConfig &config, size_t toolhead_count);
+
 std::vector<std::string> normalize_filament_assignment_options(
     DynamicConfig &config, size_t filament_count);
 
 size_t normalize_model_filament_assignments(Model &model, size_t filament_count);
+
+// Filament indices are zero-based; replacement is already indexed after deletion.
+// A replacement of -1 removes the deleted filament's explicit tool changes.
+void remap_model_tool_changes_after_filament_delete(
+    Model &model, size_t filament_index, int replacement_index);
+
+// Apply to each global config owner once. Zero/default and absent options stay intact.
+size_t remap_filament_assignments_after_delete(
+    DynamicConfig &config, size_t filament_index, int replacement_index);
+
+// Visits model data independently of GUI visibility, before painted-facet cleanup.
+size_t remap_model_filament_assignments_after_delete(
+    Model &model, size_t filament_count_after, size_t filament_index, int replacement_index);
 
 // Keeps Magpie's plate-indexed project options valid at project boundaries.
 // A plate_count of zero infers the count from the existing vectors.

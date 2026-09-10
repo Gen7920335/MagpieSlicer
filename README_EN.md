@@ -12,16 +12,16 @@ An OrcaSlicer-based fork integrating mixed nozzle sizes, extended supports, and 
 
 ## Latest Release
 
-- Version: **2.5.0.0.7**
-- Tag: `v2.5.0.0.7`
+- Version: **2.5.0.0.9 Beta 2**
+- Tag: `v2.5.0.0.9-beta.2`
 - Platform: **Windows x64**
 - Status: **Pre-release**
-- [Go directly to the latest GitHub release](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.7)
-- [Feature-by-feature changes in the current unreleased worktree](docs/MAGPIE_FEATURE_CHANGES_2.5.0.0.8.md)
+- [Go directly to the latest GitHub release](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.9-beta.2)
+- [Feature-by-feature changes](docs/MAGPIE_FEATURE_CHANGES_2.5.0.0.8.md)
 
 The source commit and SHA-256 are recorded in the GitHub release notes.
 
-This release fixes a null-pointer access at startup caused by changing the visibility of a settings group before its UI sizer existed. Installer verification now also requires the installed GUI to remain alive and responsive, preventing the same class of startup crash from reaching another release.
+This beta retains optional CUDA acceleration and detailed timing while fixing state synchronization across materials, nozzles, supports, cancellation, device inputs, Resin and Mixed supports, low-temperature interfaces, and multi-nozzle temperature towers. The release notes separate automated evidence from the remaining limitations.
 
 > This fork is under active development. Inspect the preview and generated G-code before printing on real hardware.
 

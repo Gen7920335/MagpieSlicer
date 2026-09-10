@@ -611,12 +611,12 @@ std::string get_extruder_variant_string(ExtruderType extruder_type, NozzleVolume
 {
     std::string variant_string;
 
-    if (extruder_type > etMaxExtruderType) {
+    if (extruder_type < etDirectDrive || extruder_type > etMaxExtruderType) {
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << boost::format(", unsupported ExtruderType=%1%")%extruder_type;
         //extruder_type = etDirectDrive;
         return variant_string;
     }
-    if (nozzle_volume_type > nvtMaxNozzleVolumeType) {
+    if (nozzle_volume_type < nvtStandard || nozzle_volume_type > nvtMaxNozzleVolumeType) {
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << boost::format(", unsupported NozzleVolumeType=%1%")%nozzle_volume_type;
         //extruder_type = etDirectDrive;
         return variant_string;
@@ -629,7 +629,7 @@ std::string get_extruder_variant_string(ExtruderType extruder_type, NozzleVolume
 
 std::string get_nozzle_volume_type_string(NozzleVolumeType nozzle_volume_type)
 {
-    if (nozzle_volume_type > nvtMaxNozzleVolumeType) {
+    if (nozzle_volume_type < nvtStandard || nozzle_volume_type > nvtMaxNozzleVolumeType) {
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << boost::format(", unsupported NozzleVolumeType=%1%") % nozzle_volume_type;
         return "";
     }

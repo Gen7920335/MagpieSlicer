@@ -25,6 +25,9 @@
 #include "libslic3r/Support/MixedSupportPlan.hpp"
 #include "libslic3r/Support/SupportMaterial.hpp"
 #include "libslic3r/Support/SupportParameters.hpp"
+#include "libslic3r/Support/ResinStyleSupport.hpp"
+#include "libslic3r/Support/InterfaceTemperature.hpp"
+#include "libslic3r/Support/TemperatureDropTower.hpp"
 
 #include "test_helpers.hpp" // get access to init_print, etc
 #include "test_utils.hpp"
@@ -35,6 +38,138 @@ std::vector<Polygons> buildplate_covered_by_object(const PrintObject &object);
 
 using namespace Slic3r::Test;
 using namespace Slic3r;
+
+TEST_CASE("Tower planning includes only active positive interface targets", "[InterfaceTemperature][ConfigurationOnly]")
+{
+    struct Scenario {
+        int base, sub;
+        bool enabled;
+        std::array<int, 4> expected; // top interface totals: 0, 1, 2, 5
+    };
+    const std::array<Scenario, 9> scenarios{{
+        {220, 170, true,  {220, 220, 170, 170}},
+        {220, 170, false, {220, 220, 220, 220}},
+        {170, 220, true,  {170, 170, 170, 170}},
+        {220,   0, true,  {220, 220, 220, 220}},
+        {220,  -1, true,  {220, 220, 220, 220}},
+        {  0, 170, true,  {  0,   0, 170, 170}},
+        {  0, 170, false, {  0,   0,   0,   0}},
+        { -1, 170, true,  {  0,   0, 170, 170}},
+        {  0,   0, true,  {  0,   0,   0,   0}}
+    }};
+    const std::array<int, 4> totals{0, 1, 2, 5};
+    for (const auto &scenario : scenarios) {
+        for (size_t i = 0; i < totals.size(); ++i) {
+            CAPTURE(scenario.base, scenario.sub, scenario.enabled, totals[i]);
+            DynamicPrintConfig config;
+            config.set_key_value("support_interface_temperature", new ConfigOptionInt(scenario.base));
+            config.set_key_value("support_interface_sublayer_temperature", new ConfigOptionInt(scenario.sub));
+            config.set_key_value("support_interface_sublayer_pattern", new ConfigOptionBool(scenario.enabled));
+            config.set_key_value("support_interface_top_layers", new ConfigOptionInt(totals[i]));
+            CHECK(lowest_configured_interface_temperature(config) == scenario.expected[i]);
+        }
+    }
+    DynamicPrintConfig legacy;
+    CHECK(lowest_configured_interface_temperature(legacy) == 0);
+}
+
+TEST_CASE("Resin point masks preserve holes and nested islands", "[ResinPointMask][GeometryOnly]")
+{
+    auto rectangle = [](double lo, double hi) {
+        return Polygon{Points{Point::new_scale(lo, lo), Point::new_scale(hi, lo),
+                              Point::new_scale(hi, hi), Point::new_scale(lo, hi)}};
+    };
+    Polygon hole = rectangle(2., 8.);
+    hole.reverse();
+    const Polygons mask{rectangle(0., 10.), hole, rectangle(4., 6.)};
+    const Polygons empty;
+    const ResinSupportPointFilter threshold(empty, empty, &mask, false);
+    const ResinSupportPointFilter enforced(mask, empty, nullptr, true);
+    const ResinSupportPointFilter blocked(empty, mask, nullptr, false);
+    const ResinSupportPointFilter override_blocker(mask, mask, &empty, true);
+    // Half-mm sample locations avoid polygon boundaries. The expected shape is
+    // an outer ring plus an island, with empty space between them.
+    for (int x = -1; x <= 10; ++x) {
+        for (int y = -1; y <= 10; ++y) {
+            CAPTURE(x, y);
+            const bool outer = x >= 0 && x < 10 && y >= 0 && y < 10;
+            const bool in_hole = x >= 2 && x < 8 && y >= 2 && y < 8;
+            const bool island = x >= 4 && x < 6 && y >= 4 && y < 6;
+            const bool filled = (outer && !in_hole) || island;
+            const Point point = Point::new_scale(x + 0.5, y + 0.5);
+            CHECK(threshold.accepts(point) == filled);
+            CHECK(enforced.accepts(point) == filled);
+            CHECK(blocked.accepts(point) == !filled);
+            CHECK(override_blocker.accepts(point) == filled);
+        }
+    }
+    const Point origin = Point::new_scale(1., 1.);
+    CHECK(ResinSupportPointFilter(empty, empty, nullptr, false).accepts(origin));
+    CHECK_FALSE(ResinSupportPointFilter(empty, empty, &empty, false).accepts(origin));
+    CHECK_FALSE(ResinSupportPointFilter(empty, empty, nullptr, true).accepts(origin));
+    // A separate solid enforcer may legitimately fill part of a hole. Nonzero
+    // polygon union must preserve this, rather than subtract every hole last.
+    Polygons overlap = mask;
+    overlap.push_back(rectangle(3., 5.));
+    const ResinSupportPointFilter combined(overlap, empty, nullptr, true);
+    CHECK(combined.accepts(Point::new_scale(3.5, 3.5)));
+    CHECK_FALSE(combined.accepts(Point::new_scale(6.5, 3.5)));
+}
+
+TEST_CASE("Support merge eligibility compares material IDs in the same domain", "[SupportMapping][ConfigurationOnly]")
+{
+    const int model_material = GENERATE(1, 2);
+    const int explicit_material = GENERATE(1, 2);
+    const bool interface_is_auto = GENERATE(false, true);
+    auto config = multifilament_config(2);
+    for (const char *key : {"outer_wall_filament_id", "inner_wall_filament_id", "sparse_infill_filament_id",
+                            "internal_solid_filament_id", "top_surface_filament_id", "bottom_surface_filament_id"})
+        config.set_key_value(key, new ConfigOptionInt(model_material));
+    config.set_key_value("support_filament", new ConfigOptionInt(interface_is_auto ? explicit_material : 0));
+    config.set_key_value("support_interface_filament", new ConfigOptionInt(interface_is_auto ? 0 : explicit_material));
+    Print print;
+    Model model;
+    const std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides {{{"extruder", model_material}}};
+    init_print({make_cube(10., 10., 10.)}, print, model, config, &overrides);
+    const auto &object = *print.objects().front();
+    REQUIRE(object.object_extruders() == std::vector<unsigned>{unsigned(model_material - 1)});
+    const SupportParameters parameters(object);
+    CHECK(parameters.can_merge_support_regions == (model_material == explicit_material));
+}
+
+TEST_CASE("Support flow resolves material IDs through the physical nozzle map", "[SupportMapping][ConfigurationOnly]")
+{
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_num_extruders(4);
+    config.set_num_filaments(4);
+    config.set_key_value("filament_diameter", new ConfigOptionFloats({1.75, 1.75, 1.75, 1.75}));
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.2, 0.6}));
+    config.set_key_value("filament_map_mode", new ConfigOptionEnum<FilamentMapMode>(fmmManual));
+    config.set_key_value("filament_map", new ConfigOptionInts({1, 2, 2, 1}));
+    config.set_key_value("support_filament", new ConfigOptionInt(3));
+    config.set_key_value("support_interface_filament", new ConfigOptionInt(4));
+    config.set_key_value("toolhead_support_line_width", new ConfigOptionFloatsOrPercents({
+        FloatOrPercent(0.25, false), FloatOrPercent(0.65, false)}));
+    config.set_key_value("toolhead_initial_layer_line_width", new ConfigOptionFloatsOrPercents({
+        FloatOrPercent(0.27, false), FloatOrPercent(0.67, false)}));
+    Print print;
+    Model model;
+    init_print({make_cube(10., 10., 10.)}, print, model, config);
+    REQUIRE(print.objects().size() == 1);
+    const auto *object = print.objects().front();
+    REQUIRE(print.config().filament_map.values == std::vector<int>{1, 2, 2, 1});
+    REQUIRE(object->config().support_filament.value == 3);
+    const Flow body = support_material_flow(object, 0.1f);
+    const Flow contact = support_material_interface_flow(object, 0.1f);
+    const Flow first = support_material_1st_layer_flow(object, 0.1f);
+    CHECK(body.nozzle_diameter() == Catch::Approx(0.6));
+    CHECK(body.width() == Catch::Approx(0.65));
+    CHECK(contact.nozzle_diameter() == Catch::Approx(0.2));
+    CHECK(contact.width() == Catch::Approx(0.25));
+    CHECK(first.nozzle_diameter() == Catch::Approx(0.6));
+    CHECK(first.width() == Catch::Approx(0.67));
+    CHECK(support_transition_flow(object).nozzle_diameter() == Catch::Approx(0.6));
+}
 
 static Polygons support_test_rectangle(double min_x, double min_y, double max_x, double max_y)
 {
@@ -1903,6 +2038,8 @@ TEST_CASE("Tree support geometry width follows the body hotend instead of the in
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTreeAuto));
     config.set_key_value("support_filament", new ConfigOptionInt(2));
     config.set_key_value("support_interface_filament", new ConfigOptionInt(3));
+    config.set_key_value("filament_map_mode", new ConfigOptionEnum<FilamentMapMode>(fmmManual));
+    config.set_key_value("filament_map", new ConfigOptionInts({1, 2, 3}));
     config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(105., true));
     config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4, 0.6, 0.4 }));
     config.set_key_value("toolhead_support_line_width", new ConfigOptionFloatsOrPercents({
@@ -2176,6 +2313,61 @@ TEST_CASE("Sublayer range boundaries select exact generated layers", "[SupportMa
             CHECK(sublayers.size() == range.expected_sublayers);
         }
     }
+}
+
+TEST_CASE("Bunny60 sublayer temperature restores before model extrusion", "[.BunnyThermal][Bunny][TemperatureRestore]")
+{
+    struct RestoreResources {
+        std::string previous = resources_dir();
+        ~RestoreResources() { set_resources_dir(previous); }
+    } restore_resources;
+    set_resources_dir((boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path() / "resources").string());
+    TriangleMesh bunny;
+    const auto path = boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path() /
+        "resources" / "handy_models" / "Stanford_Bunny.drc";
+    REQUIRE(load_drc(path.string().c_str(), &bunny));
+    auto config = sublayer_config(stNormalAuto);
+    config.set_deserialize_strict({
+        {"support_threshold_angle", 60},
+        {"single_nozzle_low_temperature_interface", true},
+        {"support_interface_filament", 0},
+        {"support_interface_temperature", 220},
+        {"support_interface_heating_time", 0.0},
+        {"support_interface_temperature_drop_tower", false},
+        {"support_interface_auxiliary_fan_cooling_on_temperature_change", false},
+        {"support_interface_nozzle_wiping_on_temperature_change", false}});
+    config.set_key_value("nozzle_temperature", new ConfigOptionInts({220}));
+    config.set_key_value("nozzle_temperature_initial_layer", new ConfigOptionInts({220}));
+    Print print;
+    init_and_process_print({bunny}, print, config);
+    const auto output = gcode(print);
+    GCodeReader reader;
+    reader.apply_config(config);
+    float temperature = 0.;
+    bool cooled = false;
+    size_t checked = 0, wrong = 0;
+    std::string first_wrong;
+    reader.parse_buffer(output, [&](GCodeReader &state, const GCodeReader::GCodeLine &line) {
+        float target;
+        if ((line.cmd_is("M104") || line.cmd_is("M109")) && line.has_value('S', target)) {
+            temperature = target;
+            cooled = cooled || target == 170.f;
+        }
+        std::string comment(line.comment());
+        std::transform(comment.begin(), comment.end(), comment.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        if (cooled && line.extruding(state) && line.dist_XY(state) > 0.f &&
+            (comment.find("wall") != std::string::npos || comment.find("infill") != std::string::npos)) {
+            ++checked;
+            if (temperature != 220.f) {
+                if (wrong == 0) first_wrong = line.raw();
+                ++wrong;
+            }
+        }
+    });
+    INFO("First wrong-temperature model extrusion: " << first_wrong);
+    CHECK(cooled);
+    REQUIRE(checked > 0);
+    CHECK(wrong == 0);
 }
 
 static std::string low_temperature_interface_gcode(bool auxiliary_fan_toggle, bool wiping_toggle,
@@ -3023,5 +3215,272 @@ SCENARIO("Support layer Z honors contact distance", "[SupportMaterial]")
             THEN("No null or negative support layers")		{ REQUIRE(layer_min_ok == true); }
             THEN("No layers thicker than nozzle diameter")	{ REQUIRE(layer_max_ok == true); }
         }
+    }
+}
+
+
+static void mixed_audit_paths(const ExtrusionEntity &entity, std::map<float, Polygons> &by_height)
+{
+    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+        for (const auto *child : collection->entities)
+            mixed_audit_paths(*child, by_height);
+    } else if (const auto *path = dynamic_cast<const ExtrusionPath *>(&entity)) {
+        append(by_height[path->height], path->polygons_covered_by_width());
+    } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(&entity)) {
+        for (const auto &path : loop->paths) mixed_audit_paths(path, by_height);
+    } else if (const auto *multi = dynamic_cast<const ExtrusionMultiPath *>(&entity)) {
+        for (const auto &path : multi->paths) mixed_audit_paths(path, by_height);
+    } else {
+        FAIL("Unsupported Mixed audit extrusion entity");
+    }
+}
+
+TEST_CASE("Mixed Bunny60 different Z channels do not intersect",
+          "[.MixedCrossZ][Mixed][Bunny]")
+{
+    const auto bunny_path = boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path() /
+        "resources/handy_models/Stanford_Bunny.drc";
+    TriangleMesh bunny;
+    REQUIRE(load_drc(bunny_path.string().c_str(), &bunny));
+    REQUIRE_FALSE(bunny.empty());
+    for (const int variant : {0, 1, 2, 3}) {
+        const char *selected_variant = std::getenv("MAGPIE_MIXED_AUDIT_VARIANT");
+        if (selected_variant != nullptr && variant != std::atoi(selected_variant)) continue;
+        const bool normal_control = std::getenv("MAGPIE_MIXED_AUDIT_NORMAL_CONTROL") != nullptr;
+        const bool independent = variant != 0;
+        const double model_height = variant == 2 ? 0.12 : variant == 3 ? 0.28 : 0.2;
+        const double contact_gap = variant == 2 ? 0.17 : variant == 3 ? 0.13 : 0.2;
+        for (const auto generator : {mnsgCura, mnsgPrusa}) {
+            if (normal_control && generator != mnsgPrusa) continue;
+            CAPTURE(independent, int(generator), model_height, contact_gap);
+            DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+            config.set_key_value("enable_support", new ConfigOptionBool(true));
+            config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(normal_control ? stNormalAuto : stMixedAuto));
+            config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(true));
+            config.set_key_value("mixed_normal_support_generator", new ConfigOptionEnum<MixedNormalSupportGenerator>(generator));
+            config.set_key_value("mixed_tree_support_style", new ConfigOptionEnum<MixedTreeSupportStyle>(mtssOrganic));
+            config.set_key_value("mixed_normal_coverage_threshold", new ConfigOptionPercent(50.));
+            config.set_key_value("mixed_selective_merge", new ConfigOptionBool(true));
+            config.set_key_value("support_threshold_angle", new ConfigOptionInt(60));
+            config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4}));
+            config.set_key_value("layer_height", new ConfigOptionFloat(model_height));
+            config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+            config.set_key_value("support_top_z_distance", new ConfigOptionFloat(contact_gap));
+            config.set_key_value("support_bottom_z_distance", new ConfigOptionFloat(contact_gap));
+            config.set_key_value("independent_support_layer_height", new ConfigOptionBool(independent));
+            Print print;
+            REQUIRE_NOTHROW(init_and_process_print({bunny}, print, config));
+            REQUIRE(print.objects().size() == 1);
+            const auto &layers = print.objects().front()->support_layers();
+            REQUIRE_FALSE(layers.empty());
+            std::vector<std::map<float, Polygons>> coverage(layers.size());
+            double max_path_height = 0.;
+            for (size_t i=0; i<layers.size(); ++i) {
+                mixed_audit_paths(layers[i]->support_fills, coverage[i]);
+                for (auto &[height, polygons] : coverage[i]) {
+                    max_path_height = std::max(max_path_height, double(height));
+                    polygons = union_(polygons);
+                }
+            }
+            double overlap_mm3 = 0.;
+            double channel_overlap_mm3 = 0.;
+            size_t pairs = 0;
+            // Positive vertical penetration threshold: 1 micrometre, in mm.
+            constexpr double min_penetration_mm = 0.000001;
+            for (size_t i=0; i<layers.size(); ++i) {
+                for (size_t j=i+1; j<layers.size(); ++j) {
+                    if (layers[j]->print_z - layers[i]->print_z > max_path_height) break;
+                    for (const auto &[hi, pi] : coverage[i]) {
+                        for (const auto &[hj, pj] : coverage[j]) {
+                            const double depth = layers[i]->print_z - std::max(layers[i]->print_z-hi, layers[j]->print_z-hj);
+                            if (depth <= min_penetration_mm) continue;
+                            const double mm2 = area(intersection_ex(pi,pj)) * SCALING_FACTOR * SCALING_FACTOR;
+                            if (mm2 > 0.) {
+                                overlap_mm3 += mm2*depth; ++pairs;
+                                if (layers[i]->support_type != stInnerNormal || layers[j]->support_type != stInnerNormal)
+                                    channel_overlap_mm3 += mm2*depth;
+                                std::cout << "CROSS_Z_PAIR normal_control=" << normal_control
+                                    << " zi=" << layers[i]->print_z << " zj=" << layers[j]->print_z
+                                    << " hi=" << hi << " hj=" << hj << " type_i=" << int(layers[i]->support_type)
+                                    << " type_j=" << int(layers[j]->support_type) << " area_mm2=" << mm2
+                                    << " depth_mm=" << depth << std::endl;
+                            }
+                        }
+                    }
+                }
+            }
+            std::cout << "MIXED_CROSS_Z independent=" << independent << " generator=" << int(generator)
+                      << " model_height=" << model_height << " contact_gap=" << contact_gap
+                      << " layers=" << layers.size() << " pairs=" << pairs << " overlap_mm3=" << overlap_mm3
+                      << " cross_channel_mm3=" << channel_overlap_mm3 << std::endl;
+            // Total numerical volume dust budget, in cubic mm (one 0.01 mm cube).
+            constexpr double overlap_dust_mm3 = 0.000001;
+            // The 0.12 mm / 0.17 mm Prusa case also has six normal-only slivers
+            // totaling 0.000453103 mm3 with Mixed disabled. Keep that separate
+            // from the cross-channel regression; do not widen its tolerance.
+            CHECK(channel_overlap_mm3 <= overlap_dust_mm3);
+        }
+    }
+}
+
+
+TEST_CASE("Multi-nozzle tower fill preserves its fixed physical band", "[TowerFill][GeometryOnly]")
+{
+    for (double maximum : {0.4,0.8,1.2})
+        for (double nozzle : {0.15,0.2,0.4,0.6,0.8,1.2})
+            for (double height : {0.04,0.08,0.12,0.2,0.28}) {
+                if (nozzle>maximum || height>=nozzle) continue;
+                CAPTURE(maximum,nozzle,height);
+                const double band=4.*temperature_drop_tower_multi_pitch(maximum);
+                const Flow nominal(Flow::auto_extrusion_width(frPerimeter,float(nozzle)),float(height),float(nozzle));
+                const auto fill=temperature_drop_tower_fill(nominal,band);
+                CHECK(fill.line_count>=4);
+                CHECK(fill.flow.width()+(fill.line_count-1)*double(fill.flow.spacing()) == Catch::Approx(band).margin(0.000002));
+                CHECK(fill.flow.mm3_per_mm()>0.);
+                CHECK(fill.flow.width()>0.9*nozzle);
+                CHECK(fill.flow.width()<1.5*nozzle);
+            }
+    const Flow flow(0.45f,0.2f,0.4f);
+    CHECK_THROWS(temperature_drop_tower_fill(flow,0.));
+    CHECK_THROWS(temperature_drop_tower_fill(flow,std::numeric_limits<double>::infinity()));
+}
+
+TEST_CASE("Tower placement intersects only participating physical tool areas", "[TowerFill][GeometryOnly]")
+{
+    auto rectangle=[](double left,double right) {
+        return Polygons{Polygon{Points{Point::new_scale(left,0.),Point::new_scale(right,0.),
+            Point::new_scale(right,200.),Point::new_scale(left,200.)}}};
+    };
+    const Polygons bed=rectangle(0.,200.);
+    const std::vector<Polygons> areas{rectangle(0.,150.),rectangle(50.,200.)};
+    for (const auto tools : {std::vector<size_t>{0,1},std::vector<size_t>{1,0},std::vector<size_t>{0,1,1}}) {
+        const auto common=temperature_drop_tower_common_area(bed,areas,tools);
+        CHECK(area(common)*SCALING_FACTOR*SCALING_FACTOR == Catch::Approx(20000.));
+        CHECK(diff_ex(common,rectangle(50.,150.)).empty());
+    }
+    CHECK(temperature_drop_tower_common_area(bed,{rectangle(0.,80.),rectangle(120.,200.)},{0,1}).empty());
+    CHECK(area(temperature_drop_tower_common_area(bed,areas,{0}))*SCALING_FACTOR*SCALING_FACTOR == Catch::Approx(30000.));
+    CHECK(area(temperature_drop_tower_common_area(bed,{}, {0,1}))*SCALING_FACTOR*SCALING_FACTOR == Catch::Approx(40000.));
+}
+
+TEST_CASE("Bunny60 temperature tower adapts to physical nozzle changes",
+          "[.TowerMultiNozzle][Bunny][TemperatureDropTower]")
+{
+    TriangleMesh bunny;
+    const auto bunny_path = boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path() / "resources/handy_models/Stanford_Bunny.drc";
+    REQUIRE(load_drc(bunny_path.string().c_str(), &bunny));
+    for (const bool large_first : {false, true}) {
+        CAPTURE(large_first);
+        auto config = temperature_drop_tower_config(TemperatureDropTowerSettings{});
+        const bool limited_second = std::getenv("MAGPIE_TOWER_AUDIT_LIMIT_SECOND") != nullptr;
+        const bool hot_second = std::getenv("MAGPIE_TOWER_AUDIT_HOT_SECOND") != nullptr;
+        config.set_key_value("printable_height", new ConfigOptionFloat(200.));
+        config.set_num_extruders(2);
+        config.set_num_filaments(2);
+        config.set_key_value("filament_diameter", new ConfigOptionFloats({1.75,1.75}));
+        config.set_key_value("filament_type", new ConfigOptionStrings({"PLA","PLA"}));
+        config.set_key_value("filament_colour", new ConfigOptionStrings({"#FF0000","#00FF00"}));
+        for (const char *key : {"filament_vendor", "filament_start_gcode"})
+            static_cast<ConfigOptionVectorBase *>(config.option(key, true))->resize(2, FullPrintConfig::defaults().option(key));
+        config.set_key_value("flush_multiplier", new ConfigOptionFloats({1.,1.}));
+        config.set_key_value("flush_volumes_matrix", new ConfigOptionFloats({0.,0.,0.,0.,0.,0.,0.,0.}));
+        config.set_key_value("filament_map", new ConfigOptionInts({1,2}));
+        config.set_key_value("filament_map_mode", new ConfigOptionEnum<FilamentMapMode>(fmmManual));
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats(large_first ? std::vector<double>{0.8,0.2} : std::vector<double>{0.2,0.8}));
+        config.set_key_value("min_layer_height", new ConfigOptionFloats({0.04,0.04}));
+        config.set_key_value("max_layer_height", new ConfigOptionFloats({0.16,0.16}));
+        config.set_key_value("layer_height", new ConfigOptionFloat(0.12));
+        config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.12));
+        config.set_key_value("support_threshold_angle", new ConfigOptionInt(60));
+        config.set_key_value("nozzle_temperature", new ConfigOptionInts({220,hot_second ? 230 : 220}));
+        config.set_key_value("nozzle_temperature_initial_layer", new ConfigOptionInts({220,hot_second ? 230 : 220}));
+        config.set_key_value("use_relative_e_distances", new ConfigOptionBool(true));
+        config.set_key_value("layer_change_gcode", new ConfigOptionString("G92 E0\n"));
+        config.set_key_value("enable_prime_tower", new ConfigOptionBool(false));
+        config.set_key_value("gcode_comments", new ConfigOptionBool(true));
+        config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(false));
+        if (limited_second)
+            config.set_key_value("extruder_printable_area", new ConfigOptionPointsGroups({
+                {Vec2d(0.,0.),Vec2d(200.,0.),Vec2d(200.,200.),Vec2d(0.,200.)},
+                {Vec2d(40.,0.),Vec2d(200.,0.),Vec2d(200.,200.),Vec2d(40.,200.)}}));
+        Print print;
+        Model model;
+        init_print({bunny}, print, model, config);
+        REQUIRE(model.objects.size() == 1);
+        for (ModelInstance *instance : model.objects.front()->instances)
+            instance->set_offset(instance->get_offset()+Vec3d(100.,100.,0.));
+        const auto model_bounds=model.objects.front()->instance_bounding_box(0);
+        REQUIRE(model_bounds.min.x()>=40.);
+        REQUIRE(model_bounds.max.x()<=200.);
+        REQUIRE(model_bounds.min.y()>=0.);
+        REQUIRE(model_bounds.max.y()<=200.);
+        auto &upper = model.objects.front()->layer_config_ranges[{50.,200.}];
+        upper.set_key_value("layer_height", new ConfigOptionFloat(0.12));
+        for (const char *key : {"extruder", "wall_filament", "sparse_infill_filament", "solid_infill_filament"})
+            upper.set_key_value(key, new ConfigOptionInt(2));
+        print.apply(model, config);
+        const auto validation=print.validate();
+        INFO(validation.string);
+        REQUIRE(validation.string.empty());
+        REQUIRE(print.config().filament_diameter.size() == 2);
+        REQUIRE(print.config().nozzle_diameter.size() == 2);
+        std::cout << "TOWER_MULTI_PROCESS_BEGIN " << large_first << std::endl;
+        print.process();
+        std::cout << "TOWER_MULTI_EXPORT_BEGIN " << large_first << std::endl;
+        const std::string output = gcode(print);
+        if (const char *out = std::getenv("MAGPIE_TOWER_AUDIT_DIR")) {
+            std::ofstream file(std::string(out) + (large_first ? "/tower-large-first.gcode" : "/tower-small-first.gcode"));
+            file << output;
+        }
+        struct LayerLines { std::set<double> x; double width=0., height=0., min_y=10000., max_y=-10000.; };
+        std::map<std::pair<int,long long>, LayerLines> lines;
+        int tool=0;
+        double x=0.,y=0.,z=0.,width=0.,height=0.12;
+        std::istringstream stream(output);
+        for (std::string line; std::getline(stream,line);) {
+            if (line.size()>1 && line[0]=='T' && std::isdigit(static_cast<unsigned char>(line[1]))) tool=std::stoi(line.substr(1));
+            if (line.rfind(";WIDTH:",0)==0) width=std::stod(line.substr(7));
+            if (line.rfind(";HEIGHT:",0)==0) height=std::stod(line.substr(8));
+            const double old_x=x, old_y=y;
+            if (auto v=gcode_word(line,'X')) x=*v;
+            if (auto v=gcode_word(line,'Y')) y=*v;
+            if (auto v=gcode_word(line,'Z')) z=*v;
+            const auto e=gcode_word(line,'E');
+            // Long vertical tower strokes, in mm; avoid connectors and brim.
+            if (line.rfind("G1 ",0)==0 && e && *e>0. && std::abs(x-old_x)<0.0001 && std::abs(y-old_y)>8. &&
+                line.find("; temperature drop tower")!=std::string::npos && line.find("brim")==std::string::npos) {
+                auto &item=lines[{tool,std::llround(z*1000000.)}];
+                item.x.insert(x); item.width=width; item.height=height;
+                item.min_y=std::min({item.min_y,y,old_y});
+                item.max_y=std::max({item.max_y,y,old_y});
+            }
+        }
+        std::set<int> observed_tools;
+        size_t bad=0, checked=0, outside_tool_area=0;
+        for (const auto &[key,item] : lines) {
+            if (item.x.size()<2) continue;
+            observed_tools.insert(key.first);
+            if (limited_second && key.first==1 && *item.x.begin()-0.5*item.width<40.)
+                ++outside_tool_area;
+            REQUIRE(item.width>0.);
+            // Full L-arm physical extent, in mm, independent of the first tool.
+            CHECK(item.max_y-item.min_y+item.width == Catch::Approx(hot_second ? 80. : 70.).margin(0.003));
+            // Independent rounded-rectangle area oracle, in mm. Pitch follows
+            // actual bead width and height; nozzle diameter is not a pitch floor.
+            const double expected=item.width-item.height*(1.-M_PI/4.);
+            auto previous=item.x.begin();
+            for (auto next=std::next(previous); next!=item.x.end(); previous=next++) {
+                ++checked;
+                const double spacing=*next-*previous;
+                if (std::abs(spacing-expected)>0.05*expected) ++bad;
+            }
+        }
+        std::cout << "TOWER_MULTI large_first=" << large_first << " tools=" << observed_tools.size()
+                  << " spacing_checks=" << checked << " mismatches=" << bad
+                  << " outside_tool_area_layers=" << outside_tool_area << std::endl;
+        CHECK(observed_tools.size()==2);
+        CHECK(checked>0);
+        CHECK(bad==0);
+        CHECK(outside_tool_area==0);
     }
 }

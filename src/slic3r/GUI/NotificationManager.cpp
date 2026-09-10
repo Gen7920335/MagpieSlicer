@@ -162,6 +162,9 @@ NotificationManager::PopNotification::PopNotification(const NotificationData &n,
 	, m_evt_handler         (evt_handler)
 	, m_notification_start  (GLCanvas3D::timestamp_now())
 {
+    if (!n.ori_text.empty())
+        m_appended_texts.insert(n.ori_text);
+
     m_ErrorColor  = ImGuiWrapper::to_ImVec4(decode_color_to_float_array("#E14747")); // ORCA
     m_WarnColor   = ImGuiWrapper::to_ImVec4(decode_color_to_float_array("#F59B16")); // ORCA
     m_NormalColor = ImGuiWrapper::COL_ORCA;
@@ -1027,12 +1030,17 @@ void NotificationManager::PopNotification::update(const NotificationData& n)
 	m_text1          = n.text1;
 	m_hypertext      = n.hypertext;
     m_text2          = n.text2;
+    m_appended_texts.clear();
+    if (!n.ori_text.empty())
+        m_appended_texts.insert(n.ori_text);
     const_cast<NotificationData&>(m_data).callback	 = n.callback;
 	init();
 }
 
 void NotificationManager::PopNotification::append(const std::string& append_str)
 {
+	if (append_str.empty() || !m_appended_texts.insert(append_str).second)
+		return;
 	m_text1            = m_text1 + "\n" + append_str;
 	//m_hypertext      = n.hypertext;
 	//m_text2          = n.text2;
@@ -3021,8 +3029,12 @@ void NotificationManager::push_delayed_notification_data(std::unique_ptr<Notific
                                                          int64_t                                               delay_interval)
 {
 	if (initial_delay == 0 && condition_callback()) {
-		if( push_notification_data(std::move(notification), 0))
+		// Match the delayed update path: keep ownership while a duplicate is
+		// waiting to retry. push_notification_data consumes it even on false.
+		if (!this->activate_existing(notification.get()) || delay_interval == 0) {
+			push_notification_data(std::move(notification), 0);
 			return;
+		}
 	}
 	m_waiting_notifications.emplace_back(std::move(notification), condition_callback, initial_delay == 0 ? delay_interval : initial_delay, delay_interval);
 	wxGetApp().plater()->get_current_canvas3D()->schedule_extra_frame(initial_delay == 0 ? delay_interval : initial_delay);

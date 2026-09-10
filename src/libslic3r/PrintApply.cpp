@@ -1219,6 +1219,7 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     t_config_option_keys region_diff      = m_default_region_config.diff(new_full_config);
 
     //BBS: process the filament_map related logic
+    bool apply_unused_filament_map = false;
     std::unordered_set<std::string> print_diff_set(print_diff.begin(), print_diff.end());
     if (print_diff_set.find("filament_map_mode") == print_diff_set.end())
     {
@@ -1238,7 +1239,14 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
             std::vector<int> old_filament_map = m_config.filament_map.values;
             std::vector<int> new_filament_map = new_full_config.option<ConfigOptionInts>("filament_map", true)->values;
 
-            if (old_filament_map.size() == new_filament_map.size())
+            // Detail walls may start using a previously unused material after
+            // its hotend mapping changes. The old used-filament set cannot
+            // exclude those candidates from geometry invalidation.
+            bool detail_walls = new_full_config.opt_bool("use_smaller_nozzles_in_crisp_corners");
+            for (const PrintObject *object : m_objects)
+                for (const PrintRegion &region : object->all_regions())
+                    detail_walls |= region.config().use_smaller_nozzles_in_crisp_corners.value;
+            if (!detail_walls && old_filament_map.size() == new_filament_map.size())
             {
                 bool same_map = true;
                 for (size_t index = 0; index < old_filament_map.size(); index++)
@@ -1251,8 +1259,10 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                         break;
                     }
                 }
-                if (same_map)
+                if (same_map) {
                     print_diff_set.erase("filament_map");
+                    apply_unused_filament_map = old_filament_map != new_filament_map;
+                }
             }
         }
         if (print_diff_set.size() != print_diff.size())
@@ -1296,6 +1306,10 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 		m_placeholder_parser.apply_config(filament_overrides);
 	    // It is also safe to change m_config now after this->invalidate_state_by_config_options() call.
 	    m_config.apply_only(new_full_config, print_diff, true);
+        // Suppressing unnecessary geometry work must not leave the config
+        // owner with an old mapping. Apply it after stopping background export.
+        if (apply_unused_filament_map)
+            m_config.filament_map = *new_full_config.option<ConfigOptionInts>("filament_map");
 	    //FIXME use move semantics once ConfigBase supports it.
         // Some filament_overrides may contain values different from new_full_config, but equal to m_config.
         // As long as these config options don't reallocate memory when copying, we are safe overriding a value, which is in use by a worker thread.

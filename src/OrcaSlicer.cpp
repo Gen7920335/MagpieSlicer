@@ -51,6 +51,7 @@ using namespace nlohmann;
 
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/ProjectConfigService.hpp"
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/GCode.hpp"
 #include "libslic3r/GCode/PostProcessor.hpp"
@@ -72,6 +73,7 @@ using namespace nlohmann;
 #include "libslic3r/FlushVolCalc.hpp"
 #ifdef MAGPIE_SLICING_TIMING
 #include "libslic3r/SlicingProfiler.hpp"
+#include "libslic3r/Gpu/VulkanProfileStats.hpp"
 #endif
 
 #include "libslic3r/Orient.hpp"
@@ -418,16 +420,23 @@ public:
         if (m_path.empty())
             return;
         auto& profiler = SlicingProfiler::instance();
-        if (!m_completed)
+        if (!m_completed) {
+            profiler.set_vulkan_stats(Gpu::vulkan_profile_stats(Gpu::VulkanSlicerBackend::query_runtime_stats()));
+            profiler.set_gpu_stats(SlicingProfileGpuApi::CUDA, Gpu::CudaSlicerBackend::runtime_stats());
             profiler.cancel_session("CLI exited before successful completion");
+        }
         std::string error;
         if (!profiler.export_json(m_path, &error))
             BOOST_LOG_TRIVIAL(error) << "Slicing timing export failed: " << error;
     }
     void finish()
     {
-        if (!m_path.empty())
-            SlicingProfiler::instance().finish_session();
+        if (!m_path.empty()) {
+            auto &profiler = SlicingProfiler::instance();
+            profiler.set_vulkan_stats(Gpu::vulkan_profile_stats(Gpu::VulkanSlicerBackend::query_runtime_stats()));
+            profiler.set_gpu_stats(SlicingProfileGpuApi::CUDA, Gpu::CudaSlicerBackend::runtime_stats());
+            profiler.finish_session();
+        }
         m_completed = true;
     }
 private:
@@ -3070,6 +3079,8 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    normalize_project_tool_enums(m_print_config, new_extruder_count);
+    normalize_project_tool_enums(m_extra_config, new_extruder_count);
     //get nozzle_volume_type
     if(m_extra_config.has("nozzle_volume_type")) {
         auto opt_nozzle_volume_type = dynamic_cast<const ConfigOptionEnumsGeneric*>(m_extra_config.option("nozzle_volume_type"));
@@ -3349,6 +3360,8 @@ int CLI::run(int argc, char **argv)
                             new_variant_counts[filament_index - 1] = opt_vec_src->size();
                     }
                     else {
+                        if (opt_vec_dst->size() > size_t(filament_count))
+                            opt_vec_dst->resize(filament_count);
                         opt_vec_dst->set_at(opt_vec_src, filament_index - 1, 0);
                     }
                 }
@@ -3387,6 +3400,7 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    normalize_project_filament_arrays(m_print_config, filament_count, new_extruder_count);
     //compute the flush volume
     ConfigOptionStrings *selected_filament_colors_option = m_extra_config.option<ConfigOptionStrings>("filament_colour");
     ConfigOptionStrings *project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour");
@@ -3507,11 +3521,15 @@ int CLI::run(int argc, char **argv)
                 if(m_extra_config.has("nozzle_volume_type")) // get volume type from input
                     volume_types = m_extra_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type")->values;
 
+                extruders.resize(new_extruder_count, int(etDirectDrive));
+                volume_types.resize(new_extruder_count, int(nvtStandard));
+
                 for (int eidx = 0; eidx < new_extruder_count; ++eidx) {
                     int index = 0;
                     if (m_print_config.has("printer_extruder_id") && m_print_config.has("printer_extruder_variant"))
                         index = m_print_config.get_index_for_extruder(eidx + 1, "printer_extruder_id", ExtruderType(extruders[eidx]), NozzleVolumeType(volume_types[eidx]), "printer_extruder_variant");
-                    nozzle_flush_dataset[eidx] = nozzle_flush_dataset_full[index];
+                    nozzle_flush_dataset[eidx] = index >= 0 && size_t(index) < nozzle_flush_dataset_full.size()
+                        ? nozzle_flush_dataset_full[index] : 0;
                 }
             }
 
@@ -5642,7 +5660,9 @@ int CLI::run(int argc, char **argv)
             //FIXME check for mixing the FFF / SLA parameters.
             // or better save fff_print_config vs. sla_print_config
             //m_print_config.save(m_config.opt_string("save"));
-            m_print_config.save_to_json(m_config.opt_string(opt_key), std::string("project_settings"), std::string("project"), std::string(SoftFever_VERSION));
+            const auto snapshot = normalized_project_config_for_save(
+                m_print_config, infer_project_config_normalization_context(m_print_config));
+            snapshot.save_to_json(m_config.opt_string(opt_key), std::string("project_settings"), std::string("project"), std::string(SoftFever_VERSION));
         } else if (opt_key == "info") {
             // --info works on unrepaired model
             for (Model &model : m_models) {
@@ -6470,7 +6490,7 @@ int CLI::run(int argc, char **argv)
             }
         }
 
-        if (!outfile_dir.empty()) {
+        if (!outfile_dir.empty() && !boost::filesystem::path(export_3mf_file).is_absolute()) {
             export_3mf_file = outfile_dir + "/"+export_3mf_file;
         }
 
@@ -6605,7 +6625,7 @@ int CLI::run(int argc, char **argv)
 
             int gl_major, gl_minor, gl_verbos;
             glfwGetVersion(&gl_major, &gl_minor, &gl_verbos);
-            BOOST_LOG_TRIVIAL(info) << boost::format("opengl version %1%.%2%.%3%")%gl_major %gl_minor %gl_verbos;
+            BOOST_LOG_TRIVIAL(info) << boost::format("GLFW version %1%.%2%.%3%")%gl_major %gl_minor %gl_verbos;
 
             bool thumbnail_opengl_ready = false;
             glfwSetErrorCallback(glfw_callback);
@@ -6617,8 +6637,8 @@ int CLI::run(int argc, char **argv)
             }
             else {
                 BOOST_LOG_TRIVIAL(info) << "glfwInit Success."<< std::endl;
-                glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, gl_major);
-                glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, gl_minor);
+                glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+                glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
                 glfwWindowHint(GLFW_RED_BITS, 8);
                 glfwWindowHint(GLFW_GREEN_BITS, 8);
                 glfwWindowHint(GLFW_BLUE_BITS, 8);

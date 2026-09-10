@@ -27,6 +27,8 @@
 #include "libslic3r/format.hpp"
 #include "Time.hpp"
 #include "GCode/ExtrusionProcessor.hpp"
+#include "Support/InterfaceTemperature.hpp"
+#include "Support/TemperatureDropTower.hpp"
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -7948,7 +7950,7 @@ bool GCode::temperature_drop_tower_enabled() const
             }))
         return false;
 
-    const int interface_temperature = m_config.support_interface_temperature.value;
+    const int interface_temperature = lowest_configured_interface_temperature(m_config);
     if (interface_temperature <= 0)
         return false;
 
@@ -7963,6 +7965,33 @@ bool GCode::temperature_drop_tower_enabled() const
 }
 
 namespace {
+
+struct TemperatureDropTowerTools {
+    std::vector<size_t> physical_tools;
+    double maximum_nozzle_mm = 0.;
+    double minimum_nozzle_mm = std::numeric_limits<double>::max();
+    int maximum_temperature = 0;
+    bool multiple_widths() const { return maximum_nozzle_mm != minimum_nozzle_mm; }
+};
+
+static TemperatureDropTowerTools temperature_drop_tower_tools(
+    const Print &print, const GCodeWriter &writer, const FullPrintConfig &config)
+{
+    TemperatureDropTowerTools tools;
+    // GCodeWriter was initialized from the final ToolOrdering, including custom
+    // changes. Do not infer future tools from just the currently active nozzle.
+    for (const Extruder &filament : writer.extruders()) {
+        const size_t physical_tool = print.get_extruder_id(filament.id());
+        if (std::find(tools.physical_tools.begin(), tools.physical_tools.end(), physical_tool) == tools.physical_tools.end())
+            tools.physical_tools.push_back(physical_tool);
+        const double nozzle_mm = config.nozzle_diameter.get_at(physical_tool);
+        tools.maximum_nozzle_mm = std::max(tools.maximum_nozzle_mm, nozzle_mm);
+        tools.minimum_nozzle_mm = std::min(tools.minimum_nozzle_mm, nozzle_mm);
+        tools.maximum_temperature = std::max({tools.maximum_temperature,
+            config.nozzle_temperature.get_at(filament.id()), config.nozzle_temperature_initial_layer.get_at(filament.id())});
+    }
+    return tools;
+}
 
 static_assert(temperature_drop_tower_size(0.0) == 50.0);
 static_assert(temperature_drop_tower_size(30.0) == 50.0);
@@ -7987,7 +8016,9 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
     if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
         return false;
 
-    const Flow flow(Flow::auto_extrusion_width(frPerimeter, nozzle_diameter), layer_height, nozzle_diameter);
+    const auto tower_tools = temperature_drop_tower_tools(*m_print, m_writer, m_config);
+    const bool multiple_widths = tower_tools.multiple_widths();
+    Flow flow(Flow::auto_extrusion_width(frPerimeter, nozzle_diameter), layer_height, nozzle_diameter);
     if (!m_temperature_drop_tower_path_initialized) {
         m_temperature_drop_tower_path_initialized = true;
         const std::vector<Vec2d> &printable_area = m_config.printable_area.values;
@@ -8006,9 +8037,9 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
         const double configured_y = temperature_drop_tower_position_at(
             &m_config.support_interface_temperature_drop_tower_y, plate_index);
 
-        // Automatic placement must use the same physical tool area as the final
-        // multi-extruder G-code validation. Explicit positions retain their existing
-        // whole-bed clamping behavior and are validated below.
+        // Keep one position for the entire tower. Automatic multi-tool placement
+        // uses the intersection of every participating tool's reachable area;
+        // explicit positions keep their whole-bed clamp and are checked below.
         const bool automatic_placement = configured_x < 0.0 || configured_y < 0.0;
         Polygon extruder_placement_polygon;
         const Polygon *placement_polygon = &printable_polygon;
@@ -8023,11 +8054,20 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
             }
         }
 
+        const bool multiple_tools = tower_tools.physical_tools.size() > 1;
+        const Polygons common_area = multiple_tools
+            ? temperature_drop_tower_common_area(Polygons{printable_polygon},
+                  m_print->get_extruder_printable_polygons(), tower_tools.physical_tools)
+            : Polygons{*placement_polygon};
+        if (multiple_tools && common_area.empty())
+            throw SlicingError(_u8L("The temperature drop tower has no printable area shared by all participating tools."));
+        const Polygons placement_bounds = multiple_tools && automatic_placement ? common_area : Polygons{*placement_polygon};
+
         double min_x = std::numeric_limits<double>::max();
         double min_y = std::numeric_limits<double>::max();
         double max_x = std::numeric_limits<double>::lowest();
         double max_y = std::numeric_limits<double>::lowest();
-        for (const Point &point : placement_polygon->points) {
+        for (const Polygon &region : placement_bounds) for (const Point &point : region.points) {
             const Vec2d unscaled_point = unscale(point);
             min_x = std::min(min_x, unscaled_point.x());
             min_y = std::min(min_y, unscaled_point.y());
@@ -8035,27 +8075,35 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
             max_y = std::max(max_y, unscaled_point.y());
         }
 
-        const int normal_temperature = std::max(m_config.nozzle_temperature.get_at(filament_id),
-                                                m_config.nozzle_temperature_initial_layer.get_at(filament_id));
-        const int interface_temperature = m_config.support_interface_temperature.value;
+        const int normal_temperature = tower_tools.maximum_temperature;
+        const int interface_temperature = lowest_configured_interface_temperature(m_config);
         const double temperature_delta = std::max(normal_temperature - interface_temperature, 0);
         const double requested_tower_size = temperature_drop_tower_size(temperature_delta);
-        const double spacing = std::max(double(nozzle_diameter), double(flow.spacing()));
+        const double spacing = multiple_widths
+            ? temperature_drop_tower_multi_pitch(tower_tools.maximum_nozzle_mm)
+            : std::max(double(nozzle_diameter), double(flow.spacing()));
         const double brim_width = TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT * spacing;
         const double usable_margin = TEMPERATURE_DROP_TOWER_BED_MARGIN + brim_width;
         const double tower_size = std::min(requested_tower_size,
                                            std::min(max_x - min_x - 2.0 * usable_margin,
                                                     max_y - min_y - 2.0 * usable_margin));
-        if (tower_size < 8.0)
+        // Minimum usable L-arm length, in mm, retained from the single-tool plan.
+        if (tower_size < 8.0) {
+            if (multiple_tools)
+                throw SlicingError(_u8L("The temperature drop tower does not fit inside the printable area shared by all participating tools."));
             return false;
+        }
 
         const double footprint_size = tower_size + 2.0 * brim_width;
         const double min_origin_x = min_x + TEMPERATURE_DROP_TOWER_BED_MARGIN;
         const double min_origin_y = min_y + TEMPERATURE_DROP_TOWER_BED_MARGIN;
         const double max_origin_x = max_x - TEMPERATURE_DROP_TOWER_BED_MARGIN - footprint_size;
         const double max_origin_y = max_y - TEMPERATURE_DROP_TOWER_BED_MARGIN - footprint_size;
-        if (max_origin_x < min_origin_x || max_origin_y < min_origin_y)
+        if (max_origin_x < min_origin_x || max_origin_y < min_origin_y) {
+            if (multiple_tools)
+                throw SlicingError(_u8L("The temperature drop tower does not fit inside the printable area shared by all participating tools."));
             return false;
+        }
 
         const double origin_x = configured_x < 0.0
             ? min_origin_x
@@ -8076,6 +8124,16 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
             }))
             return false;
 
+        if (multiple_tools) {
+            Polygon footprint;
+            footprint.points = {Point::new_scale(origin_x, origin_y),
+                Point::new_scale(origin_x + footprint_size, origin_y),
+                Point::new_scale(origin_x + footprint_size, origin_y + footprint_size),
+                Point::new_scale(origin_x, origin_y + footprint_size)};
+            if (!diff_ex(Polygons{footprint}, common_area).empty())
+                throw SlicingError(_u8L("The temperature drop tower does not fit inside the printable area shared by all participating tools."));
+        }
+
         const double tower_left = origin_x + brim_width;
         const double tower_rear = origin_y + brim_width + tower_size;
         m_temperature_drop_tower_left = tower_left;
@@ -8083,20 +8141,50 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
         m_temperature_drop_tower_size = tower_size;
         m_temperature_drop_tower_spacing = spacing;
 
-        m_temperature_drop_tower_plate_path.emplace_back(tower_left, tower_rear - tower_size);
-        for (int line = 0; line < TEMPERATURE_DROP_TOWER_LINE_COUNT; ++line) {
-            const double vertical_x = tower_left + line * spacing;
-            const double horizontal_y = tower_rear - line * spacing;
+        if (!multiple_widths) {
+            m_temperature_drop_tower_plate_path.emplace_back(tower_left, tower_rear - tower_size);
+            for (int line = 0; line < TEMPERATURE_DROP_TOWER_LINE_COUNT; ++line) {
+                const double vertical_x = tower_left + line * spacing;
+                const double horizontal_y = tower_rear - line * spacing;
+                if ((line & 1) == 0) {
+                    m_temperature_drop_tower_plate_path.emplace_back(vertical_x, horizontal_y);
+                    m_temperature_drop_tower_plate_path.emplace_back(tower_left + tower_size, horizontal_y);
+                    if (line + 1 < TEMPERATURE_DROP_TOWER_LINE_COUNT)
+                        m_temperature_drop_tower_plate_path.emplace_back(tower_left + tower_size, horizontal_y - spacing);
+                } else {
+                    m_temperature_drop_tower_plate_path.emplace_back(vertical_x, horizontal_y);
+                    m_temperature_drop_tower_plate_path.emplace_back(vertical_x, tower_rear - tower_size);
+                    if (line + 1 < TEMPERATURE_DROP_TOWER_LINE_COUNT)
+                        m_temperature_drop_tower_plate_path.emplace_back(vertical_x + spacing, tower_rear - tower_size);
+                }
+            }
+        }
+    }
+
+    if (multiple_widths && m_temperature_drop_tower_spacing > 0.) {
+        const double band_width_mm = TEMPERATURE_DROP_TOWER_LINE_COUNT * m_temperature_drop_tower_spacing;
+        const auto fill = temperature_drop_tower_fill(flow, band_width_mm);
+        flow = fill.flow;
+        const double spacing = flow.spacing();
+        const double radius = 0.5 * flow.width();
+        const double left = m_temperature_drop_tower_left + radius;
+        const double rear = m_temperature_drop_tower_rear - radius;
+        const double right = m_temperature_drop_tower_left + m_temperature_drop_tower_size - radius;
+        const double bottom = m_temperature_drop_tower_rear - m_temperature_drop_tower_size + radius;
+        m_temperature_drop_tower_plate_path.clear();
+        m_temperature_drop_tower_plate_path.emplace_back(left, bottom);
+        for (int line = 0; line < fill.line_count; ++line) {
+            const double x = left + line * spacing;
+            const double y = rear - line * spacing;
+            m_temperature_drop_tower_plate_path.emplace_back(x, y);
             if ((line & 1) == 0) {
-                m_temperature_drop_tower_plate_path.emplace_back(vertical_x, horizontal_y);
-                m_temperature_drop_tower_plate_path.emplace_back(tower_left + tower_size, horizontal_y);
-                if (line + 1 < TEMPERATURE_DROP_TOWER_LINE_COUNT)
-                    m_temperature_drop_tower_plate_path.emplace_back(tower_left + tower_size, horizontal_y - spacing);
+                m_temperature_drop_tower_plate_path.emplace_back(right, y);
+                if (line + 1 < fill.line_count)
+                    m_temperature_drop_tower_plate_path.emplace_back(right, y - spacing);
             } else {
-                m_temperature_drop_tower_plate_path.emplace_back(vertical_x, horizontal_y);
-                m_temperature_drop_tower_plate_path.emplace_back(vertical_x, tower_rear - tower_size);
-                if (line + 1 < TEMPERATURE_DROP_TOWER_LINE_COUNT)
-                    m_temperature_drop_tower_plate_path.emplace_back(vertical_x + spacing, tower_rear - tower_size);
+                m_temperature_drop_tower_plate_path.emplace_back(x, bottom);
+                if (line + 1 < fill.line_count)
+                    m_temperature_drop_tower_plate_path.emplace_back(x + spacing, bottom);
             }
         }
     }
@@ -8132,18 +8220,25 @@ bool GCode::build_temperature_drop_tower_brim_paths(std::vector<ExtrusionPath> &
     if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
         return false;
 
-    const Flow flow(Flow::auto_extrusion_width(frPerimeter, nozzle_diameter), layer_height, nozzle_diameter);
+    const auto tower_tools = temperature_drop_tower_tools(*m_print, m_writer, m_config);
+    const bool multiple_widths = tower_tools.multiple_widths();
+    Flow flow(Flow::auto_extrusion_width(frPerimeter, nozzle_diameter), layer_height, nozzle_diameter);
     const double left = m_temperature_drop_tower_left;
     const double rear = m_temperature_drop_tower_rear;
     const double bottom = rear - m_temperature_drop_tower_size;
-    const double inner_right = left + (TEMPERATURE_DROP_TOWER_LINE_COUNT - 1) * m_temperature_drop_tower_spacing;
-    const double inner_bottom = rear - (TEMPERATURE_DROP_TOWER_LINE_COUNT - 1) * m_temperature_drop_tower_spacing;
+    if (multiple_widths)
+        flow = temperature_drop_tower_fill(flow, TEMPERATURE_DROP_TOWER_LINE_COUNT * m_temperature_drop_tower_spacing).flow;
+    const double band_width_mm = (multiple_widths ? TEMPERATURE_DROP_TOWER_LINE_COUNT : TEMPERATURE_DROP_TOWER_LINE_COUNT - 1) * m_temperature_drop_tower_spacing;
+    const double inner_right = left + band_width_mm;
+    const double inner_bottom = rear - band_width_mm;
     const double right = left + m_temperature_drop_tower_size;
 
     paths.clear();
     paths.reserve(TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT);
     for (int line = 1; line <= TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT; ++line) {
-        const double offset = line * m_temperature_drop_tower_spacing;
+        const double offset = multiple_widths
+            ? line * double(flow.spacing()) - 0.5 * double(flow.width())
+            : line * m_temperature_drop_tower_spacing;
         auto plate_to_point = [this](const Vec2d &point) {
             const Vec2d local_point = point - m_origin;
             return Point(scaled<coord_t>(local_point));
@@ -8333,7 +8428,7 @@ std::string GCode::finish_low_temperature_support_interface()
     const int normal_temperature = on_first_layer()
         ? m_config.nozzle_temperature_initial_layer.get_at(filament_id)
         : m_config.nozzle_temperature.get_at(filament_id);
-    const int interface_temperature = m_config.support_interface_temperature.value;
+    const int interface_temperature = m_low_temperature_support_interface_target_temperature;
 
     std::string gcode;
     if (normal_temperature > 0 && normal_temperature != interface_temperature) {

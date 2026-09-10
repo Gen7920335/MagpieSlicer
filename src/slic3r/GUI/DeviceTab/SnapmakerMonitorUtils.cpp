@@ -12,6 +12,60 @@
 namespace Slic3r {
 namespace GUI {
 
+void SnapmakerNumericInputState::mark_edited()
+{
+    ++m_revision;
+    m_edited = true;
+    m_pending = false;
+    m_acknowledged = false;
+}
+
+void SnapmakerNumericInputState::reset()
+{
+    ++m_revision;
+    m_edited = false;
+    m_pending = false;
+    m_acknowledged = false;
+}
+
+std::uint64_t SnapmakerNumericInputState::begin_submit(double requested_value)
+{
+    ++m_revision;
+    m_requested_value = requested_value;
+    m_edited = true;
+    m_pending = true;
+    m_acknowledged = false;
+    return m_revision;
+}
+
+void SnapmakerNumericInputState::command_finished(std::uint64_t revision, bool success)
+{
+    if (revision != m_revision || !m_pending)
+        return;
+    m_acknowledged = success;
+    if (!success)
+        m_pending = false;
+}
+
+bool SnapmakerNumericInputState::allow_remote_update(double remote_value, unsigned display_digits, bool focused)
+{
+    if (!std::isfinite(remote_value))
+        return false;
+    if (m_pending && m_acknowledged) {
+        // Compare at this control's displayed precision (percent, degrees C,
+        // mm/s, etc.), including firmware/PWM rounding invisible in the UI.
+        const double display_scale = std::pow(10., display_digits);
+        const double remote_display_units = remote_value * display_scale;
+        const double requested_display_units = m_requested_value * display_scale;
+        if (std::isfinite(remote_display_units) && std::isfinite(requested_display_units) &&
+            std::round(remote_display_units) == std::round(requested_display_units)) {
+            m_edited = false;
+            m_pending = false;
+        }
+    }
+    return !focused && !m_edited && !m_pending;
+}
+
 namespace {
 
 bool is_valid_port(std::string_view port)
@@ -216,6 +270,18 @@ bool is_success_http_status(unsigned status)
 int valid_snapmaker_layer_number(int requested_layer, int indexed_layer_count)
 {
     return requested_layer > 0 && requested_layer <= indexed_layer_count ? requested_layer : 0;
+}
+
+bool snapmaker_manual_motion_allowed(bool connected, bool command_in_flight, std::string_view print_state)
+{
+    const bool stopped = print_state == "standby" || print_state == "complete" ||
+                         print_state == "cancelled" || print_state == "error";
+    return connected && !command_in_flight && stopped;
+}
+
+bool snapmaker_emergency_stop_allowed(bool has_server, bool emergency_in_flight)
+{
+    return has_server && !emergency_in_flight;
 }
 
 SnapmakerControlAvailability snapmaker_control_availability(

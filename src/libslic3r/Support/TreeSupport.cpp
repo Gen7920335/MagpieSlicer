@@ -1493,7 +1493,7 @@ void TreeSupport::generate_toolpaths()
     SupportProfileStage total_timing("support-tree-toolpath", "Generate all classic tree toolpaths", m_object->support_layer_count());
     const PrintObjectConfig &object_config = m_object->config();
     coordf_t support_extrusion_width = m_support_params.support_extrusion_width;
-    coordf_t nozzle_diameter = m_print_config->nozzle_diameter.get_at(object_config.support_filament - 1);
+    coordf_t nozzle_diameter = m_support_params.support_material_flow.nozzle_diameter();
     coordf_t layer_height = object_config.layer_height.value;
     const size_t wall_count = size_t(std::clamp(object_config.tree_support_wall_count.value, 0, 10));
 

@@ -586,6 +586,9 @@ private:
 
 		// Main text
 		std::string      m_text1;
+		// Exact texts already represented by this popup. Slicing warnings may be
+		// reactivated repeatedly while a print is invalidated and rebuilt.
+		std::unordered_set<std::string> m_appended_texts;
 		// Clickable text
 		std::string      m_hypertext;
 		// Aditional text after hypertext - currently not used
@@ -954,7 +957,7 @@ private:
 	// and condition callback is success, notification is regular pushed from update function.
 	// Otherwise another delay interval waiting. Timestamp is 0.
 	// Note that notification object is constructed when being added to the waiting list, but there are no updates called on it and its timer is reset at regular push.
-	// Also note that no control of same notification is done during push_delayed_notification_data but if waiting notif fails to push, it continues waiting.
+	// A duplicate with a nonzero retry interval retains ownership in the waiting list, including when initial_delay is zero.
 	// If delay_interval is 0, notification is pushed only after initial_delay no matter the result.
 	void push_delayed_notification_data(std::unique_ptr<NotificationManager::PopNotification> notification, std::function<bool(void)> condition_callback, int64_t initial_delay, int64_t delay_interval);
 	//finds older notification of same type and moves it to the end of queue. returns true if found

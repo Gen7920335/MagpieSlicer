@@ -4615,9 +4615,12 @@ void PrintObject::_generate_support_material()
                     fallback_timing.finish(normal_layers.size());
                     if (normal_layers.empty())
                         throw SlicingError(_u8L("Mixed support could not generate a printable route for the assigned support demand."));
+                    // PERMANENT DIAGNOSTIC: nonempty fallback layers may contain
+                    // only the original normal demand; they do not prove that
+                    // the failed tree demand received printable support.
                     this->active_step_add_warning(
-                        PrintStateBase::WarningLevel::NON_CRITICAL,
-                        _u8L("Tree support could not route part of the Mixed support demand, so it was generated with normal support instead."));
+                        PrintStateBase::WarningLevel::CRITICAL,
+                        _u8L("Tree support could not route the assigned Mixed support demand. Normal support was retried, but some areas may remain unsupported. Check the preview before printing."));
                 }
                 tree_timing.finish(tree_layers.size());
             }

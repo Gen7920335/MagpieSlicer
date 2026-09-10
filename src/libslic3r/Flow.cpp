@@ -297,17 +297,24 @@ ResolvedWallTool detail_wall_tool(const PrintConfig &print_config, const PrintRe
 
     auto best_smaller = [&](bool require_same_colour) -> ResolvedWallTool {
         ResolvedWallTool best;
-        for (size_t hotend_idx = 0; hotend_idx < hotend_count; ++hotend_idx) {
-            if (!is_smaller_candidate(hotend_idx))
-                continue;
-            const ResolvedWallTool candidate = wall_tool_for_hotend(print_config, unsigned(hotend_idx + 1), base_tool.filament_id_1based);
-            if (!candidate)
+        for (size_t filament_idx = 0; filament_idx < configured_filament_count(print_config); ++filament_idx) {
+            const ResolvedWallTool candidate = wall_tool_for_filament(print_config, unsigned(filament_idx + 1));
+            if (!candidate || !is_smaller_candidate(size_t(candidate.hotend_id_1based - 1)))
                 continue;
             const size_t candidate_filament_idx = size_t(candidate.filament_id_1based - 1);
+            // Automatic colour/nozzle preference must not change the model's
+            // material. Explicit manual selection below remains unrestricted.
+            if (print_config.filament_type.values.empty() ||
+                print_config.filament_type.get_at(base_filament_idx).empty() ||
+                print_config.filament_type.get_at(candidate_filament_idx) != print_config.filament_type.get_at(base_filament_idx) ||
+                (!print_config.filament_soluble.values.empty() &&
+                 print_config.filament_soluble.get_at(candidate_filament_idx) != print_config.filament_soluble.get_at(base_filament_idx)))
+                continue;
             if (require_same_colour && (!base_colour_known || candidate_filament_idx >= print_config.filament_colour.values.size() ||
                                         print_config.filament_colour.values[candidate_filament_idx] != base_colour))
                 continue;
-            if (!best || candidate.nozzle_diameter < best.nozzle_diameter)
+            if (!best || candidate.nozzle_diameter < best.nozzle_diameter ||
+                (candidate.nozzle_diameter == best.nozzle_diameter && candidate.hotend_id_1based < best.hotend_id_1based))
                 best = candidate;
         }
         return best;
@@ -517,52 +524,61 @@ double support_interface_spacing_from_density(double extrusion_spacing, double d
     return std::max(0., extrusion_spacing * (1. / clamped_density - 1.));
 }
 
+unsigned int support_hotend_1based(const PrintConfig &config, int filament_id_1based)
+{
+    return filament_id_1based <= 0 ? 0u : unsigned(get_extruder_index(config, unsigned(filament_id_1based - 1)) + 1);
+}
+
 Flow support_material_flow(const PrintObject *object, float layer_height)
 {
     const PrintConfig &print_config = object->print()->config();
+    const unsigned hotend = support_hotend_1based(print_config, object->config().support_filament.value);
     ConfigOptionFloatOrPercent width = (object->config().support_line_width.value > 0) ? object->config().support_line_width : object->config().line_width;
-    width = toolhead_line_width_or(print_config, frSupportMaterial, object->config().support_filament, false, width);
+    width = toolhead_line_width_or(print_config, frSupportMaterial, hotend, false, width);
     return Flow::new_from_config_width(
         frSupportMaterial,
         // The width parameter accepted by new_from_config_width is of type ConfigOptionFloatOrPercent, the Flow class takes care of the percent to value substitution.
         width,
         // if object->config().support_filament == 0 (which means to not trigger tool change, but use the current extruder instead), get_at will return the 0th component.
-        float(print_config.nozzle_diameter.get_at(object->config().support_filament-1)),
+        float(print_config.nozzle_diameter.get_at(size_t(hotend) - 1)),
         (layer_height > 0.f) ? layer_height : float(object->config().layer_height.value));
 }
 //BBS
 Flow support_transition_flow(const PrintObject* object)
 {
     //BBS: support transition of tree support is bridge flow
-    float dmr = float(object->print()->config().nozzle_diameter.get_at(object->config().support_filament - 1));
+    const PrintConfig &config = object->print()->config();
+    float dmr = float(config.nozzle_diameter.get_at(size_t(support_hotend_1based(config, object->config().support_filament.value)) - 1));
     return Flow::bridging_flow(dmr, dmr);
 }
 
 Flow support_material_1st_layer_flow(const PrintObject *object, float layer_height)
 {
     const PrintConfig &print_config = object->print()->config();
+    const unsigned hotend = support_hotend_1based(print_config, object->config().support_filament.value);
     ConfigOptionFloatOrPercent width = (print_config.initial_layer_line_width.value > 0) ? print_config.initial_layer_line_width : object->config().support_line_width;
     width = (width.value > 0) ? width : object->config().line_width;
-    width = toolhead_line_width_or(print_config, frSupportMaterial, object->config().support_filament, true, width);
+    width = toolhead_line_width_or(print_config, frSupportMaterial, hotend, true, width);
     return Flow::new_from_config_width(
         frSupportMaterial,
         // The width parameter accepted by new_from_config_width is of type ConfigOptionFloatOrPercent, the Flow class takes care of the percent to value substitution.
         width,
-        float(print_config.nozzle_diameter.get_at(object->config().support_filament-1)),
+        float(print_config.nozzle_diameter.get_at(size_t(hotend) - 1)),
         (layer_height > 0.f) ? layer_height : float(print_config.initial_layer_print_height.value));
 }
 
 Flow support_material_interface_flow(const PrintObject *object, float layer_height)
 {
     const PrintConfig &print_config = object->print()->config();
+    const unsigned hotend = support_hotend_1based(print_config, object->config().support_interface_filament.value);
     ConfigOptionFloatOrPercent width = (object->config().support_line_width > 0) ? object->config().support_line_width : object->config().line_width;
-    width = toolhead_line_width_or(print_config, frSupportMaterialInterface, object->config().support_interface_filament, false, width);
+    width = toolhead_line_width_or(print_config, frSupportMaterialInterface, hotend, false, width);
     return Flow::new_from_config_width(
         frSupportMaterialInterface,
         // The width parameter accepted by new_from_config_width is of type ConfigOptionFloatOrPercent, the Flow class takes care of the percent to value substitution.
         width,
         // if object->config().support_interface_filament == 0 (which means to not trigger tool change, but use the current extruder instead), get_at will return the 0th component.
-        float(print_config.nozzle_diameter.get_at(object->config().support_interface_filament-1)),
+        float(print_config.nozzle_diameter.get_at(size_t(hotend) - 1)),
         (layer_height > 0.f) ? layer_height : float(object->config().layer_height.value));
 }
 

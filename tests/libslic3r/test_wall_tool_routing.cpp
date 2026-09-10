@@ -38,6 +38,25 @@ unsigned int filament_mapped_to(const std::vector<int> &map, unsigned int hotend
 
 } // namespace
 
+TEST_CASE("Automatic detail walls do not substitute a different material", "[WallToolRouting][MaterialSafety]")
+{
+    PrintConfig config = routing_config({1, 2, 3, 4}, {"same", "same", "same", "same"});
+    config.filament_type.values = {"PVA", "PETG", "PLA", "PLA"};
+    config.filament_soluble.values = {true, false, false, false};
+    CHECK(detail_wall_tool(config, detail_region(), 3).filament_id_1based == 3);
+    // Explicitly chosen smaller tool remains available for intentional combinations.
+    CHECK(detail_wall_tool(config, detail_region(1), 3).filament_id_1based == 1);
+    config.filament_type.values[1] = "PLA";
+    CHECK(detail_wall_tool(config, detail_region(), 3).filament_id_1based == 2);
+    config.filament_type.values[0] = "PLA";
+    CHECK(detail_wall_tool(config, detail_region(), 3).filament_id_1based == 2);
+    config.filament_soluble.values[0] = false;
+    CHECK(detail_wall_tool(config, detail_region(), 3).filament_id_1based == 1);
+    config.filament_type.values = {"PVA", "PLA", "PLA", "PLA"};
+    config.filament_map.values = {1, 1, 3, 4};
+    CHECK(detail_wall_tool(config, detail_region(), 3).filament_id_1based == 2);
+}
+
 TEST_CASE("Wall tool routing resolves identity and permuted filament maps", "[WallToolRouting]")
 {
     SECTION("identity map") {

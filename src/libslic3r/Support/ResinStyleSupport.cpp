@@ -93,12 +93,6 @@ sla::PillarConnectionMode connection_mode(SLAPillarConnectionMode mode)
     }
 }
 
-bool contains_point(const Polygons &polygons, const Point &point)
-{
-    return std::any_of(polygons.begin(), polygons.end(),
-        [&point](const Polygon &polygon) { return polygon.contains(point); });
-}
-
 bool contains_point(const ExPolygons &polygons, const Point &point)
 {
     return std::any_of(polygons.begin(), polygons.end(),
@@ -136,6 +130,21 @@ size_t support_point_layer_index(
 }
 
 } // namespace
+
+ResinSupportPointFilter::ResinSupportPointFilter(const Polygons &enforcers, const Polygons &blockers,
+                                               const Polygons *threshold, bool enforcers_only)
+    : m_enforcers(union_ex(enforcers)), m_blockers(union_ex(blockers)),
+      m_threshold(threshold ? union_ex(*threshold) : ExPolygons{}),
+      m_threshold_enabled(threshold != nullptr), m_enforcers_only(enforcers_only)
+{}
+
+bool ResinSupportPointFilter::accepts(const Point &point) const
+{
+    const bool enforced = contains_point(m_enforcers, point);
+    const bool blocked = contains_point(m_blockers, point);
+    const bool passes_threshold = !m_threshold_enabled || contains_point(m_threshold, point);
+    return enforced || (!blocked && !m_enforcers_only && passes_threshold);
+}
 
 void ResinStyleSupport::generate()
 {
@@ -200,8 +209,9 @@ void ResinStyleSupport::generate()
     generator_data_timing.finish(heights.size());
 
     const PrintConfig &print_cfg = m_object.print()->config();
-    const double nozzle = print_cfg.nozzle_diameter.get_at(cfg.support_filament.value - 1);
-    const double configured_width = cfg.support_line_width.get_abs_value(nozzle);
+    const Flow support_flow = support_material_flow(&m_object);
+    const double nozzle = support_flow.nozzle_diameter();
+    const double configured_width = support_flow.width();
     const double printable_diameter = std::max(nozzle, configured_width);
 
     sla::SupportPointGeneratorConfig point_cfg;
@@ -240,16 +250,28 @@ void ResinStyleSupport::generate()
     m_object.project_and_append_custom_facets(false, EnforcerBlockerType::ENFORCER, enforcers);
     m_object.project_and_append_custom_facets(false, EnforcerBlockerType::BLOCKER, blockers);
 
+    std::vector<ResinSupportPointFilter> point_filters;
+    point_filters.reserve(heights.size());
+    {
+        SupportProfileStage masks_timing("support-resin", "Normalize resin point masks", heights.size());
+        for (size_t layer_id = 0; layer_id < heights.size(); ++layer_id) {
+            cancel();
+            // Reconstruct contour/hole topology once per layer, never per point.
+            point_filters.emplace_back(enforcers[layer_id], blockers[layer_id],
+                threshold_demand.empty() ? nullptr : &threshold_demand[layer_id], cfg.resin_support_enforcers_only.value);
+            enforcers[layer_id].clear();
+            blockers[layer_id].clear();
+            if (!threshold_demand.empty()) threshold_demand[layer_id].clear();
+        }
+        masks_timing.finish(point_filters.size());
+    }
+
     sla::SupportPoints filtered_points;
     filtered_points.reserve(points.size());
     for (sla::SupportPoint &support_point : points) {
         const size_t layer_id = support_point_layer_index(m_object, heights, support_point);
         const Point point = Point::new_scale(support_point.pos.x(), support_point.pos.y());
-        const bool enforced = contains_point(enforcers[layer_id], point);
-        const bool blocked  = contains_point(blockers[layer_id], point);
-        const bool passes_threshold = threshold_demand.empty() ||
-            contains_point(threshold_demand[layer_id], point);
-        if (enforced || (!blocked && !cfg.resin_support_enforcers_only.value && passes_threshold))
+        if (point_filters[layer_id].accepts(point))
             filtered_points.emplace_back(std::move(support_point));
     }
     painting_timing.finish(filtered_points.size());

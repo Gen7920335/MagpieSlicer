@@ -3566,7 +3566,6 @@ void TabPrint::toggle_options()
         auto &set = is_tree(support_type) && !is_mixed(support_type) ? enum_set_tree : enum_set_normal;
         auto &opt = const_cast<ConfigOptionDef &>(field->m_opt);
         auto  cb  = dynamic_cast<ComboBox *>(choice->window);
-        auto  n   = cb->GetValue();
         opt.enum_values.clear();
         opt.enum_labels.clear();
         cb->Clear();
@@ -3575,7 +3574,8 @@ void TabPrint::toggle_options()
             opt.enum_labels.push_back(def->enum_labels[i]);
             cb->Append(_(def->enum_labels[i]));
         }
-        cb->SetValue(n);
+        const auto selected = std::find(set.begin(), set.end(), int(m_config->opt_enum<SupportMaterialStyle>("support_style")));
+        cb->SetSelection(selected == set.end() ? 0 : int(std::distance(set.begin(), selected)));
     }
 
     const auto optional_bool = [this](const char *key) {

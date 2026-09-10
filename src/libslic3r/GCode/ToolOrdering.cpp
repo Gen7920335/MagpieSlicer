@@ -579,13 +579,13 @@ static void apply_first_layer_order(const DynamicPrintConfig* config, std::vecto
     if (first_layer_print_sequence_op) {
         const std::vector<int>& print_sequence_1st = first_layer_print_sequence_op->values;
         if (print_sequence_1st.size() >= tool_order.size()) {
-            std::sort(tool_order.begin(), tool_order.end(), [&print_sequence_1st](int lh, int rh) {
+            std::stable_sort(tool_order.begin(), tool_order.end(), [&print_sequence_1st](int lh, int rh) {
                 auto lh_it = std::find(print_sequence_1st.begin(), print_sequence_1st.end(), lh);
                 auto rh_it = std::find(print_sequence_1st.begin(), print_sequence_1st.end(), rh);
 
-                if (lh_it == print_sequence_1st.end() || rh_it == print_sequence_1st.end())
-                    return false;
-
+                // Unlisted materials share the last rank. Preserve their area
+                // order without making them equivalent to every listed rank
+                // (which would violate the sort's strict weak ordering).
                 return lh_it < rh_it;
             });
         }

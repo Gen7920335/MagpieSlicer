@@ -1772,7 +1772,10 @@ boost::any& Choice::get_value()
                     m_opt_id == "support_style" || m_opt_id == "support_type" ||
                     m_opt_id == "curr_bed_type" || m_opt_id == "wipe_tower_wall_type")
         {
-            const std::string &key = m_opt.enum_values[field->GetSelection()];
+            const int selection = field->GetSelection();
+            if (selection < 0 || size_t(selection) >= m_opt.enum_values.size())
+                return m_value; // A rebuilt/empty filtered list is not a new setting.
+            const std::string &key = m_opt.enum_values[size_t(selection)];
             m_value = int(m_opt.enum_keys_map->at(key));
         }
         // Support ThirdPartyPrinter

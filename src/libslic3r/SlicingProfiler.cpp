@@ -292,7 +292,7 @@ void SlicingProfiler::finish_event(SlicingProfileToken token,
     const Clock::time_point now = Clock::now();
     const auto& event = it->second;
     Impl::FinishedEvent finished { event.id, event.category, event.name, backend,
-        work_items == 0 ? event.work_items : work_items, event.thread,
+        work_items == SLICING_PROFILE_KEEP_WORK_ITEMS ? event.work_items : work_items, event.thread,
         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(event.started - m_impl->session_started).count()),
         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - event.started).count()),
         gpu_ms, diagnostic };
@@ -436,7 +436,9 @@ bool SlicingProfiler::export_json(const std::string& path, std::string* error) c
                 { "gpu_kernel_time", "Device event/timestamp interval when available; -1 means unavailable. Not host wall time." },
                 { "phase_wall_time", "Host phase milliseconds; null means unmeasured. Phases may overlap and are not additive." },
                 { "covered_wall_time", "Union of recorded host event intervals, without double counting nested or parallel events. A surrounding pipeline event covers wall time, not every internal operation." },
-                { "cpu_gpu_overlap", "Intersection of recorded CPU/CPU-fallback intervals with CUDA/Vulkan/generic-GPU intervals. Hybrid events stay separate because their CPU/GPU split is ambiguous." },
+                { "cpu_gpu_overlap", "Intersection of recorded HOST CPU/CPU-fallback intervals with HOST CUDA/Vulkan/generic-GPU request intervals, including packing, transfer and device waits. This is NOT simultaneous CPU/device computation or utilization. Hybrid events stay separate because their CPU/GPU split is ambiguous." },
+                { "actual_cpu_device_compute_overlap", "Not measured: host scopes and device durations do not provide synchronized execution intervals." },
+                { "work_items", "Count supplied by the stage; an explicit zero is retained. If the final count is omitted, the initial count is preserved." },
                 { "percentiles", "Nearest-rank p50 and p95 of completed host event durations in each category/name/backend group." },
                 { "summary_coverage", "Summary counts, work items, durations and diagnostics include every completed event, including raw timeline events omitted after event_limit." },
                 { "dropped_events", "Number of raw timeline events omitted after event_limit. These events remain counted in summary." },
@@ -714,7 +716,7 @@ void ScopedSlicingProfileEvent::set_result(SlicingProfileBackend backend,
 {
     m_backend = backend;
     m_gpu_ms = gpu_ms;
-    if (work_items != 0)
+    if (work_items != SLICING_PROFILE_KEEP_WORK_ITEMS)
         m_work_items = work_items;
     m_diagnostic = diagnostic;
 }

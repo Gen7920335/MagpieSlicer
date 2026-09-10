@@ -109,20 +109,46 @@ int main() {
             << " init_ms=" << stats.initialization_ms << " allocation_ms=" << stats.allocation_ms
             << " pack_reference_ms=" << stats.packing_ms << " upload_ms=" << stats.upload_ms
             << " download_ms=" << stats.download_ms << " validation_ms=" << stats.validation_ms << std::endl;
+        const auto concurrent_before = CudaSlicerBackend::runtime_stats();
+        constexpr int concurrent_workers = 8;
+        std::atomic<int> ready_workers {0};
+        std::atomic<bool> start_workers {false};
+        std::atomic<int> gpu_successes {0};
+        std::atomic<int> cpu_fallbacks {0};
         std::atomic<int> thread_failures {0};
         auto worker = [&]() {
+            ready_workers.fetch_add(1);
+            while (!start_workers.load()) std::this_thread::yield();
             auto batch = CudaSlicerBackend::dispatch_vertical_intersections(requests);
-            if (!batch.dispatched || batch.intersections.size() != requests.size()) ++thread_failures;
+            if (batch.dispatched && batch.intersections.size() == requests.size()) {
+                ++gpu_successes;
+            } else if (!batch.dispatched && batch.intersections.empty() &&
+                       batch.diagnostic == "CUDA runtime busy; CPU fallback without waiting") {
+                ++cpu_fallbacks;
+            } else {
+                ++thread_failures;
+            }
         };
-        std::thread first(worker), second(worker);
-        first.join(); second.join();
-        require(thread_failures == 0, "Context reuse across worker threads failed");
+        std::vector<std::thread> workers;
+        workers.reserve(concurrent_workers);
+        for (int index = 0; index < concurrent_workers; ++index) workers.emplace_back(worker);
+        while (ready_workers.load() != concurrent_workers) std::this_thread::yield();
+        start_workers.store(true);
+        for (auto& worker_thread : workers) worker_thread.join();
+        require(thread_failures.load() == 0 && gpu_successes.load() + cpu_fallbacks.load() == concurrent_workers,
+                "Concurrent CUDA requests returned neither a complete GPU batch nor the declared CPU fallback");
+        require(gpu_successes.load() >= 1 && cpu_fallbacks.load() >= 1,
+                "Concurrent CUDA test did not exercise both runtime reuse and non-blocking busy fallback");
         stats = CudaSlicerBackend::runtime_stats();
-        require(stats.queue_submissions == 5 && stats.accepted_gpu_items == 5 * requests.size(), "Concurrent accounting mismatch");
+        require(stats.queue_submissions == concurrent_before.queue_submissions + uint64_t(gpu_successes.load()) &&
+                stats.accepted_gpu_items == concurrent_before.accepted_gpu_items + uint64_t(gpu_successes.load()) * requests.size() &&
+                stats.skipped_workloads == concurrent_before.skipped_workloads + uint64_t(cpu_fallbacks.load()),
+                "Concurrent GPU/fallback accounting mismatch");
         CudaSlicerBackend::begin_slicing_session();
         require(CudaSlicerBackend::runtime_stats().queue_submissions == 0, "Session counters not reset");
         require(CudaSlicerBackend::dispatch_vertical_intersections(requests).dispatched, "Retained context after session reset failed");
-        std::cout << "PASS worker-thread reuse and next-session reset" << std::endl;
+        std::cout << "PASS worker-thread reuse, non-blocking busy fallback and next-session reset: gpu="
+                  << gpu_successes.load() << " cpu_fallback=" << cpu_fallbacks.load() << std::endl;
         for (int iteration = 0; iteration < 1000; ++iteration) {
             std::vector<VulkanVerticalIntersectionRequest> changing;
             for (int j = 0; j < 17; ++j)

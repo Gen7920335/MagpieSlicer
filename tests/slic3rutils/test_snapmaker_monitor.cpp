@@ -3,9 +3,166 @@
 #include "libslic3r/GCode/SnapmakerHomingPolicy.hpp"
 #include "slic3r/GUI/DeviceTab/SnapmakerGCodeLayer.hpp"
 #include "slic3r/GUI/DeviceTab/SnapmakerMonitorUtils.hpp"
+#include "slic3r/GUI/DeviceTab/SnapmakerCameraSession.hpp"
+#include <boost/asio.hpp>
+#include <boost/beast/websocket.hpp>
+#include <atomic>
+#include <chrono>
+#include <thread>
 
 #include <cmath>
 #include <string>
+#include <limits>
+
+TEST_CASE("Snapmaker polling preserves both edited inputs after focus moves", "[SnapmakerMonitor][NumericInput]")
+{
+    const int edited = GENERATE(0, 1, 2, 3);
+    const int focus = GENERATE(0, 1, 2, 3, 4);
+    CAPTURE(edited, focus);
+    Slic3r::GUI::SnapmakerNumericInputState speed, flow;
+    if (edited & 1) speed.mark_edited();
+    if (edited & 2) flow.mark_edited();
+    CHECK(speed.allow_remote_update(110., 0, focus == 1 || focus == 3) == (!(edited & 1) && focus != 1 && focus != 3));
+    CHECK(flow.allow_remote_update(90., 0, focus == 2 || focus == 4) == (!(edited & 2) && focus != 2 && focus != 4));
+}
+
+TEST_CASE("Snapmaker numeric input follows only acknowledged current commands", "[SnapmakerMonitor][NumericInput]")
+{
+    const unsigned digits = GENERATE(0u, 1u, 4u);
+    const bool focused = GENERATE(false, true);
+    CAPTURE(digits, focused);
+    Slic3r::GUI::SnapmakerNumericInputState input;
+    CHECK(input.allow_remote_update(100., digits, focused) == !focused);
+    input.mark_edited();
+    CHECK_FALSE(input.allow_remote_update(200., digits, focused)); // Same remote value does not apply an unsent edit.
+    auto revision = input.begin_submit(200.);
+    CHECK_FALSE(input.allow_remote_update(200., digits, focused)); // Status arriving before ACK.
+    input.command_finished(revision, true);
+    CHECK_FALSE(input.allow_remote_update(std::numeric_limits<double>::quiet_NaN(), digits, focused));
+    CHECK_FALSE(input.allow_remote_update(std::numeric_limits<double>::infinity(), digits, focused));
+    CHECK_FALSE(input.allow_remote_update(100., digits, focused)); // Stale poll after ACK.
+    CHECK(input.allow_remote_update(200., digits, focused) == !focused);
+    CHECK(input.allow_remote_update(210., digits, false)); // Resume following actual remote changes.
+
+    input.mark_edited();
+    revision = input.begin_submit(220.);
+    input.command_finished(revision, false);
+    CHECK_FALSE(input.allow_remote_update(220., digits, false)); // Failed command retains the edit.
+    const auto retry = input.begin_submit(220.);
+    input.command_finished(revision, true); // Old completion must not acknowledge a retry.
+    CHECK_FALSE(input.allow_remote_update(220., digits, false));
+    input.command_finished(retry, true);
+    CHECK(input.allow_remote_update(220., digits, false));
+
+    revision = input.begin_submit(230.);
+    input.mark_edited(); // User changes the field again while a response is delayed.
+    input.command_finished(revision, true);
+    CHECK_FALSE(input.allow_remote_update(230., digits, false));
+    revision = input.begin_submit(240.);
+    input.reset(); // Printer or active PA-tool changed.
+    input.command_finished(revision, true);
+    CHECK(input.allow_remote_update(80., digits, false));
+    CHECK_FALSE(input.allow_remote_update(std::numeric_limits<double>::quiet_NaN(), digits, false));
+    CHECK_FALSE(input.allow_remote_update(std::numeric_limits<double>::infinity(), digits, false));
+}
+
+TEST_CASE("Snapmaker acknowledged targets compare at visible precision", "[SnapmakerMonitor][NumericInput]")
+{
+    Slic3r::GUI::SnapmakerNumericInputState input;
+    SECTION("integer percent tolerates firmware PWM quantization") {
+        auto revision = input.begin_submit(75.);
+        input.command_finished(revision, true);
+        CHECK(input.allow_remote_update(100. * 191. / 255., 0, false));
+    }
+    SECTION("one decimal keeps a materially different corner velocity pending") {
+        auto revision = input.begin_submit(5.1);
+        input.command_finished(revision, true);
+        CHECK_FALSE(input.allow_remote_update(5.04, 1, false));
+        CHECK(input.allow_remote_update(5.099999999, 1, false));
+    }
+    SECTION("four decimals preserve a pressure advance change") {
+        auto revision = input.begin_submit(0.0123);
+        input.command_finished(revision, true);
+        CHECK_FALSE(input.allow_remote_update(0.0122, 4, false));
+        CHECK(input.allow_remote_update(0.012300000001, 4, false));
+    }
+}
+
+TEST_CASE("Snapmaker camera stop cancels a silent local server", "[SnapmakerMonitor][Camera][Cancellation]")
+{
+    namespace net = boost::asio;
+    using tcp = net::ip::tcp;
+    const bool handshake = GENERATE(false, true);
+    net::io_context server_io;
+    tcp::acceptor acceptor(server_io, tcp::endpoint(net::ip::address_v4::loopback(), 0));
+    acceptor.non_blocking(true);
+    std::atomic<bool> connected{false}, active{false}, release{false};
+    std::thread server([&] {
+        tcp::socket socket(server_io);
+        boost::system::error_code ec;
+        while (!release.load()) {
+            acceptor.accept(socket, ec);
+            if (!ec) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if (release.load()) return;
+        connected.store(true);
+        boost::beast::websocket::stream<tcp::socket> ws(std::move(socket));
+        if (handshake) {
+            bool accepted = false;
+            ws.async_accept([&](boost::system::error_code error) { ec = error; accepted = true; });
+            server_io.run_for(std::chrono::seconds(2));
+            if (!accepted) {
+                ws.next_layer().close(ec);
+                server_io.restart();
+                server_io.run();
+                return;
+            }
+        }
+        while (!release.load())
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    });
+    Slic3r::GUI::SnapmakerCameraSession session;
+    session.start("http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port()), "",
+        [&](auto state, const std::string &) {
+            if (state == Slic3r::GUI::SnapmakerCameraSession::State::Active) active.store(true);
+        });
+    const auto ready_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!(handshake ? active.load() : connected.load()) && std::chrono::steady_clock::now() < ready_deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    const bool reached = handshake ? active.load() : connected.load();
+    const auto before_stop = std::chrono::steady_clock::now();
+    session.stop();
+    const auto stop_time = std::chrono::steady_clock::now() - before_stop;
+    release.store(true);
+    server.join();
+    CHECK(reached);
+    CHECK(stop_time < std::chrono::seconds(1)); // User-facing stop latency, wall time.
+    CHECK_FALSE(session.is_running());
+}
+
+TEST_CASE("Snapmaker manual motion is restricted to confirmed stopped states", "[Snapmaker][Safety]")
+{
+    using Slic3r::GUI::snapmaker_manual_motion_allowed;
+    for (const char *state : {"printing", "paused", "", "unknown"})
+        CHECK_FALSE(snapmaker_manual_motion_allowed(true, false, state));
+    for (const char *state : {"standby", "complete", "cancelled", "error"}) {
+        CHECK(snapmaker_manual_motion_allowed(true, false, state));
+        CHECK_FALSE(snapmaker_manual_motion_allowed(true, true, state));
+        CHECK_FALSE(snapmaker_manual_motion_allowed(false, false, state));
+    }
+}
+
+TEST_CASE("Snapmaker emergency stop is independent of the normal command lane", "[Snapmaker][Safety]")
+{
+    using Slic3r::GUI::snapmaker_emergency_stop_allowed;
+    // Busy commands and lost status connectivity deliberately are not inputs to
+    // emergency admission; only an absent endpoint or duplicate emergency blocks it.
+    CHECK(snapmaker_emergency_stop_allowed(true, false));
+    CHECK_FALSE(snapmaker_emergency_stop_allowed(true, true));
+    CHECK_FALSE(snapmaker_emergency_stop_allowed(false, false));
+    CHECK_FALSE(snapmaker_emergency_stop_allowed(false, true));
+}
 
 using Slic3r::GUI::SnapmakerGCodeLayer;
 using Slic3r::GUI::SnapmakerGCodeLayerCache;

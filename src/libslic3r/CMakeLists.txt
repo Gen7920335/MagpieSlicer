@@ -536,6 +536,8 @@ set(lisbslic3r_sources
     GCode/ToolOrderUtils.cpp
     Gpu/GpuExactGeometry.hpp
     Gpu/VulkanSlicer.hpp
+    Gpu/VulkanProfileStats.hpp
+    Support/InterfaceTemperature.hpp
     Gpu/VulkanSlicer.cpp
     Gpu/CudaSlicer.hpp
     Gpu/SlicerCompute.hpp

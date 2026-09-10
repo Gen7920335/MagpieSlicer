@@ -3,9 +3,29 @@
 
 #include <string>
 #include <string_view>
+#include <cstdint>
 
 namespace Slic3r {
 namespace GUI {
+
+// UI-thread state for one editable remote numeric target. A command ACK alone
+// must not release an edit to an older, already in-flight status response.
+class SnapmakerNumericInputState
+{
+public:
+    void mark_edited();
+    void reset();
+    std::uint64_t begin_submit(double requested_value);
+    void command_finished(std::uint64_t revision, bool success);
+    bool allow_remote_update(double remote_value, unsigned display_digits, bool focused);
+
+private:
+    std::uint64_t m_revision {0};
+    double m_requested_value {0.};
+    bool m_edited {false};
+    bool m_pending {false};
+    bool m_acknowledged {false};
+};
 
 struct SnapmakerWebSocketEndpoint
 {
@@ -40,6 +60,8 @@ std::string snapmaker_pressure_advance_script(
 std::string snapmaker_bed_mesh_profile_script(std::string_view operation, std::string_view profile);
 bool is_success_http_status(unsigned status);
 int valid_snapmaker_layer_number(int requested_layer, int indexed_layer_count);
+bool snapmaker_manual_motion_allowed(bool connected, bool command_in_flight, std::string_view print_state);
+bool snapmaker_emergency_stop_allowed(bool has_server, bool emergency_in_flight);
 
 SnapmakerControlAvailability snapmaker_control_availability(
     bool connected,

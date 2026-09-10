@@ -31,6 +31,7 @@
 #include <wx/dialog.h>
 #include <wx/filedlg.h>
 #include <wx/gauge.h>
+#include <wx/event.h>
 #include <wx/image.h>
 #include <wx/listbox.h>
 #include <wx/msgdlg.h>
@@ -1003,12 +1004,14 @@ void SnapmakerMonitorPanel::build_ui()
     m_homed_axes = add_value_row(control_page, motion_box, _L("Homed axes: none"));
     auto *home_row = new wxBoxSizer(wxHORIZONTAL);
     m_home_all = make_action(control_page, _L("Home all"), [this]() { on_home(""); });
+    m_manual_motion_buttons.emplace_back(m_home_all);
     home_row->Add(m_home_all, wxSizerFlags().Expand().Proportion(1).Border(wxRIGHT, FromDIP(5)));
     for (const char axis : {'X', 'Y', 'Z'}) {
         auto *button = make_action(
             control_page,
             wxString::Format("Home %c", axis),
             [this, axis]() { on_home(std::string(1, axis)); });
+        m_manual_motion_buttons.emplace_back(button);
         home_row->Add(button, wxSizerFlags().Expand().Proportion(1).Border(wxRIGHT, FromDIP(5)));
     }
     motion_box->Add(home_row, wxSizerFlags().Expand().Border(wxBOTTOM, FromDIP(8)));
@@ -1034,8 +1037,10 @@ void SnapmakerMonitorPanel::build_ui()
     }
     motion_box->Add(jog_grid, wxSizerFlags().Expand());
     auto *motors_off = make_action(control_page, _L("Disable motors"), [this]() {
-        send_gcode_script("M84", _L("Motors disabled"));
+        if (snapmaker_manual_motion_allowed(m_connected, m_command_in_flight, m_print_state))
+            send_gcode_script("M84", _L("Motors disabled"));
     });
+    m_manual_motion_buttons.emplace_back(motors_off);
     motion_box->Add(motors_off, wxSizerFlags().Expand().Border(wxTOP, FromDIP(8)));
     control_root->Add(motion_box, wxSizerFlags().Expand().Proportion(4).Border(wxALL, FromDIP(10)));
 
@@ -1065,7 +1070,10 @@ void SnapmakerMonitorPanel::build_ui()
     }
     temperature_box->Add(temperature_grid, wxSizerFlags().Expand());
     auto *heaters_off = make_action(control_page, _L("Turn off heaters"), [this]() {
-        send_gcode_script("TURN_OFF_HEATERS", _L("Heaters turned off"));
+        std::vector<NumericInputTarget> targets;
+        for (auto *control : m_temperature_targets)
+            targets.emplace_back(control, 0.);
+        send_gcode_script("TURN_OFF_HEATERS", _L("Heaters turned off"), targets);
     });
     temperature_box->Add(heaters_off, wxSizerFlags().Expand().Border(wxTOP, FromDIP(8)));
     control_root->Add(temperature_box, wxSizerFlags().Expand().Proportion(4).Border(wxTOP | wxBOTTOM, FromDIP(10)));
@@ -1364,7 +1372,42 @@ void SnapmakerMonitorPanel::build_ui()
     auto *outer = new wxBoxSizer(wxVERTICAL);
     outer->Add(scroll, wxSizerFlags().Expand().Proportion(1));
     SetSizer(outer);
+    for (auto *control : m_temperature_targets)
+        bind_numeric_input(control);
+    for (auto *control : {m_speed_target, m_flow_target, m_main_fan_target, m_cavity_fan_target,
+                          m_light_target, m_velocity_target, m_acceleration_target,
+                          m_square_corner_velocity_target, m_pressure_advance_target, m_smooth_time_target})
+        bind_numeric_input(control);
     update_controls();
+}
+
+void SnapmakerMonitorPanel::bind_numeric_input(wxSpinCtrlDouble *control)
+{
+    if (control == nullptr)
+        return;
+    m_numeric_inputs.emplace(control, SnapmakerNumericInputState{});
+    control->Bind(wxEVT_TEXT, [this, control](wxCommandEvent &event) {
+        m_numeric_inputs[control].mark_edited();
+        event.Skip();
+    });
+    control->Bind(wxEVT_SPINCTRLDOUBLE, [this, control](wxSpinDoubleEvent &event) {
+        m_numeric_inputs[control].mark_edited();
+        event.Skip();
+    });
+}
+
+void SnapmakerMonitorPanel::update_numeric_input(wxSpinCtrlDouble *control, double remote_value)
+{
+    if (control == nullptr)
+        return;
+    wxWindow *focus = wxWindow::FindFocus();
+    const bool focused = focus != nullptr && (focus == control || control->IsDescendant(focus));
+    if (m_numeric_inputs[control].allow_remote_update(remote_value, control->GetDigits(), focused)) {
+        // Status writes are not user edits, including text events forwarded by
+        // the spin control's native child text window.
+        wxEventBlocker block_events(control);
+        control->SetValue(remote_value);
+    }
 }
 
 void SnapmakerMonitorPanel::set_server(const wxString &url, const wxString &api_key)
@@ -1378,11 +1421,14 @@ void SnapmakerMonitorPanel::set_server(const wxString &url, const wxString &api_
     m_base_url = base_url;
     m_api_key = key;
     ++m_server_generation;
+    for (auto &entry : m_numeric_inputs)
+        entry.second.reset();
     m_status_objects.clear();
     m_status_in_flight = false;
     m_camera_in_flight = false;
     m_objects_in_flight = false;
     m_command_in_flight = false;
+    m_emergency_in_flight = false;
     m_gcode_in_flight = false;
     m_console_in_flight = false;
     m_files_in_flight = false;
@@ -1398,6 +1444,7 @@ void SnapmakerMonitorPanel::set_server(const wxString &url, const wxString &api_
     m_slow_refresh_tick = 0;
     m_print_state.clear();
     m_active_extruder_name.clear();
+    m_pressure_input_extruder_name.clear();
     m_active_extruder_temperature = 0.0;
     m_current_layer = 0;
     m_total_layers = 0;
@@ -1860,6 +1907,7 @@ void SnapmakerMonitorPanel::apply_status(const std::string &body)
         const json data = json::parse(body);
         const json &status = data.at("result").at("status");
         const json empty = json::object();
+        const double unknown_numeric_target = std::numeric_limits<double>::quiet_NaN();
         const json &print_stats = status.contains("print_stats") ? status.at("print_stats") : empty;
         const json &display = status.contains("display_status") ? status.at("display_status") : empty;
         const json &virtual_sd = status.contains("virtual_sdcard") ? status.at("virtual_sdcard") : empty;
@@ -1869,6 +1917,11 @@ void SnapmakerMonitorPanel::apply_status(const std::string &body)
         const std::string active_extruder = status.contains("toolhead")
             ? string_or(status.at("toolhead"), "extruder")
             : std::string();
+        if (!active_extruder.empty() && m_pressure_input_extruder_name != active_extruder) {
+            m_numeric_inputs[m_pressure_advance_target].reset();
+            m_numeric_inputs[m_smooth_time_target].reset();
+            m_pressure_input_extruder_name = active_extruder;
+        }
         m_active_extruder_name = active_extruder;
         m_active_extruder_temperature = status.contains(active_extruder)
             ? number_or(status.at(active_extruder), "temperature")
@@ -1937,13 +1990,13 @@ void SnapmakerMonitorPanel::apply_status(const std::string &body)
                     max_y = min_y + bed_width;
                 m_layer_view->set_bed_bounds(min_x, min_y, max_x, max_y);
             }
-            if (m_velocity_target != nullptr && wxWindow::FindFocus() != m_velocity_target)
-                m_velocity_target->SetValue(number_or(*toolhead_it, "max_velocity", m_velocity_target->GetValue()));
-            if (m_acceleration_target != nullptr && wxWindow::FindFocus() != m_acceleration_target)
-                m_acceleration_target->SetValue(number_or(*toolhead_it, "max_accel", m_acceleration_target->GetValue()));
-            if (m_square_corner_velocity_target != nullptr && wxWindow::FindFocus() != m_square_corner_velocity_target)
-                m_square_corner_velocity_target->SetValue(
-                    number_or(*toolhead_it, "square_corner_velocity", m_square_corner_velocity_target->GetValue()));
+            if (m_velocity_target != nullptr)
+                update_numeric_input(m_velocity_target, number_or(*toolhead_it, "max_velocity", unknown_numeric_target));
+            if (m_acceleration_target != nullptr)
+                update_numeric_input(m_acceleration_target, number_or(*toolhead_it, "max_accel", unknown_numeric_target));
+            if (m_square_corner_velocity_target != nullptr)
+                update_numeric_input(m_square_corner_velocity_target,
+                    number_or(*toolhead_it, "square_corner_velocity", unknown_numeric_target));
         }
 
         if (status.contains("gcode_move") && status.at("gcode_move").is_object()) {
@@ -1956,12 +2009,12 @@ void SnapmakerMonitorPanel::apply_status(const std::string &body)
 
         if (!active_extruder.empty() && status.contains(active_extruder) && status.at(active_extruder).is_object()) {
             const json &extruder_status = status.at(active_extruder);
-            if (m_pressure_advance_target != nullptr && wxWindow::FindFocus() != m_pressure_advance_target)
-                m_pressure_advance_target->SetValue(
-                    number_or(extruder_status, "pressure_advance", m_pressure_advance_target->GetValue()));
-            if (m_smooth_time_target != nullptr && wxWindow::FindFocus() != m_smooth_time_target)
-                m_smooth_time_target->SetValue(
-                    number_or(extruder_status, "smooth_time", m_smooth_time_target->GetValue()));
+            if (m_pressure_advance_target != nullptr)
+                update_numeric_input(m_pressure_advance_target,
+                    number_or(extruder_status, "pressure_advance", unknown_numeric_target));
+            if (m_smooth_time_target != nullptr)
+                update_numeric_input(m_smooth_time_target,
+                    number_or(extruder_status, "smooth_time", unknown_numeric_target));
         }
 
         std::vector<ExcludeObjectShape> exclude_objects;
@@ -2024,9 +2077,8 @@ void SnapmakerMonitorPanel::apply_status(const std::string &body)
             else
                 m_toolheads[i]->SetLabel(label + "  -");
             m_toolheads[i]->SetForegroundColour(active_extruder == object_name ? ACCENT_BLUE : wxNullColour);
-            if (status.contains(object_name) && m_temperature_targets[i] != nullptr &&
-                wxWindow::FindFocus() != m_temperature_targets[i])
-                m_temperature_targets[i]->SetValue(number_or(status.at(object_name), "target"));
+            if (status.contains(object_name))
+                update_numeric_input(m_temperature_targets[i], number_or(status.at(object_name), "target", unknown_numeric_target));
         }
         wxString active_tool = "-";
         for (size_t i = 0; i < m_toolheads.size(); ++i) {
@@ -2040,9 +2092,8 @@ void SnapmakerMonitorPanel::apply_status(const std::string &body)
         m_bed->SetLabel(status.contains("heater_bed")
             ? temperature_text(_L("Bed"), status.at("heater_bed"))
             : _L("Bed: -"));
-        if (status.contains("heater_bed") && m_temperature_targets.back() != nullptr &&
-            wxWindow::FindFocus() != m_temperature_targets.back())
-            m_temperature_targets.back()->SetValue(number_or(status.at("heater_bed"), "target"));
+        if (status.contains("heater_bed"))
+            update_numeric_input(m_temperature_targets.back(), number_or(status.at("heater_bed"), "target", unknown_numeric_target));
 
         std::array<double, 5> temperatures;
         temperatures.fill(std::numeric_limits<double>::quiet_NaN());
@@ -2069,19 +2120,17 @@ void SnapmakerMonitorPanel::apply_status(const std::string &body)
                 const int speed = static_cast<int>(std::lround(number_or(it.value(), "speed") * 100.0));
                 const std::string display_name = name == "fan" ? "Main" : name.substr(std::string("fan_generic ").size());
                 fans.emplace_back(wxString::Format("%s %d%%", from_u8(display_name), speed));
-                if (name == "fan" && m_main_fan_target != nullptr && wxWindow::FindFocus() != m_main_fan_target)
-                    m_main_fan_target->SetValue(speed);
-                if (name == "fan_generic cavity_fan" && m_cavity_fan_target != nullptr &&
-                    wxWindow::FindFocus() != m_cavity_fan_target)
-                    m_cavity_fan_target->SetValue(speed);
+                if (name == "fan")
+                    update_numeric_input(m_main_fan_target, number_or(it.value(), "speed", unknown_numeric_target) * 100.0);
+                if (name == "fan_generic cavity_fan")
+                    update_numeric_input(m_cavity_fan_target, number_or(it.value(), "speed", unknown_numeric_target) * 100.0);
             } else if (starts_with(name, "output_pin ")) {
                 std::string lower = name;
                 std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
                 if (lower.find("light") != std::string::npos || lower.find("led") != std::string::npos) {
                     const int value = static_cast<int>(std::lround(number_or(it.value(), "value") * 100.0));
                     light = wxString::Format("%s: %d%%", _L("Light"), value);
-                    if (m_light_target != nullptr && wxWindow::FindFocus() != m_light_target)
-                        m_light_target->SetValue(value);
+                    update_numeric_input(m_light_target, number_or(it.value(), "value", unknown_numeric_target) * 100.0);
                 }
             } else if (starts_with(name, "led ")) {
                 const auto colors = it.value().find("color_data");
@@ -2092,8 +2141,7 @@ void SnapmakerMonitorPanel::apply_status(const std::string &body)
                     if (channels[channel].is_number()) {
                         const int value = static_cast<int>(std::lround(channels[channel].get<double>() * 100.0));
                         light = wxString::Format("%s: %d%%", _L("Light"), value);
-                        if (m_light_target != nullptr && wxWindow::FindFocus() != m_light_target)
-                            m_light_target->SetValue(value);
+                        update_numeric_input(m_light_target, value);
                     }
                 }
             }
@@ -2115,12 +2163,10 @@ void SnapmakerMonitorPanel::apply_status(const std::string &body)
             m_fans->SetToolTip(fan_text);
         }
         const double speed_factor = status.contains("gcode_move") ? number_or(status.at("gcode_move"), "speed_factor", 1.0) : 1.0;
-        const double flow_factor = status.contains("gcode_move") ? number_or(status.at("gcode_move"), "extrude_factor", 1.0) : 1.0;
         m_speed->SetLabel(wxString::Format("%s: %.0f%%", _L("Speed"), speed_factor * 100.0));
-        if (m_speed_target != nullptr && wxWindow::FindFocus() != m_speed_target)
-            m_speed_target->SetValue(speed_factor * 100.0);
-        if (m_flow_target != nullptr && wxWindow::FindFocus() != m_flow_target)
-            m_flow_target->SetValue(flow_factor * 100.0);
+        const json &gcode_move = status.contains("gcode_move") ? status.at("gcode_move") : empty;
+        update_numeric_input(m_speed_target, number_or(gcode_move, "speed_factor", unknown_numeric_target) * 100.0);
+        update_numeric_input(m_flow_target, number_or(gcode_move, "extrude_factor", unknown_numeric_target) * 100.0);
         m_light->SetLabel(light);
 
         if (status.contains("bed_mesh")) {
@@ -2339,10 +2385,12 @@ void SnapmakerMonitorPanel::set_connection_error(const wxString &message)
 
 void SnapmakerMonitorPanel::send_print_command(const std::string &endpoint, const wxString &success_message)
 {
-    if (m_command_in_flight || !m_connected || m_base_url.empty())
+    const bool emergency = endpoint == "/printer/emergency_stop";
+    if (emergency ? !snapmaker_emergency_stop_allowed(!m_base_url.empty(), m_emergency_in_flight)
+                  : (m_command_in_flight || !m_connected || m_base_url.empty()))
         return;
 
-    m_command_in_flight = true;
+    (emergency ? m_emergency_in_flight : m_command_in_flight) = true;
     m_message->SetLabel(_L("Sending command..."));
     update_controls();
 
@@ -2354,21 +2402,21 @@ void SnapmakerMonitorPanel::send_print_command(const std::string &endpoint, cons
     request.header("Content-Length", "0")
         .timeout_connect(2)
         .timeout_max(5)
-        .on_complete([this, lifetime, generation, success_message](std::string, unsigned) {
-            wxTheApp->CallAfter([this, lifetime, generation, success_message]() {
+        .on_complete([this, lifetime, generation, success_message, emergency](std::string, unsigned) {
+            wxTheApp->CallAfter([this, lifetime, generation, success_message, emergency]() {
                 if (lifetime.expired() || generation != m_server_generation)
                     return;
-                m_command_in_flight = false;
+                (emergency ? m_emergency_in_flight : m_command_in_flight) = false;
                 m_message->SetLabel(success_message);
                 update_controls();
                 request_status();
             });
         })
-        .on_error([this, lifetime, generation](std::string, std::string error, unsigned) {
-            wxTheApp->CallAfter([this, lifetime, generation, error = std::move(error)]() {
+        .on_error([this, lifetime, generation, emergency](std::string, std::string error, unsigned) {
+            wxTheApp->CallAfter([this, lifetime, generation, emergency, error = std::move(error)]() {
                 if (lifetime.expired() || generation != m_server_generation)
                     return;
-                m_command_in_flight = false;
+                (emergency ? m_emergency_in_flight : m_command_in_flight) = false;
                 wxString message = _L("Command failed");
                 if (!error.empty())
                     message += ": " + from_u8(error);
@@ -2416,7 +2464,8 @@ void SnapmakerMonitorPanel::send_delete_command(const std::string &endpoint, con
         .perform();
 }
 
-void SnapmakerMonitorPanel::send_gcode_script(const std::string &script, const wxString &success_message)
+void SnapmakerMonitorPanel::send_gcode_script(const std::string &script, const wxString &success_message,
+                                             const std::vector<NumericInputTarget> &input_targets)
 {
     if (m_command_in_flight || !m_connected || m_base_url.empty())
         return;
@@ -2426,6 +2475,10 @@ void SnapmakerMonitorPanel::send_gcode_script(const std::string &script, const w
     update_controls();
 
     const std::string body = json {{"script", script}}.dump();
+    std::vector<std::pair<wxSpinCtrlDouble *, std::uint64_t>> submitted_inputs;
+    for (const auto &target : input_targets)
+        if (target.first != nullptr)
+            submitted_inputs.emplace_back(target.first, m_numeric_inputs[target.first].begin_submit(target.second));
     const auto lifetime = std::weak_ptr<int>(m_lifetime);
     const std::uint64_t generation = m_server_generation;
     auto request = Slic3r::Http::post(m_base_url + "/printer/gcode/script");
@@ -2436,21 +2489,25 @@ void SnapmakerMonitorPanel::send_gcode_script(const std::string &script, const w
         .set_post_body(body)
         .timeout_connect(2)
         .timeout_max(180)
-        .on_complete([this, lifetime, generation, success_message](std::string, unsigned) {
-            wxTheApp->CallAfter([this, lifetime, generation, success_message]() {
+        .on_complete([this, lifetime, generation, success_message, submitted_inputs](std::string, unsigned) {
+            wxTheApp->CallAfter([this, lifetime, generation, success_message, submitted_inputs]() {
                 if (lifetime.expired() || generation != m_server_generation)
                     return;
                 m_command_in_flight = false;
+                for (const auto &entry : submitted_inputs)
+                    m_numeric_inputs[entry.first].command_finished(entry.second, true);
                 m_message->SetLabel(success_message);
                 update_controls();
                 request_status();
             });
         })
-        .on_error([this, lifetime, generation](std::string, std::string error, unsigned) {
-            wxTheApp->CallAfter([this, lifetime, generation, error = std::move(error)]() {
+        .on_error([this, lifetime, generation, submitted_inputs](std::string, std::string error, unsigned) {
+            wxTheApp->CallAfter([this, lifetime, generation, submitted_inputs, error = std::move(error)]() {
                 if (lifetime.expired() || generation != m_server_generation)
                     return;
                 m_command_in_flight = false;
+                for (const auto &entry : submitted_inputs)
+                    m_numeric_inputs[entry.first].command_finished(entry.second, false);
                 wxString message = _L("Command failed");
                 if (!error.empty())
                     message += ": " + from_u8(error);
@@ -2471,6 +2528,8 @@ void SnapmakerMonitorPanel::refresh_auxiliary()
 
 void SnapmakerMonitorPanel::on_home(const std::string &axes)
 {
+    if (!snapmaker_manual_motion_allowed(m_connected, m_command_in_flight, m_print_state))
+        return;
     std::string script = "G28";
     for (char axis : axes) {
         const char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(axis)));
@@ -2484,7 +2543,8 @@ void SnapmakerMonitorPanel::on_home(const std::string &axes)
 
 void SnapmakerMonitorPanel::on_jog(char axis, double direction)
 {
-    if (!m_homed || m_jog_distance == nullptr)
+    if (!snapmaker_manual_motion_allowed(m_connected, m_command_in_flight, m_print_state) ||
+        !m_homed || m_jog_distance == nullptr)
         return;
     static const std::array<double, 4> distances {0.1, 1.0, 10.0, 50.0};
     const int selection = m_jog_distance->GetSelection();
@@ -2509,7 +2569,8 @@ void SnapmakerMonitorPanel::on_set_temperature(size_t heater_index)
     try {
         send_gcode_script(
             snapmaker_heater_script(heater, m_temperature_targets[heater_index]->GetValue()),
-            _L("Temperature target updated"));
+            _L("Temperature target updated"),
+            {{m_temperature_targets[heater_index], m_temperature_targets[heater_index]->GetValue()}});
     } catch (const std::exception &) {
         m_message->SetLabel(_L("Invalid temperature"));
     }
@@ -2523,7 +2584,7 @@ void SnapmakerMonitorPanel::on_set_tuning()
     const int flow = static_cast<int>(std::lround(m_flow_target->GetValue()));
     send_gcode_script(
         "M220 S" + std::to_string(speed) + "\nM221 S" + std::to_string(flow),
-        _L("Speed and flow updated"));
+        _L("Speed and flow updated"), {{m_speed_target, double(speed)}, {m_flow_target, double(flow)}});
 }
 
 void SnapmakerMonitorPanel::on_set_fans()
@@ -2531,17 +2592,22 @@ void SnapmakerMonitorPanel::on_set_fans()
     if (m_main_fan_target == nullptr)
         return;
     const int part_fan = static_cast<int>(std::lround(m_main_fan_target->GetValue() * 255.0 / 100.0));
+    std::vector<NumericInputTarget> targets{{m_main_fan_target, m_main_fan_target->GetValue()}};
     std::ostringstream script;
     script << "M106 S" << std::clamp(part_fan, 0, 255);
-    if (m_cavity_fan_supported && m_cavity_fan_target != nullptr)
+    if (m_cavity_fan_supported && m_cavity_fan_target != nullptr) {
         script << "\nSET_FAN_SPEED FAN=cavity_fan SPEED="
                << std::fixed << std::setprecision(2)
                << std::clamp(m_cavity_fan_target->GetValue() / 100.0, 0.0, 1.0);
-    if (m_light_supported && m_light_target != nullptr)
+        targets.emplace_back(m_cavity_fan_target, m_cavity_fan_target->GetValue());
+    }
+    if (m_light_supported && m_light_target != nullptr) {
         script << "\nSET_LED LED=cavity_led WHITE="
                << std::fixed << std::setprecision(2)
                << std::clamp(m_light_target->GetValue() / 100.0, 0.0, 1.0);
-    send_gcode_script(script.str(), _L("Fans and light updated"));
+        targets.emplace_back(m_light_target, m_light_target->GetValue());
+    }
+    send_gcode_script(script.str(), _L("Fans and light updated"), targets);
 }
 
 void SnapmakerMonitorPanel::on_manual_extrude(double direction)
@@ -2583,7 +2649,9 @@ void SnapmakerMonitorPanel::on_set_motion_limits()
                 m_velocity_target->GetValue(),
                 m_acceleration_target->GetValue(),
                 m_square_corner_velocity_target->GetValue()),
-            _L("Motion limits applied"));
+            _L("Motion limits applied"), {{m_velocity_target, m_velocity_target->GetValue()},
+                {m_acceleration_target, m_acceleration_target->GetValue()},
+                {m_square_corner_velocity_target, m_square_corner_velocity_target->GetValue()}});
     } catch (const std::exception &e) {
         m_message->SetLabel(from_u8(e.what()));
     }
@@ -2600,7 +2668,8 @@ void SnapmakerMonitorPanel::on_set_pressure_advance()
                 m_active_extruder_name,
                 m_pressure_advance_target->GetValue(),
                 m_smooth_time_target->GetValue()),
-            _L("Pressure advance applied"));
+            _L("Pressure advance applied"), {{m_pressure_advance_target, m_pressure_advance_target->GetValue()},
+                {m_smooth_time_target, m_smooth_time_target->GetValue()}});
     } catch (const std::exception &e) {
         m_message->SetLabel(from_u8(e.what()));
     }
@@ -2887,9 +2956,15 @@ void SnapmakerMonitorPanel::update_controls()
     for (Button *button : m_connected_buttons)
         if (button != nullptr)
             button->Enable(command_ready);
+    const bool motion_ready = snapmaker_manual_motion_allowed(m_connected, m_command_in_flight, m_print_state);
+    for (Button *button : m_manual_motion_buttons)
+        if (button != nullptr)
+            button->Enable(motion_ready);
+    if (m_emergency_stop != nullptr)
+        m_emergency_stop->Enable(snapmaker_emergency_stop_allowed(!m_base_url.empty(), m_emergency_in_flight));
     for (Button *button : m_jog_buttons)
         if (button != nullptr)
-            button->Enable(command_ready && m_homed);
+            button->Enable(motion_ready && m_homed);
     const bool printer_idle = m_print_state != "printing" && m_print_state != "paused";
     const bool extrusion_ready = command_ready && printer_idle &&
                                  !m_active_extruder_name.empty() &&

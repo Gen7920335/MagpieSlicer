@@ -967,21 +967,29 @@ static const std::array<double, 6> s_toolhead_nozzle_choices = {0.15, 0.20, 0.40
 
 static wxString format_toolhead_nozzle_diameter(double diameter)
 {
-    return wxString::Format("%.2g", diameter);
+    return wxString::Format("%.6g", diameter);
 }
 
-static int toolhead_nozzle_selection_for(double diameter)
+class ToolheadNozzleChoiceData final : public wxClientData
 {
-    int best = 0;
-    double best_delta = std::numeric_limits<double>::max();
-    for (int i = 0; i < int(s_toolhead_nozzle_choices.size()); ++i) {
-        const double delta = std::abs(s_toolhead_nozzle_choices[i] - diameter);
-        if (delta < best_delta) {
-            best = i;
-            best_delta = delta;
-        }
+public:
+    explicit ToolheadNozzleChoiceData(double value) : diameter(value) {}
+    double diameter;
+};
+
+static void select_toolhead_nozzle_diameter(wxComboBox &combo, double diameter, size_t toolhead_index)
+{
+    combo.Clear();
+    int selected = wxNOT_FOUND;
+    for (double standard : s_toolhead_nozzle_choices) {
+        const int index = combo.Append(format_toolhead_nozzle_diameter(standard), new ToolheadNozzleChoiceData(standard));
+        if (standard == diameter)
+            selected = index;
     }
-    return best;
+    if (selected == wxNOT_FOUND)
+        selected = combo.Append(format_toolhead_nozzle_diameter(diameter), new ToolheadNozzleChoiceData(diameter));
+    combo.SetSelection(selected);
+    combo.SetToolTip(_L("Toolhead nozzle diameter") + wxString::Format(" (T%zu)", toolhead_index + 1));
 }
 
 static size_t toolhead_index_for_filament(const PresetBundle &preset_bundle, size_t filament_index, size_t toolhead_count)
@@ -989,11 +997,16 @@ static size_t toolhead_index_for_filament(const PresetBundle &preset_bundle, siz
     if (toolhead_count == 0)
         return 0;
 
-    if (const auto *filament_map = preset_bundle.project_config.option<ConfigOptionInts>("filament_map")) {
-        if (filament_index < filament_map->values.size()) {
-            const int mapped_toolhead = filament_map->values[filament_index];
-            if (mapped_toolhead > 0 && size_t(mapped_toolhead) <= toolhead_count)
-                return size_t(mapped_toolhead - 1);
+    // Auto mapping is finalized when slicing starts. A stale auto-mode map (often
+    // {1, 1, ...}) must not make several editor rows alias one physical nozzle.
+    const auto *map_mode = preset_bundle.project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode");
+    if (map_mode != nullptr && map_mode->value == FilamentMapMode::fmmManual) {
+        if (const auto *filament_map = preset_bundle.project_config.option<ConfigOptionInts>("filament_map")) {
+            if (filament_index < filament_map->values.size()) {
+                const int mapped_toolhead = filament_map->values[filament_index];
+                if (mapped_toolhead > 0 && size_t(mapped_toolhead) <= toolhead_count)
+                    return size_t(mapped_toolhead - 1);
+            }
         }
     }
 
@@ -2476,25 +2489,26 @@ void Sidebar::init_filament_combo(PlaterPresetComboBox **combo, const int filame
 
     auto *nozzle_combo = new wxComboBox(p->m_panel_filament_content, wxID_ANY, wxEmptyString, wxDefaultPosition,
                                         wxSize(FromDIP(58), FromDIP(26)), 0, nullptr, wxCB_READONLY);
-    nozzle_combo->SetToolTip(_L("Toolhead nozzle diameter"));
-    for (double diameter : s_toolhead_nozzle_choices)
-        nozzle_combo->Append(format_toolhead_nozzle_diameter(diameter));
-
     double current_nozzle_diameter = 0.4;
+    size_t current_toolhead_index = 0;
     if (auto *nozzle_opt = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter")) {
         if (!nozzle_opt->values.empty()) {
             const size_t nozzle_idx = toolhead_index_for_filament(
                 *wxGetApp().preset_bundle, size_t(filament_idx), nozzle_opt->values.size());
+            current_toolhead_index = nozzle_idx;
             current_nozzle_diameter = nozzle_opt->values[nozzle_idx];
         }
     }
-    nozzle_combo->SetSelection(toolhead_nozzle_selection_for(current_nozzle_diameter));
+    select_toolhead_nozzle_diameter(*nozzle_combo, current_nozzle_diameter, current_toolhead_index);
     nozzle_combo->Bind(wxEVT_COMBOBOX, [this, filament_idx](wxCommandEvent &evt) {
         auto *combo = dynamic_cast<wxComboBox*>(evt.GetEventObject());
         if (!combo)
             return;
         const int selection = combo->GetSelection();
-        if (selection < 0 || selection >= int(s_toolhead_nozzle_choices.size()))
+        if (selection < 0 || selection >= int(combo->GetCount()))
+            return;
+        const auto *selected_nozzle = dynamic_cast<const ToolheadNozzleChoiceData *>(combo->GetClientObject(selection));
+        if (selected_nozzle == nullptr)
             return;
 
         PresetBundle &preset_bundle = *wxGetApp().preset_bundle;
@@ -2504,7 +2518,7 @@ void Sidebar::init_filament_combo(PlaterPresetComboBox **combo, const int filame
         const size_t toolhead_index = toolhead_index_for_filament(
             preset_bundle, size_t(filament_idx), toolhead_count);
 
-        const double nozzle_diameter = s_toolhead_nozzle_choices[size_t(selection)];
+        const double nozzle_diameter = selected_nozzle->diameter;
 
         DynamicPrintConfig new_config = current_config;
         set_toolhead_nozzle_diameter(new_config, toolhead_index, nozzle_diameter);
@@ -2588,9 +2602,7 @@ void Sidebar::sync_toolhead_nozzle_combos(const DynamicPrintConfig &printer_conf
         const size_t toolhead_index = toolhead_index_for_filament(
             *wxGetApp().preset_bundle, index, nozzles->values.size());
         const double diameter = nozzles->values[toolhead_index];
-        const int selection = toolhead_nozzle_selection_for(diameter);
-        if (combo->GetSelection() != selection)
-            combo->SetSelection(selection);
+        select_toolhead_nozzle_diameter(*combo, diameter, toolhead_index);
     }
 }
 
@@ -5331,13 +5343,15 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
     update();
 
     // Orca: Make sidebar dockable
+    const int sidebar_min_width = 39 * wxGetApp().em_unit();
     m_aui_mgr.AddPane(sidebar, wxAuiPaneInfo()
                                    .Name("sidebar")
                                    .Left()
                                    .CloseButton(false)
                                    .TopDockable(false)
                                    .BottomDockable(false)
-                                   .BestSize(wxSize(39 * wxGetApp().em_unit(), 90 * wxGetApp().em_unit())));
+                                   .MinSize(wxSize(sidebar_min_width, -1))
+                                   .BestSize(wxSize(sidebar_min_width, 90 * wxGetApp().em_unit())));
 
     auto* panel_sizer = new wxBoxSizer(wxHORIZONTAL);
     panel_sizer->Add(view3D, 1, wxEXPAND | wxALL, 0);
@@ -5373,9 +5387,9 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
 
         // Keep tracking the current sidebar size, by storing it using `best_size`, which will be stored
         // in the config and re-applied when the app is opened again.
-        this->sidebar->Bind(wxEVT_IDLE, [&sidebar, this](wxIdleEvent& e) {
+        this->sidebar->Bind(wxEVT_IDLE, [&sidebar, this, sidebar_min_width](wxIdleEvent& e) {
             if (sidebar.IsShown() && sidebar.IsDocked() && sidebar.rect.GetWidth() > 0) {
-                sidebar.BestSize(sidebar.rect.GetWidth(), sidebar.best_size.GetHeight());
+                sidebar.BestSize(std::max(sidebar.rect.GetWidth(), sidebar_min_width), sidebar.best_size.GetHeight());
             }
             e.Skip();
         });
@@ -6786,11 +6800,11 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                                 if (filament_color) {
                                     size_t filament_count = filament_color->size();
 
-                                    // Sync filament map
-                                    ConfigOptionInts* filament_map = proj_cfg.opt<ConfigOptionInts>("filament_map", true);
-                                    if (filament_map->size() != filament_count) {
-                                        filament_map->values.resize(filament_count, 1);
-                                    }
+                                    // Preserve valid manual mappings while giving new/invalid
+                                    // entries an identity mapping instead of aliasing toolhead 1.
+                                    normalize_project_filament_map(
+                                        proj_cfg, filament_count,
+                                        std::max<size_t>(1, preset_bundle->get_printer_extruder_count()));
 
                                     // Sync filament multi colour
                                     ConfigOptionStrings* filament_multi_color = proj_cfg.opt<ConfigOptionStrings>("filament_multi_colour", true);
@@ -12018,20 +12032,7 @@ void Plater::priv::take_snapshot(const std::string& snapshot_name, const UndoRed
     // This is a workaround until we refactor the Wipe Tower position / orientation to live solely inside the Model, not in the Print config.
     // BBS: add partplate logic
     if (this->printer_technology == ptFFF) {
-        const DynamicPrintConfig& config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-        const DynamicPrintConfig& proj_cfg = wxGetApp().preset_bundle->project_config;
-        const ConfigOptionFloats* tower_x_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_x");
-        const ConfigOptionFloats* tower_y_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_y");
-        const size_t position_count = tower_x_opt != nullptr && tower_y_opt != nullptr ?
-                                          std::min(tower_x_opt->values.size(), tower_y_opt->values.size()) : 0;
-        model.wipe_tower.positions.clear();
-        model.wipe_tower.positions.resize(position_count);
-        for (size_t plate_idx = 0; plate_idx < position_count; plate_idx++) {
-            ModelWipeTower& tower = model.wipe_tower;
-
-            tower.positions[plate_idx] = Vec2d(tower_x_opt->get_at(plate_idx), tower_y_opt->get_at(plate_idx));
-            tower.rotation = proj_cfg.opt_float("wipe_tower_rotation_angle");
-        }
+        capture_project_tower_positions(wxGetApp().preset_bundle->project_config, model.wipe_tower);
     }
     const GLGizmosManager& gizmos = get_current_canvas3D()->get_canvas_type() == GLCanvas3D::CanvasAssembleView ? assemble_view->get_canvas3d()->get_gizmos_manager() : view3D->get_canvas3d()->get_gizmos_manager();
 
@@ -12129,20 +12130,7 @@ void Plater::priv::undo_redo_to(std::vector<UndoRedo::Snapshot>::const_iterator 
     // This is a workaround until we refactor the Wipe Tower position / orientation to live solely inside the Model, not in the Print config.
     // BBS: add partplate logic
     if (this->printer_technology == ptFFF) {
-        const DynamicPrintConfig& config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-        const DynamicPrintConfig& proj_cfg = wxGetApp().preset_bundle->project_config;
-        const ConfigOptionFloats* tower_x_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_x");
-        const ConfigOptionFloats* tower_y_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_y");
-        const size_t position_count = tower_x_opt != nullptr && tower_y_opt != nullptr ?
-                                          std::min(tower_x_opt->values.size(), tower_y_opt->values.size()) : 0;
-        model.wipe_tower.positions.clear();
-        model.wipe_tower.positions.resize(position_count);
-        for (size_t plate_idx = 0; plate_idx < position_count; plate_idx++) {
-            ModelWipeTower& tower = model.wipe_tower;
-
-            tower.positions[plate_idx] = Vec2d(tower_x_opt->get_at(plate_idx), tower_y_opt->get_at(plate_idx));
-            tower.rotation = proj_cfg.opt_float("wipe_tower_rotation_angle");
-        }
+        capture_project_tower_positions(wxGetApp().preset_bundle->project_config, model.wipe_tower);
     }
     const int layer_range_idx = it_snapshot->snapshot_data.layer_range_idx;
     // Flags made of Snapshot::Flags enum values.
@@ -12197,37 +12185,7 @@ void Plater::priv::undo_redo_to(std::vector<UndoRedo::Snapshot>::const_iterator 
         // This is a workaround until we refactor the Wipe Tower position / orientation to live solely inside the Model, not in the Print config.
         // BBS: add partplate logic
         if (this->printer_technology == ptFFF) {
-            const DynamicPrintConfig& config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-            DynamicPrintConfig& proj_cfg = wxGetApp().preset_bundle->project_config;
-            ConfigOptionFloats* tower_x_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_x", true);
-            ConfigOptionFloats* tower_y_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_y", true);
-            // BBS: don't support wipe tower rotation
-            //double current_rotation = proj_cfg.opt_float("wipe_tower_rotation_angle");
-            bool need_update = false;
-            if (tower_x_opt->values.size() != model.wipe_tower.positions.size()) {
-                tower_x_opt->clear();
-                ConfigOptionFloat default_tower_x(40.f);
-                tower_x_opt->resize(model.wipe_tower.positions.size(), &default_tower_x);
-                need_update = true;
-            }
-
-            if (tower_y_opt->values.size() != model.wipe_tower.positions.size()) {
-                tower_y_opt->clear();
-                ConfigOptionFloat default_tower_y(200.f);
-                tower_y_opt->resize(model.wipe_tower.positions.size(), &default_tower_y);
-                need_update = true;
-            }
-
-            for (int plate_idx = 0; plate_idx < model.wipe_tower.positions.size(); plate_idx++) {
-                if (Vec2d(tower_x_opt->get_at(plate_idx), tower_y_opt->get_at(plate_idx)) != model.wipe_tower.positions[plate_idx]) {
-                    ConfigOptionFloat tower_x_new(model.wipe_tower.positions[plate_idx].x());
-                    ConfigOptionFloat tower_y_new(model.wipe_tower.positions[plate_idx].y());
-                    tower_x_opt->set_at(&tower_x_new, plate_idx, 0);
-                    tower_y_opt->set_at(&tower_y_new, plate_idx, 0);
-                    need_update = true;
-                    break;
-                }
-            }
+            const bool need_update = restore_project_tower_positions(model.wipe_tower, wxGetApp().preset_bundle->project_config);
 
             if (need_update) {
                 // update print to current plate (preview->m_process)
@@ -12976,11 +12934,6 @@ void Plater::add_model(bool imperial_units, std::string fname)
     auto strategy = LoadStrategy::LoadModel;
     if (imperial_units) strategy = strategy | LoadStrategy::ImperialUnits;
     if (!load_files(paths, strategy, ask_multi).empty()) {
-
-        if (get_project_name() == _L("Untitled") && paths.size() > 0) {
-            boost::filesystem::path full_path(paths[0].string());
-            p->set_project_name(from_u8(full_path.stem().string()));
-        }
 
         wxGetApp().mainframe->update_title();
     }
@@ -14909,10 +14862,6 @@ void Plater::add_file()
     case LoadFilesType::SingleOther: {
         Plater::TakeSnapshot snapshot(this, snapshot_label);
         if (!load_files(paths, LoadStrategy::LoadModel, false).empty()) {
-            if (get_project_name() == _L("Untitled") && paths.size() > 0) {
-                boost::filesystem::path full_path(paths[0].string());
-                p->set_project_name(from_u8(full_path.stem().string()));
-            }
             wxGetApp().mainframe->update_title();
             if (wxGetApp().app_config->get("recent_models") == "true")
                 wxGetApp().mainframe->add_to_recent_projects(paths[0].wstring());
@@ -14932,10 +14881,6 @@ void Plater::add_file()
     case LoadFilesType::MultipleOther: {
         Plater::TakeSnapshot snapshot(this, snapshot_label);
         if (!load_files(paths, LoadStrategy::LoadModel, true).empty()) {
-            if (get_project_name() == _L("Untitled") && paths.size() > 0) {
-                boost::filesystem::path full_path(paths[0].string());
-                p->set_project_name(from_u8(full_path.stem().string()));
-            }
             wxGetApp().mainframe->update_title();
             if (wxGetApp().app_config->get("recent_models") == "true")
                 for (auto &path : paths)
@@ -17037,47 +16982,18 @@ void Plater::on_filaments_delete(size_t num_filaments, size_t filament_id, int r
         part_plate->update_first_layer_print_sequence_when_delete_filament(filament_id);
     }*/
 
-    // update mmu info
-    for (ModelObject *mo : wxGetApp().model().objects) {
-        for (ModelVolume *mv : mo->volumes) {
-            mv->update_extruder_count_when_delete_filament(num_filaments, filament_id + 1, replace_filament_id + 1);  // this function is 1 base
-        }
-    }
+    // The model owns assignments even when no corresponding GUI row is visible.
+    remap_filament_assignments_after_delete(*p->config, filament_id, replace_filament_id);
+    remap_filament_assignments_after_delete(
+        wxGetApp().preset_bundle->prints.get_edited_preset().config, filament_id, replace_filament_id);
+    remap_model_filament_assignments_after_delete(p->model, num_filaments, filament_id, replace_filament_id);
 
-    // update UI
     sidebar().on_filaments_delete(filament_id);
-
-    // update global support filament
-    static const char *keys[] = {"support_filament", "support_interface_filament"};
-    for (auto key : keys)
-        if (p->config->has(key)) {
-            if(p->config->opt_int(key) == filament_id + 1)
-                (*(p->config)).erase(key);
-            else {
-                int new_value = p->config->opt_int(key) > filament_id ? p->config->opt_int(key) - 1 : p->config->opt_int(key);
-                (*(p->config)).set_key_value(key, new ConfigOptionInt(new_value));
-            }
-        }
 
     // update object/volume/support(object and volume) filament id
     sidebar().obj_list()->update_objects_list_filament_column_when_delete_filament(filament_id, num_filaments, replace_filament_id);
 
-    // update customize gcode
-    for (auto item = p->model.plates_custom_gcodes.begin(); item != p->model.plates_custom_gcodes.end(); ++item) {
-        auto iter = std::remove_if(item->second.gcodes.begin(), item->second.gcodes.end(), [filament_id](const Item& gcode_item) {
-            return (gcode_item.type == CustomGCode::Type::ToolChange && gcode_item.extruder == filament_id + 1);
-        });
-        if (replace_filament_id == -1)
-            item->second.gcodes.erase(iter, item->second.gcodes.end());
-        else if(iter != item->second.gcodes.end()) {
-            iter->extruder = replace_filament_id + 1;
-        }
-
-        for (auto& item : item->second.gcodes) {
-            if (item.type == CustomGCode::Type::ToolChange && item.extruder > filament_id)
-                item.extruder--;
-        }
-    }
+    remap_model_tool_changes_after_filament_delete(p->model, filament_id, replace_filament_id);
 }
 
 std::vector<Slic3r::ColorRGBA> Plater::get_extruders_colors()

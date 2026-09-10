@@ -8,8 +8,202 @@
 
 #include <array>
 #include <limits>
+#include <sstream>
+#include <cereal/types/polymorphic.hpp>
+#include <cereal/types/string.hpp>
+#include <cereal/types/vector.hpp>
+#include <cereal/archives/binary.hpp>
 
 using namespace Slic3r;
+
+TEST_CASE("Tower Undo archive restores all plate coordinates and optional states",
+          "[ProjectConfigService][TowerUndo]")
+{
+    const int optional_state = GENERATE(0, 1, 2, 3, 4, 5);
+    const int deleted_plate = GENERATE(-1, 0, 1, 2);
+    CAPTURE(optional_state, deleted_plate);
+    DynamicPrintConfig original;
+    original.set_key_value("wipe_tower_x", new ConfigOptionFloats{10., 20., 30.});
+    original.set_key_value("wipe_tower_y", new ConfigOptionFloats{110., 120., 130.});
+    original.set_key_value("wipe_tower_rotation_angle", new ConfigOptionFloat(0.));
+    original.set_key_value("wall_loops", new ConfigOptionInt(7));
+    const std::string tx = "support_interface_temperature_drop_tower_x";
+    const std::string ty = "support_interface_temperature_drop_tower_y";
+    if (optional_state == 1) {
+        original.set_key_value(tx, new ConfigOptionFloats(std::vector<double>{}));
+        original.set_key_value(ty, new ConfigOptionFloats(std::vector<double>{}));
+    } else if (optional_state >= 2) {
+        if (optional_state != 5)
+            original.set_key_value(tx, new ConfigOptionFloats(optional_state == 3 ? std::vector<double>{-1., 65.} : std::vector<double>{-1., 65., 85.}));
+        if (optional_state != 4)
+            original.set_key_value(ty, new ConfigOptionFloats(optional_state == 3 ? std::vector<double>{75.} : std::vector<double>{-1., 75., 95.}));
+    }
+    Model saved;
+    DynamicPrintConfig stale = original;
+    stale.set_key_value(tx, new ConfigOptionFloats{250.});
+    stale.set_key_value(ty, new ConfigOptionFloats{260.});
+    capture_project_tower_positions(stale, saved.wipe_tower);
+    capture_project_tower_positions(original, saved.wipe_tower);
+    std::stringstream bytes;
+    { cereal::BinaryOutputArchive archive(bytes); archive(saved.wipe_tower); }
+    Model loaded;
+    { cereal::BinaryInputArchive archive(bytes); archive(loaded.wipe_tower); }
+    DynamicPrintConfig changed = original;
+    if (deleted_plate >= 0) {
+        for (const char *key : {"wipe_tower_x", "wipe_tower_y"}) {
+            auto &values = changed.option<ConfigOptionFloats>(key)->values;
+            values.erase(values.begin() + deleted_plate);
+        }
+        erase_temperature_drop_tower_plate(changed, size_t(deleted_plate), 3);
+    } else {
+        changed.set_key_value("wipe_tower_x", new ConfigOptionFloats{150., 160., 170.});
+        changed.set_key_value("wipe_tower_y", new ConfigOptionFloats{180., 190., 200.});
+        changed.set_key_value(tx, new ConfigOptionFloats{15., 25., 35.});
+        changed.set_key_value(ty, new ConfigOptionFloats{45., 55., 65.});
+    }
+    changed.set_key_value("wall_loops", new ConfigOptionInt(9));
+    const DynamicPrintConfig expected_redo = changed;
+    Model redo_saved;
+    capture_project_tower_positions(changed, redo_saved.wipe_tower);
+    std::stringstream redo_bytes;
+    { cereal::BinaryOutputArchive archive(redo_bytes); archive(redo_saved.wipe_tower); }
+    Model redo_loaded;
+    { cereal::BinaryInputArchive archive(redo_bytes); archive(redo_loaded.wipe_tower); }
+    CHECK(restore_project_tower_positions(loaded.wipe_tower, changed));
+    for (const std::string &key : {std::string("wipe_tower_x"), std::string("wipe_tower_y"), tx, ty}) {
+        CAPTURE(key);
+        CHECK(changed.has(key) == original.has(key));
+        if (original.has(key)) {
+            REQUIRE(changed.has(key));
+            CHECK(*changed.option(key) == *original.option(key));
+        }
+    }
+    CHECK(changed.opt_int("wall_loops") == 9);
+    CHECK_FALSE(restore_project_tower_positions(loaded.wipe_tower, changed));
+    CHECK(restore_project_tower_positions(redo_loaded.wipe_tower, changed));
+    CHECK(changed == expected_redo);
+    CHECK_FALSE(restore_project_tower_positions(redo_loaded.wipe_tower, changed));
+    CHECK(restore_project_tower_positions(loaded.wipe_tower, changed));
+}
+
+TEST_CASE("Deleting a filament preserves every custom tool change in order",
+          "[ProjectConfigService][FilamentDeletion]")
+{
+    const int replacement = GENERATE(-1, 0, 1, 2);
+    Model model;
+    const std::vector<CustomGCode::Item> original {
+        {0.2, CustomGCode::ToolChange, 2, "a", "first"},
+        {0.4, CustomGCode::PausePrint, 2, "pause", "message"},
+        {0.6, CustomGCode::ToolChange, 1, "b", "second"},
+        {0.8, CustomGCode::ToolChange, 2, "c", "third"},
+        {1.0, CustomGCode::Custom, 2, "", "M117 unchanged"},
+        {1.2, CustomGCode::ToolChange, 4, "d", "fourth"},
+        {1.4, CustomGCode::ToolChange, 3, "e", "fifth"}
+    };
+    for (int plate : {0, 2})
+        model.plates_custom_gcodes[plate].gcodes = original;
+
+    remap_model_tool_changes_after_filament_delete(model, 1, replacement);
+
+    // Explicit expected sequence: no compacted tail, duplicate, lost pause or extra decrement.
+    auto expected = original;
+    expected[5].extruder = 3;
+    expected[6].extruder = 2;
+    if (replacement < 0) {
+        expected.erase(expected.begin() + 3);
+        expected.erase(expected.begin());
+    } else {
+        expected[0].extruder = replacement + 1;
+        expected[3].extruder = replacement + 1;
+    }
+    for (int plate : {0, 2})
+        CHECK(model.plates_custom_gcodes[plate].gcodes == expected);
+}
+
+TEST_CASE("Deleting a filament remaps every role at every configuration scope",
+          "[ProjectConfigService][FilamentDeletion]")
+{
+    const int deleted = GENERATE(0, 1, 2, 3);
+    const int replacement = GENERATE(-1, 0, 1, 2);
+    const int old_id = GENERATE(0, 1, 2, 3, 4);
+    CAPTURE(deleted, replacement, old_id);
+    const std::array<const char *, 12> keys {
+        "extruder", "wall_filament", "sparse_infill_filament", "solid_infill_filament",
+        "support_filament", "support_interface_filament", "outer_wall_filament_id", "inner_wall_filament_id",
+        "sparse_infill_filament_id", "internal_solid_filament_id", "top_surface_filament_id", "bottom_surface_filament_id"
+    };
+    DynamicPrintConfig global;
+    Model model;
+    ModelObject *object = model.add_object();
+    ModelVolume *volume = object->add_volume(TriangleMesh{});
+    auto &layer = object->layer_config_ranges[{0.4, 1.2}];
+    for (const char *key : keys) {
+        global.set_key_value(key, new ConfigOptionInt(old_id));
+        object->config.set_key_value(key, new ConfigOptionInt(old_id));
+        volume->config.set_key_value(key, new ConfigOptionInt(old_id));
+        layer.set_key_value(key, new ConfigOptionInt(old_id));
+    }
+    object->config.set("wall_loops", 7);
+    const auto timestamp = layer.timestamp();
+    remap_filament_assignments_after_delete(global, deleted, replacement);
+    remap_model_filament_assignments_after_delete(model, 3, deleted, replacement);
+    const bool removed = old_id == deleted + 1 && replacement < 0;
+    const int expected = old_id == deleted + 1 ? (replacement < 0 ? 0 : replacement + 1) :
+        (old_id > deleted + 1 ? old_id - 1 : old_id);
+    for (const char *key : keys) {
+        CAPTURE(key);
+        CHECK(global.opt_int(key) == expected);
+        if (removed) {
+            if (std::string(key) == "extruder")
+                CHECK(object->config.extruder() == 1);
+            else
+                CHECK_FALSE(object->config.has(key));
+            CHECK_FALSE(volume->config.has(key));
+            CHECK_FALSE(layer.has(key));
+        } else {
+            CHECK(object->config.opt_int(key) == expected);
+            CHECK(volume->config.opt_int(key) == expected);
+            CHECK(layer.opt_int(key) == expected);
+        }
+    }
+    CHECK(object->config.opt_int("wall_loops") == 7);
+    CHECK((layer.timestamp() != timestamp) == (old_id >= deleted + 1));
+}
+
+TEST_CASE("Filament deletion preserves absent and inherited overrides",
+          "[ProjectConfigService][FilamentDeletion]")
+{
+    Model model;
+    auto *object = model.add_object();
+    auto *volume = object->add_volume(TriangleMesh{});
+    auto &layer = object->layer_config_ranges[{0.2, 0.8}];
+    layer.set("support_filament", 0);
+    const auto timestamp = layer.timestamp();
+    remap_model_filament_assignments_after_delete(model, 3, 1, 2);
+    CHECK(object->config.empty());
+    CHECK(volume->config.empty());
+    CHECK(layer.size() == 1);
+    CHECK(layer.opt_int("support_filament") == 0);
+    CHECK(layer.timestamp() == timestamp);
+}
+
+TEST_CASE("Legacy physical tool enums are safe and preserve indexed values", "[ProjectConfigService][Compatibility]")
+{
+    DynamicPrintConfig config;
+    config.set_deserialize_strict("extruder_type", "Bowden");
+    config.set_deserialize_strict("nozzle_volume_type", "High Flow");
+    REQUIRE(normalize_project_tool_enums(config, 4).size() == 2);
+    CHECK(config.option<ConfigOptionEnumsGeneric>("extruder_type")->values == std::vector<int>{1, 0, 0, 0});
+    CHECK(config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type")->values == std::vector<int>{1, 0, 0, 0});
+    CHECK(normalize_project_tool_enums(config, 4).empty());
+    config.option<ConfigOptionEnumsGeneric>("extruder_type")->values = {-1, 99};
+    config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type")->values.clear();
+    normalize_project_tool_enums(config, 2);
+    CHECK(config.option<ConfigOptionEnumsGeneric>("extruder_type")->values == std::vector<int>{0, 0});
+    CHECK(config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type")->values == std::vector<int>{0, 0});
+    CHECK(get_extruder_variant_string(ExtruderType(-1), nvtStandard).empty());
+    CHECK(get_extruder_variant_string(etDirectDrive, NozzleVolumeType(-1)).empty());
+}
 
 TEST_CASE("Temperature drop tower plate vectors are normalized together", "[ProjectConfigService]")
 {

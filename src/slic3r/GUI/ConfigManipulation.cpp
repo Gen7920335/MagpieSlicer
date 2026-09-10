@@ -518,7 +518,7 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
         m_support_material_overhangs_queried = false;
     }
 
-    if (config->opt_bool("enable_support")) {
+    {
         auto   support_type = config->opt_enum<SupportType>("support_type");
         auto   support_style = config->opt_enum<SupportMaterialStyle>("support_style");
         std::set<int> enum_set_normal = { smsDefault, smsGrid, smsSnug };
@@ -580,7 +580,8 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
     }
     
     bool have_arachne = config->opt_enum<PerimeterGeneratorType>("wall_generator") == PerimeterGeneratorType::Arachne;
-    if (config->opt_enum<FuzzySkinMode>("fuzzy_skin_mode") != FuzzySkinMode::Displacement && !have_arachne) {
+    if (config->opt_enum<FuzzySkinType>("fuzzy_skin") != FuzzySkinType::Disabled_fuzzy &&
+        config->opt_enum<FuzzySkinMode>("fuzzy_skin_mode") != FuzzySkinMode::Displacement && !have_arachne) {
         wxString msg_text = _(L("Both [Extrusion] and [Combined] modes of Fuzzy Skin require the Arachne Wall Generator to be enabled."));
         msg_text += "\n\n" + _(L("Change these settings automatically?\n"
                                     "Yes - Enable Arachne Wall Generator\n"

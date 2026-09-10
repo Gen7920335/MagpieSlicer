@@ -27,6 +27,7 @@
 #include "libslic3r/Gpu/CudaSlicer.hpp"
 #ifdef MAGPIE_SLICING_TIMING
 #include "libslic3r/SlicingProfiler.hpp"
+#include "libslic3r/Gpu/VulkanProfileStats.hpp"
 #endif
 #include "libslic3r/Thread.hpp"
 #include "libslic3r/libslic3r.h"
@@ -36,6 +37,7 @@
 #include <cctype>
 #include <algorithm>
 #include <map>
+#include <optional>
 
 #include <boost/format/format_fwd.hpp>
 #include <boost/filesystem/operations.hpp>
@@ -216,19 +218,23 @@ void BackgroundSlicingProcess::process_fff()
     PresetBundle &preset_bundle = *wxGetApp().preset_bundle;
     m_fff_print->is_BBL_printer() = preset_bundle.is_bbl_vendor();
     const std::string vulkan_mode = m_session_vulkan_mode;
+    const bool process_new_slice = !m_print->finished();
     // Saved GUI choices are authoritative; CLI environment flags cannot override Off.
-    Gpu::CudaSlicerBackend::begin_slicing_session(
-        m_session_cuda_mode != "off", m_session_cuda_mode == "max", m_session_cuda_mode == "max");
+    // Re-exporting existing G-code must preserve the previous slice's device counters/report.
+    if (process_new_slice)
+        Gpu::CudaSlicerBackend::begin_slicing_session(
+            m_session_cuda_mode != "off", m_session_cuda_mode == "max", m_session_cuda_mode == "max");
 #ifdef MAGPIE_SLICING_TIMING
-    const bool profile_has_new_slice = !m_print->finished();
     const bool timing_auto_save = m_session_timing_auto_save;
     const std::string timing_detail = m_session_timing_detail;
-    SlicingProfileSession profile_session(Gpu::CudaSlicerBackend::enabled() ? "cuda" : vulkan_mode,
-        timing_detail == "off" ? SlicingProfileDetail::Off :
-        timing_detail == "stages" ? SlicingProfileDetail::Stages : SlicingProfileDetail::Detailed);
+    std::optional<SlicingProfileSession> profile_session;
+    if (process_new_slice)
+        profile_session.emplace(Gpu::CudaSlicerBackend::enabled() ? "cuda" : vulkan_mode,
+            timing_detail == "off" ? SlicingProfileDetail::Off :
+            timing_detail == "stages" ? SlicingProfileDetail::Stages : SlicingProfileDetail::Detailed);
 #endif
 	//BBS: add the logic to process from an existed gcode file
-	if (m_print->finished()) {
+	if (!process_new_slice) {
 #ifdef MAGPIE_SLICING_TIMING
         ScopedSlicingProfileEvent previous_gcode_event("pipeline", "Process previous G-code", SlicingProfileBackend::CPU);
 #endif
@@ -362,30 +368,16 @@ void BackgroundSlicingProcess::process_fff()
 	}
 #ifdef MAGPIE_SLICING_TIMING
     }
-    SlicingProfileVulkanStats profile_stats;
-    if (profile_has_new_slice) {
-        const Gpu::VulkanSlicerRuntimeStats runtime = Gpu::VulkanSlicerBackend::query_runtime_stats();
-        profile_stats.selected_device = runtime.selected_device;
-        profile_stats.execution_profile = runtime.execution_profile;
-        profile_stats.validation_mode = runtime.validation_mode;
-        profile_stats.last_diagnostic = runtime.last_diagnostic;
-        profile_stats.dispatch_calls = runtime.dispatch_calls;
-        profile_stats.queue_submissions = runtime.queue_submissions;
-        profile_stats.submitted_work_items = runtime.submitted_intersections;
-        profile_stats.accepted_gpu_items = runtime.accepted_gpu_intersections;
-        profile_stats.cpu_validation_checks = runtime.cpu_validation_checks;
-        profile_stats.validation_failures = runtime.validation_failures;
-        profile_stats.skipped_workloads = runtime.skipped_small_workloads;
-        profile_stats.total_gpu_ms = runtime.total_gpu_ms;
-        profile_stats.total_host_ms = runtime.total_host_ms;
-    }
-    SlicingProfiler::instance().set_vulkan_stats(profile_stats);
-    SlicingProfiler::instance().set_gpu_stats(SlicingProfileGpuApi::CUDA, Gpu::CudaSlicerBackend::runtime_stats());
-    profile_session.finish();
-    if (timing_auto_save && SlicingProfiler::instance().has_report()) {
-        std::string error;
-        if (!SlicingProfiler::instance().export_json_to_directory(data_dir() + "/slicing-timing", &error))
-            BOOST_LOG_TRIVIAL(error) << "Unable to save slicing timing log: " << error;
+    if (profile_session) {
+        SlicingProfiler::instance().set_vulkan_stats(
+            Gpu::vulkan_profile_stats(Gpu::VulkanSlicerBackend::query_runtime_stats()));
+        SlicingProfiler::instance().set_gpu_stats(SlicingProfileGpuApi::CUDA, Gpu::CudaSlicerBackend::runtime_stats());
+        profile_session->finish();
+        if (timing_auto_save && SlicingProfiler::instance().has_report()) {
+            std::string error;
+            if (!SlicingProfiler::instance().export_json_to_directory(data_dir() + "/slicing-timing", &error))
+                BOOST_LOG_TRIVIAL(error) << "Unable to save slicing timing log: " << error;
+        }
     }
 #endif
 }

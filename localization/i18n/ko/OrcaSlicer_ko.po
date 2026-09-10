@@ -22157,3 +22157,8 @@ msgstr "캘리브레이션할 필라멘트를 선택하지 않았습니다."
 #: Magpie static validation guards
 msgid "Unable to calibrate: a required preset is missing"
 msgstr "캘리브레이션할 수 없습니다. 필요한 프리셋이 없습니다."
+
+
+#: src/libslic3r/PrintObject.cpp
+msgid "Tree support could not route the assigned Mixed support demand. Normal support was retried, but some areas may remain unsupported. Check the preview before printing."
+msgstr "혼합 서포트에서 트리에 배정한 지지 영역의 경로를 생성하지 못했습니다. 일반 서포트로 다시 시도했지만 일부 영역에 지지가 없을 수 있습니다. 출력 전에 미리보기를 확인하세요."

@@ -333,11 +333,10 @@ void GLGizmoMove3D::change_cs_by_selection() {
     } else {
         m_object_manipulation->set_use_object_cs(false);
     }
-    if (m_object_manipulation->get_use_object_cs()) {
-        m_object_manipulation->set_coordinates_type(ECoordinatesType::Instance);
-    } else {
-        m_object_manipulation->set_coordinates_type(ECoordinatesType::World);
-    }
+    // Keep the position editor in world coordinates after a selection change so
+    // its values track the actual instance offset. Object/instance coordinates
+    // intentionally use a zero-relative origin and remain available explicitly.
+    m_object_manipulation->set_coordinates_type(ECoordinatesType::World);
 }
 
 

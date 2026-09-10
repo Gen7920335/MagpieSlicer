@@ -26,7 +26,8 @@ public:
 #endif
     }
 
-    void finish(size_t work_items = 0, const std::string &diagnostic = {})
+    // Same item-count sentinel as SlicingProfiler, including timing-disabled builds.
+    void finish(size_t work_items = size_t(-1), const std::string &diagnostic = {})
     {
 #ifdef MAGPIE_SLICING_TIMING
         m_event.set_result(SlicingProfileBackend::CPU, -1.0, work_items, diagnostic);

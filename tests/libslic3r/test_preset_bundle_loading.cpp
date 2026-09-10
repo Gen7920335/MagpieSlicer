@@ -10,6 +10,30 @@
 
 using namespace Slic3r;
 
+TEST_CASE("Purge matrix follows physical nozzle count without losing material entries", "[PresetBundle][PurgeMatrix]")
+{
+    PresetBundle bundle;
+    bundle.filament_presets.assign(4, bundle.filaments.get_edited_preset().name);
+    auto &printer = bundle.printers.get_edited_preset().config;
+    printer.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4, 0.6}));
+    std::vector<double> original(16);
+    for (size_t i = 0; i < original.size(); ++i) original[i] = double(i);
+    bundle.project_config.set_key_value("flush_volumes_matrix", new ConfigOptionFloats(original));
+    bundle.project_config.set_key_value("flush_multiplier", new ConfigOptionFloats({0.8}));
+    bundle.update_multi_material_filament_presets();
+    const auto &matrix = bundle.project_config.option<ConfigOptionFloats>("flush_volumes_matrix")->values;
+    REQUIRE(matrix.size() == 32);
+    CHECK(std::vector<double>(matrix.begin(), matrix.begin() + 16) == original);
+    CHECK(matrix[16] == 0.);
+    CHECK(matrix[17] > 0.);
+    CHECK(bundle.project_config.option<ConfigOptionFloats>("flush_multiplier")->values == std::vector<double>{0.8, 1.});
+    printer.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4}));
+    bundle.update_multi_material_filament_presets();
+    CHECK(matrix == original);
+    bundle.update_multi_material_filament_presets();
+    CHECK(matrix == original);
+}
+
 namespace {
 
 namespace fs = boost::filesystem;

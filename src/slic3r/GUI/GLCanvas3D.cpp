@@ -7,6 +7,8 @@
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/ProjectConfigService.hpp"
+#include "libslic3r/Support/InterfaceTemperature.hpp"
+#include "libslic3r/Support/TemperatureDropTower.hpp"
 #include "libslic3r/GCode/ThumbnailData.hpp"
 #include "libslic3r/Geometry/ConvexHull.hpp"
 #include "libslic3r/ExtrusionEntity.hpp"
@@ -2960,8 +2962,7 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
             m_config->option<ConfigOptionBool>("support_interface_temperature_drop_tower");
         const auto *low_temperature_interface_enabled =
             m_config->option<ConfigOptionBool>("single_nozzle_low_temperature_interface");
-        const auto *interface_temperature =
-            m_config->option<ConfigOptionInt>("support_interface_temperature");
+        const int interface_temperature = lowest_configured_interface_temperature(*m_config);
         const auto *nozzle_diameters =
             m_config->option<ConfigOptionFloats>("nozzle_diameter");
         const auto *normal_temperatures =
@@ -2977,7 +2978,7 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
         const bool show_temperature_tower =
             temperature_tower_enabled != nullptr && temperature_tower_enabled->value &&
             low_temperature_interface_enabled != nullptr && low_temperature_interface_enabled->value &&
-            interface_temperature != nullptr && interface_temperature->value > 0 &&
+            interface_temperature > 0 &&
             (interface_filament == nullptr || interface_filament->value == 0) &&
             (print_sequence == nullptr || print_sequence->value == PrintSequence::ByLayer) &&
             (nozzle_wiping == nullptr || !nozzle_wiping->value) &&
@@ -2994,13 +2995,17 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                     normal_temperature,
                     *std::max_element(initial_temperatures->values.begin(), initial_temperatures->values.end()));
 
-            if (normal_temperature > interface_temperature->value) {
+            if (normal_temperature > interface_temperature) {
                 const float nozzle_diameter =
                     float(*std::max_element(nozzle_diameters->values.begin(), nozzle_diameters->values.end()));
-                const float spacing = std::max(nozzle_diameter, 0.1f);
+                const bool multiple_widths = *std::min_element(nozzle_diameters->values.begin(), nozzle_diameters->values.end()) !=
+                    *std::max_element(nozzle_diameters->values.begin(), nozzle_diameters->values.end());
+                const float spacing = multiple_widths
+                    ? float(temperature_drop_tower_multi_pitch(nozzle_diameter))
+                    : std::max(nozzle_diameter, 0.1f);
                 const float brim_width = float(TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT) * spacing;
                 const float requested_size = float(temperature_drop_tower_size(
-                    normal_temperature - interface_temperature->value));
+                    normal_temperature - interface_temperature));
                 DynamicPrintConfig &project_config = wxGetApp().preset_bundle->project_config;
                 const auto *tower_x = project_config.option<ConfigOptionFloats>(
                     "support_interface_temperature_drop_tower_x");
@@ -3041,10 +3046,41 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                         continue;
                     const Vec3d plate_origin = part_plate->get_origin();
                     const BoundingBoxf3 plate_bbox = part_plate->get_bounding_box();
-                    const float min_x = float(plate_bbox.min.x() - plate_origin.x());
-                    const float min_y = float(plate_bbox.min.y() - plate_origin.y());
-                    const float max_x = float(plate_bbox.max.x() - plate_origin.x());
-                    const float max_y = float(plate_bbox.max.y() - plate_origin.y());
+                    float min_x = float(plate_bbox.min.x() - plate_origin.x());
+                    float min_y = float(plate_bbox.min.y() - plate_origin.y());
+                    float max_x = float(plate_bbox.max.x() - plate_origin.x());
+                    float max_y = float(plate_bbox.max.y() - plate_origin.y());
+                    const float configured_x = float(temperature_drop_tower_position_at(tower_x, size_t(plate_id)));
+                    const float configured_y = float(temperature_drop_tower_position_at(tower_y, size_t(plate_id)));
+                    std::vector<size_t> physical_tools;
+                    const auto *filament_map = m_config->option<ConfigOptionInts>("filament_map");
+                    for (int filament_1based : part_plate->get_extruders(true)) {
+                        if (filament_1based <= 0) continue;
+                        const int mapped = filament_map != nullptr && !filament_map->values.empty()
+                            ? filament_map->get_at(size_t(filament_1based - 1)) : 1;
+                        const size_t physical_tool = mapped > 0 && size_t(mapped) <= nozzle_diameters->values.size() ? size_t(mapped - 1) : 0;
+                        if (std::find(physical_tools.begin(), physical_tools.end(), physical_tool) == physical_tools.end())
+                            physical_tools.push_back(physical_tool);
+                    }
+                    Polygons common_area;
+                    if (physical_tools.size() > 1) {
+                        const auto *bed = m_config->option<ConfigOptionPoints>("printable_area");
+                        if (bed == nullptr || bed->values.size() < 3) continue;
+                        std::vector<Polygons> tool_areas;
+                        const auto *areas = m_config->option<ConfigOptionPointsGroups>("extruder_printable_area");
+                        if (areas != nullptr)
+                            for (const auto &points : areas->values)
+                                tool_areas.push_back(Polygons{Polygon::new_scale(points)});
+                        common_area = temperature_drop_tower_common_area(Polygons{Polygon::new_scale(bed->values)}, tool_areas, physical_tools);
+                        if (common_area.empty()) continue;
+                        if (configured_x < 0.f || configured_y < 0.f) {
+                            const BoundingBox box = get_extents(common_area);
+                            min_x = float(unscale<double>(box.min.x()));
+                            min_y = float(unscale<double>(box.min.y()));
+                            max_x = float(unscale<double>(box.max.x()));
+                            max_y = float(unscale<double>(box.max.y()));
+                        }
+                    }
                     const float tower_size = std::min(
                         requested_size,
                         std::min(max_x - min_x - 6.0f - 2.0f * brim_width,
@@ -3057,14 +3093,21 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                     const float min_origin_y = min_y + 3.0f;
                     const float max_origin_x = max_x - 3.0f - footprint_size;
                     const float max_origin_y = max_y - 3.0f - footprint_size;
-                    const float configured_x = float(temperature_drop_tower_position_at(tower_x, size_t(plate_id)));
-                    const float configured_y = float(temperature_drop_tower_position_at(tower_y, size_t(plate_id)));
+
                     const float origin_x = configured_x < 0.0f
                         ? min_origin_x
                         : std::clamp(configured_x, min_origin_x, max_origin_x);
                     const float origin_y = configured_y < 0.0f
                         ? max_origin_y
                         : std::clamp(configured_y, min_origin_y, max_origin_y);
+
+                    if (!common_area.empty()) {
+                        const Polygon footprint{Points{Point::new_scale(origin_x, origin_y),
+                            Point::new_scale(origin_x + footprint_size, origin_y),
+                            Point::new_scale(origin_x + footprint_size, origin_y + footprint_size),
+                            Point::new_scale(origin_x, origin_y + footprint_size)}};
+                        if (!diff_ex(Polygons{footprint}, common_area).empty()) continue;
+                    }
 
                     const int new_volume = m_volumes.load_temperature_drop_tower_preview(
                         TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE + plate_id,

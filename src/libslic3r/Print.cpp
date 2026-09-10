@@ -252,6 +252,20 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
     bool invalidated = false;
 
     for (const t_config_option_key &opt_key : opt_keys) {
+        if (opt_key == "filament_colour" || opt_key == "filament_type" || opt_key == "filament_soluble") {
+            // Automatic detail-wall selection depends on material identity and
+            // colour as well as nozzle size. Only participating objects need
+            // their walls regenerated; keep ordinary colour edits inexpensive.
+            for (PrintObject *object : m_objects)
+                for (const PrintRegion &region : object->all_regions())
+                    if (region.config().use_smaller_nozzles_in_crisp_corners.value) {
+                        invalidated |= object->invalidate_step(posPerimeters);
+                        // Contact planning examines bridging perimeter paths;
+                        // use the same dependency as editing detail-wall options.
+                        invalidated |= object->invalidate_step(posSupportMaterial);
+                        break;
+                    }
+        }
         if (steps_gcode.find(opt_key) != steps_gcode.end()) {
             // These options only affect G-code export or they are just notes without influence on the generated G-code,
             // so there is nothing to invalidate.
@@ -278,6 +292,8 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         } else if (
                opt_key == "initial_layer_print_height"
             || opt_key == "nozzle_diameter"
+            || opt_key == "filament_map"
+            || opt_key == "filament_map_mode"
             || opt_key == "filament_shrink"
             || opt_key == "filament_shrinkage_compensation_z"
             || opt_key == "resolution"
@@ -333,8 +349,6 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "other_layers_print_sequence"
             || opt_key == "other_layers_print_sequence_nums" 
             || opt_key == "extruder_ams_count"
-            || opt_key == "filament_map_mode"
-            || opt_key == "filament_map"
             || opt_key == "filament_adhesiveness_category"
             || opt_key == "filament_tower_interface_pre_extrusion_dist"
             || opt_key == "filament_tower_interface_pre_extrusion_length"

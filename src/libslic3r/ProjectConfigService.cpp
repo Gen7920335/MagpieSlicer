@@ -77,20 +77,20 @@ void initialize_flush_matrix(
                         flush_vector[2 * from] + flush_vector[2 * to + 1];
 }
 
-template<class Config>
-std::vector<std::string> normalize_filament_assignment_options_impl(
-    Config &config, size_t filament_count)
-{
-    filament_count = std::max<size_t>(1, filament_count);
-    static constexpr std::array<const char *, 12> assignment_keys {
+constexpr std::array<const char *, 12> assignment_keys {
         "extruder",
         "wall_filament", "sparse_infill_filament", "solid_infill_filament",
         "support_filament", "support_interface_filament",
         "outer_wall_filament_id", "inner_wall_filament_id",
         "sparse_infill_filament_id", "internal_solid_filament_id",
         "top_surface_filament_id", "bottom_surface_filament_id"
-    };
+};
 
+template<class Config>
+std::vector<std::string> normalize_filament_assignment_options_impl(
+    Config &config, size_t filament_count)
+{
+    filament_count = std::max<size_t>(1, filament_count);
     std::vector<std::string> repaired;
     for (const char *key : assignment_keys) {
         const auto *option = dynamic_cast<const ConfigOptionInt *>(config.option(key));
@@ -138,6 +138,55 @@ std::vector<std::string> normalize_loaded_project_config(
         config, context.filament_count, context.toolhead_count));
     append_unique(repaired, normalize_project_filament_arrays(
         config, context.filament_count, context.toolhead_count));
+    append_unique(repaired, normalize_project_tool_enums(config, context.toolhead_count));
+    return repaired;
+}
+
+template<class Config>
+size_t remap_filament_assignments_after_delete_impl(
+    Config &config, size_t filament_index, int replacement_index, bool overrides, bool object_config = false)
+{
+    size_t changed = 0;
+    for (const char *key : assignment_keys) {
+        const auto *option = dynamic_cast<const ConfigOptionInt *>(config.option(key));
+        if (option == nullptr || option->value <= 0 || option->value < int(filament_index) + 1)
+            continue;
+        if (option->value == int(filament_index) + 1) {
+            if (replacement_index >= 0)
+                config.set_key_value(key, new ConfigOptionInt(replacement_index + 1));
+            else if (object_config && std::string_view(key) == "extruder")
+                config.set_key_value(key, new ConfigOptionInt(1));
+            else if (overrides)
+                config.erase(key);
+            else
+                config.set_key_value(key, new ConfigOptionInt(0));
+        } else {
+            config.set_key_value(key, new ConfigOptionInt(option->value - 1));
+        }
+        ++changed;
+    }
+    return changed;
+}
+
+std::vector<std::string> normalize_project_tool_enums(DynamicConfig &config, size_t toolhead_count)
+{
+    std::vector<std::string> repaired;
+    toolhead_count = std::max<size_t>(1, toolhead_count);
+    for (const char *key : {"extruder_type", "nozzle_volume_type"}) {
+        auto *option = config.option<ConfigOptionEnumsGeneric>(key);
+        if (option == nullptr)
+            continue; // A project-only patch does not own missing printer fields.
+        const auto *defaults = dynamic_cast<const ConfigOptionEnumsGeneric *>(print_config_def.get(key)->default_value.get());
+        const int fallback = defaults->values.front();
+        const int maximum = std::string_view(key) == "extruder_type" ? int(etMaxExtruderType) : int(nvtMaxNozzleVolumeType);
+        const auto previous = option->values;
+        option->values.resize(toolhead_count, fallback);
+        for (int &value : option->values)
+            if (value < 0 || value > maximum)
+                value = fallback;
+        if (option->values != previous)
+            repaired.emplace_back(key);
+    }
     return repaired;
 }
 
@@ -314,6 +363,60 @@ size_t normalize_model_filament_assignments(Model &model, size_t filament_count)
     return repaired;
 }
 
+void remap_model_tool_changes_after_filament_delete(
+    Model &model, size_t filament_index, int replacement_index)
+{
+    for (auto &plate : model.plates_custom_gcodes) {
+        auto &gcodes = plate.second.gcodes;
+        auto destination = gcodes.begin();
+        for (auto source = gcodes.begin(); source != gcodes.end(); ++source) {
+            int extruder = source->extruder;
+            if (source->type == CustomGCode::Type::ToolChange) {
+                if (extruder == int(filament_index) + 1) {
+                    if (replacement_index < 0)
+                        continue;
+                    // Sidebar already converted this index to the post-deletion domain.
+                    extruder = replacement_index + 1;
+                } else if (extruder > int(filament_index) + 1) {
+                    --extruder;
+                }
+            }
+            if (destination != source)
+                *destination = std::move(*source);
+            destination->extruder = extruder;
+            ++destination;
+        }
+        gcodes.erase(destination, gcodes.end());
+    }
+}
+
+size_t remap_filament_assignments_after_delete(
+    DynamicConfig &config, size_t filament_index, int replacement_index)
+{
+    return remap_filament_assignments_after_delete_impl(config, filament_index, replacement_index, false);
+}
+
+size_t remap_model_filament_assignments_after_delete(
+    Model &model, size_t filament_count_after, size_t filament_index, int replacement_index)
+{
+    size_t changed = 0;
+    for (ModelObject *object : model.objects) {
+        changed += remap_filament_assignments_after_delete_impl(
+            object->config, filament_index, replacement_index, true, true);
+        for (auto &range : object->layer_config_ranges)
+            changed += remap_filament_assignments_after_delete_impl(
+                range.second, filament_index, replacement_index, true);
+        for (ModelVolume *volume : object->volumes) {
+            changed += remap_filament_assignments_after_delete_impl(
+                volume->config, filament_index, replacement_index, true);
+            // Remap first: cleanup would otherwise erase a surviving last-slot assignment.
+            volume->update_extruder_count_when_delete_filament(
+                filament_count_after, filament_index + 1, replacement_index + 1);
+        }
+    }
+    return changed;
+}
+
 void erase_temperature_drop_tower_plate(
     DynamicConfig &config, size_t plate_index, size_t plate_count_before_erase)
 {
@@ -360,6 +463,66 @@ void transfer_temperature_drop_tower_plate(
         tower_x->values[source_plate_index] = TEMPERATURE_DROP_TOWER_AUTOMATIC_POSITION;
         tower_y->values[source_plate_index] = TEMPERATURE_DROP_TOWER_AUTOMATIC_POSITION;
     }
+}
+
+void capture_project_tower_positions(const DynamicConfig &config, ModelWipeTower &tower)
+{
+    const auto *tower_x_opt = config.option<ConfigOptionFloats>("wipe_tower_x");
+    const auto *tower_y_opt = config.option<ConfigOptionFloats>("wipe_tower_y");
+    const size_t position_count = tower_x_opt != nullptr && tower_y_opt != nullptr ?
+        std::min(tower_x_opt->values.size(), tower_y_opt->values.size()) : 0;
+    tower.positions.clear();
+    tower.positions.resize(position_count);
+    for (size_t plate_idx = 0; plate_idx < position_count; ++plate_idx) {
+        tower.positions[plate_idx] = Vec2d(tower_x_opt->get_at(plate_idx), tower_y_opt->get_at(plate_idx));
+        tower.rotation = config.opt_float("wipe_tower_rotation_angle");
+    }
+    tower.temperature_drop_positions.clear();
+    for (const char *key : temperature_drop_tower_position_keys)
+        if (const ConfigOption *option = config.option(key))
+            tower.temperature_drop_positions.set_key_value(key, option->clone());
+}
+
+bool restore_project_tower_positions(const ModelWipeTower &tower, DynamicConfig &config)
+{
+    auto *tower_x_opt = config.option<ConfigOptionFloats>("wipe_tower_x", true);
+    auto *tower_y_opt = config.option<ConfigOptionFloats>("wipe_tower_y", true);
+    bool need_update = false;
+    if (tower_x_opt->values.size() != tower.positions.size()) {
+        tower_x_opt->clear();
+        ConfigOptionFloat default_tower_x(40.f);
+        tower_x_opt->resize(tower.positions.size(), &default_tower_x);
+        need_update = true;
+    }
+    if (tower_y_opt->values.size() != tower.positions.size()) {
+        tower_y_opt->clear();
+        ConfigOptionFloat default_tower_y(200.f);
+        tower_y_opt->resize(tower.positions.size(), &default_tower_y);
+        need_update = true;
+    }
+    for (size_t plate_idx = 0; plate_idx < tower.positions.size(); ++plate_idx) {
+        if (Vec2d(tower_x_opt->get_at(plate_idx), tower_y_opt->get_at(plate_idx)) != tower.positions[plate_idx]) {
+            ConfigOptionFloat tower_x_new(tower.positions[plate_idx].x());
+            ConfigOptionFloat tower_y_new(tower.positions[plate_idx].y());
+            tower_x_opt->set_at(&tower_x_new, plate_idx, 0);
+            tower_y_opt->set_at(&tower_y_new, plate_idx, 0);
+            need_update = true;
+        }
+    }
+    for (const char *key : temperature_drop_tower_position_keys) {
+        const ConfigOption *saved = tower.temperature_drop_positions.option(key);
+        const ConfigOption *current = config.option(key);
+        if (saved != nullptr) {
+            if (current == nullptr || *current != *saved) {
+                config.set_key_value(key, saved->clone());
+                need_update = true;
+            }
+        } else if (current != nullptr) {
+            config.erase(key);
+            need_update = true;
+        }
+    }
+    return need_update;
 }
 
 double temperature_drop_tower_position_at(

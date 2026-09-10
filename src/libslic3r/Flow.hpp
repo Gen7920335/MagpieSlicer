@@ -147,6 +147,9 @@ private:
 };
 
 extern Flow support_material_flow(const PrintObject* object, float layer_height = 0.f);
+// Explicit material selection -> physical hotend. Zero preserves the existing
+// active-tool convention; planning its per-layer choice belongs to ToolOrdering.
+extern unsigned int support_hotend_1based(const PrintConfig &config, int filament_id_1based);
 extern Flow support_transition_flow(const PrintObject *object); //BBS
 extern Flow support_material_1st_layer_flow(const PrintObject *object, float layer_height = 0.f);
 extern Flow support_material_interface_flow(const PrintObject *object, float layer_height = 0.f);

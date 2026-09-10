@@ -457,8 +457,9 @@ void GLModel::init_from(const indexed_triangle_set& its)
     data.reserve_indices(3 * its.indices.size());
 
     // Read user preference: smooth normals enabled
-    const bool realistic_mode = wxGetApp().app_config != nullptr && wxGetApp().app_config->get_bool(SETTING_OPENGL_REALISTIC_MODE);
-    const bool smooth_normals_enabled = wxGetApp().app_config != nullptr && wxGetApp().app_config->get_bool(SETTING_OPENGL_PHONG_SMOOTH_NORMALS);
+    const AppConfig *app_config = get_app_config();
+    const bool realistic_mode = app_config != nullptr && app_config->get_bool(SETTING_OPENGL_REALISTIC_MODE);
+    const bool smooth_normals_enabled = app_config != nullptr && app_config->get_bool(SETTING_OPENGL_PHONG_SMOOTH_NORMALS);
 
     if (realistic_mode && smooth_normals_enabled) {
         // Use per-corner smooth normals (via IGL)

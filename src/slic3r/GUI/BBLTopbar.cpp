@@ -343,9 +343,11 @@ void BBLTopbar::Init(wxFrame* parent)
         m_cuda_mode_choice = new wxChoice(this, ID_CUDA_MODE);
         m_cuda_mode_choice->Append(_L("CUDA: Off"));
         m_cuda_mode_choice->Append(_L("CUDA: On"));
-        m_cuda_mode_choice->SetSelection(wxGetApp().app_config->get("cuda_slicer_mode") == "on" ? 1 : 0);
-        m_cuda_mode_choice->SetToolTip(_L("Use CUDA for supported workloads with full CPU result validation. Selecting CUDA turns Vulkan off. Changes apply to the next slice."));
-        m_cuda_mode_choice->SetMinSize(FromDIP(wxSize(115, -1)));
+        m_cuda_mode_choice->Append(_L("CUDA: Max GPU"));
+        const std::string cuda_mode = wxGetApp().app_config->get("cuda_slicer_mode");
+        m_cuda_mode_choice->SetSelection(cuda_mode == "max" ? 2 : (cuda_mode == "on" ? 1 : 0));
+        m_cuda_mode_choice->SetToolTip(_L("CUDA On validates supported results against CPU output. Max GPU disables duplicate CPU validation. Busy CUDA work falls back to CPU immediately so slicing workers do not wait. Selecting CUDA turns Vulkan off. Changes apply to the next slice."));
+        m_cuda_mode_choice->SetMinSize(FromDIP(wxSize(132, -1)));
         this->AddControl(m_cuda_mode_choice, _L("CUDA slicing acceleration"));
     }
 
@@ -439,10 +441,13 @@ void BBLTopbar::Init(wxFrame* parent)
     }
     if (m_cuda_mode_choice) {
         m_cuda_mode_choice->Bind(wxEVT_CHOICE, [](wxCommandEvent& event) {
-            wxGetApp().app_config->set_slicing_acceleration_mode("cuda_slicer_mode", event.GetSelection() == 1 ? "on" : "off");
+            static const char* modes[] = {"off", "on", "max"};
+            const int selection = std::clamp(event.GetSelection(), 0, 2);
+            wxGetApp().app_config->set_slicing_acceleration_mode("cuda_slicer_mode", modes[selection]);
         });
         m_cuda_mode_choice->Bind(wxEVT_UPDATE_UI, [this](wxUpdateUIEvent&) {
-            const int selection = wxGetApp().app_config->get("cuda_slicer_mode") == "on" ? 1 : 0;
+            const std::string mode = wxGetApp().app_config->get("cuda_slicer_mode");
+            const int selection = mode == "max" ? 2 : (mode == "on" ? 1 : 0);
             if (m_cuda_mode_choice->GetSelection() != selection)
                 m_cuda_mode_choice->SetSelection(selection);
         });
@@ -591,6 +596,12 @@ void BBLTopbar::UpdateToolbarWidth(int width)
 }
 
 void BBLTopbar::Rescale() {
+    m_toolbar_h = FromDIP(30);
+    SetSize(GetSize().GetWidth(), m_toolbar_h);
+    if (m_vulkan_mode_choice)
+        m_vulkan_mode_choice->SetMinSize(FromDIP(wxSize(132, -1)));
+    if (m_cuda_mode_choice)
+        m_cuda_mode_choice->SetMinSize(FromDIP(wxSize(132, -1)));
     int em = em_unit(this);
     wxAuiToolBarItem* item;
 

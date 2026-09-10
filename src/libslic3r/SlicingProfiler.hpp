@@ -9,6 +9,10 @@
 
 namespace Slic3r {
 
+// Item-count sentinel: omit a result count to preserve the count at event start.
+// Zero is a measured empty result and must not mean "unspecified".
+inline constexpr size_t SLICING_PROFILE_KEEP_WORK_ITEMS = size_t(-1);
+
 enum class SlicingProfileBackend {
     CPU,
     GPU,
@@ -88,7 +92,7 @@ public:
     void finish_event(SlicingProfileToken token,
                       SlicingProfileBackend backend,
                       double gpu_ms = -1.0,
-                      size_t work_items = 0,
+                      size_t work_items = SLICING_PROFILE_KEEP_WORK_ITEMS,
                       const std::string& diagnostic = {});
 
     void begin_state_step(bool object_step, int step, const void* owner);
@@ -126,7 +130,7 @@ public:
 
     void set_result(SlicingProfileBackend backend,
                     double gpu_ms = -1.0,
-                    size_t work_items = 0,
+                    size_t work_items = SLICING_PROFILE_KEEP_WORK_ITEMS,
                     const std::string& diagnostic = {});
 
 private:

@@ -4,6 +4,7 @@
 #include "libslic3r/ExtrusionEntity.hpp"
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/GCodeReader.hpp"
+#include "libslic3r/GCode/ToolOrdering.hpp"
 #include "libslic3r/Layer.hpp"
 
 #include "test_helpers.hpp"
@@ -145,6 +146,143 @@ static DynamicPrintConfig mapped_four_hotend_wall_config(const std::array<int, 4
     flush_matrix->values.assign(4 * 4 * 4, 0.);
     config.set_key_value("flush_volumes_matrix", flush_matrix);
     return config;
+}
+
+TEST_CASE("Material edits invalidate only geometry that depends on them", "[MaterialCache][MultiNozzle]")
+{
+    const bool enabled = GENERATE(false, true);
+    const bool object_override = GENERATE(false, true);
+    const char *generator = GENERATE("classic", "arachne");
+    const int edit = GENERATE(0, 1, 2, 3, 4); // candidate map, colour, type, soluble, active map
+    CAPTURE(enabled, object_override, generator, edit);
+    const std::array<int, 4> initial_map = edit == 0 ? std::array<int, 4>{1, 1, 3, 1} :
+        std::array<int, 4>{1, 2, 3, 4};
+    auto config = mapped_four_hotend_wall_config(initial_map, 3, generator);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.8, 0.15, 0.4, 0.2});
+    for (const char *key : {"toolhead_outer_wall_line_width", "toolhead_inner_wall_line_width"})
+        config.set_key_value(key, new ConfigOptionFloatsOrPercents{
+            FloatOrPercent(0.88, false), FloatOrPercent(0.165, false),
+            FloatOrPercent(0.44, false), FloatOrPercent(0.22, false)});
+    config.set_key_value("use_smaller_nozzles_in_crisp_corners", new ConfigOptionBool(enabled && !object_override));
+    config.set_key_value("layer_height", new ConfigOptionFloat(0.1));
+    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.1));
+    config.set_key_value("filament_type", new ConfigOptionStrings{"PLA", "PLA", "PLA", "PLA"});
+    config.set_key_value("filament_soluble", new ConfigOptionBools{false, false, false, false});
+    if (edit == 1) config.option<ConfigOptionStrings>("filament_colour")->values[3] = "#0000FF";
+    if (edit == 2) config.option<ConfigOptionStrings>("filament_type")->values[3] = "PVA";
+    if (edit == 3) config.option<ConfigOptionBools>("filament_soluble")->values[3] = true;
+    std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{{{"extruder", 3}}};
+    if (object_override)
+        overrides.front().push_back({"use_smaller_nozzles_in_crisp_corners", enabled});
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(4)}, print, model, config, &overrides);
+    print.apply(model, config);
+    REQUIRE_FALSE(print.objects().front()->config().enable_support.value);
+    REQUIRE(print.config().filament_map.values == std::vector<int>(initial_map.begin(), initial_map.end()));
+    print.process();
+    REQUIRE(print.objects().front()->is_step_done(posPerimeters));
+    REQUIRE(print.objects().front()->is_step_done(posSupportMaterial));
+    const auto &region = print.objects().front()->printing_region(0).config();
+    REQUIRE(detail_wall_tool(print.config(), region, 3).filament_id_1based == (enabled && edit != 0 ? 2 : 3));
+
+    auto changed = config;
+    if (edit == 0) changed.option<ConfigOptionInts>("filament_map")->values[1] = 2;
+    if (edit == 1) changed.set_key_value("filament_colour", new ConfigOptionStrings{"#FF0000", "#0000FF", "#FF0000", "#FF0000"});
+    if (edit == 2) changed.set_key_value("filament_type", new ConfigOptionStrings{"PLA", "PVA", "PLA", "PLA"});
+    if (edit == 3) changed.set_key_value("filament_soluble", new ConfigOptionBools{false, true, false, false});
+    if (edit == 4) changed.option<ConfigOptionInts>("filament_map")->values[2] = 1;
+    print.apply(model, changed);
+    CHECK(print.config().filament_map.values == changed.option<ConfigOptionInts>("filament_map")->values);
+    CHECK(print.objects().front()->is_step_done(posPerimeters) == (!enabled && edit != 4));
+    // Support contact planning consumes generated walls as well as slices.
+    CHECK(print.objects().front()->is_step_done(posSupportMaterial) == (!enabled && edit != 3 && edit != 4));
+    CHECK(print.objects().front()->is_step_done(posSlice) == !(edit == 4 || (edit == 0 && enabled)));
+    print.process();
+
+    Print fresh;
+    fresh.apply(model, changed);
+    fresh.apply(model, changed);
+    fresh.process();
+    // Compare actual perimeter points after incremental and fresh generation (support is disabled).
+    REQUIRE(print.objects().front()->layers().size() == fresh.objects().front()->layers().size());
+    for (size_t layer = 0; layer < fresh.objects().front()->layers().size(); ++layer) {
+        const auto &actual = print.objects().front()->layers()[layer]->regions().front()->perimeters;
+        const auto &expected = fresh.objects().front()->layers()[layer]->regions().front()->perimeters;
+        Points actual_points, expected_points;
+        actual.collect_points(actual_points);
+        expected.collect_points(expected_points);
+        CHECK(actual_points == expected_points);
+    }
+}
+
+TEST_CASE("First-layer material order remains valid when the saved list omits a used material", "[ToolOrderRegression]")
+{
+    const int sequence_kind = GENERATE(0, 1, 2, 3, 4);
+    const std::vector<int> sequence = sequence_kind == 0 ? std::vector<int>{3, 1, 2} :
+        sequence_kind == 1 ? std::vector<int>{3, 1, 4} :
+        sequence_kind == 3 ? std::vector<int>{3, 4, 4} :
+        sequence_kind == 4 ? std::vector<int>{3, 1} : std::vector<int>{};
+    std::vector<int> area_order{1, 2, 3};
+    do {
+        CAPTURE(sequence_kind, area_order);
+        auto config = multifilament_config(4, {{"enable_support", false}, {"enable_prime_tower", false},
+            {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+        config.set_key_value("first_layer_print_sequence", new ConfigOptionInts(sequence));
+        std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides;
+        for (int filament : area_order) {
+            overrides.push_back({{"extruder", filament}});
+            for (const char *key : {"outer_wall_filament_id", "inner_wall_filament_id",
+                    "sparse_infill_filament_id", "internal_solid_filament_id",
+                    "top_surface_filament_id", "bottom_surface_filament_id"})
+                overrides.back().push_back({key, filament});
+        }
+        Print print;
+        Model model;
+        init_print(std::vector<TriangleMesh>{cube(6), cube(5), cube(4)}, print, model, config, &overrides);
+        REQUIRE(print.full_print_config().option<ConfigOptionInts>("first_layer_print_sequence")->values == sequence);
+        print.process();
+        const ToolOrdering ordering(print, unsigned(-1), false);
+        REQUIRE_FALSE(ordering.empty());
+        std::vector<unsigned int> expected;
+        auto ordered_filaments = sequence_kind == 2 || sequence_kind == 4 ? area_order : std::vector<int>{3, 1, 2};
+        if (sequence_kind == 3) {
+            ordered_filaments = {3};
+            for (int filament : area_order)
+                if (filament != 3) ordered_filaments.push_back(filament);
+        }
+        for (int filament : ordered_filaments)
+            expected.push_back(unsigned(filament - 1));
+        CHECK(ordering.front().extruders == expected);
+    } while (std::next_permutation(area_order.begin(), area_order.end()));
+}
+
+TEST_CASE("Automatic mapping feedback does not restart completed geometry", "[MaterialCache][MultiNozzle]")
+{
+    const auto mode = GENERATE(fmmAutoForFlush, fmmAutoForMatch);
+    const bool enabled = GENERATE(false, true);
+    CAPTURE(mode, enabled);
+    auto config = mapped_four_hotend_wall_config({1, 2, 3, 4}, 3, "classic");
+    config.set_key_value("filament_map_mode", new ConfigOptionEnum<FilamentMapMode>(mode));
+    config.set_key_value("use_smaller_nozzles_in_crisp_corners", new ConfigOptionBool(enabled));
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(4)}, print, model, config);
+    print.apply(model, config);
+    REQUIRE_FALSE(print.objects().front()->config().enable_support.value);
+    print.process();
+    REQUIRE(print.objects().front()->is_step_done(posPerimeters));
+    // The automatic planner reports a recommended map back to the GUI config.
+    // This feedback is not a new manual geometry request.
+    auto feedback = config;
+    auto map = print.config().filament_map.values;
+    REQUIRE(map.size() == 4);
+    map[0] = map[0] == 1 ? 2 : 1;
+    feedback.set_key_value("filament_map", new ConfigOptionInts(map));
+    print.apply(model, feedback);
+    CHECK(print.config().filament_map.values == map);
+    CHECK(print.objects().front()->is_step_done(posSlice));
+    CHECK(print.objects().front()->is_step_done(posPerimeters));
 }
 
 static void collect_perimeter_inset_indices(const ExtrusionEntity &entity, std::vector<int> &indices)

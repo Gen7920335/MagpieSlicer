@@ -103,7 +103,7 @@ struct SupportParameters {
             // One of the support extruders is of "don't care" type.
             auto object_extruders = object.object_extruders();
             if (object_extruders.size() == 1 &&
-                *object_extruders.begin() == std::max<unsigned int>(object_config.support_filament.value, object_config.support_interface_filament.value))
+                *object_extruders.begin() + 1 == std::max<unsigned int>(object_config.support_filament.value, object_config.support_interface_filament.value))
                 // Object is printed with the same extruder as the support.
                 this->can_merge_support_regions = true;
         }
