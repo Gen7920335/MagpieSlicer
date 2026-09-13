@@ -17,6 +17,7 @@
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Layer.hpp"
+#include "libslic3r/HalfLayerSources.hpp"
 
 #include "libslic3r/Geometry/Curves.hpp"
 #include "libslic3r/ShortEdgeCollapse.hpp"
@@ -483,6 +484,8 @@ void process_perimeter_polygon(const Polygon &orig_polygon, float z_coord, const
   size_t orig_angle_index = 0;
   perimeter.start_index = result.points.size();
   perimeter.flow_width = region != nullptr ? region->flow(FlowRole::frExternalPerimeter).width() : 0.0f;
+  if (region != nullptr && region->layer()->object()->config().outer_wall_half_layer_height)
+    perimeter.physical_layer = region->layer();
   bool some_point_enforced = false;
   while (!orig_polygon_points.empty() || !oversampled_points.empty()) {
     EnforcedBlockedSeamPoint type = EnforcedBlockedSeamPoint::Neutral;
@@ -1022,14 +1025,25 @@ void SeamPlacer::gather_seam_candidates(const PrintObject *po, const SeamPlacerI
                       for (size_t layer_idx = r.begin(); layer_idx < r.end(); ++layer_idx) {
                         PrintObjectSeamData::LayerSeams &layer_seams = seam_data.layers[layer_idx];
                         const Layer *layer = po->get_layer(layer_idx);
-                        auto unscaled_z = layer->slice_z;
-                        std::vector<const LayerRegion*> regions;
-                        //NOTE corresponding region ptr may be null, if the layer has zero perimeters
-                        Polygons polygons = extract_perimeter_polygons(layer, regions);
-                        for (size_t poly_index = 0; poly_index < polygons.size(); ++poly_index) {
-                          process_perimeter_polygon(polygons[poly_index], unscaled_z,
-                                                    regions[poly_index], global_model_info, layer_seams);
-                        }
+                        const auto emit_candidates = [&](const Layer *source, bool allow_dummy) {
+                          std::vector<const LayerRegion*> regions;
+                          Polygons polygons = extract_perimeter_polygons(source, regions);
+                          // Empty auxiliary bands must not introduce a dummy
+                          // origin candidate beside real physical walls.
+                          if (!allow_dummy && regions.size() == 1 && regions.front() == nullptr)
+                            return;
+                          for (size_t poly_index = 0; poly_index < polygons.size(); ++poly_index)
+                            process_perimeter_polygon(polygons[poly_index], source->slice_z,
+                                                      regions[poly_index], global_model_info, layer_seams);
+                        };
+                        if (const auto *sources = po->half_layer_sources()) {
+                          emit_candidates(layer, false);
+                          for (unsigned phase = 0; phase < 2; ++phase)
+                            emit_candidates(sources->phases[phase].at(layer_idx).get(), false);
+                          if (layer_seams.points.empty())
+                            emit_candidates(layer, true);
+                        } else
+                          emit_candidates(layer, true);
                         auto functor = SeamCandidateCoordinateFunctor { layer_seams.points };
                         seam_data.layers[layer_idx].points_tree =
                             std::make_unique<PrintObjectSeamData::SeamCandidatesTree>(functor,
@@ -1079,8 +1093,43 @@ void SeamPlacer::calculate_overhangs_and_layer_embedding(const PrintObject *po) 
                             to_unscaled_linesf(po->layers()[layer_idx]->lslices));
 
                         auto& layer_seams = layers[layer_idx];
+                        struct PhysicalSection {
+                          std::unique_ptr<PerimeterDistancer> distancer;
+                          bool compute_embedding = false;
+                        };
+                        std::unordered_map<const Layer *, PhysicalSection> physical_sections;
+                        const auto section = [&physical_sections](const Layer *source) -> PhysicalSection & {
+                          auto [it, inserted] = physical_sections.try_emplace(source);
+                          if (inserted) {
+                            it->second.distancer = std::make_unique<PerimeterDistancer>(to_unscaled_linesf(source->lslices));
+                            const auto regions_with_walls = std::count_if(source->regions().begin(), source->regions().end(),
+                                [](const LayerRegion *region) { return !region->perimeters.empty(); });
+                            it->second.compute_embedding = regions_with_walls > 1;
+                          }
+                          return it->second;
+                        };
                         for (SeamCandidate &perimeter_point : layer_seams.points) {
                           Vec2f point = Vec2f { perimeter_point.position.head<2>() };
+                          if (const Layer *physical = perimeter_point.perimeter.physical_layer;
+                              physical != nullptr && physical != po->layers()[layer_idx]) {
+                            // The first/second half sees its actual preceding
+                            // mesh section, not the previous full-height layer.
+                            perimeter_point.overhang = 0.f;
+                            perimeter_point.unsupported_dist = 0.f;
+                            if (physical->lower_layer != nullptr) {
+                              const auto distance_mm = section(physical->lower_layer).distancer->distance_from_lines<true>(point.cast<double>());
+                              // Existing dimensionless bead-margin factors;
+                              // distances and physical band height are in mm.
+                              perimeter_point.overhang = std::max(0.f, float(distance_mm + 0.65f * perimeter_point.perimeter.flow_width
+                                  - tan(SeamPlacer::overhang_angle_threshold) * physical->height));
+                              perimeter_point.unsupported_dist = distance_mm + 0.4f * perimeter_point.perimeter.flow_width;
+                            }
+                            auto &current = section(physical);
+                            if (current.compute_embedding)
+                              perimeter_point.embedded_distance = current.distancer->distance_from_lines<true>(point.cast<double>())
+                                  + 0.65f * perimeter_point.perimeter.flow_width;
+                            continue;
+                          }
                           if (prev_layer_distancer.get() != nullptr) {
                             const auto _dist = prev_layer_distancer->distance_from_lines<true>(point.cast<double>());
                             perimeter_point.overhang = _dist

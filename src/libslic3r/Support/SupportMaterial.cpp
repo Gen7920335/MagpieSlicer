@@ -578,7 +578,7 @@ void PrintObjectSupportMaterial::generate_impl(
     SupportGeneratorLayersPtr layers_sorted =
 #endif // SLIC3R_DEBUG
     SupportProfileStage assemble_timing("support-normal", "Assemble support layer positions", raft_layers.size() + bottom_contacts.size() + top_contacts.size() + intermediate_layers.size() + interface_layers.size() + base_interface_layers.size());
-    generate_support_layers(object, raft_layers, bottom_contacts, top_contacts, intermediate_layers, interface_layers, base_interface_layers);
+    generate_support_layers(object, raft_layers, bottom_contacts, top_contacts, intermediate_layers, interface_layers, base_interface_layers, &layer_storage);
     assemble_timing.finish(object.support_layer_count());
 
     BOOST_LOG_TRIVIAL(info) << "Support generator - Generating tool paths";

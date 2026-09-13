@@ -6,6 +6,7 @@
 #include <boost/log/trivial.hpp>
 #include <memory>
 #include <utility>
+#include <stdexcept>
 
 #include "LimitedBeadingStrategy.hpp"
 #include "WideningBeadingStrategy.hpp"
@@ -30,7 +31,9 @@ BeadingStrategyPtr BeadingStrategyFactory::makeStrategy(const coord_t preferred_
                                                         const int     inward_distributed_center_wall_count,
                                                         const double  minimum_variable_line_ratio,
                                                          const size_t  fixed_outer_wall_count,
-                                                         const coord_t fixed_outer_wall_boundary_overlap)
+                                                         const coord_t fixed_outer_wall_boundary_overlap,
+                                                         const std::vector<coord_t>& fixed_outer_wall_spacings,
+                                                         const std::vector<coord_t>& fixed_outer_wall_overlaps)
 {
     // Handle a special case when there is just one external perimeter.
     // Because big differences in bead width for inner and other perimeters cause issues with current beading strategies.
@@ -39,13 +42,23 @@ BeadingStrategyPtr BeadingStrategyFactory::makeStrategy(const coord_t preferred_
                                                                           wall_split_middle_threshold, wall_add_middle_threshold,
                                                                           inward_distributed_center_wall_count);
 
-    const size_t outer_shell_count = fixed_outer_wall_count == 0 ? 1 : fixed_outer_wall_count;
+    if (fixed_outer_wall_spacings.size() != fixed_outer_wall_overlaps.size())
+        throw std::invalid_argument("Wall spacing and overlap profiles must have equal length");
+    const size_t outer_shell_count = fixed_outer_wall_spacings.empty() ?
+        (fixed_outer_wall_count == 0 ? 1 : fixed_outer_wall_count) : fixed_outer_wall_spacings.size();
     BOOST_LOG_TRIVIAL(trace) << "Applying " << outer_shell_count
                              << " Redistribute meta-strategy shell(s) with outer-wall width = " << preferred_bead_width_outer
                              << ", inner-wall width = " << preferred_bead_width_inner << ".";
     for (size_t shell_idx = 0; shell_idx < outer_shell_count; ++shell_idx) {
-        const coord_t boundary_overlap = shell_idx == 0 ? fixed_outer_wall_boundary_overlap : 0;
-        ret = std::make_unique<RedistributeBeadingStrategy>(preferred_bead_width_outer, minimum_variable_line_ratio,
+        // Each wrapper adds one outer shell, so consume the profile inside-out.
+        const size_t depth = outer_shell_count - shell_idx - 1;
+        const coord_t spacing = fixed_outer_wall_spacings.empty() ? preferred_bead_width_outer : fixed_outer_wall_spacings[depth];
+        const coord_t boundary_overlap = fixed_outer_wall_spacings.empty() ?
+            (shell_idx == 0 ? fixed_outer_wall_boundary_overlap : 0) : fixed_outer_wall_overlaps[depth];
+        // Positive spacing and nonnegative overlap, both in scaled mm.
+        if (!fixed_outer_wall_spacings.empty() && (spacing <= 0 || boundary_overlap < 0 || boundary_overlap >= spacing))
+            throw std::invalid_argument("Invalid wall spacing profile");
+        ret = std::make_unique<RedistributeBeadingStrategy>(spacing, minimum_variable_line_ratio,
                                                             boundary_overlap, std::move(ret));
     }
 

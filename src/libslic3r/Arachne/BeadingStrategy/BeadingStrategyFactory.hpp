@@ -33,7 +33,9 @@ public:
         int inward_distributed_center_wall_count = 2,
         double minimum_variable_line_width = 0.5,
         size_t fixed_outer_wall_count = 1,
-        coord_t fixed_outer_wall_boundary_overlap = 0
+        coord_t fixed_outer_wall_boundary_overlap = 0,
+        const std::vector<coord_t>& fixed_outer_wall_spacings = {},
+        const std::vector<coord_t>& fixed_outer_wall_overlaps = {}
     );
 };
 

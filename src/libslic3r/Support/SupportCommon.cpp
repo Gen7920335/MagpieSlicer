@@ -2,6 +2,7 @@
 // #include "../ClipperZUtils.hpp"
 #include "../ExtrusionEntityCollection.hpp"
 #include "../Layer.hpp"
+#include "../HalfLayerPlan.hpp"
 #include "../Print.hpp"
 #include "../Fill/FillBase.hpp"
 #include "../MutablePolygon.hpp"
@@ -1540,14 +1541,122 @@ static constexpr const std::initializer_list<SupporLayerType> support_types_inte
     SupporLayerType::RaftInterface, SupporLayerType::BottomContact, SupporLayerType::BottomInterface, SupporLayerType::TopContact, SupporLayerType::TopInterface
 };
 
+// Refine the already classified physical support volumes, before Flow/pattern
+// generation. Contact gaps, interface thickness and genuine raft bands retain
+// their original endpoints; no generated G-code or extrusion path is copied.
+std::vector<double> half_height_support_z_grid(const PrintObject &object)
+{
+    std::vector<double> cuts_mm;
+    cuts_mm.reserve(object.layers().size() * 2);
+    if (!object.layers().empty()) {
+        const double start_mm = object.slicing_parameters().has_raft() ?
+            object.slicing_parameters().raft_contact_top_z : 0.;
+        const double first_bottom_mm = object.layers().front()->bottom_z();
+        const double step_mm = 0.5 * object.layers().front()->height;
+        if (!std::isfinite(step_mm) || step_mm <= 0.)
+            throw std::invalid_argument("Half-height support grid needs a positive first model height");
+        const double count = std::max(0., std::ceil((first_bottom_mm - start_mm) / step_mm));
+        if (!std::isfinite(count) || count >= double(cuts_mm.max_size()))
+            throw std::length_error("Half-height support grid is too large");
+        // Elevated objects still need physical support bands between the bed
+        // (or the preserved raft) and the first model band.
+        for (size_t i = 1; i <= size_t(count); ++i) {
+            const double z_mm = start_mm + double(i) * step_mm;
+            if (z_mm < first_bottom_mm)
+                cuts_mm.push_back(z_mm);
+        }
+        if (first_bottom_mm > start_mm)
+            cuts_mm.push_back(first_bottom_mm);
+    }
+    for (const Layer *layer : object.layers()) {
+        for (const auto &band : split_model_layer_half(layer->id(), layer->bottom_z(), layer->print_z))
+            cuts_mm.push_back(band.print_z_mm);
+    }
+    std::sort(cuts_mm.begin(), cuts_mm.end());
+    cuts_mm.erase(std::unique(cuts_mm.begin(), cuts_mm.end()), cuts_mm.end());
+    return cuts_mm;
+}
+
+std::vector<double> half_height_support_band_ends(
+    const std::vector<double> &cuts_mm, double bottom_mm, double top_mm)
+{
+    if (!std::isfinite(bottom_mm) || !std::isfinite(top_mm) || top_mm <= bottom_mm)
+        throw std::invalid_argument("Half-height support needs a positive physical print interval");
+    // Endpoint coalescing tolerance, mm, matching fixed-point geometry precision.
+    constexpr double z_tolerance_mm = 0.000001;
+    std::vector<double> ends;
+    auto it = std::upper_bound(cuts_mm.begin(), cuts_mm.end(), bottom_mm + z_tolerance_mm);
+    for (; it != cuts_mm.end() && *it < top_mm - z_tolerance_mm; ++it)
+        ends.push_back(*it);
+    ends.push_back(top_mm);
+    return ends;
+}
+
+static void refine_half_height_support_regions(const PrintObject &object,
+    SupportGeneratorLayerStorage &storage,
+    std::initializer_list<SupportGeneratorLayersPtr *> groups)
+{
+    const auto cuts_mm = half_height_support_z_grid(object);
+    // Z-coalescing tolerance, mm, matching fixed-point geometry precision.
+    constexpr double z_tolerance_mm = 0.000001;
+    const double raft_top_mm = object.slicing_parameters().raft_contact_top_z;
+    std::map<SupportGeneratorLayer *, SupportGeneratorLayersPtr> refined;
+    for (auto *group : groups) {
+        SupportGeneratorLayersPtr replacement;
+        for (SupportGeneratorLayer *original : *group) {
+            auto found = refined.find(original);
+            if (found == refined.end()) {
+                SupportGeneratorLayersPtr bands;
+                if (original->height <= z_tolerance_mm ||
+                    (object.slicing_parameters().has_raft() && original->print_z <= raft_top_mm + z_tolerance_mm)) {
+                    bands.push_back(original);
+                } else {
+                    const double bottom_mm = original->bottom_print_z();
+                    const auto ends = half_height_support_band_ends(cuts_mm, bottom_mm, original->print_z);
+                    double previous_mm = bottom_mm;
+                    for (size_t i = 0; i < ends.size(); ++i) {
+                        auto &band = storage.allocate_unguarded(original->layer_type);
+                        band.print_z = ends[i];
+                        band.height = ends[i] - previous_mm;
+                        // Only the first physical band inherits the original
+                        // bottom contact separation and bridging classification.
+                        band.bottom_z = i == 0 ? original->bottom_z : previous_mm;
+                        band.bridging = i == 0 && original->bridging;
+                        band.idx_object_layer_above = original->idx_object_layer_above;
+                        band.idx_object_layer_below = original->idx_object_layer_below;
+                        band.half_layer_source_id = original->half_layer_source_id;
+                        band.half_layer_interface_id = original->half_layer_interface_id;
+                        band.half_layer_parent_print_z_mm = original->half_layer_parent_print_z_mm;
+                        band.half_layer_parent_height_mm = original->half_layer_parent_height_mm;
+                        band.polygons = original->polygons;
+                        if (original->contact_polygons)
+                            band.contact_polygons = std::make_unique<Polygons>(*original->contact_polygons);
+                        if (original->overhang_polygons)
+                            band.overhang_polygons = std::make_unique<Polygons>(*original->overhang_polygons);
+                        if (original->enforcer_polygons)
+                            band.enforcer_polygons = std::make_unique<Polygons>(*original->enforcer_polygons);
+                        bands.push_back(&band);
+                        previous_mm = ends[i];
+                    }
+                }
+                found = refined.emplace(original, std::move(bands)).first;
+            }
+            append(replacement, found->second);
+        }
+        std::sort(replacement.begin(), replacement.end(), [](const auto *a, const auto *b) { return *a < *b; });
+        group->swap(replacement);
+    }
+}
+
 SupportGeneratorLayersPtr generate_support_layers(
     PrintObject                         &object,
-    const SupportGeneratorLayersPtr     &raft_layers,
-    const SupportGeneratorLayersPtr     &bottom_contacts,
-    const SupportGeneratorLayersPtr     &top_contacts,
-    const SupportGeneratorLayersPtr     &intermediate_layers,
-    const SupportGeneratorLayersPtr     &interface_layers,
-    const SupportGeneratorLayersPtr     &base_interface_layers)
+    SupportGeneratorLayersPtr           &raft_layers,
+    SupportGeneratorLayersPtr           &bottom_contacts,
+    SupportGeneratorLayersPtr           &top_contacts,
+    SupportGeneratorLayersPtr           &intermediate_layers,
+    SupportGeneratorLayersPtr           &interface_layers,
+    SupportGeneratorLayersPtr           &base_interface_layers,
+    SupportGeneratorLayerStorage        *half_layer_storage)
 {
     SupportProfileStage timing("support-layer", "Sort and install support layer positions",
         raft_layers.size() + bottom_contacts.size() + top_contacts.size() + intermediate_layers.size() + interface_layers.size() + base_interface_layers.size());
@@ -1615,13 +1724,44 @@ SupportGeneratorLayersPtr generate_support_layers(
                         this_layer_id_interface = other_layer.interface_id() + 1;
                     }
             }
-            object.add_support_layer(layer_id ++, this_layer_id_interface, height_min, zavg);
+            if (object.config().support_half_layer_height.value) {
+                for (size_t k = i; k < j; ++k) {
+                    auto &source = *layers_sorted[k];
+                    if (half_layer_storage != nullptr) {
+                        source.half_layer_source_id = size_t(layer_id);
+                        source.half_layer_interface_id = this_layer_id_interface;
+                        source.half_layer_parent_print_z_mm = zavg;
+                        source.half_layer_parent_height_mm = height_min;
+                    } else if (source.half_layer_interface_id != size_t(-1)) {
+                        this_layer_id_interface = source.half_layer_interface_id;
+                    }
+                }
+            }
+            auto *installed = object.add_support_layer(layer_id ++, this_layer_id_interface, height_min, zavg);
+            if (object.config().support_half_layer_height.value)
+                for (size_t k = i; k < j; ++k) {
+                    const auto &source = *layers_sorted[k];
+                    if (source.half_layer_source_id != size_t(-1))
+                        installed->half_layer_parent_bands.push_back({source.half_layer_parent_print_z_mm,
+                            source.half_layer_parent_height_mm, source.half_layer_interface_id});
+                }
             if (num_interfaces && ! this_layer_contacts_only)
                 ++ layer_id_interface;
         }
         i = j;
     }
     timing.finish(object.support_layer_count());
+    if (object.config().support_half_layer_height.value && half_layer_storage != nullptr) {
+        refine_half_height_support_regions(object, *half_layer_storage,
+            {&raft_layers, &bottom_contacts, &top_contacts, &intermediate_layers, &interface_layers, &base_interface_layers});
+        // Discard only the just-created empty support descriptors. The broader
+        // clear_support_layers() also clears model overhang/sharp-tail caches.
+        for (SupportLayer *layer : object.support_layers())
+            delete layer;
+        object.support_layers().clear();
+        return generate_support_layers(object, raft_layers, bottom_contacts, top_contacts,
+            intermediate_layers, interface_layers, base_interface_layers, nullptr);
+    }
     return layers_sorted;
 }
 
@@ -1781,6 +1921,8 @@ void generate_support_toolpaths(
         std::vector<char> has_top_interface(support_layers.size(), 0);
         std::vector<char> has_bottom_contact(support_layers.size(), 0);
         std::vector<char> has_bottom_interface(support_layers.size(), 0);
+        std::vector<size_t> top_source_ids(support_layers.size(), size_t(-1));
+        std::vector<size_t> bottom_source_ids(support_layers.size(), size_t(-1));
         auto support_layer_idx_at_print_z = [&support_layers](coordf_t print_z) -> size_t {
             auto it = std::lower_bound(support_layers.begin(), support_layers.end(), print_z - EPSILON,
                 [](const SupportLayer *layer, coordf_t z) { return layer->print_z < z; });
@@ -1794,12 +1936,16 @@ void generate_support_toolpaths(
                     continue;
                 if (layer->layer_type == SupporLayerType::TopContact)
                     has_top_contact[idx] = 1;
-                else if (layer->layer_type == SupporLayerType::TopInterface)
+                else if (layer->layer_type == SupporLayerType::TopInterface) {
                     has_top_interface[idx] = 1;
+                    top_source_ids[idx] = layer->half_layer_source_id;
+                }
                 else if (layer->layer_type == SupporLayerType::BottomContact)
                     has_bottom_contact[idx] = 1;
-                else if (layer->layer_type == SupporLayerType::BottomInterface)
+                else if (layer->layer_type == SupporLayerType::BottomInterface) {
                     has_bottom_interface[idx] = 1;
+                    bottom_source_ids[idx] = layer->half_layer_source_id;
+                }
             }
         };
         mark_layers(top_contacts);
@@ -1808,27 +1954,35 @@ void generate_support_toolpaths(
 
         const int top_total = int(support_params.num_top_interface_layers);
         int top_number = 0;
+        size_t previous_top_source = size_t(-1);
         for (int idx = int(support_layers.size()) - 1; idx >= 0; --idx) {
             if (has_top_contact[idx])
                 top_number = 1;
             if (has_top_interface[idx] && top_number > 0 && top_total > 1) {
-                ++top_number;
+                if (top_source_ids[idx] == size_t(-1) || top_source_ids[idx] != previous_top_source)
+                    ++top_number;
+                previous_top_source = top_source_ids[idx];
                 top_interface_numbers[size_t(idx)] = top_number;
             } else if (!has_top_contact[idx] && !has_top_interface[idx]) {
                 top_number = 0;
+                previous_top_source = size_t(-1);
             }
         }
 
         const int bottom_total = int(support_params.num_bottom_interface_layers);
         int bottom_number = 0;
+        size_t previous_bottom_source = size_t(-1);
         for (size_t idx = 0; idx < support_layers.size(); ++idx) {
             if (has_bottom_contact[idx])
                 bottom_number = 1;
             if (has_bottom_interface[idx] && bottom_number > 0 && bottom_total > 1) {
-                ++bottom_number;
+                if (bottom_source_ids[idx] == size_t(-1) || bottom_source_ids[idx] != previous_bottom_source)
+                    ++bottom_number;
+                previous_bottom_source = bottom_source_ids[idx];
                 bottom_interface_numbers[idx] = bottom_number;
             } else if (!has_bottom_contact[idx] && !has_bottom_interface[idx]) {
                 bottom_number = 0;
+                previous_bottom_source = size_t(-1);
             }
         }
     }
@@ -2021,6 +2175,9 @@ void generate_support_toolpaths(
                         (raft_contact ? &support_params.raft_interface_flow :
                          interface_as_base ? &support_params.support_material_flow : &support_params.support_material_interface_flow)
                             ->with_height(float(layer_ex.layer->height));
+                    if (config.support_half_layer_height.value && !raft_contact && layer_ex.layer->bridging)
+                        interface_flow = Flow(support_params.support_material_bottom_interface_flow.width(),
+                            float(layer_ex.layer->height), support_params.support_material_bottom_interface_flow.nozzle_diameter());
                     filler->angle = interface_as_base ?
                             // If zero interface layers are configured, use the same angle as for the base layers.
                             angles[support_layer_id % angles.size()] :
@@ -2035,6 +2192,13 @@ void generate_support_toolpaths(
                         bottom_interface ? support_params.bottom_interface_density : support_params.top_interface_density;
                     filler->spacing = raft_contact ? support_params.raft_interface_flow.spacing() :
                         interface_as_base ? support_params.support_material_flow.spacing() : support_params.support_material_interface_flow.spacing();
+                    if (config.support_half_layer_height.value && !raft_contact) {
+                        const double gap_mm = interface_as_base ? config.support_base_pattern_spacing.value :
+                            bottom_interface ? config.support_bottom_interface_spacing.value :
+                            support_params.ironing ? 0. : config.support_interface_spacing.value;
+                        filler->spacing = interface_flow.spacing();
+                        density = std::min(1., filler->spacing / (filler->spacing + gap_mm));
+                    }
                     filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / density));
                     ExPolygons regions = union_safety_offset_ex(layer_ex.polygons_to_extrude());
                     const ExtrusionRole role = interface_as_base ?
@@ -2110,6 +2274,8 @@ void generate_support_toolpaths(
                 bool  done    = false;
                 if (base_layer.layer->bottom_z < EPSILON) {
                     flow = support_params.first_layer_flow;
+                    if (config.support_half_layer_height.value)
+                        flow = flow.with_height(float(base_layer.layer->height));
                     const bool cura_style = support_params.cura_style_support;
                     if (cura_style && !config.cura_solid_support_raft.value) {
                         // Keep Cura-style support lines vertically aligned from the bed upward.

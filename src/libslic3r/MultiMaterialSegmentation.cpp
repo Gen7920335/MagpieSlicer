@@ -1349,6 +1349,11 @@ static inline std::vector<std::vector<ExPolygons>> segmentation_top_and_bottom_l
                 //BBS: the extrusion line width is outer wall rather than inner wall
                 const double nozzle_diameter = print_object.print()->config().nozzle_diameter.get_at(0);
                 double outer_wall_line_width = config.get_abs_value("outer_wall_line_width", nozzle_diameter);
+                // Zero is the automatic-width sentinel, not a physical width.
+                // Resolve it with the same mapped-tool Flow used by perimeters.
+                // Keep the established explicit-width path unchanged.
+                if (config.outer_wall_line_width.value == 0.)
+                    outer_wall_line_width = region->flow(frExternalPerimeter).width();
                 out.extrusion_width     = std::max<float>(out.extrusion_width, outer_wall_line_width);
                 out.top_shell_layers    = std::max<int>(out.top_shell_layers, config.top_shell_layers);
                 out.bottom_shell_layers = std::max<int>(out.bottom_shell_layers, config.bottom_shell_layers);

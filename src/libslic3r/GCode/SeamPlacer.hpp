@@ -40,6 +40,9 @@ enum class EnforcedBlockedSeamPoint {
 
 // struct representing single perimeter loop
 struct Perimeter {
+  // Only half-height mode supplies a physical source. Logical bucket identity
+  // remains unchanged; geometry/overhang queries use this actual section.
+  const Layer *physical_layer = nullptr;
   size_t start_index{};
   size_t end_index{}; //inclusive!
   size_t seam_index{};

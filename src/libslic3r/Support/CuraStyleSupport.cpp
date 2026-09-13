@@ -976,7 +976,7 @@ void CuraStyleSupportGenerator::generate(PrintObject &object)
     throw_if_canceled(object);
     generate_support_layers(
         object, raft_layers, bottom_contacts, top_contacts,
-        base_layers, interface_layers, base_interface_layers);
+        base_layers, interface_layers, base_interface_layers, &layer_storage);
     throw_if_canceled(object);
     generate_support_toolpaths(
         object.support_layers(), object.config(), support_params, m_slicing_params,

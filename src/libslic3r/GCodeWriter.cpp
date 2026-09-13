@@ -695,6 +695,46 @@ std::string GCodeWriter::lazy_lift(LiftType lift_type, bool spiral_vase)
     return "";
 }
 
+std::string GCodeWriter::ensure_travel_clearance(double target_nominal_z_mm, double minimum_lift_mm)
+{
+    const double source_nominal_z_mm = m_pos.z() - m_lifted;
+    return this->ensure_travel_clearance(source_nominal_z_mm, target_nominal_z_mm, minimum_lift_mm);
+}
+
+std::string GCodeWriter::ensure_travel_clearance(double source_nominal_z_mm, double target_nominal_z_mm,
+                                                 double minimum_lift_mm)
+{
+    if (!std::isfinite(source_nominal_z_mm))
+        throw std::invalid_argument("Travel clearance requires a finite source Z in mm");
+    if (!std::isfinite(target_nominal_z_mm) || !std::isfinite(minimum_lift_mm) || minimum_lift_mm < 0.)
+        throw std::invalid_argument("Travel clearance requires finite Z and a nonnegative lift in mm");
+    const auto *active_filament = filament();
+    if (active_filament == nullptr)
+        throw std::logic_error("Travel clearance requires a selected filament");
+    const double configured_lift_mm = config.z_hop.get_at(active_filament->id());
+    if (!std::isfinite(configured_lift_mm) || configured_lift_mm < 0.)
+        throw std::invalid_argument("Configured travel lift must be finite and nonnegative in mm");
+    const double requested_lift_mm = std::max({minimum_lift_mm, configured_lift_mm, m_to_lift});
+    const double clearance_z_mm = std::max(m_pos.z(),
+        std::max(source_nominal_z_mm, target_nominal_z_mm) + requested_lift_mm);
+    if (!std::isfinite(clearance_z_mm))
+        throw std::invalid_argument("Travel clearance Z overflow");
+    // Account against the destination nominal plane even on downward travel.
+    // Otherwise travel_to_xyz could cancel the lift and descend during XY.
+    m_lifted = clearance_z_mm - target_nominal_z_mm;
+    m_to_lift = 0.;
+    return clearance_z_mm > m_pos.z() ? _travel_to_z(clearance_z_mm, "half-layer travel clearance") : std::string{};
+}
+
+void GCodeWriter::set_position_with_nominal_z(const Vec3d &in, double nominal_z_mm)
+{
+    if (!in.allFinite() || !std::isfinite(nominal_z_mm))
+        throw std::invalid_argument("Custom G-code position and nominal Z must be finite millimetres");
+    m_pos = in;
+    m_lifted = std::max(0., in.z() - nominal_z_mm);
+    m_to_lift = 0.;
+}
+
 // BBS: immediately execute an undelayed lift move with a spiral lift pattern
 // designed specifically for subsequent gcode injection (e.g. timelapse) 
 std::string GCodeWriter::eager_lift(const LiftType type) {

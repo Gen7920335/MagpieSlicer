@@ -14,6 +14,10 @@ namespace Slic3r {
 class PrintObject;
 class SupportLayer;
 
+std::vector<double> half_height_support_z_grid(const PrintObject &object);
+std::vector<double> half_height_support_band_ends(
+    const std::vector<double> &cuts_mm, double bottom_mm, double top_mm);
+
 InfillPattern interface_pattern_to_fill_pattern(
     SupportMaterialInterfacePattern pattern,
     const SupportParameters         &support_params);
@@ -77,12 +81,13 @@ void fill_expolygons_with_sheath_generate_paths(
 // returns sorted layers
 SupportGeneratorLayersPtr generate_support_layers(
 	PrintObject							&object,
-    const SupportGeneratorLayersPtr     &raft_layers,
-    const SupportGeneratorLayersPtr     &bottom_contacts,
-    const SupportGeneratorLayersPtr     &top_contacts,
-    const SupportGeneratorLayersPtr     &intermediate_layers,
-    const SupportGeneratorLayersPtr     &interface_layers,
-    const SupportGeneratorLayersPtr     &base_interface_layers);
+    SupportGeneratorLayersPtr           &raft_layers,
+    SupportGeneratorLayersPtr           &bottom_contacts,
+    SupportGeneratorLayersPtr           &top_contacts,
+    SupportGeneratorLayersPtr           &intermediate_layers,
+    SupportGeneratorLayersPtr           &interface_layers,
+    SupportGeneratorLayersPtr           &base_interface_layers,
+    SupportGeneratorLayerStorage        *half_layer_storage = nullptr);
 
 // Produce the support G-code.
 // Used by both classic and tree supports.

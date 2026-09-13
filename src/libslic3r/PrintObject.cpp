@@ -8,6 +8,9 @@
 #include "Geometry.hpp"
 #include "I18N.hpp"
 #include "Layer.hpp"
+#include "HalfLayerSources.hpp"
+#include "HalfLayerSupportSources.hpp"
+#include "HalfLayerWalls.hpp"
 #include "MutablePolygon.hpp"
 #include "PrintConfig.hpp"
 #include "SLA/IndexedMesh.hpp"
@@ -193,8 +196,14 @@ Polygons create_polyholes(const Point center, const coord_t radius, const coord_
 }
 
 // Detect and convert holes to polyholes, implementation is ported from SuperSlicer
-void PrintObject::_transform_hole_to_polyholes()
+void PrintObject::_transform_hole_to_polyholes(const std::vector<size_t> *parent_layer_indices)
 {
+    // Physical half layers are contiguous for hole matching, but polygon twist
+    // and the minimum span retain the original model-layer index domain.
+    assert(parent_layer_indices == nullptr || parent_layer_indices->size() == m_layers.size());
+    const auto parent_index = [parent_layer_indices](size_t index) {
+        return parent_layer_indices == nullptr ? index : (*parent_layer_indices)[index];
+    };
     // get all circular holes for each layer
     // the id is center-diameter-extruderid
     //the tuple is Point center; float diameter_max; int extruder_id; coord_t max_variation; bool twist; int max_edges;
@@ -280,7 +289,13 @@ void PrintObject::_transform_hole_to_polyholes()
                 }
             }
             //check if strait hole or first layer hole (cause of first layer compensation)
-            if (holes.size() >= min_nb_layers || (holes.size() == 1 && holes[0].second == 0)) {
+            size_t distinct_parent_count = holes.size();
+            if (parent_layer_indices != nullptr) {
+                distinct_parent_count = 1;
+                for (size_t i = 1; i < holes.size(); ++i)
+                    distinct_parent_count += parent_index(holes[i].second) != parent_index(holes[i - 1].second);
+            }
+            if (distinct_parent_count >= min_nb_layers || (distinct_parent_count == 1 && parent_index(holes[0].second) == 0)) {
                 id2layerz2hole.emplace(std::move(id), std::move(holes));
             }
         }
@@ -289,7 +304,7 @@ void PrintObject::_transform_hole_to_polyholes()
     for (auto entry : id2layerz2hole) {
         Polygons polyholes = create_polyholes(std::get<0>(entry.first), std::get<1>(entry.first), scale_(print()->config().nozzle_diameter.get_at(std::get<2>(entry.first) - 1)), std::get<4>(entry.first), std::get<5>(entry.first));
         for (auto& poly_to_replace : entry.second) {
-            Polygon polyhole = polyholes[poly_to_replace.second % polyholes.size()];
+            Polygon polyhole = polyholes[parent_index(poly_to_replace.second) % polyholes.size()];
             //search the clone in layers->slices
             for (ExPolygon& explo_slice : m_layers[poly_to_replace.second]->lslices) {
                 for (Polygon& poly_slice : explo_slice.holes) {
@@ -550,18 +565,82 @@ void PrintObject::make_perimeters()
         BOOST_LOG_TRIVIAL(debug) << "Generating extra perimeters for region " << region_id << " in parallel - end";
     }
 
+    m_half_layer_sources.reset();
+    if (m_config.outer_wall_half_layer_height) {
+        m_half_layer_sources = std::make_unique<HalfLayerSourceLayers>(make_half_layer_source_layers());
+        // A trimmed empty top section remains empty. Keep its band descriptor
+        // available to assembly without copying geometry from the other phase.
+        for (unsigned phase = 0; phase < 2; ++phase) {
+            auto &layers = m_half_layer_sources->phases[phase];
+            for (size_t index = layers.size(); index < m_layers.size(); ++index) {
+                const Layer &parent = *m_layers[index];
+                const auto band = split_model_layer_half(parent.id(), parent.bottom_z(), parent.print_z)[phase];
+                HalfLayerSourceLayers::LayerOwner empty(new Layer(parent.id(), this, band.height_mm(), band.print_z_mm,
+                    band.slice_z_mm() - m_slicing_params.object_print_z_min));
+                for (const auto *region : parent.regions())
+                    empty->add_region(&region->region());
+                layers.push_back(std::move(empty));
+            }
+        }
+    }
+    std::vector<unsigned char> retained_original_walls(m_layers.size(), 0);
     BOOST_LOG_TRIVIAL(debug) << "Generating perimeters in parallel - start";
     tbb::parallel_for(
         tbb::blocked_range<size_t>(0, m_layers.size()),
-        [this](const tbb::blocked_range<size_t>& range) {
+        [this, &retained_original_walls](const tbb::blocked_range<size_t>& range) {
             for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++ layer_idx) {
                 m_print->throw_if_canceled();
-                m_layers[layer_idx]->make_perimeters();
+                if (!m_half_layer_sources) {
+                    m_layers[layer_idx]->make_perimeters();
+                    continue;
+                }
+                Layer &parent = *m_layers[layer_idx];
+                const std::array<Layer *, 2> phases{m_half_layer_sources->phases[0][layer_idx].get(),
+                    m_half_layer_sources->phases[1][layer_idx].get()};
+                auto plan = make_half_layer_layer_candidate(parent, *phases[0], *phases[1]);
+                for (Layer *layer : {&parent, phases[0], phases[1]})
+                    for (LayerRegion *region : layer->regions()) {
+                        region->perimeters.clear();
+                        region->thin_fills.clear();
+                        region->fills.clear();
+                        region->fill_surfaces.clear();
+                        region->fill_expolygons.clear();
+                        region->fill_no_overlap_expolygons.clear();
+                    }
+                for (auto &group : plan.groups) {
+                    if (!group.gap_fill)
+                        throw SlicingError("Half-height wall gap ownership could not be resolved.");
+                    auto *core_region = parent.get_region(group.print_object_region_id);
+                    if (group.gap_ownership == HalfLayerGapOwnership::Unsplit && !group.core->empty())
+                        retained_original_walls[layer_idx] = 1;
+                    core_region->perimeters.append(std::move(group.core->entities));
+                    core_region->thin_fills.append(std::move(group.gap_fill->core.entities));
+                    for (unsigned phase = 0; phase < 2; ++phase) {
+                        auto *region = phases[phase]->get_region(group.print_object_region_id);
+                        region->perimeters.append(std::move(group.shells[phase]->entities));
+                        region->thin_fills.append(std::move(group.gap_fill->phases[phase].entities));
+                    }
+                }
+                for (size_t index = 0; index < plan.fills.size(); ++index) {
+                    auto *region = parent.get_region(int(index));
+                    region->fill_surfaces = std::move(plan.fills[index].surfaces);
+                    region->fill_expolygons = to_expolygons(region->fill_surfaces.surfaces);
+                    region->fill_no_overlap_expolygons = std::move(plan.fills[index].no_overlap);
+                    for (Layer *phase : phases) {
+                        auto *phase_region = phase->get_region(int(index));
+                        if (!phase_region->thin_fills.empty())
+                            phase_region->fills.append(phase_region->thin_fills);
+                    }
+                }
             }
         }
     );
     m_print->throw_if_canceled();
     BOOST_LOG_TRIVIAL(debug) << "Generating perimeters in parallel - end";
+
+    if (std::any_of(retained_original_walls.begin(), retained_original_walls.end(), [](unsigned char retained) { return retained != 0; }))
+        this->active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL,
+            _u8L("Some narrow features do not intersect either half-height wall section. Their original walls were retained."));
 
     this->set_done(posPerimeters);
 }
@@ -899,6 +978,8 @@ void PrintObject::generate_support_material()
             this->_generate_support_material();
             m_print->throw_if_canceled();
         }
+        if (m_config.support_half_layer_height.value)
+            m_half_layer_support_sources = std::make_unique<HalfLayerSupportSources>(this, m_support_layers);
         this->set_done(posSupportMaterial);
     }
 }
@@ -944,6 +1025,9 @@ void PrintObject::simplify_extrusion_path()
                 for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++ layer_idx) {
                     m_print->throw_if_canceled();
                     m_layers[layer_idx]->simplify_wall_extrusion_path();
+                    if (m_half_layer_sources)
+                        for (auto &phase : m_half_layer_sources->phases)
+                            phase[layer_idx]->simplify_wall_extrusion_path();
                 }
             }
         );
@@ -962,6 +1046,9 @@ void PrintObject::simplify_extrusion_path()
                 for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++layer_idx) {
                     m_print->throw_if_canceled();
                     m_layers[layer_idx]->simplify_infill_extrusion_path();
+                    if (m_half_layer_sources)
+                        for (auto &phase : m_half_layer_sources->phases)
+                            phase[layer_idx]->simplify_infill_extrusion_path();
                 }
             }
         );
@@ -1040,11 +1127,27 @@ FillLightning::GeneratorPtr PrintObject::prepare_lightning_infill_data()
 
 void PrintObject::clear_layers()
 {
+    m_half_layer_sources.reset();
     if (!m_shared_object) {
         for (Layer *l : m_layers)
             delete l;
         m_layers.clear();
     }
+}
+
+const HalfLayerSourceLayers *PrintObject::half_layer_sources() const
+{
+    if (m_shared_object)
+        return m_shared_object->half_layer_sources();
+    return m_config.outer_wall_half_layer_height && this->is_step_done(posPerimeters) ? m_half_layer_sources.get() : nullptr;
+}
+
+const HalfLayerSupportSources *PrintObject::half_layer_support_sources() const
+{
+    if (m_shared_object)
+        return m_shared_object->half_layer_support_sources();
+    return m_config.support_half_layer_height && this->is_step_done(posSupportMaterial) ?
+        m_half_layer_support_sources.get() : nullptr;
 }
 
 Layer* PrintObject::add_layer(int id, coordf_t height, coordf_t print_z, coordf_t slice_z)
@@ -1067,6 +1170,7 @@ SupportLayer* PrintObject::get_support_layer_at_printz(coordf_t print_z, coordf_
 
 void PrintObject::clear_support_layers()
 {
+    m_half_layer_support_sources.reset();
     if (!m_shared_object) {
         for (SupportLayer* l : m_support_layers)
             delete l;
@@ -1147,6 +1251,7 @@ bool PrintObject::invalidate_state_by_config_options(
             }
         } else if (
                opt_key == "wall_loops"
+            || opt_key == "outer_wall_half_layer_height"
             || opt_key == "alternate_extra_wall"
             || opt_key == "top_one_wall_type"
             || opt_key == "min_width_top_surface"
@@ -1242,6 +1347,7 @@ bool PrintObject::invalidate_state_by_config_options(
                 steps.emplace_back(posSlice);
         } else if (
 	       opt_key == "support_type"
+            || opt_key == "support_half_layer_height"
             || opt_key == "mixed_normal_support_generator"
             || opt_key == "mixed_tree_support_style"
             || opt_key == "mixed_normal_coverage_threshold"
@@ -1498,7 +1604,10 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "scarf_joint_flow_ratio"
             || opt_key == "spiral_starting_flow_ratio"
             || opt_key == "spiral_finishing_flow_ratio") {
-            invalidated |= m_print->invalidate_step(psGCodeExport);
+            if (this->config().outer_wall_half_layer_height.value || this->config().support_half_layer_height.value)
+                invalidated |= m_print->invalidate_step(psWipeTower);
+            else
+                invalidated |= m_print->invalidate_step(psGCodeExport);
         } else if (
                opt_key == "flush_into_infill"
             || opt_key == "flush_into_objects"
@@ -4483,6 +4592,7 @@ static void merge_mixed_support_layers(
             normal->height = std::min(normal->height, tree->height);
             normal->print_z = 0.5 * (normal->print_z + tree->print_z);
             normal->support_type = stInnerMixed;
+            append(normal->half_layer_parent_bands, tree->half_layer_parent_bands);
             if (normal->interface_id() != tree->interface_id())
                 BOOST_LOG_TRIVIAL(debug) << "Mixed support layer at Z=" << normal->print_z
                     << " keeps normal interface_id=" << normal->interface_id()

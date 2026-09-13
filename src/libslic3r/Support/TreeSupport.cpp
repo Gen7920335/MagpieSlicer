@@ -1490,6 +1490,55 @@ static void make_perimeter_and_infill(ExtrusionEntitiesPtr& dst, const ExPolygon
 
 void TreeSupport::generate_toolpaths()
 {
+    std::vector<size_t> half_layer_source_ids;
+    if (m_object->config().support_half_layer_height.value) {
+        const auto cuts_mm = half_height_support_z_grid(*m_object);
+        std::vector<std::unique_ptr<SupportLayer>> physical_layers;
+        const double raft_top_mm = m_slicing_params.raft_contact_top_z;
+        constexpr double z_tolerance_mm = 0.000001; // Physical raft endpoint tolerance, mm.
+        for (const SupportLayer *original : m_object->support_layers()) {
+            if (!original->support_fills.empty())
+                throw std::logic_error("Classic tree half-height refinement must precede toolpath generation");
+            const bool raft = m_slicing_params.has_raft() && original->print_z <= raft_top_mm + z_tolerance_mm;
+            const auto ends = raft ? std::vector<double>{original->print_z} :
+                half_height_support_band_ends(cuts_mm, original->bottom_z(), original->print_z);
+            double bottom_mm = original->bottom_z();
+            for (double top_mm : ends) {
+                auto layer = std::unique_ptr<SupportLayer>(new SupportLayer(physical_layers.size(),
+                    original->interface_id(), m_object, top_mm - bottom_mm, top_mm, 0.5 * (bottom_mm + top_mm)));
+                layer->support_type = original->support_type;
+                layer->half_layer_parent_bands.push_back({original->print_z, original->height, original->interface_id()});
+                layer->support_islands = original->support_islands;
+                layer->lslices = original->lslices;
+                layer->lslices_bboxes = original->lslices_bboxes;
+                layer->roof_gap_areas = original->roof_gap_areas;
+                std::unordered_map<const ExPolygon *, ExPolygon *> areas;
+                auto copy_areas = [&](const ExPolygons &source, ExPolygons &destination) {
+                    destination = source;
+                    for (size_t i = 0; i < source.size(); ++i)
+                        areas.emplace(&source[i], &destination[i]);
+                };
+                copy_areas(original->base_areas, layer->base_areas);
+                copy_areas(original->roof_areas, layer->roof_areas);
+                copy_areas(original->floor_areas, layer->floor_areas);
+                copy_areas(original->roof_1st_layer, layer->roof_1st_layer);
+                layer->area_groups = original->area_groups;
+                for (auto &group : layer->area_groups)
+                    group.area = areas.at(group.area);
+                physical_layers.push_back(std::move(layer));
+                half_layer_source_ids.push_back(original->id());
+                bottom_mm = top_mm;
+            }
+        }
+        // All source references were remapped before replacing owned geometry.
+        auto &destination = m_object->support_layers();
+        destination.reserve(physical_layers.size());
+        for (SupportLayer *layer : destination)
+            delete layer;
+        destination.clear();
+        for (auto &layer : physical_layers)
+            destination.push_back(layer.release());
+    }
     SupportProfileStage total_timing("support-tree-toolpath", "Generate all classic tree toolpaths", m_object->support_layer_count());
     const PrintObjectConfig &object_config = m_object->config();
     coordf_t support_extrusion_width = m_support_params.support_extrusion_width;
@@ -1636,6 +1685,7 @@ void TreeSupport::generate_toolpaths()
                 //m_object->print()->set_status(70, (boost::format(_u8L("Support: generate toolpath at layer %d")) % layer_id).str());
 
                 SupportLayer* ts_layer = m_object->get_support_layer(layer_id);
+                const size_t logical_support_id = half_layer_source_ids.empty() ? layer_id : half_layer_source_ids[layer_id];
                 Flow support_flow(support_extrusion_width, ts_layer->height, nozzle_diameter);
                 Flow interface_flow = support_material_interface_flow(m_object, ts_layer->height); // update flow using real support layer height
                 coordf_t support_spacing         = object_config.support_base_pattern_spacing.value + support_flow.spacing();
@@ -1668,8 +1718,10 @@ void TreeSupport::generate_toolpaths()
                     }
                     if (area_group.type != SupportLayer::BaseType) {
                         // interface
-                        if (layer_id == 0) {
+                        if (logical_support_id == 0) {
                             Flow flow = m_raft_layers == 0 ? m_object->print()->brim_flow() : support_flow;
+                            if (object_config.support_half_layer_height.value && m_raft_layers == 0)
+                                flow = support_material_1st_layer_flow(m_object, float(ts_layer->height));
                             ExtrusionRole brim_role = (area_group.type == SupportLayer::RoofType && !area_group.interface_as_base) ?
                                 erSupportMaterialInterface : erSupportMaterial;
                             make_perimeter_and_inner_brim(ts_layer->support_fills.entities, poly, wall_count, flow,
@@ -1802,8 +1854,10 @@ void TreeSupport::generate_toolpaths()
                     }
                     else {
                         // base_areas
-                        bool support_base_on_bed = (layer_id == 0 && m_raft_layers == 0);
+                        bool support_base_on_bed = (logical_support_id == 0 && m_raft_layers == 0);
                         Flow flow = support_base_on_bed ? m_support_params.first_layer_flow : support_flow;
+                        if (object_config.support_half_layer_height.value && support_base_on_bed)
+                            flow = flow.with_height(float(ts_layer->height));
                         bool need_infill = with_infill;
                         if(m_object_config->support_base_pattern==smpDefault)
                             need_infill &= area_group.need_infill;
@@ -1823,7 +1877,7 @@ void TreeSupport::generate_toolpaths()
                         std::unique_ptr<ExtrusionEntityCollection> base_eec = std::make_unique<ExtrusionEntityCollection>();
                         base_eec->no_sort = true;
                         ExtrusionEntitiesPtr &base_dst = base_eec->entities;
-                        if (layer_id == 0) {
+                        if (logical_support_id == 0) {
                             float density = float(m_object_config->raft_first_layer_density.value * 0.01);
                             fill_expolygons_with_sheath_generate_paths(base_dst, loops, filler_support.get(), density, erSupportMaterial, flow,
                                                                        m_support_params, true, false);

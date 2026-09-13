@@ -22162,3 +22162,27 @@ msgstr "캘리브레이션할 수 없습니다. 필요한 프리셋이 없습니
 #: src/libslic3r/PrintObject.cpp
 msgid "Tree support could not route the assigned Mixed support demand. Normal support was retried, but some areas may remain unsupported. Check the preview before printing."
 msgstr "혼합 서포트에서 트리에 배정한 지지 영역의 경로를 생성하지 못했습니다. 일반 서포트로 다시 시도했지만 일부 영역에 지지가 없을 수 있습니다. 출력 전에 미리보기를 확인하세요."
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Half-height outer walls"
+msgstr "절반 높이 외벽"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Print the outer two XY walls at half the model layer height, without changing the total XY wall count. The two passes are separated near half the estimated layer time. Travel Z hop is at least 1.5 times the model layer height."
+msgstr "전체 XY 벽 수는 변경하지 않고 바깥쪽 XY 벽 두 줄을 모델 레이어 높이의 절반으로 출력합니다. 두 패스는 예상 레이어 시간의 중간 부근에 나누어 배치됩니다. 이동 Z 홉은 모델 레이어 높이의 최소 1.5배입니다."
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Half-height support"
+msgstr "절반 높이 서포트"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Generate support at half the model layer height while preserving physical contact gaps, interface thickness and raft thickness. Travel Z hop is at least 1.5 times the model layer height."
+msgstr "물리적 접촉 간격, 인터페이스 두께 및 래프트 두께를 유지하면서 서포트를 모델 레이어 높이의 절반으로 생성합니다. 이동 Z 홉은 모델 레이어 높이의 최소 1.5배입니다."
+
+#: src/libslic3r/Print.cpp
+msgid "Half-height outer walls or supports cannot be combined with spiral vase mode because their discrete Z passes require ordinary layer geometry."
+msgstr "절반 높이 외벽 또는 서포트는 개별 Z 패스에 일반 레이어 형상이 필요하므로 나선형 꽃병 모드와 함께 사용할 수 없습니다."
+
+#: src/libslic3r/PrintObject.cpp
+msgid "Some narrow features do not intersect either half-height wall section. Their original walls were retained."
+msgstr "일부 좁은 형상은 절반 높이 외벽의 어느 단면과도 교차하지 않습니다. 해당 형상에는 기존 벽을 유지했습니다."

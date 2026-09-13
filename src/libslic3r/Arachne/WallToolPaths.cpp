@@ -540,7 +540,9 @@ const std::vector<VariableWidthLines> &WallToolPaths::generate()
             wall_distribution_count,
             0.5,
             m_params.fixed_outer_wall_count,
-            m_params.fixed_outer_wall_boundary_overlap
+            m_params.fixed_outer_wall_boundary_overlap,
+            m_params.fixed_outer_wall_spacings,
+            m_params.fixed_outer_wall_overlaps
         );
     const coord_t transition_filter_dist   = scaled<coord_t>(100.f);
     const coord_t allowed_filter_deviation = wall_transition_filter_deviation;

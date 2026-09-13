@@ -3066,6 +3066,94 @@ bool GCodeProcessor::get_last_z_from_gcode(const std::string& gcode_str, double&
     return is_z_changed;
 }
 
+bool GCodeProcessor::get_last_z_from_gcode(const std::string &gcode_str, double initial_z_mm, double &z_mm)
+{
+    if (!std::isfinite(initial_z_mm))
+        return false;
+
+    bool   relative_xyz = false;
+    double unit_to_mm = 1.;
+    double physical_z_mm = initial_z_mm;
+    double coordinate_z_mm = initial_z_mm;
+    double coordinate_offset_mm = physical_z_mm - coordinate_z_mm;
+    bool   z_moved = false;
+
+    auto parse_z_word_mm = [](std::string_view line, double unit_scale, double &value_mm) {
+        for (size_t begin = 0; begin < line.size();) {
+            while (begin < line.size() && (line[begin] == ' ' || line[begin] == '\t'))
+                ++begin;
+            const size_t end = line.find_first_of(" \t", begin);
+            const std::string_view word = line.substr(begin, end == std::string_view::npos ?
+                line.size() - begin : end - begin);
+            if (word.size() > 1 && (word.front() == 'Z' || word.front() == 'z')) {
+                double value = 0.;
+                const char *first = word.data() + 1;
+                const char *last = word.data() + word.size();
+                const auto parsed = fast_float::from_chars(first, last, value);
+                if (parsed.ptr == last && parsed.ec == std::errc{} && std::isfinite(value)) {
+                    value_mm = value * unit_scale;
+                    return true;
+                }
+            }
+            if (end == std::string_view::npos)
+                break;
+            begin = end + 1;
+        }
+        return false;
+    };
+
+    size_t line_begin = 0;
+    while (line_begin <= gcode_str.size()) {
+        const size_t newline = gcode_str.find('\n', line_begin);
+        std::string_view line(gcode_str.data() + line_begin,
+            (newline == std::string::npos ? gcode_str.size() : newline) - line_begin);
+        const size_t comment = line.find(';');
+        if (comment != std::string_view::npos)
+            line = line.substr(0, comment);
+        const size_t first = line.find_first_not_of(" \t\r");
+        if (first != std::string_view::npos) {
+            line.remove_prefix(first);
+            const size_t command_end = line.find_first_of(" \t\r");
+            const std::string_view command = line.substr(0, command_end);
+            if (command == "G90" || command == "g90")
+                relative_xyz = false;
+            else if (command == "G91" || command == "g91")
+                relative_xyz = true;
+            else if (command == "G20" || command == "g20")
+                unit_to_mm = 25.4;
+            else if (command == "G21" || command == "g21")
+                unit_to_mm = 1.;
+            else if (command == "G92" || command == "g92") {
+                double reset_z_mm = 0.;
+                if (parse_z_word_mm(line, unit_to_mm, reset_z_mm)) {
+                    coordinate_z_mm = reset_z_mm;
+                    coordinate_offset_mm = physical_z_mm - coordinate_z_mm;
+                }
+            } else if (command == "G0" || command == "G1" || command == "G2" || command == "G3" ||
+                       command == "g0" || command == "g1" || command == "g2" || command == "g3") {
+                double requested_z_mm = 0.;
+                if (parse_z_word_mm(line, unit_to_mm, requested_z_mm)) {
+                    if (relative_xyz) {
+                        physical_z_mm += requested_z_mm;
+                        coordinate_z_mm += requested_z_mm;
+                    } else {
+                        coordinate_z_mm = requested_z_mm;
+                        physical_z_mm = coordinate_z_mm + coordinate_offset_mm;
+                    }
+                    z_moved = true;
+                }
+            }
+        }
+        if (newline == std::string::npos)
+            break;
+        line_begin = newline + 1;
+    }
+
+    if (z_moved)
+        z_mm = physical_z_mm;
+    return z_moved;
+}
+
 bool GCodeProcessor::get_last_position_from_gcode(const std::string &gcode_str, Vec3f &pos)
 {
     int  str_size     = gcode_str.size();

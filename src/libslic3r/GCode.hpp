@@ -249,6 +249,11 @@ public:
     unsigned int    layer_count() const { return m_layer_count; }
     void            set_layer_count(unsigned int value) { m_layer_count = value; }
     void            apply_print_config(const PrintConfig &print_config);
+    // Borrow a physical extrusion band and its logical parent. This changes
+    // motion/first-layer context only: no logical index, hook or cooling event.
+    void            set_physical_layer(const Layer &physical, const Layer &logical_parent);
+    void            set_physical_layer(const Layer &physical, const Layer &logical_parent,
+                                       double motion_reference_height);
 
     std::string     travel_to(const Point& point, ExtrusionRole role, std::string comment, double z = DBL_MAX);
     bool            needs_retraction(const Polyline& travel, ExtrusionRole role, LiftType& lift_type);
@@ -335,9 +340,13 @@ private:
     };
     void            _do_export(Print &print, GCodeOutputStream &file, ThumbnailsGeneratorCallback thumbnail_cb);
 
+public:
+    // Read-only logical event plan, shared by diagnostics and export. Physical
+    // half-height paths are not additional layer-change/cooling events.
     static std::vector<LayerToPrint>        		                   collect_layers_to_print(const PrintObject &object);
     static std::vector<std::pair<coordf_t, std::vector<LayerToPrint>>> collect_layers_to_print(const Print &print);
 
+private:
     std::string generate_skirt(const Print &print,
         const ExtrusionEntityCollection &skirt,
         const Point& offset,
@@ -369,7 +378,8 @@ private:
         // Otherwise print a single copy of a single object.
         const size_t                     single_object_idx = size_t(-1),
         // BBS
-        const bool                       prime_extruder = false);
+        const bool                       prime_extruder = false,
+        const HalfLayerExecutionFrame   *half_layer_frame = nullptr);
     std::string emit_lesic_ring_annotations(const Calib_Params &params);
     // Process all layers of all objects (non-sequential mode) with a parallel pipeline:
     // Generate G-code, run the filters (vase mode, cooling buffer), run the G-code analyser
@@ -501,6 +511,9 @@ private:
     std::string     extrude_perimeters(const Print& print, const std::vector<ObjectByExtruder::Island::Region>& by_region, bool is_first_layer, bool is_infill_first);
     std::string     extrude_infill(const Print& print, const std::vector<ObjectByExtruder::Island::Region>& by_region, bool ironing);
     std::string     extrude_support(const ExtrusionEntityCollection& support_fills, const ExtrusionRole support_extrusion_role);
+    std::string     extrude_support_entities(const ExtrusionEntitiesPtr& support_entities,
+                                             ExtrusionRole support_extrusion_role,
+                                             bool preserve_order);
     bool            has_configured_low_temperature_nozzle_wiper() const;
     bool            temperature_drop_tower_enabled() const;
     bool            build_temperature_drop_tower_path(ExtrusionPath &path);
@@ -593,6 +606,12 @@ private:
     // Current layer processed. In sequential printing mode, only a single copy will be printed.
     // In non-sequential mode, all its copies will be printed.
     const Layer*                        m_layer;
+    const Layer*                        m_logical_layer = nullptr;
+    double                              m_half_layer_motion_reference_height = 0.;
+    bool                                m_half_layer_dispatch_active = false;
+    // Printed source plane retained across custom physical-tool changes. NaN
+    // means ordinary writer lift state is authoritative.
+    double                              m_half_layer_pending_source_z = std::numeric_limits<double>::quiet_NaN();
     // m_layer is an object layer and it is being printed over raft surface.
     bool                                m_object_layer_over_raft;
     //double                              m_volumetric_speed;
@@ -601,6 +620,9 @@ private:
     size_t                              m_support_extrusion_context_depth { 0 };
     bool                                m_low_temperature_support_interface_active { false };
     int                                 m_low_temperature_support_interface_target_temperature { 0 };
+    unsigned int                        m_low_temperature_support_interface_filament { unsigned(-1) };
+    int                                 m_low_temperature_support_interface_normal_temperature { 0 };
+    double                              m_low_temperature_support_interface_heating_time { 0. };
     coordf_t                            m_temperature_drop_tower_last_print_z { -std::numeric_limits<coordf_t>::max() };
     bool                                m_temperature_drop_tower_path_initialized { false };
     bool                                m_temperature_drop_tower_brim_printed { false };
@@ -681,7 +703,6 @@ private:
     int get_bed_temperature(const int extruder_id, const bool is_first_layer, const BedType bed_type) const;
     int get_highest_bed_temperature(const bool is_first_layer,const Print &print) const;
 
-    double      calc_max_volumetric_speed(const double layer_height, const double line_width, const std::string co_str);
     std::string _extrude(const ExtrusionPath &path, std::string description = "", double speed = -1,
                          ExtrusionToolHint tool_hint = ExtrusionToolHint::Auto);
     bool _needSAFC(const ExtrusionPath &path);
@@ -690,7 +711,10 @@ private:
     void _print_first_layer_extruder_temperatures(GCodeOutputStream &file, Print &print, const std::string &gcode, unsigned int first_printing_extruder_id, bool wait);
     // On the first printing layer. This flag triggers first layer speeds.
     //BBS
-    bool    on_first_layer() const { return m_layer != nullptr && m_layer->id() == 0 && abs(m_layer->bottom_z()) < EPSILON; }
+    bool    on_first_layer() const {
+        const Layer *logical = m_logical_layer != nullptr ? m_logical_layer : m_layer;
+        return logical != nullptr && logical->id() == 0 && abs(logical->bottom_z()) < EPSILON;
+    }
     int layer_id() const {
         if (m_layer == nullptr)
             return -1;

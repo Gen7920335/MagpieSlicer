@@ -390,9 +390,13 @@ class Print;
         // (the first max_count found tags are returned into found_tag)
         static bool contains_reserved_tags(const std::string& gcode, unsigned int max_count, std::vector<std::string>& found_tag);
 
-        static int get_gcode_last_filament(const std::string &gcode_str);
-        static bool get_last_z_from_gcode(const std::string& gcode_str, double& z);
-        static bool get_last_position_from_gcode(const std::string &gcode_str, Vec3f &pos);
+          static int get_gcode_last_filament(const std::string &gcode_str);
+          static bool get_last_z_from_gcode(const std::string& gcode_str, double& z);
+          // Resolve explicit Z motion from a known physical starting height.
+          // Unlike the legacy extractor above, this tracks XYZ coordinate mode,
+          // units and G92 offsets. Unknown firmware macros are deliberately ignored.
+          static bool get_last_z_from_gcode(const std::string &gcode_str, double initial_z_mm, double &z_mm);
+          static bool get_last_position_from_gcode(const std::string &gcode_str, Vec3f &pos);
 
         static const float Wipe_Width;
         static const float Wipe_Height;

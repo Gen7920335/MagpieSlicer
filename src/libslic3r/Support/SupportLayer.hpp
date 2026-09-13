@@ -103,6 +103,14 @@ public:
 	// Use a bridging flow when printing this support layer.
 	bool 	 bridging { false };
 
+    // Original planned support identity, before physical half-height refinement.
+    // Material/interface ranges and pattern parity refer to this identity, not
+    // to the number of generated physical slices.
+    size_t half_layer_source_id { size_t(-1) };
+    size_t half_layer_interface_id { size_t(-1) };
+    double half_layer_parent_print_z_mm { 0. };
+    double half_layer_parent_height_mm { 0. };
+
 	// Polygons to be filled by the support pattern.
 	Polygons polygons;
 	// Currently for the contact layers only.

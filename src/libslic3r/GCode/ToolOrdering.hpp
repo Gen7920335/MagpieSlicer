@@ -6,11 +6,13 @@
 #include "../libslic3r.h"
 
 #include <utility>
+#include <memory>
 
 #include <boost/container/small_vector.hpp>
 #include "../FilamentGroup.hpp"
 #include "../ExtrusionEntity.hpp"
 #include "../PrintConfig.hpp"
+#include "HalfLayerExecution.hpp"
 
 namespace Slic3r {
 
@@ -150,6 +152,9 @@ public:
     bool						has_support = false;
     // Zero based extruder IDs, ordered to minimize tool switches.
     std::vector<unsigned int> 	extruders;
+    // Index into ToolOrdering's immutable Print-owned execution-plan view.
+    // The unique material inventory above intentionally stays unique.
+    size_t half_layer_frame_index = size_t(-1);
     // If per layer extruder switches are inserted by the G-code preview slider, this value contains the new (1 based) extruder, with which the whole object layer is being printed with.
     // If not overriden, it is set to 0.
     unsigned int 				extruder_override = 0;
@@ -190,7 +195,8 @@ public:
 
     // For the use case when each object is printed separately
     // (print->config().print_sequence == PrintSequence::ByObject is true).
-    ToolOrdering(const PrintObject &object, unsigned int first_extruder, bool prime_multi_material = false);
+    ToolOrdering(const PrintObject &object, unsigned int first_extruder, bool prime_multi_material = false,
+                 size_t instance_id = size_t(-1));
 
     // For the use case when all objects are printed at once.
     // (print->config().print_sequence == PrintSequence::ByObject is false).
@@ -204,9 +210,19 @@ public:
 
     void    clear() {
         m_layer_tools.clear();
+        m_half_layer_execution_plan.reset();
+        m_half_layer_execution_enabled = false;
         m_stats_by_single_extruder.clear();
         m_stats_by_multi_extruder_best.clear();
         m_stats_by_multi_extruder_curr.clear();
+    }
+
+    // Borrowed task pointers are invalid as soon as their owning Print step is
+    // invalidated. Ordinary inventory data may remain available to legacy UI.
+    void invalidate_half_layer_execution_plan() {
+        m_half_layer_execution_plan.reset();
+        for (LayerTools &tools : m_layer_tools)
+            tools.half_layer_frame_index = size_t(-1);
     }
 
     // Only valid for non-sequential print:
@@ -234,6 +250,10 @@ public:
     std::vector<LayerTools>::const_iterator end()   const { return m_layer_tools.end(); }
     bool 				empty()       const { return m_layer_tools.empty(); }
     std::vector<LayerTools>& layer_tools() { return m_layer_tools; }
+    const std::vector<LayerTools>& layer_tools() const { return m_layer_tools; }
+    const HalfLayerPrintExecutionPlan* half_layer_execution_plan() const { return m_half_layer_execution_plan.get(); }
+    const HalfLayerExecutionFrame* execution_frame(const LayerTools &tools) const;
+    std::vector<unsigned int> execution_filaments(const LayerTools &tools) const;
     bool 				has_wipe_tower() const { return ! m_layer_tools.empty() && m_first_printing_extruder != (unsigned int)-1 && m_layer_tools.front().has_wipe_tower; }
 
     int                 get_most_used_extruder() const { return most_used_extruder; }
@@ -256,6 +276,9 @@ public:
     bool                has_non_support_filament(const PrintConfig &config);
 
 private:
+    void                build_half_layer_execution(const Print &print);
+    void                build_half_layer_execution(const PrintObject &object);
+    LayerTools&         tools_for_deadline(coordf_t physical_print_z);
     void				initialize_layers(std::vector<coordf_t> &zs);
     void 				collect_extruders(const PrintObject &object, const std::vector<std::pair<double, unsigned int>> &per_layer_extruder_switches);
     void 				fill_wipe_tower_partitions(const PrintConfig &config, coordf_t object_bottom_z, coordf_t max_layer_height);
@@ -269,6 +292,8 @@ private:
     std::vector<unsigned int> generate_first_layer_tool_order(const PrintObject& object);
 
     std::vector<LayerTools>    m_layer_tools;
+    std::shared_ptr<const HalfLayerPrintExecutionPlan> m_half_layer_execution_plan;
+    bool                         m_half_layer_execution_enabled = false;
     // First printing extruder, including the multi-material priming sequence.
     unsigned int               m_first_printing_extruder = (unsigned int)-1;
     // Final printing extruder.
@@ -278,6 +303,7 @@ private:
     const DynamicPrintConfig*  m_print_full_config = nullptr;
     const PrintConfig*         m_print_config_ptr = nullptr;
     const PrintObject*         m_print_object_ptr = nullptr;
+    size_t                     m_instance_id = size_t(-1);
     Print*                     m_print;
     bool                       m_sorted = false;
 

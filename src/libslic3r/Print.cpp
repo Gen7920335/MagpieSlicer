@@ -75,6 +75,7 @@ void Print::clear()
 	for (PrintObject *object : m_objects)
 		delete object;
 	m_objects.clear();
+    m_half_layer_execution_plan.reset();
     m_print_regions.clear();
     m_model.clear_objects();
     m_statistics_by_extruder_count.clear();
@@ -250,6 +251,10 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
     std::vector<PrintStep> steps;
     std::vector<PrintObjectStep> osteps;
     bool invalidated = false;
+    const bool half_layer_execution_enabled = std::any_of(m_objects.begin(), m_objects.end(), [](const PrintObject *object) {
+        return object != nullptr && (object->config().outer_wall_half_layer_height.value ||
+                                     object->config().support_half_layer_height.value);
+    });
 
     for (const t_config_option_key &opt_key : opt_keys) {
         if (opt_key == "filament_colour" || opt_key == "filament_type" || opt_key == "filament_soluble") {
@@ -269,7 +274,11 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         if (steps_gcode.find(opt_key) != steps_gcode.end()) {
             // These options only affect G-code export or they are just notes without influence on the generated G-code,
             // so there is nothing to invalidate.
-            steps.emplace_back(psGCodeExport);
+            if (half_layer_execution_enabled && (opt_key == "z_hop" || opt_key == "filament_flow_ratio" ||
+                                                 opt_key == "seam_gap"))
+                steps.emplace_back(psWipeTower);
+            else
+                steps.emplace_back(psGCodeExport);
         } else if (steps_ignore.find(opt_key) != steps_ignore.end()) {
             // These steps have no influence on the G-code whatsoever. Just ignore them.
         } else if (
@@ -455,6 +464,13 @@ void Print::set_calib_params(const Calib_Params& params) {
 bool Print::invalidate_step(PrintStep step)
 {
 	bool invalidated = Inherited::invalidate_step(step);
+    if (step == psWipeTower) {
+        // Half-layer tasks borrow PrintObject geometry and cache timing/motion
+        // values. Do not expose a stale view while reprocessing is pending.
+        m_half_layer_execution_plan.reset();
+        m_tool_ordering.invalidate_half_layer_execution_plan();
+        m_wipe_tower_data.tool_ordering.invalidate_half_layer_execution_plan();
+    }
     // Propagate to dependent steps.
     if (step != psGCodeExport)
         invalidated |= Inherited::invalidate_step(psGCodeExport);
@@ -1365,6 +1381,10 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
     }
 
     if (m_config.spiral_mode) {
+        for (const PrintObject *object : m_objects)
+            if (object->config().outer_wall_half_layer_height.value || object->config().support_half_layer_height.value)
+                return {L("Half-height outer walls or supports cannot be combined with spiral vase mode because their discrete Z passes require ordinary layer geometry."),
+                    object, "spiral_mode"};
         size_t total_copies_count = 0;
         for (const PrintObject* object : m_objects)
             total_copies_count += object->instances().size();
@@ -2470,6 +2490,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
 
         m_wipe_tower_data.clear();
         m_tool_ordering.clear();
+        m_half_layer_execution_plan.reset();
         if (this->has_wipe_tower()) {
             this->_make_wipe_tower();
         }
@@ -2517,7 +2538,9 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             std::vector<unsigned int> first_layer_used_filaments;
             std::vector<std::vector<unsigned int>> all_filaments;
             for (print_object_instance_sequential_active = print_object_instances_ordering.begin(); print_object_instance_sequential_active != print_object_instances_ordering.end(); ++print_object_instance_sequential_active) {
-                tool_ordering = ToolOrdering(*(*print_object_instance_sequential_active)->print_object, initial_extruder_id);
+                const PrintInstance *active_instance = *print_object_instance_sequential_active;
+                const size_t active_instance_id = size_t(active_instance - active_instance->print_object->instances().data());
+                tool_ordering = ToolOrdering(*active_instance->print_object, initial_extruder_id, false, active_instance_id);
                 for (size_t idx = 0; idx < tool_ordering.layer_tools().size(); ++idx) {
                     auto& layer_filament = tool_ordering.layer_tools()[idx].extruders;
                     all_filaments.emplace_back(layer_filament);
@@ -2545,8 +2568,10 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             //        print_object_instances_ordering = sort_object_instances_by_max_z(print);
             print_object_instance_sequential_active = print_object_instances_ordering.begin();
             for (; print_object_instance_sequential_active != print_object_instances_ordering.end(); ++print_object_instance_sequential_active) {
-                tool_ordering = ToolOrdering(*(*print_object_instance_sequential_active)->print_object, initial_extruder_id);
-                tool_ordering.sort_and_build_data(*(*print_object_instance_sequential_active)->print_object, initial_extruder_id);
+                const PrintInstance *active_instance = *print_object_instance_sequential_active;
+                const size_t active_instance_id = size_t(active_instance - active_instance->print_object->instances().data());
+                tool_ordering = ToolOrdering(*active_instance->print_object, initial_extruder_id, false, active_instance_id);
+                tool_ordering.sort_and_build_data(*active_instance->print_object, initial_extruder_id);
                 if ((initial_extruder_id = tool_ordering.first_extruder()) != static_cast<unsigned int>(-1)) {
                     append(printExtruders, tool_ordering.tools_for_layer(layers_to_print.front().first).extruders);
                 }
@@ -3586,7 +3611,14 @@ void Print::_make_wipe_tower()
 
             used_filament_ids.insert(layer_tools.extruders.begin(), layer_tools.extruders.end());
 
-            for (const auto filament_id : layer_tools.extruders) {
+            const HalfLayerExecutionFrame *execution_frame =
+                m_wipe_tower_data.tool_ordering.execution_frame(layer_tools);
+            size_t execution_visit_index = 0;
+            for (const auto filament_id : m_wipe_tower_data.tool_ordering.execution_filaments(layer_tools)) {
+                const HalfLayerExecutionVisit *execution_visit = execution_frame == nullptr ? nullptr :
+                    &execution_frame->plan.visits.at(execution_visit_index++);
+                if (execution_visit != nullptr && execution_visit->tool.filament != filament_id)
+                    throw std::logic_error("Half-layer Type1 tower visit ordinal is inconsistent");
                 if (filament_id == current_filament_id)
                     continue;
 
@@ -3597,8 +3629,17 @@ void Print::_make_wipe_tower()
                 if (pre_filament_id != (unsigned int)(-1) && pre_filament_id != filament_id) {
                     volume_to_purge = multi_extruder_flush[nozzle_id][pre_filament_id][filament_id];
                     volume_to_purge *= m_config.flush_multiplier.get_at(nozzle_id);
-                    volume_to_purge = pre_filament_id == -1 ? 0 :
-                        layer_tools.wiping_extrusions().mark_wiping_extrusions(*this, current_filament_id, filament_id, volume_to_purge);
+                    if (execution_frame != nullptr) {
+                        if (execution_visit->purge_transaction < execution_frame->plan.purge_transactions.size()) {
+                            const HalfLayerPurgeTransaction &transaction =
+                                execution_frame->plan.purge_transactions[execution_visit->purge_transaction];
+                            if (transaction.source_filament == pre_filament_id)
+                                volume_to_purge = float(transaction.tower_volume_mm3);
+                        }
+                    } else {
+                        volume_to_purge = layer_tools.wiping_extrusions().mark_wiping_extrusions(
+                            *this, current_filament_id, filament_id, volume_to_purge);
+                    }
                 }
 
                 //During the filament change, the extruder will extrude an extra length of grab_length for the corresponding detection, so the purge can reduce this length.
@@ -3610,7 +3651,8 @@ void Print::_make_wipe_tower()
                 current_filament_id = filament_id;
                 nozzle_cur_filament_ids[nozzle_id] = filament_id;
             }
-            layer_tools.wiping_extrusions().ensure_perimeters_infills_order(*this);
+            if (m_wipe_tower_data.tool_ordering.execution_frame(layer_tools) == nullptr)
+                layer_tools.wiping_extrusions().ensure_perimeters_infills_order(*this);
 
             // if enable timelapse, slice all layer
             if (m_config.enable_wrapping_detection || enable_timelapse_print()) {
@@ -3710,7 +3752,14 @@ void Print::_make_wipe_tower()
                 bool first_layer = &layer_tools == &m_wipe_tower_data.tool_ordering.front();
                 wipe_tower.plan_toolchange((float) layer_tools.print_z, (float) layer_tools.wipe_tower_layer_height, current_extruder_id,
                                            current_extruder_id, false);
-                for (const auto extruder_id : layer_tools.extruders) {
+                const HalfLayerExecutionFrame *execution_frame =
+                    m_wipe_tower_data.tool_ordering.execution_frame(layer_tools);
+                size_t execution_visit_index = 0;
+                for (const auto extruder_id : m_wipe_tower_data.tool_ordering.execution_filaments(layer_tools)) {
+                    const HalfLayerExecutionVisit *execution_visit = execution_frame == nullptr ? nullptr :
+                        &execution_frame->plan.visits.at(execution_visit_index++);
+                    if (execution_visit != nullptr && execution_visit->tool.filament != extruder_id)
+                        throw std::logic_error("Half-layer Type2 tower visit ordinal is inconsistent");
                     if ((first_layer && extruder_id == m_wipe_tower_data.tool_ordering.all_extruders().back()) || extruder_id !=
                         current_extruder_id) {
                         float volume_to_wipe = m_config.prime_volume;
@@ -3720,9 +3769,19 @@ void Print::_make_wipe_tower()
                             // Not all of that can be used for infill purging:
                             volume_to_wipe -= (float) m_config.filament_minimal_purge_on_wipe_tower.get_at(extruder_id);
 
-                            // try to assign some infills/objects for the wiping:
-                            volume_to_wipe = layer_tools.wiping_extrusions().mark_wiping_extrusions(*this, current_extruder_id, extruder_id,
-                                                                                                    volume_to_wipe);
+                            // Reuse only claims owned by this exact ordered visit.
+                            if (execution_frame != nullptr) {
+                                if (execution_visit->purge_transaction < execution_frame->plan.purge_transactions.size()) {
+                                    const HalfLayerPurgeTransaction &transaction =
+                                        execution_frame->plan.purge_transactions[execution_visit->purge_transaction];
+                                    if (transaction.source_filament == current_extruder_id)
+                                        volume_to_wipe = std::max(0.f, volume_to_wipe -
+                                            float(transaction.claimed_volume_mm3));
+                                }
+                            } else {
+                                volume_to_wipe = layer_tools.wiping_extrusions().mark_wiping_extrusions(
+                                    *this, current_extruder_id, extruder_id, volume_to_wipe);
+                            }
 
                             // add back the minimal amount toforce on the wipe tower:
                             volume_to_wipe += (float) m_config.filament_minimal_purge_on_wipe_tower.get_at(extruder_id);
@@ -3734,7 +3793,8 @@ void Print::_make_wipe_tower()
                         current_extruder_id = extruder_id;
                     }
                 }
-                layer_tools.wiping_extrusions().ensure_perimeters_infills_order(*this);
+                if (m_wipe_tower_data.tool_ordering.execution_frame(layer_tools) == nullptr)
+                    layer_tools.wiping_extrusions().ensure_perimeters_infills_order(*this);
                 if (&layer_tools == &m_wipe_tower_data.tool_ordering.back() || (&layer_tools + 1)->wipe_tower_partitions == 0)
                     break;
             }

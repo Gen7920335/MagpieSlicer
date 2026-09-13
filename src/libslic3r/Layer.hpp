@@ -251,6 +251,7 @@ public:
 
 protected:
     friend class PrintObject;
+    friend struct HalfLayerSourceDeleter;
     friend std::vector<Layer*> new_layers(PrintObject*, const std::vector<coordf_t>&);
     friend std::string fix_slicing_errors(PrintObject* object, LayerPtrs&, const std::function<void()>&, int &);
 
@@ -292,6 +293,14 @@ inline bool has_tree_channel(SupportInnerType type)
 class SupportLayer : public Layer
 {
 public:
+    struct LogicalBand {
+        double print_z_mm;
+        double height_mm;
+        size_t interface_id;
+    };
+    // Surviving geometry carries its pre-refinement event identity through
+    // generator retries and Mixed channel merging. Empty when the feature is off.
+    std::vector<LogicalBand> half_layer_parent_bands;
     // Polygons covered by the supports: base, interface and contact areas.
     // Used to suppress retraction if moving for a support extrusion over these support_islands.
     ExPolygons                  support_islands;

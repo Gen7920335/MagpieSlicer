@@ -1515,7 +1515,7 @@ std::vector<WipeTower::ToolChangeResult> WipeTower2::prime(
 	return results;
 }
 
-WipeTower::ToolChangeResult WipeTower2::tool_change(size_t tool)
+WipeTower::ToolChangeResult WipeTower2::tool_change(size_t tool, size_t planned_change_index)
 {
     size_t old_tool = m_current_tool;
 
@@ -1526,12 +1526,22 @@ WipeTower::ToolChangeResult WipeTower2::tool_change(size_t tool)
 	// Finds this toolchange info
 	if (tool != (unsigned int)(-1))
 	{
-		for (const auto &b : m_layer_info->tool_changes)
-			if ( b.new_tool == tool ) {
-                wipe_volume = b.wipe_volume;
-				wipe_area = b.required_depth;
-				break;
-			}
+		const WipeTowerInfo::ToolChange *planned = nullptr;
+        if (planned_change_index < m_layer_info->tool_changes.size()) {
+            const WipeTowerInfo::ToolChange &candidate = m_layer_info->tool_changes[planned_change_index];
+            if (candidate.old_tool == old_tool && candidate.new_tool == tool)
+                planned = &candidate;
+        }
+        if (planned == nullptr)
+            for (const auto &candidate : m_layer_info->tool_changes)
+                if (candidate.old_tool == old_tool && candidate.new_tool == tool) {
+                    planned = &candidate;
+                    break;
+                }
+        if (planned != nullptr) {
+            wipe_volume = planned->wipe_volume;
+			wipe_area = planned->required_depth;
+        }
 	}
 	else {
 		// Otherwise we are going to Unload only. And m_layer_info would be invalid.
@@ -2293,7 +2303,7 @@ void WipeTower2::save_on_last_wipe()
 
         for (int i=0; i<int(m_layer_info->tool_changes.size()); ++i) {
             auto& toolchange = m_layer_info->tool_changes[i];
-            tool_change(toolchange.new_tool);
+            tool_change(toolchange.new_tool, size_t(i));
 
             if (i == idx) {
                 float width = m_wipe_tower_width - 3*m_perimeter_width; // width we draw into
@@ -2417,7 +2427,7 @@ void WipeTower2::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> 
         }
 
         for (int i=0; i<int(layer.tool_changes.size()); ++i) {
-            layer_result.emplace_back(tool_change(layer.tool_changes[i].new_tool));
+            layer_result.emplace_back(tool_change(layer.tool_changes[i].new_tool, size_t(i)));
             if (i == idx) // finish_layer will be called after this toolchange
                 finish_layer_tcr = finish_layer();
         }

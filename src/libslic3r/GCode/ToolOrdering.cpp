@@ -2,6 +2,8 @@
 #include "Print.hpp"
 #include "ToolOrdering.hpp"
 #include "Layer.hpp"
+#include "HalfLayerSources.hpp"
+#include "HalfLayerSupportSources.hpp"
 #include "ClipperUtils.hpp"
 #include "Flow.hpp"
 #include "ParameterUtils.hpp"
@@ -426,6 +428,7 @@ void ToolOrdering::sort_and_build_data(const Print& print, unsigned int first_ex
     bool reorder_first_layer = (first_extruder != (unsigned int)(-1));
     reorder_extruders_for_minimum_flush_volume(reorder_first_layer);
     m_sorted = true;
+    this->build_half_layer_execution(print);
 
     double max_layer_height = 0.;
     double object_bottom_z = 0.;
@@ -444,8 +447,14 @@ void ToolOrdering::sort_and_build_data(const Print& print, unsigned int first_ex
     this->fill_wipe_tower_partitions(print.config(), object_bottom_z, max_layer_height);
     if (this->insert_wipe_tower_extruder()) {
         reorder_extruders_for_minimum_flush_volume(reorder_first_layer);
+        this->build_half_layer_execution(print);
         this->fill_wipe_tower_partitions(print.config(), object_bottom_z, max_layer_height);
-    }
+    } else if (m_half_layer_execution_enabled)
+        // Wipe-into claims depend on the finalized per-layer tower presence.
+        // The first plan above supplies visit counts for partition planning;
+        // this bounded second construction freezes claims without changing
+        // task order or triggering a scheduling fixed point.
+        this->build_half_layer_execution(print);
 
     this->collect_extruder_statistics(prime_multi_material);
 }
@@ -457,25 +466,311 @@ void ToolOrdering::sort_and_build_data(const PrintObject& object , unsigned int 
     bool reorder_first_layer = (first_extruder != (unsigned int)(-1));
     reorder_extruders_for_minimum_flush_volume(reorder_first_layer);
     m_sorted = true;
+    this->build_half_layer_execution(object);
 
     double max_layer_height = calc_max_layer_height(object.print()->config(), object.config().layer_height);
 
     this->fill_wipe_tower_partitions(object.print()->config(), object.layers().front()->print_z - object.layers().front()->height, max_layer_height);
     if (this->insert_wipe_tower_extruder()) {
         reorder_extruders_for_minimum_flush_volume(reorder_first_layer);
+        this->build_half_layer_execution(object);
         this->fill_wipe_tower_partitions(object.print()->config(), object.layers().front()->print_z - object.layers().front()->height, max_layer_height);
-    }
+    } else if (m_half_layer_execution_enabled)
+        this->build_half_layer_execution(object);
 
     this->collect_extruder_statistics(prime_multi_material);
+}
+
+static bool half_layer_features_enabled(const PrintObject &object)
+{
+    return object.config().outer_wall_half_layer_height.value ||
+           object.config().support_half_layer_height.value;
+}
+
+static void finalize_half_layer_frame(LayerTools &tools, HalfLayerPrintExecutionPlan &print_plan,
+    unsigned int incoming_filament,
+    HalfLayerWipeIntoContext &wipe_context,
+    std::vector<HalfLayerExecutionTask> prefix,
+    std::vector<HalfLayerExecutionTask> lower,
+    std::vector<HalfLayerExecutionTask> core,
+    std::vector<HalfLayerExecutionTask> upper)
+{
+    if (prefix.empty() && lower.empty() && core.empty() && upper.empty()) {
+        tools.half_layer_frame_index = size_t(-1);
+        return;
+    }
+    // Producers already traverse dependency/no-sort collections in their
+    // stored order. Material grouping here would turn A-B-A into A-A-B and can
+    // move an interface ahead of its support body. Visits are derived from the
+    // preserved task stream below; they do not own task ordering.
+    HalfLayerExecutionFrame frame;
+    frame.print_z = tools.print_z;
+    std::vector<HalfLayerExecutionTask *> provisional_stream;
+    provisional_stream.reserve(prefix.size() + lower.size() + core.size() + upper.size());
+    for (auto *tasks : {&prefix, &lower, &core, &upper})
+        for (HalfLayerExecutionTask &task : *tasks)
+            provisional_stream.push_back(&task);
+    const size_t wipe_reservation_count = reserve_half_layer_cross_material_wipe(
+        std::move(provisional_stream), wipe_context, tools.has_wipe_tower,
+        [](HalfLayerExecutionTask &task, unsigned int destination_filament) {
+            retarget_half_layer_task_material(task, destination_filament);
+        });
+    const HalfLayerExecutionTask *first_task = !prefix.empty() ? &prefix.front() :
+        !lower.empty() ? &lower.front() : !core.empty() ? &core.front() : &upper.front();
+    const double initial_seconds = half_layer_initial_entry_seconds(incoming_filament, *first_task);
+    frame.plan = schedule_half_layer_execution(std::move(prefix), std::move(lower), std::move(core),
+        std::move(upper), initial_seconds);
+    reconcile_half_layer_cross_material_wipe(frame.plan,
+        wipe_context.loaded_filament_by_tool, wipe_reservation_count, incoming_filament);
+    for (unsigned int filament : tools.extruders) {
+        const bool represented = std::any_of(frame.plan.visits.begin(), frame.plan.visits.end(),
+            [filament](const HalfLayerExecutionVisit &visit) { return visit.tool.filament == filament; });
+        if (!represented) {
+            if (tools.print_config == nullptr)
+                throw std::logic_error("Half-layer tower-only visit has no printer configuration");
+            const size_t physical_tool = get_extruder_index(*tools.print_config, filament);
+            if (physical_tool >= tools.print_config->nozzle_diameter.size())
+                throw std::logic_error("Half-layer tower-only visit has an invalid physical nozzle mapping");
+            frame.plan.visits.push_back({{unsigned(physical_tool), filament}, frame.plan.tasks.size(),
+                frame.plan.tasks.size(), true, size_t(-1)});
+        }
+    }
+    for (size_t i = 0; i < frame.plan.tasks.size(); ++i)
+        frame.plan.tasks[i].id = i;
+    apply_half_layer_wipe_into_claims(frame.plan, wipe_context, tools.has_wipe_tower);
+    if (!frame.valid())
+        throw std::logic_error("Invalid half-layer execution frame");
+    tools.half_layer_frame_index = print_plan.frames.size();
+    print_plan.frames.push_back(std::move(frame));
+}
+
+static HalfLayerWipeIntoContext half_layer_wipe_into_context(const PrintConfig &config,
+                                                              unsigned int initial_filament)
+{
+    HalfLayerWipeIntoContext context;
+    context.filament_count = std::max({config.filament_colour.size(), config.filament_diameter.size(),
+        config.filament_max_volumetric_speed.size()});
+    context.loaded_filament_by_tool.assign(config.nozzle_diameter.size(), -1);
+    context.purge_volume_mm3_by_tool.resize(config.nozzle_diameter.size());
+    const size_t matrix_size = context.filament_count * context.filament_count;
+    for (size_t physical_tool = 0; physical_tool < context.purge_volume_mm3_by_tool.size(); ++physical_tool) {
+        auto &matrix = context.purge_volume_mm3_by_tool[physical_tool];
+        const auto &stored = config.flush_volumes_matrix.values;
+        if (matrix_size > 0 && !stored.empty() && stored.size() % matrix_size == 0) {
+            const size_t matrix_count = stored.size() / matrix_size;
+            const size_t matrix_index = matrix_count == 1 ? 0 : std::min(physical_tool, matrix_count - 1);
+            const size_t begin = matrix_index * matrix_size;
+            matrix.assign(stored.begin() + begin, stored.begin() + begin + matrix_size);
+        }
+        if (matrix.size() != matrix_size) {
+            matrix.assign(matrix_size, config.prime_volume.value);
+            for (size_t filament = 0; filament < context.filament_count; ++filament)
+                matrix[filament * context.filament_count + filament] = 0.;
+        }
+        const double multiplier = config.flush_multiplier.get_at(physical_tool);
+        for (double &volume_mm3 : matrix)
+            volume_mm3 = std::max(0., volume_mm3 * multiplier);
+    }
+    context.transition_claimable_filament.assign(context.filament_count, true);
+    for (size_t filament = 0; filament < context.filament_count; ++filament)
+        context.transition_claimable_filament[filament] =
+            !config.filament_soluble.get_at(filament) && !config.filament_is_support.get_at(filament);
+    if (initial_filament < context.filament_count) {
+        const size_t physical_tool = get_extruder_index(config, initial_filament);
+        if (physical_tool < context.loaded_filament_by_tool.size())
+            context.loaded_filament_by_tool[physical_tool] = int(initial_filament);
+    }
+    return context;
+}
+
+void ToolOrdering::build_half_layer_execution(const Print &print)
+{
+    const bool enabled = std::any_of(print.objects().begin(), print.objects().end(),
+        [](const PrintObject *object) { return half_layer_features_enabled(*object); });
+    m_half_layer_execution_enabled = enabled;
+    if (!enabled) {
+        for (LayerTools &tools : m_layer_tools)
+            tools.half_layer_frame_index = size_t(-1);
+        m_half_layer_execution_plan.reset();
+        return;
+    }
+
+    auto print_plan = std::make_shared<HalfLayerPrintExecutionPlan>();
+    struct SupportAssignment {
+        const PrintObject *object;
+        const Layer *event;
+        const SupportLayer *physical;
+    };
+    struct ModelAssignment {
+        const PrintObject *object;
+        size_t parent_index;
+    };
+    std::vector<std::vector<SupportAssignment>> support_by_frame(m_layer_tools.size());
+    std::vector<std::vector<ModelAssignment>> model_by_frame(m_layer_tools.size());
+    for (const PrintObject *object : print.objects()) {
+        for (const SupportLayer *event : support_event_layers(*object)) {
+            if (const auto *half_event = dynamic_cast<const HalfLayerSupportEvent *>(event)) {
+                for (const SupportLayer *physical : half_event->physical_layers) {
+                    if (physical == nullptr)
+                        continue;
+                    const size_t frame_index = size_t(&tools_for_deadline(physical->print_z) - m_layer_tools.data());
+                    support_by_frame[frame_index].push_back({object, event, physical});
+                }
+            } else {
+                const size_t frame_index = size_t(&tools_for_layer(event->print_z) - m_layer_tools.data());
+                support_by_frame[frame_index].push_back({object, event, nullptr});
+            }
+        }
+        for (size_t parent_index = 0; parent_index < object->layers().size(); ++parent_index) {
+            const size_t frame_index = size_t(&tools_for_layer(object->layers()[parent_index]->print_z) - m_layer_tools.data());
+            model_by_frame[frame_index].push_back({object, parent_index});
+        }
+    }
+    unsigned int incoming = m_first_printing_extruder == unsigned(-1) ? 0 : m_first_printing_extruder;
+    for (const LayerTools &tools : m_layer_tools)
+        if (!tools.extruders.empty()) {
+            incoming = tools.extruders.front();
+            break;
+        }
+    HalfLayerWipeIntoContext wipe_context = half_layer_wipe_into_context(print.config(), incoming);
+    for (size_t frame_index = 0; frame_index < m_layer_tools.size(); ++frame_index) {
+        LayerTools &tools = m_layer_tools[frame_index];
+        std::vector<HalfLayerExecutionTask> prefix, lower, core, upper;
+        for (const SupportAssignment &assignment : support_by_frame[frame_index])
+            for (size_t instance_id = 0; instance_id < assignment.object->instances().size(); ++instance_id)
+                append_half_layer_support_tasks(*assignment.object, *assignment.event, tools, instance_id,
+                    incoming, prefix, assignment.physical);
+        for (const ModelAssignment &assignment : model_by_frame[frame_index])
+            for (size_t instance_id = 0; instance_id < assignment.object->instances().size(); ++instance_id)
+                append_half_layer_model_tasks(*assignment.object, assignment.parent_index, tools, instance_id,
+                    lower, core, upper);
+        finalize_half_layer_frame(tools, *print_plan, incoming, wipe_context, std::move(prefix), std::move(lower),
+            std::move(core), std::move(upper));
+        const HalfLayerExecutionFrame *frame = tools.half_layer_frame_index == size_t(-1) ? nullptr :
+            &print_plan->frames[tools.half_layer_frame_index];
+        if (frame != nullptr && !frame->plan.visits.empty())
+            incoming = frame->plan.visits.back().tool.filament;
+        else if (!tools.extruders.empty())
+            incoming = tools.extruders.back();
+    }
+    if (!print_plan->valid())
+        throw std::logic_error("Invalid half-layer print execution plan");
+    m_half_layer_execution_plan = print_plan;
+    if (this == &m_print->m_tool_ordering)
+        m_print->m_half_layer_execution_plan = std::move(print_plan);
+}
+
+void ToolOrdering::build_half_layer_execution(const PrintObject &object)
+{
+    const bool enabled = half_layer_features_enabled(object);
+    m_half_layer_execution_enabled = enabled;
+    if (!enabled) {
+        for (LayerTools &tools : m_layer_tools)
+            tools.half_layer_frame_index = size_t(-1);
+        m_half_layer_execution_plan.reset();
+        return;
+    }
+    auto print_plan = std::make_shared<HalfLayerPrintExecutionPlan>();
+    struct SupportAssignment {
+        const Layer *event;
+        const SupportLayer *physical;
+    };
+    std::vector<std::vector<SupportAssignment>> support_by_frame(m_layer_tools.size());
+    std::vector<std::vector<size_t>> model_by_frame(m_layer_tools.size());
+    for (const SupportLayer *event : support_event_layers(object)) {
+        if (const auto *half_event = dynamic_cast<const HalfLayerSupportEvent *>(event)) {
+            for (const SupportLayer *physical : half_event->physical_layers) {
+                if (physical == nullptr)
+                    continue;
+                const size_t frame_index = size_t(&tools_for_deadline(physical->print_z) - m_layer_tools.data());
+                support_by_frame[frame_index].push_back({event, physical});
+            }
+        } else {
+            const size_t frame_index = size_t(&tools_for_layer(event->print_z) - m_layer_tools.data());
+            support_by_frame[frame_index].push_back({event, nullptr});
+        }
+    }
+    for (size_t parent_index = 0; parent_index < object.layers().size(); ++parent_index) {
+        const size_t frame_index = size_t(&tools_for_layer(object.layers()[parent_index]->print_z) - m_layer_tools.data());
+        model_by_frame[frame_index].push_back(parent_index);
+    }
+    const size_t first_instance = m_instance_id == size_t(-1) ? 0 : m_instance_id;
+    const size_t end_instance = m_instance_id == size_t(-1) ? object.instances().size() : m_instance_id + 1;
+    unsigned int incoming = m_first_printing_extruder == unsigned(-1) ? 0 : m_first_printing_extruder;
+    for (const LayerTools &tools : m_layer_tools)
+        if (!tools.extruders.empty()) {
+            incoming = tools.extruders.front();
+            break;
+        }
+    HalfLayerWipeIntoContext wipe_context = half_layer_wipe_into_context(object.print()->config(), incoming);
+    for (size_t frame_index = 0; frame_index < m_layer_tools.size(); ++frame_index) {
+        LayerTools &tools = m_layer_tools[frame_index];
+        std::vector<HalfLayerExecutionTask> prefix, lower, core, upper;
+        for (const SupportAssignment &assignment : support_by_frame[frame_index])
+            for (size_t instance_id = first_instance; instance_id < end_instance; ++instance_id)
+                append_half_layer_support_tasks(object, *assignment.event, tools, instance_id, incoming,
+                    prefix, assignment.physical);
+        for (size_t parent_index : model_by_frame[frame_index])
+            for (size_t instance_id = first_instance; instance_id < end_instance; ++instance_id)
+                append_half_layer_model_tasks(object, parent_index, tools, instance_id, lower, core, upper);
+        finalize_half_layer_frame(tools, *print_plan, incoming, wipe_context, std::move(prefix), std::move(lower),
+            std::move(core), std::move(upper));
+        const HalfLayerExecutionFrame *frame = tools.half_layer_frame_index == size_t(-1) ? nullptr :
+            &print_plan->frames[tools.half_layer_frame_index];
+        if (frame != nullptr && !frame->plan.visits.empty())
+            incoming = frame->plan.visits.back().tool.filament;
+        else if (!tools.extruders.empty())
+            incoming = tools.extruders.back();
+    }
+    if (!print_plan->valid())
+        throw std::logic_error("Invalid half-layer object execution plan");
+    m_half_layer_execution_plan = print_plan;
+    if (this == &m_print->m_tool_ordering)
+        m_print->m_half_layer_execution_plan = std::move(print_plan);
+}
+
+const HalfLayerExecutionFrame* ToolOrdering::execution_frame(const LayerTools &tools) const
+{
+    if (!m_half_layer_execution_plan) {
+        if (m_half_layer_execution_enabled)
+            throw std::logic_error("Half-layer execution plan is invalidated or not ready");
+        return nullptr;
+    }
+    if (tools.half_layer_frame_index == size_t(-1))
+        return nullptr;
+    if (tools.half_layer_frame_index >= m_half_layer_execution_plan->frames.size())
+        throw std::logic_error("Half-layer execution frame index is out of range");
+    const HalfLayerExecutionFrame &frame = m_half_layer_execution_plan->frames[tools.half_layer_frame_index];
+    if (std::abs(frame.print_z - tools.print_z) >= EPSILON)
+        throw std::logic_error("Stale half-layer execution frame index");
+    return &frame;
+}
+
+std::vector<unsigned int> ToolOrdering::execution_filaments(const LayerTools &tools) const
+{
+    const HalfLayerExecutionFrame *frame = execution_frame(tools);
+    if (frame == nullptr)
+        return tools.extruders;
+    std::vector<unsigned int> out;
+    out.reserve(frame->plan.visits.size());
+    for (const HalfLayerExecutionVisit &visit : frame->plan.visits)
+        out.push_back(visit.tool.filament);
+    return out;
 }
 
 
 // For the use case when each object is printed separately
 // (print->config().print_sequence == PrintSequence::ByObject is true).
-ToolOrdering::ToolOrdering(const PrintObject &object, unsigned int first_extruder, bool prime_multi_material)
+ToolOrdering::ToolOrdering(const PrintObject &object, unsigned int first_extruder, bool prime_multi_material,
+                           size_t instance_id)
 {
     m_print_full_config = &object.print()->full_print_config();
     m_print_object_ptr = &object;
+    m_instance_id = instance_id;
+    if (m_instance_id != size_t(-1) && m_instance_id >= object.instances().size())
+        throw std::out_of_range("ToolOrdering instance scope is outside the PrintObject");
+    if (object.config().outer_wall_half_layer_height || object.config().support_half_layer_height)
+        m_print_config_ptr = &object.print()->config();
     m_print = const_cast<Print*>(object.print());
     if (object.layers().empty())
         return;
@@ -487,7 +782,7 @@ ToolOrdering::ToolOrdering(const PrintObject &object, unsigned int first_extrude
         zs.reserve(zs.size() + object.layers().size() + object.support_layers().size());
         for (auto layer : object.layers())
             zs.emplace_back(layer->print_z);
-        for (auto layer : object.support_layers())
+        for (auto layer : support_event_layers(object))
             zs.emplace_back(layer->print_z);
         this->initialize_layers(zs);
     }
@@ -531,7 +826,7 @@ ToolOrdering::ToolOrdering(const Print &print, unsigned int first_extruder, bool
             zs.reserve(zs.size() + object->layers().size() + object->support_layers().size());
             for (auto layer : object->layers())
                 zs.emplace_back(layer->print_z);
-            for (auto layer : object->support_layers())
+            for (auto layer : support_event_layers(*object))
                 zs.emplace_back(layer->print_z);
 
             max_layer_height = std::max(max_layer_height, object->config().layer_height.value);
@@ -742,6 +1037,14 @@ void ToolOrdering::initialize_layers(std::vector<coordf_t> &zs)
     }
 }
 
+LayerTools& ToolOrdering::tools_for_deadline(coordf_t physical_print_z)
+{
+    auto it = std::lower_bound(m_layer_tools.begin(), m_layer_tools.end(), LayerTools(physical_print_z - EPSILON));
+    if (it == m_layer_tools.end())
+        throw std::logic_error("Half-layer physical support exceeds the execution event grid");
+    return *it;
+}
+
 // Collect extruders reuqired to print layers.
 void ToolOrdering::collect_extruders(const PrintObject &object, const std::vector<std::pair<double, unsigned int>> &per_layer_extruder_switches)
 {
@@ -755,6 +1058,7 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
     std::vector<int> firstLayerExtruders;
     firstLayerExtruders.clear();
 
+    const HalfLayerSourceLayers *half_sources = object.half_layer_sources();
     // Collect the object extruders.
     for (auto layer : object.layers()) {
         LayerTools &layer_tools = this->tools_for_layer(layer->print_z);
@@ -767,8 +1071,10 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
         // Store the current extruder override (set to zero if no overriden), so that layer_tools.wiping_extrusions().is_overridable_and_mark() will use it.
         layer_tools.extruder_override = extruder_override;
 
-        // What extruders are required to print this object layer?
-        for (const LayerRegion *layerm : layer->regions()) {
+        // Physical shell layers share this logical layer's override and tool
+        // inventory. Reuse the normal role/tool-hint/wiping classification.
+        const auto collect_geometry = [&](const Layer *geometry) {
+        for (const LayerRegion *layerm : geometry->regions()) {
             const PrintRegion &region = layerm->region();
 
             if (! layerm->perimeters.entities.empty()) {
@@ -843,7 +1149,7 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                     has_top_solid_surface = true;
                 else if (role == erBottomSurface)
                     has_bottom_surface = true;
-                else if (is_solid_infill(role))
+                else if (is_solid_infill(role) || (half_sources != nullptr && role == erGapFill))
                     has_internal_solid = true;
                 else if (role != erNone)
                     has_infill = true;
@@ -870,25 +1176,47 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
             if (has_internal_solid || has_top_solid_surface || has_bottom_surface || has_infill)
                 layer_tools.has_object = true;
         }
+        };
+        collect_geometry(layer);
+        if (half_sources)
+            for (unsigned phase = 0; phase < 2; ++phase)
+                collect_geometry(half_sources->phases[phase].at(size_t(layerCount)).get());
         layerCount++;
     }
 
     sort_remove_duplicates(firstLayerExtruders);
     const_cast<PrintObject&>(object).object_first_layer_wall_extruders = firstLayerExtruders;
 
-    // Collect the support extruders.
-    for (auto support_layer : object.support_layers()) {
-        LayerTools   &layer_tools   = this->tools_for_layer(support_layer->print_z);
+    // Collect support inventory at each physical band's execution deadline,
+    // while retaining its original logical event as source identity.
+    for (auto support_layer : support_event_layers(object)) {
+        std::vector<const SupportLayer *> physical_layers;
+        if (const auto *event = dynamic_cast<const HalfLayerSupportEvent *>(support_layer))
+            physical_layers = event->physical_layers;
+        else
+            physical_layers.push_back(support_layer);
+        for (const SupportLayer *physical_layer : physical_layers) {
+        if (physical_layer == nullptr)
+            continue;
+        LayerTools &layer_tools = dynamic_cast<const HalfLayerSupportEvent *>(support_layer) != nullptr ?
+            this->tools_for_deadline(physical_layer->print_z) : this->tools_for_layer(support_layer->print_z);
         layer_tools.print_config = m_print_config_ptr;
-        ExtrusionRole role          = support_layer->support_fills.role();
+        ExtrusionRole role          = physical_layer->support_fills.role();
         bool          has_support   = false;
         bool          has_interface = false;
-        for (const ExtrusionEntity *ee : support_layer->support_fills.entities) {
-            ExtrusionRole er = ee->role();
-            if (er == erSupportMaterial || er == erSupportTransition) has_support = true;
-            if (er == erSupportMaterialInterface || er == erSupportMaterialInterfaceSublayer) has_interface = true;
-            if (has_support && has_interface) break;
-        }
+        auto inspect = [&](auto &&self, const ExtrusionEntity &entity) -> void {
+            if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+                for (const auto *child : collection->entities)
+                    if (child != nullptr)
+                        self(self, *child);
+            } else {
+                const auto er = entity.role();
+                has_support |= er == erSupportMaterial || er == erSupportTransition;
+                has_interface |= er == erSupportMaterialInterface || er == erSupportMaterialInterfaceSublayer || er == erIroning;
+            }
+        };
+        inspect(inspect, physical_layer->support_fills);
+        role = has_support && has_interface ? erMixed : has_interface ? erSupportMaterialInterface : erSupportMaterial;
         unsigned int extruder_support   = object.config().support_filament.value;
         unsigned int extruder_interface = object.config().support_interface_filament.value;
         if (has_support) {
@@ -924,6 +1252,7 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
             layer_tools.has_support = true;
             layer_tools.wiping_extrusions().is_support_overriddable_and_mark(role, object);
         }
+        }
     }
 
     for (auto& layer : m_layer_tools) {
@@ -945,12 +1274,13 @@ void ToolOrdering::fill_wipe_tower_partitions(const PrintConfig &config, coordf_
     // Count the minimum number of tool changes per layer.
     size_t last_extruder = size_t(-1);
     for (LayerTools &lt : m_layer_tools) {
-        lt.wipe_tower_partitions = lt.extruders.size();
-        if (! lt.extruders.empty()) {
-            if (last_extruder == size_t(-1) || last_extruder == lt.extruders.front())
+        const std::vector<unsigned int> sequence = execution_filaments(lt);
+        lt.wipe_tower_partitions = sequence.size();
+        if (! sequence.empty()) {
+            if (last_extruder == size_t(-1) || last_extruder == sequence.front())
                 // The first extruder on this layer is equal to the current one, no need to do an initial tool change.
                 -- lt.wipe_tower_partitions;
-            last_extruder = lt.extruders.back();
+            last_extruder = sequence.back();
         }
     }
 
@@ -1018,9 +1348,11 @@ void ToolOrdering::fill_wipe_tower_partitions(const PrintConfig &config, coordf_
     for (unsigned int i=0; i+1<m_layer_tools.size(); ++i) {
         LayerTools& lt = m_layer_tools[i];
         LayerTools& lt_next = m_layer_tools[i+1];
-        if (lt.extruders.empty() || lt_next.extruders.empty())
+        const std::vector<unsigned int> sequence = execution_filaments(lt);
+        const std::vector<unsigned int> next_sequence = execution_filaments(lt_next);
+        if (sequence.empty() || next_sequence.empty())
             break;
-        if (!lt_next.has_wipe_tower && (lt_next.extruders.front() != lt.extruders.back() || lt_next.extruders.size() > 1))
+        if (!lt_next.has_wipe_tower && (next_sequence.front() != sequence.back() || next_sequence.size() > 1))
             lt_next.has_wipe_tower = true;
         // We should also check that the next wipe tower layer is no further than max_layer_height:
         unsigned int j = i+1;
@@ -1045,18 +1377,22 @@ void ToolOrdering::fill_wipe_tower_partitions(const PrintConfig &config, coordf_
 void ToolOrdering::collect_extruder_statistics(bool prime_multi_material)
 {
     m_first_printing_extruder = (unsigned int)-1;
-    for (const auto &lt : m_layer_tools)
-        if (! lt.extruders.empty()) {
-            m_first_printing_extruder = lt.extruders.front();
+    for (const auto &lt : m_layer_tools) {
+        const std::vector<unsigned int> sequence = execution_filaments(lt);
+        if (! sequence.empty()) {
+            m_first_printing_extruder = sequence.front();
             break;
         }
+    }
 
     m_last_printing_extruder = (unsigned int)-1;
-    for (auto lt_it = m_layer_tools.rbegin(); lt_it != m_layer_tools.rend(); ++ lt_it)
-        if (! lt_it->extruders.empty()) {
-            m_last_printing_extruder = lt_it->extruders.back();
+    for (auto lt_it = m_layer_tools.rbegin(); lt_it != m_layer_tools.rend(); ++ lt_it) {
+        const std::vector<unsigned int> sequence = execution_filaments(*lt_it);
+        if (! sequence.empty()) {
+            m_last_printing_extruder = sequence.back();
             break;
         }
+    }
 
     m_all_printing_extruders.clear();
     for (const auto &lt : m_layer_tools) {

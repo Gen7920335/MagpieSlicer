@@ -88,10 +88,19 @@ public:
     std::string eager_lift(const LiftType type);
     // record a lift request, do realy lift in next travel
     std::string lazy_lift(LiftType lift_type = LiftType::NormalLift, bool spiral_vase = false);
+    // Raise vertically before XY travel regardless of retraction. The next
+    // travel uses target_nominal_z_mm without force_z, then unlift normally.
+    // Existing clearance is retained, never added a second time.
+    std::string ensure_travel_clearance(double target_nominal_z_mm, double minimum_lift_mm);
+    // Same contract with an explicit, previously printed source plane. This is
+    // used after custom G-code, whose position bookkeeping may not retain it.
+    std::string ensure_travel_clearance(double source_nominal_z_mm, double target_nominal_z_mm,
+                                        double minimum_lift_mm);
     std::string unlift();
     const Vec3d& get_position() const { return m_pos; }
     Vec3d&       get_position() { return m_pos; }
     void        set_position(const Vec3d& in) { m_pos = in; }
+    void        set_position_with_nominal_z(const Vec3d &in, double nominal_z_mm);
     double      get_zhop() const { return m_lifted; }
 
     //BBS: set offset for gcode writer

@@ -7,6 +7,8 @@
 #include "Exception.hpp"
 #include "I18N.hpp"
 #include "Layer.hpp"
+#include "HalfLayerPlan.hpp"
+#include "HalfLayerSources.hpp"
 #include "MultiMaterialSegmentation.hpp"
 #include "Print.hpp"
 //BBS
@@ -807,6 +809,108 @@ void groupingVolumesForBrim(PrintObject* object, LayerPtrs& layers, int firstLay
 }
 
 // Called by make_perimeters()
+// A scoped view lets the existing modifier, painting and XY compensation stages
+// operate on a detached grid without duplicating their implementations. The
+// caller serializes this operation before parallel perimeter generation.
+class ScopedHalfLayerGrid {
+public:
+    enum class Ownership { Owned, Borrowed };
+    ScopedHalfLayerGrid(LayerPtrs &active, std::vector<VolumeSlices> &first_layer_cache,
+                        Ownership ownership = Ownership::Owned)
+        : m_active(active), m_first_layer_cache(first_layer_cache), m_ownership(ownership)
+    {
+        m_original_layers.swap(m_active);
+        m_original_cache.swap(m_first_layer_cache);
+    }
+    ~ScopedHalfLayerGrid()
+    {
+        if (m_ownership == Ownership::Owned)
+            for (Layer *layer : m_active)
+                HalfLayerSourceDeleter{}(layer);
+        m_active.clear();
+        m_original_layers.swap(m_active);
+        m_original_cache.swap(m_first_layer_cache);
+    }
+    ScopedHalfLayerGrid(const ScopedHalfLayerGrid &) = delete;
+    ScopedHalfLayerGrid &operator=(const ScopedHalfLayerGrid &) = delete;
+    const LayerPtrs &original_layers() const { return m_original_layers; }
+private:
+    LayerPtrs &m_active;
+    std::vector<VolumeSlices> &m_first_layer_cache;
+    Ownership m_ownership;
+    LayerPtrs m_original_layers;
+    std::vector<VolumeSlices> m_original_cache;
+};
+
+HalfLayerSourceLayers PrintObject::make_half_layer_source_layers()
+{
+    this->slice();
+    HalfLayerSourceLayers result;
+    const double model_to_print_z_mm = m_slicing_params.object_print_z_min;
+    for (unsigned phase = 0; phase < result.phases.size(); ++phase) {
+        ScopedHalfLayerGrid grid(m_layers, firstLayerObjSliceByVolume);
+        m_layers.reserve(grid.original_layers().size());
+        Layer *previous = nullptr;
+        size_t parent_index = 0;
+        for (const Layer *parent : grid.original_layers()) {
+            m_print->throw_if_canceled();
+            const auto bands = split_model_layer_half(parent->id(), parent->bottom_z(), parent->print_z);
+            const HalfLayerBand &band = bands[phase];
+            // Preserve the existing slicing-plane policy (including Z contouring
+            // and the first-layer exception), applied to the actual half band.
+            const double sample_z_mm = compute_slice_z(this, 2 * parent_index,
+                band.bottom_z_mm - model_to_print_z_mm, band.print_z_mm - model_to_print_z_mm);
+            Layer *layer = new Layer(parent->id(), this, band.height_mm(), band.print_z_mm, sample_z_mm);
+            m_layers.push_back(layer); // Capacity reserved before allocating any Layer.
+            if (previous != nullptr) {
+                previous->upper_layer = layer;
+                layer->lower_layer = previous;
+            }
+            previous = layer;
+            ++parent_index;
+        }
+        this->slice_volumes();
+        auto &destination = result.phases[phase];
+        destination.reserve(m_layers.size());
+        for (Layer *&layer : m_layers) {
+            destination.emplace_back(layer);
+            layer = nullptr;
+        }
+        m_layers.clear();
+    }
+    {
+        // Same-phase grids have a half-height gap. Hole continuity must instead
+        // see both phases in physical Z order; ownership stays in result.
+        ScopedHalfLayerGrid grid(m_layers, firstLayerObjSliceByVolume, ScopedHalfLayerGrid::Ownership::Borrowed);
+        std::vector<size_t> parent_indices;
+        m_layers.reserve(result.phases[0].size() + result.phases[1].size());
+        parent_indices.reserve(m_layers.capacity());
+        for (size_t i = 0; i < grid.original_layers().size(); ++i) {
+            for (unsigned phase = 0; phase < result.phases.size(); ++phase) {
+                if (i < result.phases[phase].size()) {
+                    Layer *layer = result.phases[phase][i].get();
+                    layer->lower_layer = m_layers.empty() ? nullptr : m_layers.back();
+                    layer->upper_layer = nullptr;
+                    if (layer->lower_layer != nullptr)
+                        layer->lower_layer->upper_layer = layer;
+                    m_layers.push_back(layer);
+                    parent_indices.push_back(i);
+                }
+            }
+        }
+        this->_transform_hole_to_polyholes(&parent_indices);
+        for (Layer *layer : m_layers) {
+            m_print->throw_if_canceled();
+            layer->lslices_bboxes.clear();
+            layer->lslices_bboxes.reserve(layer->lslices.size());
+            for (const ExPolygon &polygon : layer->lslices)
+                layer->lslices_bboxes.emplace_back(get_extents(polygon));
+            layer->backup_untyped_slices();
+        }
+    }
+    return result;
+}
+
 // 1) Decides Z positions of the layers,
 // 2) Initializes layers and their regions
 // 3) Slices the object meshes
@@ -1202,6 +1306,11 @@ void PrintObject::slice_volumes()
     if (! m_layers.empty())
         m_layers.back()->upper_layer = nullptr;
     m_print->throw_if_canceled();
+
+    // An upper half-grid may be entirely above a thin model. There is no
+    // geometry to project or interlock; painting expects a nonempty Z grid.
+    if (m_layers.empty())
+        return;
 
     this->apply_conical_overhang();
 

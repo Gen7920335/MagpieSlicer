@@ -3,6 +3,7 @@
 #include "ClipperUtils.hpp"
 #include "Geometry.hpp"
 #include "PerimeterGenerator.hpp"
+#include "HalfLayerWalls.hpp"
 #include "Point.hpp"
 #include "Print.hpp"
 #include "Surface.hpp"
@@ -29,11 +30,11 @@ Flow LayerRegion::flow(FlowRole role, double layer_height) const
     return m_region->flow(*m_layer->object(), role, layer_height, m_layer->id() == 0);
 }
 
-Flow LayerRegion::bridging_flow(FlowRole role, bool thick_bridge) const
+static Flow region_bridging_flow(const LayerRegion &source, FlowRole role, bool thick_bridge, double height_mm)
 {
-    const PrintRegion       &region         = this->region();
+    const PrintRegion       &region         = source.region();
     const PrintRegionConfig &region_config  = region.config();
-    const PrintObject       &print_object   = *this->layer()->object();
+    const PrintObject       &print_object   = *source.layer()->object();
     Flow bridge_flow;
     // Here this->extruder(role) - 1 may underflow to MAX_INT, but then the get_at() will fall back to zero'th element, so everything is all right.
     const PrintConfig &print_config = print_object.print()->config();
@@ -57,13 +58,18 @@ Flow LayerRegion::bridging_flow(FlowRole role, bool thick_bridge) const
         bridge_flow = Flow::bridging_flow(thread_diameter, nozzle_diameter);
     } else {
         // The same way as other slicers: Use normal extrusions. Apply bridge_flow while maintaining the original spacing.
-        Flow base_flow = this->flow(role);
+        Flow base_flow = source.flow(role, height_mm);
         if (has_bridge_width)
             base_flow = Flow(float(bridge_width), base_flow.height(), nozzle_diameter);
         bridge_flow = base_flow.with_flow_ratio(bridge_flow_ratio);
     }
     return bridge_flow;
 
+}
+
+Flow LayerRegion::bridging_flow(FlowRole role, bool thick_bridge) const
+{
+    return region_bridging_flow(*this, role, thick_bridge, this->layer()->height);
 }
 
 // Fill in layerm->fill_surfaces by trimming the layerm->slices by the cummulative layerm->fill_surfaces.
@@ -86,44 +92,50 @@ void LayerRegion::slices_to_fill_surfaces_clipped()
     }
 }
 
-void LayerRegion::make_perimeters(const SurfaceCollection &slices, const LayerRegionPtrs &compatible_regions, SurfaceCollection* fill_surfaces, ExPolygons* fill_no_overlap)
+static void make_region_perimeters(const LayerRegion &source,
+    const SurfaceCollection &slices, const LayerRegionPtrs &compatible_regions,
+    ExtrusionEntityCollection &perimeters, ExtrusionEntityCollection &thin_fills,
+    SurfaceCollection *fill_surfaces, ExPolygons *fill_no_overlap,
+    double parent_height_mm, bool half_layer_outer_walls,
+    std::vector<PerimeterGapDemand> *gap_demands = nullptr)
 {
-    this->perimeters.clear();
-    this->thin_fills.clear();
+    perimeters.clear();
+    thin_fills.clear();
 
-    const PrintConfig       &print_config  = this->layer()->object()->print()->config();
-    const PrintRegionConfig &region_config = this->region().config();
-    const PrintObjectConfig& object_config = this->layer()->object()->config();
+    const Layer &layer = *source.layer();
+    const PrintConfig       &print_config  = layer.object()->print()->config();
+    const PrintRegionConfig &region_config = source.region().config();
+    const PrintObjectConfig& object_config = layer.object()->config();
     // This needs to be in sync with PrintObject::_slice() slicing_mode_normal_below_layer!
     bool spiral_mode = print_config.spiral_mode &&
         //FIXME account for raft layers.
-        (this->layer()->id() >= size_t(region_config.bottom_shell_layers.value) &&
-         this->layer()->print_z >= region_config.bottom_shell_thickness - EPSILON);
+        (layer.id() >= size_t(region_config.bottom_shell_layers.value) &&
+         layer.print_z >= region_config.bottom_shell_thickness - EPSILON);
 
     const unsigned int base_wall_filament = region_config.outer_wall_filament_id.value > 0 ?
         unsigned(region_config.outer_wall_filament_id.value) : 1u;
     const ResolvedWallTool override_tool = large_nozzle_override_wall_tool(
-        print_config, region_config, this->layer()->id(), base_wall_filament);
-    Flow perimeter_flow = this->flow(frPerimeter);
-    Flow external_perimeter_flow = this->flow(frExternalPerimeter);
+        print_config, region_config, layer.id(), base_wall_filament);
+    Flow perimeter_flow = source.flow(frPerimeter, parent_height_mm);
+    Flow external_perimeter_flow = source.flow(frExternalPerimeter, parent_height_mm);
     if (override_tool) {
         const float nozzle = float(override_tool.nozzle_diameter);
-        const bool first_layer = this->layer()->id() == 0;
+        const bool first_layer = layer.id() == 0;
         perimeter_flow = Flow::new_from_config_width(
             frPerimeter,
             toolhead_line_width_or(print_config, frPerimeter, int(override_tool.hotend_id_1based), first_layer, region_config.inner_wall_line_width),
             nozzle,
-            float(this->layer()->height));
+            float(parent_height_mm));
         external_perimeter_flow = Flow::new_from_config_width(
             frExternalPerimeter,
             toolhead_line_width_or(print_config, frExternalPerimeter, int(override_tool.hotend_id_1based), first_layer, region_config.outer_wall_line_width),
             nozzle,
-            float(this->layer()->height));
+            float(parent_height_mm));
     }
 
     double model_rotation_rad = 0.0;
     if (region_config.align_infill_direction_to_model) {
-        auto m = this->layer()->object()->trafo().matrix();
+        auto m = layer.object()->trafo().matrix();
         model_rotation_rad = std::atan2((double)m(1, 0), (double)m(0, 0));
     }
 
@@ -131,41 +143,438 @@ void LayerRegion::make_perimeters(const SurfaceCollection &slices, const LayerRe
         // input:
         &slices,
         &compatible_regions,
-        this->layer()->height,
-        this->layer()->slice_z,
+        parent_height_mm,
+        layer.slice_z,
         perimeter_flow,
         &region_config,
-        &this->layer()->object()->config(),
+        &object_config,
         &print_config,
         spiral_mode,
         model_rotation_rad,
         
         // output:
-        &this->perimeters,
-        &this->thin_fills,
+        &perimeters,
+        &thin_fills,
         fill_surfaces,
         //BBS
         fill_no_overlap
     );
     
-    if (this->layer()->lower_layer != nullptr)
+    if (layer.lower_layer != nullptr)
         // Cummulative sum of polygons over all the regions.
-        g.lower_slices = &this->layer()->lower_layer->lslices;
-    if (this->layer()->upper_layer != NULL)
-        g.upper_slices = &this->layer()->upper_layer->lslices;
+        g.lower_slices = &layer.lower_layer->lslices;
+    if (layer.upper_layer != NULL)
+        g.upper_slices = &layer.upper_layer->lslices;
 
-    int region_id = this->region().print_object_region_id();
-    if (this->layer()->upper_layer != NULL)
-        g.upper_slices_same_region = &this->layer()->upper_layer->get_region(region_id)->slices;
+    int region_id = source.region().print_object_region_id();
+    if (layer.upper_layer != NULL)
+        g.upper_slices_same_region = &layer.upper_layer->get_region(region_id)->slices;
 
-    g.layer_id              = (int)this->layer()->id();
+    g.layer_id              = (int)layer.id();
+    g.half_layer_outer_walls = half_layer_outer_walls;
+    g.gap_demands           = gap_demands;
     g.ext_perimeter_flow    = external_perimeter_flow;
-    g.overhang_flow         = this->bridging_flow(frPerimeter, object_config.thick_bridges);
-    g.solid_infill_flow     = this->flow(frSolidInfill);
-    if (this->layer()->object()->config().wall_generator.value == PerimeterGeneratorType::Arachne && !spiral_mode)
+    g.overhang_flow         = region_bridging_flow(source, frPerimeter, object_config.thick_bridges, parent_height_mm);
+    g.solid_infill_flow     = source.flow(frSolidInfill, parent_height_mm);
+    if (object_config.wall_generator.value == PerimeterGeneratorType::Arachne && !spiral_mode)
         g.process_arachne();
     else
         g.process_classic();
+}
+
+void LayerRegion::make_perimeters(const SurfaceCollection &slices, const LayerRegionPtrs &compatible_regions, SurfaceCollection* fill_surfaces, ExPolygons* fill_no_overlap)
+{
+    make_region_perimeters(*this, slices, compatible_regions, perimeters, thin_fills,
+        fill_surfaces, fill_no_overlap, layer()->height, false);
+}
+
+HalfLayerWallGeometry make_half_layer_wall_geometry(const LayerRegion &source,
+    const SurfaceCollection &slices, const LayerRegionPtrs &compatible_regions, double parent_height_mm)
+{
+    if (!std::isfinite(parent_height_mm) || parent_height_mm <= 0.)
+        throw std::invalid_argument("Half-layer wall parent height must be positive and finite");
+    // Spiral output has continuous Z and cannot be divided into discrete wall
+    // events. Do not silently produce an invalid detached plan.
+    if (source.layer()->object()->print()->config().spiral_mode)
+        throw std::invalid_argument("Half-layer walls require discrete layers, not spiral mode");
+    HalfLayerWallGeometry result;
+    make_region_perimeters(source, slices, compatible_regions, result.perimeters, result.thin_fills,
+        &result.fill_surfaces, &result.fill_no_overlap, parent_height_mm, true, &result.gap_demands);
+    return result;
+}
+
+std::unique_ptr<ExtrusionEntityCollection> select_half_layer_wall_group(
+    const ExtrusionEntityCollection &perimeters, HalfLayerWallGroup group)
+{
+    auto result = std::make_unique<ExtrusionEntityCollection>();
+    result->no_sort = perimeters.no_sort;
+    if (!perimeters.can_reverse())
+        result->set_reverse();
+    result->inset_idx = perimeters.inset_idx;
+    result->tool_hint = perimeters.tool_hint;
+    result->entities.reserve(perimeters.entities.size());
+    for (const ExtrusionEntity *entity : perimeters.entities) {
+        std::unique_ptr<ExtrusionEntity> selected;
+        if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(entity)) {
+            auto children = select_half_layer_wall_group(*collection, group);
+            if (!children->empty())
+                selected = std::move(children);
+        } else {
+            if (entity->inset_idx < 0)
+                throw std::invalid_argument("Half-layer wall selection requires a known XY inset identity");
+            const bool is_shell = entity->inset_idx < 2;
+            if (is_shell == (group == HalfLayerWallGroup::Shell))
+                selected.reset(entity->clone());
+        }
+        if (selected) {
+            result->entities.push_back(selected.get());
+            selected.release();
+        }
+    }
+    return result;
+}
+
+static bool gaps_have_height(const ExtrusionEntity &entity, double height_mm)
+{
+    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity))
+        return std::all_of(collection->entities.begin(), collection->entities.end(),
+            [height_mm](const ExtrusionEntity *child) { return gaps_have_height(*child, height_mm); });
+    const auto same_height = [height_mm](const ExtrusionPath &path) {
+        // Physical path height tolerance, mm (one geometry coordinate).
+        constexpr double path_height_tolerance_mm = 0.000001;
+        return path.role() == erGapFill && std::isfinite(path.height) &&
+            std::abs(path.height - height_mm) <= path_height_tolerance_mm;
+    };
+    if (const auto *path = dynamic_cast<const ExtrusionPath *>(&entity))
+        return same_height(*path);
+    if (const auto *paths = dynamic_cast<const ExtrusionMultiPath *>(&entity))
+        return std::all_of(paths->paths.begin(), paths->paths.end(), same_height);
+    if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(&entity))
+        return std::all_of(loop->paths.begin(), loop->paths.end(), same_height);
+    return false;
+}
+
+static std::optional<HalfLayerGapFill> assign_shell_only_half_layer_gaps(
+    const HalfLayerRegionWallCandidate &candidate, HalfLayerGapOwnership &ownership)
+{
+    if (candidate.unassigned_core_gap_fill.empty() && candidate.unassigned_phase_gap_fill[0].empty() &&
+        candidate.unassigned_phase_gap_fill[1].empty()) {
+        ownership = HalfLayerGapOwnership::NoGaps;
+        return HalfLayerGapFill{};
+    }
+
+    // A coupled outline is only a construction input. With no selected inner
+    // wall or interior fill domain, it owns no physical deposition. The real
+    // source sections own their shell gaps, once in each physical H/2 band.
+    // Never extend this rule to mixed shell/core islands: their joint gap
+    // demand must be regenerated against the selected, not placeholder, core.
+    if (!candidate.core->empty() || !candidate.core_fill_surfaces.empty() || !candidate.core_fill_no_overlap.empty()) {
+        ownership = HalfLayerGapOwnership::NeedsJointCore;
+        return std::nullopt;
+    }
+    HalfLayerGapFill result;
+    for (unsigned phase = 0; phase < 2; ++phase) {
+        const auto &gaps = candidate.unassigned_phase_gap_fill[phase];
+        if (!gaps_have_height(gaps, candidate.bands[phase].height_mm())) {
+            ownership = HalfLayerGapOwnership::IncompatiblePhaseHeight;
+            return std::nullopt;
+        }
+        result.phases[phase] = gaps;
+    }
+    ownership = HalfLayerGapOwnership::ShellOnly;
+    return result;
+}
+
+static ExPolygons half_layer_gap_regions(const std::vector<PerimeterGapDemand> &demands)
+{
+    ExPolygons regions;
+    for (const auto &demand : demands)
+        append(regions, demand.regions);
+    return union_ex(regions);
+}
+
+// Reserve deposited cross-sectional area, not the larger rounded bead width.
+// Half-height bridge-role shells also use their actual fixed-height area here,
+// rather than the legacy role-based assumption of a round nozzle-sized bridge.
+static void half_layer_volume_footprint(const ExtrusionEntity &entity, Polygons &out)
+{
+    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+        for (const auto *child : collection->entities)
+            half_layer_volume_footprint(*child, out);
+        return;
+    }
+    const auto append_path = [&out](const ExtrusionPath &path) {
+        if (!std::isfinite(path.height) || path.height <= 0. ||
+            !std::isfinite(path.mm3_per_mm) || path.mm3_per_mm <= 0.)
+            throw std::invalid_argument("Half-layer joint gaps require positive finite wall height and volume");
+        const double spacing_mm = path.mm3_per_mm / path.height;
+        polygons_append(out, offset(path.polyline.to_polyline(), float(0.5 * scale_(spacing_mm))));
+    };
+    if (const auto *path = dynamic_cast<const ExtrusionPath *>(&entity))
+        append_path(*path);
+    else if (const auto *paths = dynamic_cast<const ExtrusionMultiPath *>(&entity))
+        for (const auto &path : paths->paths)
+            append_path(path);
+    else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(&entity))
+        for (const auto &path : loop->paths)
+            append_path(path);
+    else
+        throw std::invalid_argument("Half-layer joint gaps require known wall geometry");
+}
+
+static HalfLayerGapFill assign_joint_half_layer_gaps(const HalfLayerRegionWallCandidate &candidate,
+    const std::array<ExPolygons, 2> &source_sections)
+{
+    HalfLayerGapFill result;
+    const std::array<ExPolygons, 2> phase_regions{
+        half_layer_gap_regions(candidate.phase_gap_demands[0]), half_layer_gap_regions(candidate.phase_gap_demands[1])};
+    const auto core_regions = half_layer_gap_regions(candidate.core_gap_demands);
+    ExPolygons common_regions;
+    const double parent_height_mm = candidate.bands[0].height_mm() + candidate.bands[1].height_mm();
+    // Retain a whole, unchanged common component at parent H. Splitting its
+    // tiny moving edge into a separate medial axis could lose printable demand.
+    for (const auto &demand : candidate.core_gap_demands) {
+        constexpr double flow_height_tolerance_mm = 0.000001; // Physical height, mm.
+        if (std::abs(demand.flow.height() - parent_height_mm) > flow_height_tolerance_mm)
+            continue;
+        for (const auto &region : demand.regions) {
+            const ExPolygons component{region};
+            bool unchanged = true;
+            for (unsigned phase = 0; phase < 2 && unchanged; ++phase) {
+                const auto matching = std::find_if(phase_regions[phase].begin(), phase_regions[phase].end(),
+                    [&component](const ExPolygon &other) {
+                        return diff_ex(component, ExPolygons{other}).empty() && diff_ex(ExPolygons{other}, component).empty();
+                    });
+                unchanged = matching != phase_regions[phase].end();
+            }
+            if (unchanged) {
+                auto common_demand = demand;
+                common_demand.regions = component;
+                auto paths = make_perimeter_gap_fill(std::move(common_demand));
+                result.core.append(std::move(paths.entities));
+                append(common_regions, component);
+            }
+        }
+    }
+    common_regions = union_ex(common_regions);
+    Polygons reserved_core;
+    half_layer_volume_footprint(*candidate.core, reserved_core);
+    half_layer_volume_footprint(result.core, reserved_core);
+    polygons_append(reserved_core, to_polygons(candidate.core_fill_surfaces.surfaces));
+    for (unsigned phase = 0; phase < 2; ++phase) {
+        const auto &demands = candidate.phase_gap_demands[phase].empty() ?
+            candidate.core_gap_demands : candidate.phase_gap_demands[phase];
+        if (demands.empty())
+            continue;
+        const auto &policy = demands.front();
+        // All demands in this homogeneous region share the generator's gap
+        // policy. Keep this precondition explicit for future per-island tools.
+        for (const auto *inputs : {&candidate.core_gap_demands, &candidate.phase_gap_demands[phase]})
+            for (const auto &demand : *inputs)
+                if (demand.min_spacing_scaled != policy.min_spacing_scaled ||
+                    demand.max_spacing_scaled != policy.max_spacing_scaled ||
+                    demand.simplify_distance_scaled != policy.simplify_distance_scaled ||
+                    demand.minimum_length_scaled != policy.minimum_length_scaled ||
+                    demand.flow.nozzle_diameter() != policy.flow.nozzle_diameter())
+                    throw std::invalid_argument("Half-layer joint gap demand requires a homogeneous gap policy");
+        auto owned = policy;
+        owned.flow = owned.flow.with_height(float(candidate.bands[phase].height_mm()));
+        owned.regions = intersection_ex(diff_ex(union_ex(phase_regions[phase], core_regions), common_regions), source_sections[phase]);
+        Polygons occupied = reserved_core;
+        half_layer_volume_footprint(*candidate.shells[phase], occupied);
+        owned.regions = diff_ex(owned.regions, occupied);
+        result.phases[phase] = make_perimeter_gap_fill(std::move(owned));
+    }
+    return result;
+}
+
+static bool same_half_layer_surface_metadata(const Surface &a, const Surface &b)
+{
+    return a.surface_type == b.surface_type && a.extra_perimeters == b.extra_perimeters &&
+        a.thickness == b.thickness && a.thickness_layers == b.thickness_layers && a.bridge_angle == b.bridge_angle;
+}
+
+static HalfLayerRegionWallCandidate make_half_layer_region_wall_candidate_impl(
+    const LayerRegion &parent, const LayerRegion &lower, const LayerRegion &upper,
+    const SurfaceCollection &parent_slices, const SurfaceCollection &lower_slices, const SurfaceCollection &upper_slices,
+    const std::array<LayerRegionPtrs, 3> &compatible_regions)
+{
+    const Layer &parent_layer = *parent.layer();
+    HalfLayerRegionWallCandidate result;
+    result.bands = split_model_layer_half(parent_layer.id(), parent_layer.bottom_z(), parent_layer.print_z);
+    result.print_object_region_id = parent.region().print_object_region_id();
+    const std::array<const LayerRegion *, 2> phases{&lower, &upper};
+    constexpr double band_position_tolerance_mm = 0.000001; // One fixed-point coordinate, in mm.
+    for (unsigned phase = 0; phase < 2; ++phase) {
+        const LayerRegion &region = *phases[phase];
+        const Layer &layer = *region.layer();
+        if (&region.region() != &parent.region() || layer.object() != parent_layer.object())
+            throw std::invalid_argument("Half-layer candidate requires identical source and parent region ownership");
+        if (layer.id() != parent_layer.id())
+            throw std::invalid_argument("Half-layer candidate source has a different parent layer identity");
+        if (!std::isfinite(layer.height) || !std::isfinite(layer.print_z) ||
+            std::abs(layer.height - result.bands[phase].height_mm()) > band_position_tolerance_mm ||
+            std::abs(layer.print_z - result.bands[phase].print_z_mm) > band_position_tolerance_mm)
+            throw std::invalid_argument("Half-layer candidate source does not match its physical Z band");
+    }
+    const auto retain_unsplit_geometry = [&]() {
+        // There is no physical half-wall work to schedule (for example, zero
+        // requested walls). Preserve the original parent's fill/geometry,
+        // rather than expanding it to the union of unused source sections.
+        HalfLayerWallGeometry geometry;
+        make_region_perimeters(parent, parent_slices, compatible_regions[0], geometry.perimeters, geometry.thin_fills,
+            &geometry.fill_surfaces, &geometry.fill_no_overlap, parent_layer.height, false);
+        result.core = std::make_unique<ExtrusionEntityCollection>(std::move(geometry.perimeters));
+        for (auto &shell : result.shells)
+            shell = std::make_unique<ExtrusionEntityCollection>();
+        result.core_slices = parent_slices;
+        result.core_fill_surfaces = std::move(geometry.fill_surfaces);
+        result.core_fill_no_overlap = std::move(geometry.fill_no_overlap);
+        result.gap_fill.emplace();
+        result.gap_fill->core = std::move(geometry.thin_fills);
+        result.gap_ownership = HalfLayerGapOwnership::Unsplit;
+    };
+    const SurfaceCollection *template_slices = !parent_slices.empty() ? &parent_slices :
+        (!lower_slices.empty() ? &lower_slices : &upper_slices);
+    if (template_slices->empty()) {
+        retain_unsplit_geometry();
+        return result;
+    }
+
+    // Surface classification/extra-perimeter requests must survive union. A
+    // heterogeneous parent needs a layer-level partition, not a first-surface
+    // fallback that silently applies one request to all islands.
+    const Surface &surface_template = template_slices->surfaces.front();
+    const auto same_metadata = [&surface_template](const Surface &surface) {
+        return same_half_layer_surface_metadata(surface, surface_template);
+    };
+    for (const auto *slices : {&parent_slices, &lower_slices, &upper_slices})
+        if (!std::all_of(slices->surfaces.begin(), slices->surfaces.end(), same_metadata))
+            throw std::invalid_argument("Half-layer candidate requires homogeneous surface metadata across its source sections");
+
+    result.core_slices.append(union_ex(to_expolygons(lower_slices.surfaces), to_expolygons(upper_slices.surfaces)), surface_template);
+    // Use the original parent for inner-wall Flow, logical interlocking parity,
+    // modifiers and tool override ranges. Only its contour input is coupled.
+    auto core_geometry = make_half_layer_wall_geometry(parent, result.core_slices,
+        compatible_regions[0], parent_layer.height);
+    result.core = select_half_layer_wall_group(core_geometry.perimeters, HalfLayerWallGroup::Core);
+    result.unassigned_core_gap_fill = std::move(core_geometry.thin_fills);
+    result.core_gap_demands = std::move(core_geometry.gap_demands);
+    result.core_fill_surfaces = std::move(core_geometry.fill_surfaces);
+    result.core_fill_no_overlap = std::move(core_geometry.fill_no_overlap);
+    const std::array<const SurfaceCollection *, 2> phase_slices{&lower_slices, &upper_slices};
+    for (unsigned phase = 0; phase < 2; ++phase) {
+        const auto &region = *phases[phase];
+        // The existing generator API borrows non-const region pointers for
+        // fuzzy configuration lookup; it does not mutate these regions.
+        auto geometry = make_half_layer_wall_geometry(region, *phase_slices[phase],
+            compatible_regions[phase + 1], parent_layer.height);
+        result.shells[phase] = select_half_layer_wall_group(geometry.perimeters, HalfLayerWallGroup::Shell);
+        result.unassigned_phase_gap_fill[phase] = std::move(geometry.thin_fills);
+        result.phase_gap_demands[phase] = std::move(geometry.gap_demands);
+    }
+    if (result.shells[0]->empty() && result.shells[1]->empty()) {
+        retain_unsplit_geometry();
+        return result;
+    }
+    result.gap_fill = assign_shell_only_half_layer_gaps(result, result.gap_ownership);
+    if (!result.gap_fill && result.gap_ownership == HalfLayerGapOwnership::NeedsJointCore) {
+        result.gap_fill = assign_joint_half_layer_gaps(result,
+            {to_expolygons(lower_slices.surfaces), to_expolygons(upper_slices.surfaces)});
+        result.gap_ownership = HalfLayerGapOwnership::JointDemand;
+    }
+    return result;
+}
+
+HalfLayerRegionWallCandidate make_half_layer_region_wall_candidate(
+    const LayerRegion &parent, const LayerRegion &lower, const LayerRegion &upper)
+{
+    return make_half_layer_region_wall_candidate_impl(parent, lower, upper, parent.slices, lower.slices, upper.slices,
+        {{{const_cast<LayerRegion *>(&parent)}, {const_cast<LayerRegion *>(&lower)}, {const_cast<LayerRegion *>(&upper)}}});
+}
+
+HalfLayerLayerCandidate make_half_layer_layer_candidate(const Layer &parent, const Layer &lower, const Layer &upper)
+{
+    if (parent.object() != lower.object() || parent.object() != upper.object() ||
+        parent.region_count() != lower.region_count() || parent.region_count() != upper.region_count())
+        throw std::invalid_argument("Half-layer layer assembly requires matching object and region domains");
+    HalfLayerLayerCandidate result;
+    result.fills.resize(parent.region_count());
+    std::vector<bool> done(parent.region_count(), false);
+    const std::array<const Layer *, 3> inputs{&parent, &lower, &upper};
+    const auto active_region = [&inputs](size_t index) {
+        return std::any_of(inputs.begin(), inputs.end(), [index](const Layer *layer) {
+            return !layer->get_region(int(index))->slices.empty();
+        });
+    };
+    for (size_t region_index = 0; region_index < parent.region_count(); ++region_index) {
+        if (done[region_index])
+            continue;
+        done[region_index] = true;
+        if (!active_region(region_index))
+            continue;
+        std::vector<size_t> members{region_index};
+        for (size_t other = region_index + 1; other < parent.region_count(); ++other)
+            if (!done[other] && active_region(other) && Layer::is_perimeter_compatible(*parent.object()->print(),
+                parent.get_region(int(region_index))->region(), parent.get_region(int(other))->region())) {
+                members.push_back(other);
+                done[other] = true;
+            }
+        size_t flow_owner = members.front();
+        std::array<LayerRegionPtrs, 3> compatible;
+        struct MetadataGroup {
+            Surface prototype;
+            std::array<SurfaceCollection, 3> slices;
+        };
+        std::vector<MetadataGroup> metadata_groups;
+        for (const size_t member : members) {
+            if (parent.get_region(int(member))->region().config().sparse_infill_density >
+                parent.get_region(int(flow_owner))->region().config().sparse_infill_density)
+                flow_owner = member;
+            for (unsigned input = 0; input < 3; ++input) {
+                const auto *region = inputs[input]->get_region(int(member));
+                compatible[input].push_back(const_cast<LayerRegion *>(region));
+                for (const auto &surface : region->slices.surfaces) {
+                    auto it = std::find_if(metadata_groups.begin(), metadata_groups.end(), [&surface](const MetadataGroup &group) {
+                        return same_half_layer_surface_metadata(surface, group.prototype);
+                    });
+                    if (it == metadata_groups.end()) {
+                        metadata_groups.push_back({surface, {}});
+                        it = std::prev(metadata_groups.end());
+                    }
+                    it->slices[input].surfaces.push_back(surface);
+                }
+            }
+        }
+        for (auto &metadata : metadata_groups) {
+            for (auto &slices : metadata.slices) {
+                auto merged = members.size() > 1 ? offset_ex(slices.surfaces, ClipperSafetyOffset) : union_ex(slices.surfaces);
+                slices.set(std::move(merged), metadata.prototype);
+            }
+            auto candidate = make_half_layer_region_wall_candidate_impl(
+                *parent.get_region(int(flow_owner)), *lower.get_region(int(flow_owner)), *upper.get_region(int(flow_owner)),
+                metadata.slices[0], metadata.slices[1], metadata.slices[2], compatible);
+            for (const size_t member : members) {
+                auto &fill = result.fills[member];
+                const auto &original_slices = parent.get_region(int(member))->slices.surfaces;
+                for (const auto &surface : candidate.core_fill_surfaces.surfaces)
+                    fill.surfaces.append(intersection_ex(ExPolygons{surface.expolygon}, to_expolygons(original_slices)), surface);
+                append(fill.no_overlap, intersection_ex(candidate.core_fill_no_overlap, to_expolygons(original_slices)));
+            }
+            // Keep the existing compatible-region counterbore exception: these
+            // intentional bridge fills extend outside the original slice holes.
+            if (parent.get_region(int(flow_owner))->region().config().counterbore_hole_bridging.value != chbNone) {
+                for (const auto &surface : candidate.core_fill_surfaces.surfaces) {
+                    auto extra = diff_ex(ExPolygons{surface.expolygon}, to_expolygons(metadata.slices[0].surfaces), ApplySafetyOffset::Yes);
+                    result.fills[members.front()].surfaces.append(std::move(extra), surface);
+                }
+            }
+            result.groups.push_back(std::move(candidate));
+        }
+    }
+    for (auto &fill : result.fills)
+        fill.no_overlap = union_ex(fill.no_overlap);
+    return result;
 }
 
 #if 1

@@ -3034,6 +3034,7 @@ void TabPrint::build()
     page = add_options_page(L("Strength"), "custom-gcode_strength"); // ORCA: icon only visible on placeholders
         optgroup = page->new_optgroup(L("Walls"), L"param_wall");
         optgroup->append_single_option_line("wall_loops", "strength_settings_walls#wall-loops");
+        optgroup->append_single_option_line("outer_wall_half_layer_height", "strength_settings_walls#wall-loops");
         optgroup->append_single_option_line("alternate_extra_wall", "strength_settings_walls#alternate-extra-wall");
         optgroup->append_single_option_line("detect_thin_wall", "strength_settings_walls#detect-thin-wall");
 
@@ -3169,6 +3170,7 @@ void TabPrint::build()
     page = add_options_page(L("Support"), "custom-gcode_support"); // ORCA: icon only visible on placeholders
         optgroup = page->new_optgroup(L("Support"), L"param_support");
         optgroup->append_single_option_line("enable_support", "support_settings_support");
+        optgroup->append_single_option_line("support_half_layer_height", "support_settings_support");
         optgroup->append_single_option_line("support_type", "support_settings_support#type");
         optgroup->append_single_option_line("mixed_normal_support_generator", "support_settings_support#type");
         optgroup->append_single_option_line("mixed_tree_support_style", "support_settings_support#type");

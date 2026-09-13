@@ -18536,3 +18536,27 @@ msgstr ""
 #: src/libslic3r/PrintObject.cpp
 msgid "Tree support could not route the assigned Mixed support demand. Normal support was retried, but some areas may remain unsupported. Check the preview before printing."
 msgstr ""
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Half-height outer walls"
+msgstr ""
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Print the outer two XY walls at half the model layer height, without changing the total XY wall count. The two passes are separated near half the estimated layer time. Travel Z hop is at least 1.5 times the model layer height."
+msgstr ""
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Half-height support"
+msgstr ""
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Generate support at half the model layer height while preserving physical contact gaps, interface thickness and raft thickness. Travel Z hop is at least 1.5 times the model layer height."
+msgstr ""
+
+#: src/libslic3r/Print.cpp
+msgid "Half-height outer walls or supports cannot be combined with spiral vase mode because their discrete Z passes require ordinary layer geometry."
+msgstr ""
+
+#: src/libslic3r/PrintObject.cpp
+msgid "Some narrow features do not intersect either half-height wall section. Their original walls were retained."
+msgstr ""

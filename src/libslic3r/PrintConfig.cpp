@@ -7078,6 +7078,22 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<SupportMaterialStyle>(smsDefault));
 
+    def = this->add("outer_wall_half_layer_height", coBool);
+    def->label = L("Half-height outer walls");
+    def->category = L("Quality");
+    def->tooltip = L("Print the outer two XY walls at half the model layer height, without changing the total XY wall count. "
+                     "The two passes are separated near half the estimated layer time. Travel Z hop is at least 1.5 times the model layer height.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("support_half_layer_height", coBool);
+    def->label = L("Half-height support");
+    def->category = L("Support");
+    def->tooltip = L("Generate support at half the model layer height while preserving physical contact gaps, interface thickness and raft thickness. "
+                     "Travel Z hop is at least 1.5 times the model layer height.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("independent_support_layer_height", coBool);
     def->label = L("Independent support layer height");
     def->category = L("Support");

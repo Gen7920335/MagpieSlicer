@@ -32,6 +32,10 @@ public:
     int     wall_distribution_count;
     size_t  fixed_outer_wall_count = 1;
     coord_t fixed_outer_wall_boundary_overlap = 0;
+    // Optional per-depth spacing/overlap, in scaled mm, outside to inside.
+    // Empty preserves the established uniform fixed-shell strategy.
+    std::vector<coord_t> fixed_outer_wall_spacings;
+    std::vector<coord_t> fixed_outer_wall_overlaps;
     bool    is_top_or_bottom_layer;
 
     coord_t wall_maximum_resolution = meshfix_maximum_resolution();

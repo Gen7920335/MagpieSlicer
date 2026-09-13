@@ -3618,7 +3618,7 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
         SupportGeneratorLayersPtr raft_layers = generate_raft_base(print_object, support_params, print_object.slicing_parameters(), top_contacts, interface_layers, base_interface_layers, intermediate_layers, layer_storage);
         raft_timing.finish(raft_layers.size());
         SupportProfileStage assemble_timing("support-tree-organic", "Assemble organic support layers", raft_layers.size() + bottom_contacts.size() + top_contacts.size() + intermediate_layers.size() + interface_layers.size() + base_interface_layers.size());
-        SupportGeneratorLayersPtr layers_sorted = generate_support_layers(print_object, raft_layers, bottom_contacts, top_contacts, intermediate_layers, interface_layers, base_interface_layers);
+        SupportGeneratorLayersPtr layers_sorted = generate_support_layers(print_object, raft_layers, bottom_contacts, top_contacts, intermediate_layers, interface_layers, base_interface_layers, &layer_storage);
         assemble_timing.finish(print_object.support_layer_count());
 
         // BBS: This is a hack to avoid the support being generated outside the bed area. See #4769.
