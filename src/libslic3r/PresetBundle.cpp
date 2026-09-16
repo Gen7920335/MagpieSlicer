@@ -3204,6 +3204,22 @@ void PresetBundle::update_num_filaments(unsigned int to_del_flament_id)
     erase_or_resize(filament_color_type->values);
     erase_or_resize(ams_multi_color_filment);
 
+    // Keep the two purge scalars (unload/load) attached to their logical
+    // filament. A resize alone would retain the deleted slot and shift every
+    // following material onto the wrong values.
+    if (auto *flush_vector = project_config.option<ConfigOptionFloats>("flush_volumes_vector")) {
+        const double default_unload = flush_vector->values.empty() ? 140. : flush_vector->values.front();
+        const double default_load = flush_vector->values.size() < 2 ? 140. : flush_vector->values[1];
+        const size_t old_vector_size = flush_vector->values.size();
+        flush_vector->values.resize(2 * size_t(old_filament_count));
+        for (size_t index = old_vector_size; index < flush_vector->values.size(); ++index)
+            flush_vector->values[index] = index % 2 == 0 ? default_unload : default_load;
+        const size_t first = 2 * size_t(to_del_flament_id);
+        if (first + 2 <= flush_vector->values.size())
+            flush_vector->values.erase(flush_vector->values.begin() + first,
+                                       flush_vector->values.begin() + first + 2);
+    }
+
     update_multi_material_filament_presets(to_del_flament_id);
 }
 

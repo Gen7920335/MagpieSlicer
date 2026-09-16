@@ -34,6 +34,47 @@ TEST_CASE("Purge matrix follows physical nozzle count without losing material en
     CHECK(matrix == original);
 }
 
+TEST_CASE("Deleting a logical filament removes its purge vector pair and matrix axes",
+          "[PresetBundle][PurgeMatrix][FilamentDeletion]")
+{
+    PresetBundle bundle;
+    bundle.filament_presets.assign(4, bundle.filaments.get_edited_preset().name);
+    bundle.printers.get_edited_preset().config.set_key_value(
+        "nozzle_diameter", new ConfigOptionFloats({0.4, 0.8}));
+    bundle.project_config.set_key_value(
+        "filament_colour", new ConfigOptionStrings({"#1", "#2", "#3", "#4"}));
+    bundle.project_config.set_key_value(
+        "filament_multi_colour", new ConfigOptionStrings({"#1", "#2", "#3", "#4"}));
+    bundle.project_config.set_key_value(
+        "filament_colour_type", new ConfigOptionStrings({"1", "1", "1", "1"}));
+    bundle.project_config.set_key_value("filament_map", new ConfigOptionInts({1, 2, 1, 2}));
+    bundle.project_config.set_key_value(
+        "flush_volumes_vector", new ConfigOptionFloats({10., 11., 20., 21., 30., 31., 40., 41.}));
+    bundle.project_config.set_key_value("flush_multiplier", new ConfigOptionFloats({1., 1.}));
+
+    std::vector<double> original_matrix;
+    for (size_t tool = 0; tool < 2; ++tool)
+        for (size_t from = 0; from < 4; ++from)
+            for (size_t to = 0; to < 4; ++to)
+                original_matrix.emplace_back(double(tool * 100 + from * 10 + to));
+    bundle.project_config.set_key_value(
+        "flush_volumes_matrix", new ConfigOptionFloats(original_matrix));
+
+    bundle.update_num_filaments(1);
+
+    CHECK(bundle.filament_presets.size() == 3);
+    CHECK(bundle.project_config.option<ConfigOptionFloats>("flush_volumes_vector")->values ==
+          std::vector<double>{10., 11., 30., 31., 40., 41.});
+    const auto &matrix = bundle.project_config.option<ConfigOptionFloats>("flush_volumes_matrix")->values;
+    const std::array<size_t, 3> retained {0, 2, 3};
+    std::vector<double> expected_matrix;
+    for (size_t tool = 0; tool < 2; ++tool)
+        for (size_t from : retained)
+            for (size_t to : retained)
+                expected_matrix.emplace_back(original_matrix[tool * 16 + from * 4 + to]);
+    CHECK(matrix == expected_matrix);
+}
+
 namespace {
 
 namespace fs = boost::filesystem;

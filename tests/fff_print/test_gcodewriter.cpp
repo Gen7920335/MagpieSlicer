@@ -1,6 +1,7 @@
 #include <catch2/catch_all.hpp>
 
 #include <memory>
+#include <stdexcept>
 
 #include "libslic3r/GCodeWriter.hpp"
 #include "libslic3r/GCode.hpp"
@@ -23,6 +24,40 @@ TEST_CASE("Non-zero Z offset initializes before selecting an extruder", "[GCodeW
             { "layer_height", 0.25 }
         }));
     }
+}
+
+TEST_CASE("Writer rejects unregistered filaments without changing the active tool",
+          "[GCodeWriter][SequentialToolInventory]")
+{
+    const unsigned int missing_id = GENERATE(1u, 3u); // gap and past-the-end lookup
+    CAPTURE(missing_id);
+    GCodeWriter writer;
+    PrintConfig config;
+    config.apply(multifilament_config(3), true);
+    writer.apply_print_config(config);
+    writer.set_extruders({0, 2});
+
+    CHECK_THROWS_AS(writer.init_extruder(missing_id), std::out_of_range);
+    CHECK(writer.filament() == nullptr);
+    CHECK_THROWS_AS(writer.set_extruder(missing_id), std::out_of_range);
+    CHECK(writer.filament() == nullptr);
+    REQUIRE_NOTHROW(writer.init_extruder(0));
+    REQUIRE(writer.filament() != nullptr);
+    const Extruder *original = writer.filament();
+    CHECK_THROWS_AS(writer.set_extruder(missing_id), std::out_of_range);
+    CHECK(writer.filament() == original);
+    CHECK_THROWS_AS(writer.toolchange(missing_id), std::out_of_range);
+    CHECK(writer.filament() == original);
+    CHECK(writer.set_extruder(0).empty());
+    REQUIRE_NOTHROW(writer.set_extruder(2));
+    REQUIRE(writer.filament() != nullptr);
+    CHECK(writer.filament()->id() == 2);
+
+    writer.set_extruders({});
+    CHECK_THROWS_AS(writer.init_extruder(0), std::out_of_range);
+    CHECK_THROWS_AS(writer.set_extruder(0), std::out_of_range);
+    CHECK_THROWS_AS(writer.toolchange(0), std::out_of_range);
+    CHECK(writer.filament() == nullptr);
 }
 
 SCENARIO("set_speed emits values with fixed-point output.", "[GCodeWriter]") {

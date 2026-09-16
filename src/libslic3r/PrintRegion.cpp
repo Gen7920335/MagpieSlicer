@@ -84,9 +84,31 @@ void PrintRegion::collect_object_printing_extruders(const PrintConfig &print_con
         object_extruders.emplace_back((i >= num_extruders) ? 0 : i);
     };
     if (region_config.wall_loops.value > 0 || has_brim) {
-    	emplace_extruder(region_config.outer_wall_filament_id);
-                if (region_config.wall_loops.value > 1)
-			emplace_extruder(region_config.inner_wall_filament_id);
+        const unsigned int base_outer_wall_filament = region_config.outer_wall_filament_id.value > 0 ?
+            unsigned(region_config.outer_wall_filament_id.value) : 1u;
+        emplace_extruder(int(base_outer_wall_filament));
+        if (region_config.wall_loops.value > 1)
+            emplace_extruder(region_config.inner_wall_filament_id);
+
+        // PrintRegion owns the pre-slicing candidate inventory. Include every
+        // logical filament that wall generation may select through the shared
+        // Flow resolvers; G-code ordering later narrows this to generated paths.
+        if (region_config.wall_loops.value > 0 && detail_walls_enabled(region_config)) {
+            if (const ResolvedWallTool detail = detail_wall_tool(
+                    print_config, region_config, base_outer_wall_filament); detail)
+                emplace_extruder(int(detail.filament_id_1based));
+        }
+        if (region_config.wall_loops.value > 0) {
+            for (const std::string &serialized : region_config.crisp_corner_large_nozzle_override_regions.values) {
+                const std::optional<LargeNozzleOverrideRegion> override_region =
+                    parse_large_nozzle_override_region(serialized);
+                if (!override_region)
+                    continue;
+                if (const ResolvedWallTool override_tool = wall_tool_for_hotend(
+                        print_config, override_region->toolhead_1based, base_outer_wall_filament); override_tool)
+                    emplace_extruder(int(override_tool.filament_id_1based));
+            }
+        }
     }
     if (region_config.sparse_infill_density.value > 0)
     	emplace_extruder(region_config.sparse_infill_filament_id);

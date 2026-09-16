@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <stdexcept>
 #include <assert.h>
 #include <GCode/GCodeProcessor.hpp>
 
@@ -613,10 +614,9 @@ std::string GCodeWriter::toolchange_prefix() const
 std::string GCodeWriter::toolchange(unsigned int filament_id)
 {
     // set the new extruder
-    auto filament_extruder_iter = Slic3r::lower_bound_by_predicate(m_filament_extruders.begin(), m_filament_extruders.end(), [filament_id](const Extruder &e) { return e.id() < filament_id; });
-    assert(filament_extruder_iter != m_filament_extruders.end() && filament_extruder_iter->id() == filament_id);
-    m_curr_extruder_id = filament_extruder_iter->extruder_id();
-    m_curr_filament_extruder[m_curr_extruder_id] = &*filament_extruder_iter;
+    Extruder &selected = require_registered_filament(filament_id);
+    m_curr_extruder_id = selected.extruder_id();
+    m_curr_filament_extruder[m_curr_extruder_id] = &selected;
 
     // return the toolchange command
     // if we are running a single-extruder setup, just set the extruder and return nothing
@@ -1285,22 +1285,27 @@ void GCodeWriter::add_object_change_labels(std::string& gcode)
     add_object_start_labels(gcode);
 }
 
-std::string GCodeWriter::set_extruder(unsigned int filament_id)
+Extruder& GCodeWriter::require_registered_filament(unsigned int filament_id)
 {
     auto filament_ext_it = Slic3r::lower_bound_by_predicate(m_filament_extruders.begin(), m_filament_extruders.end(), [filament_id](const Extruder &e) { return e.id() < filament_id; });
-    unsigned int extruder_id = filament_ext_it->extruder_id();
-    assert(filament_ext_it != m_filament_extruders.end() && filament_ext_it->id() == filament_id);
-    //TODO: optmize here, pass extruder_id to toolchange
+    // PERMANENT DIAGNOSTIC: reject an incomplete tool inventory before changing
+    // active-tool state; an assertion alone does not protect release exports.
+    if (filament_ext_it == m_filament_extruders.end() || filament_ext_it->id() != filament_id)
+        throw std::out_of_range("GCodeWriter: unregistered filament ID (0-based): " + std::to_string(filament_id));
+    return *filament_ext_it;
+}
+
+std::string GCodeWriter::set_extruder(unsigned int filament_id)
+{
     return this->need_toolchange(filament_id) ? this->toolchange(filament_id) : "";
 }
 
 void GCodeWriter::init_extruder(unsigned int filament_id)
 {
     if (m_curr_extruder_id == -1 && filament_id != -1) {
-        auto filament_extruder_iter = Slic3r::lower_bound_by_predicate(m_filament_extruders.begin(), m_filament_extruders.end(), [filament_id](const Extruder &e) { return e.id() < filament_id; });
-        assert(filament_extruder_iter != m_filament_extruders.end() && filament_extruder_iter->id() == filament_id);
-        m_curr_extruder_id = filament_extruder_iter->extruder_id();
-        m_curr_filament_extruder[m_curr_extruder_id] = &*filament_extruder_iter;
+        Extruder &selected = require_registered_filament(filament_id);
+        m_curr_extruder_id = selected.extruder_id();
+        m_curr_filament_extruder[m_curr_extruder_id] = &selected;
     }
 }
 

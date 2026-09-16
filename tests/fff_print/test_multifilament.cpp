@@ -511,6 +511,98 @@ TEST_CASE("FFF routing honors nonidentity logical-filament to physical-hotend ma
     }
 }
 
+TEST_CASE("Sequential dynamic walls register tools from every object",
+          "[MultiFilament][MultiNozzleWalls][SequentialToolInventory]")
+{
+    const char *wall_generator = GENERATE("classic", "arachne");
+    const bool large_override = GENERATE(false, true);
+    const bool half_height = GENERATE(false, true);
+    const size_t dynamic_object = GENERATE(size_t(0), size_t(1));
+    CAPTURE(wall_generator, large_override, half_height, dynamic_object);
+
+    // Logical F1 -> physical 3 (0.4 mm), F4 -> physical 2 (0.15 mm),
+    // F2 -> physical 1 (0.8 mm). No ordinary role names F2 or F4.
+    auto config = mapped_four_hotend_wall_config({3, 1, 4, 2}, 1, wall_generator);
+    config.set_deserialize_strict({
+        { "print_sequence", "by object" },
+        { "use_smaller_nozzles_in_crisp_corners", false },
+        { "outer_wall_half_layer_height", half_height },
+        { "layer_height", 0.1 },
+        { "initial_layer_print_height", 0.1 },
+        { "gcode_comments", true },
+    });
+    Print print;
+    Model model;
+    init_print({cube(6), cube(6)}, print, model, config);
+    auto &object_config = model.objects[dynamic_object]->config;
+    if (large_override)
+        object_config.set_key_value("crisp_corner_large_nozzle_override_regions",
+                                    new ConfigOptionStrings{"1:999:1"});
+    else
+        object_config.set_key_value("use_smaller_nozzles_in_crisp_corners", new ConfigOptionBool(true));
+    print.apply(model, config);
+    REQUIRE_NOTHROW(print.process());
+    REQUIRE(print.objects().size() == 2);
+
+    const unsigned int dynamic_filament = large_override ? 1u : 3u; // zero-based logical ID
+    const std::set<unsigned int> dynamic_inventory{0u, dynamic_filament};
+    const auto &region_ids = print.extruders();
+    CHECK(std::set<unsigned int>(region_ids.begin(), region_ids.end()) == dynamic_inventory);
+    for (const PrintObject *object : print.objects()) {
+        ToolOrdering ordering(*object, static_cast<unsigned int>(-1), false, 0);
+        ordering.sort_and_build_data(*object, static_cast<unsigned int>(-1));
+        const auto &ids = ordering.all_extruders();
+        const std::set<unsigned int> inventory(ids.begin(), ids.end());
+        const bool is_dynamic = object->model_object()->id() == model.objects[dynamic_object]->id();
+        CHECK(inventory == (is_dynamic ? dynamic_inventory : std::set<unsigned int>{0u}));
+        REQUIRE_FALSE(ordering.layer_tools().empty());
+        const std::set<unsigned int> first_layer_inventory(
+            ordering.layer_tools().front().extruders.begin(), ordering.layer_tools().front().extruders.end());
+        CHECK(first_layer_inventory == (is_dynamic ? dynamic_inventory : std::set<unsigned int>{0u}));
+        const std::vector<unsigned int> expected_first_layer_order = !is_dynamic ?
+            std::vector<unsigned int>{0u} :
+            (large_override ? std::vector<unsigned int>{dynamic_filament, 0u} :
+                              std::vector<unsigned int>{0u, dynamic_filament});
+        CHECK(ordering.layer_tools().front().extruders == expected_first_layer_order);
+        const std::set<int> first_layer_wall_inventory(
+            object->object_first_layer_wall_extruders.begin(), object->object_first_layer_wall_extruders.end());
+        const std::set<int> expected_walls = is_dynamic ?
+            (large_override ? std::set<int>{int(dynamic_filament + 1)} :
+                              std::set<int>{1, int(dynamic_filament + 1)}) :
+            std::set<int>{1};
+        CHECK(first_layer_wall_inventory == expected_walls);
+    }
+
+    const std::string output = gcode(print);
+    CHECK(tools_for_role(output, "perimeter") == std::set<int>{0, int(dynamic_filament)});
+    CHECK(tools_for_role(output, "infill") == std::set<int>{0});
+}
+
+TEST_CASE("First-layer wall ordering uses the mapped physical hotend width",
+          "[MultiFilament][MultiNozzleWalls][FirstLayerToolOrder]")
+{
+    const char *wall_generator = GENERATE("classic", "arachne");
+    auto config = mapped_four_hotend_wall_config({3, 1, 4, 2}, 1, wall_generator);
+    Print print;
+    Model model;
+    init_print({cube(6)}, print, model, config);
+    REQUIRE_NOTHROW(print.process());
+
+    // Freeze generated paths, then isolate ToolOrdering's width lookup. F1 is
+    // mapped to physical hotend 3 and F4 to hotend 2. With the mapped widths,
+    // the F1 island is rejected by the area heuristic and F4 must be ordered
+    // first. Reusing hotend 1's width for both would produce F1, F4 instead.
+    auto &print_config = const_cast<PrintConfig &>(print.config());
+    print_config.toolhead_initial_layer_line_width.values = {
+        FloatOrPercent(0.8, false), FloatOrPercent(0.2, false),
+        FloatOrPercent(100., false), FloatOrPercent(0.6, false)};
+
+    const PrintObject &object = *print.objects().front();
+    ToolOrdering ordering(object, static_cast<unsigned int>(-1), false, 0);
+    REQUIRE_FALSE(ordering.layer_tools().empty());
+    CHECK(ordering.layer_tools().front().extruders == std::vector<unsigned int>{3u, 0u});
+}
+
 TEST_CASE("Small nozzle wall speed overrides detail walls in generated G-code", "[MultiFilament][MultiNozzleWalls][Speed]")
 {
     const char *wall_generator = GENERATE("classic", "arachne");

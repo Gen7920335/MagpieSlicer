@@ -3940,12 +3940,14 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         print_object_instance_sequential_active = print_object_instances_ordering.begin();
         first_has_extrude_print_object          = print_object_instance_sequential_active;
         bool find_fist_non_support_filament = false;
+        std::vector<unsigned int> sequential_extruders = print.extruders();
         for (; print_object_instance_sequential_active != print_object_instances_ordering.end(); ++ print_object_instance_sequential_active) {
             const PrintInstance *active_instance = *print_object_instance_sequential_active;
             const size_t active_instance_id = size_t(active_instance - active_instance->print_object->instances().data());
             tool_ordering = ToolOrdering(*active_instance->print_object, initial_extruder_id, false, active_instance_id);
 
             tool_ordering.sort_and_build_data(*active_instance->print_object, initial_extruder_id);
+            append(sequential_extruders, tool_ordering.all_extruders());
             float temp_max_additional_fan = tool_ordering.cal_max_additional_fan(print.config());
             if(temp_max_additional_fan > max_additional_fan )
                         max_additional_fan = temp_max_additional_fan;
@@ -3963,8 +3965,10 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             // No object to print was found, cancel the G-code export.
             throw Slic3r::SlicingError(_(L("No object can be printed. It may be too small.")));
         // We don't allow switching of extruders per layer by Model::custom_gcode_per_print_z in sequential mode.
-        // Use the extruder IDs collected from Regions.
-        this->set_extruders(print.extruders());
+        // Retain the region inventory (including helper extrusions), and register
+        // dynamic wall tools from every instance before emitting any G-code.
+        sort_remove_duplicates(sequential_extruders);
+        this->set_extruders(sequential_extruders);
 
         has_wipe_tower = print.has_wipe_tower() && tool_ordering.has_wipe_tower();
     } else {

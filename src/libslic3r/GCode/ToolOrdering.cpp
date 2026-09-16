@@ -64,6 +64,59 @@ static bool entity_has_tool_hint(const ExtrusionEntity &entity, ExtrusionToolHin
     return entity.tool_hint == hint;
 }
 
+static std::vector<unsigned int> generated_wall_filaments_1based(
+    const PrintConfig &print_config, const PrintRegion &region, size_t layer_id,
+    const ExtrusionEntityCollection &perimeters, unsigned int extruder_override)
+{
+    if (extruder_override != 0)
+        return {extruder_override};
+
+    const PrintRegionConfig &region_config = region.config();
+    const unsigned int base_outer_wall_filament = region_config.outer_wall_filament_id.value > 0 ?
+        unsigned(region_config.outer_wall_filament_id.value) : 1u;
+    const unsigned int base_inner_wall_filament = region_config.inner_wall_filament_id.value > 0 ?
+        unsigned(region_config.inner_wall_filament_id.value) : base_outer_wall_filament;
+    const unsigned int override_wall_hotend = large_nozzle_override_toolhead_1based(
+        region_config, layer_id, print_config.nozzle_diameter.values.size());
+
+    std::vector<unsigned int> filaments;
+    if (override_wall_hotend > 0) {
+        if (const ResolvedWallTool override_tool = large_nozzle_override_wall_tool(
+                print_config, region_config, layer_id, base_outer_wall_filament); override_tool) {
+            filaments.emplace_back(override_tool.filament_id_1based);
+        } else {
+            filaments.emplace_back(base_outer_wall_filament);
+            if (region_config.wall_loops.value > 1)
+                filaments.emplace_back(base_inner_wall_filament);
+        }
+        return filaments;
+    }
+
+    bool has_detail_walls = false;
+    bool has_large_walls = false;
+    for (const ExtrusionEntity *entity : perimeters.entities) {
+        if (entity == nullptr)
+            continue;
+        has_detail_walls = has_detail_walls || entity_has_tool_hint(*entity, ExtrusionToolHint::DetailWall);
+        has_large_walls = has_large_walls || entity_has_tool_hint(*entity, ExtrusionToolHint::LargeWall);
+    }
+
+    if (has_detail_walls || has_large_walls) {
+        if (has_detail_walls)
+            filaments.emplace_back(detail_external_perimeter_filament_1based(
+                &print_config, region, base_outer_wall_filament));
+        if (has_large_walls)
+            filaments.emplace_back(base_inner_wall_filament);
+    } else {
+        filaments.emplace_back(detail_external_perimeter_filament_1based(
+            &print_config, region, base_outer_wall_filament));
+        if (region_config.wall_loops.value > 1)
+            filaments.emplace_back(base_inner_wall_filament);
+    }
+    sort_remove_duplicates(filaments);
+    return filaments;
+}
+
 static size_t mapped_extruder_index_or_zero(const PrintConfig &config, unsigned int filament_id, size_t extruder_count)
 {
     if (extruder_count == 0 || config.filament_map.values.empty())
@@ -887,138 +940,113 @@ static void apply_first_layer_order(const DynamicPrintConfig* config, std::vecto
     }
 }
 
+static bool collect_first_layer_wall_areas(
+    const PrintObject &object, std::map<unsigned int, double> &min_areas_per_filament)
+{
+    const PrintConfig &print_config = object.print()->config();
+    const HalfLayerSourceLayers *half_sources = object.half_layer_sources();
+    for (size_t layer_index = 0; layer_index < object.layers().size(); ++layer_index) {
+        const Layer *layer = object.layers()[layer_index];
+        bool found_printable_wall = false;
+        std::map<unsigned int, double> layer_min_areas;
+        for (size_t region_index = 0; region_index < layer->regions().size(); ++region_index) {
+            const LayerRegion *layer_region = layer->regions()[region_index];
+            std::vector<unsigned int> wall_filaments;
+            auto collect_generated = [&](const LayerRegion *source_region) {
+                if (source_region == nullptr || source_region->perimeters.entities.empty())
+                    return;
+                append(wall_filaments, generated_wall_filaments_1based(
+                    print_config, source_region->region(), layer->id(), source_region->perimeters, 0));
+            };
+            collect_generated(layer_region);
+            if (half_sources != nullptr) {
+                for (unsigned phase = 0; phase < 2; ++phase) {
+                    if (layer_index >= half_sources->phases[phase].size())
+                        continue;
+                    const Layer *phase_layer = half_sources->phases[phase][layer_index].get();
+                    if (region_index < phase_layer->regions().size())
+                        collect_generated(phase_layer->regions()[region_index]);
+                }
+            }
+            sort_remove_duplicates(wall_filaments);
+            if (wall_filaments.empty()) {
+                // Preserve the legacy no-generated-wall/brim fallback. Dynamic
+                // wall routes are taken only from geometry that was generated.
+                const unsigned int base_outer_wall_filament =
+                    layer_region->region().config().outer_wall_filament_id.value > 0 ?
+                    unsigned(layer_region->region().config().outer_wall_filament_id.value) : 1u;
+                wall_filaments.emplace_back(detail_external_perimeter_filament_1based(
+                    &print_config, layer_region->region(), base_outer_wall_filament));
+            }
+            for (const ExPolygon &expoly : layer_region->raw_slices) {
+                for (unsigned int filament_id_1based : wall_filaments) {
+                    const ResolvedWallTool tool = wall_tool_for_filament(print_config, filament_id_1based);
+                    if (!tool)
+                        continue;
+                    const ConfigOptionFloatOrPercent initial_width = toolhead_line_width_or(
+                        print_config, frExternalPerimeter, int(tool.hotend_id_1based), true,
+                        print_config.initial_layer_line_width);
+                    const coordf_t initial_layer_line_width = initial_width.get_abs_value(tool.nozzle_diameter);
+                    // Printable-island shrink distance: 20% of the physical
+                    // first-layer line width, converted from mm to scaled XY.
+                    const coord_t shrink_distance = scale_(0.2 * initial_layer_line_width);
+                    if (offset_ex(expoly, -shrink_distance).empty())
+                        continue;
+                    found_printable_wall = true;
+                    const double contour_area = expoly.contour.area();
+                    auto [it, inserted] = layer_min_areas.emplace(filament_id_1based, contour_area);
+                    if (!inserted)
+                        it->second = std::min(it->second, contour_area);
+                }
+            }
+        }
+        if (!found_printable_wall)
+            continue;
+        for (const auto &[filament, area] : layer_min_areas) {
+            auto [it, inserted] = min_areas_per_filament.emplace(filament, area);
+            if (!inserted)
+                it->second = std::min(it->second, area);
+        }
+        return true;
+    }
+    return false;
+}
+
+static std::vector<unsigned int> order_wall_filaments_by_minimum_area(
+    const std::map<unsigned int, double> &min_areas_per_filament)
+{
+    std::vector<unsigned int> tool_order;
+    for (const auto &[filament, area] : min_areas_per_filament) {
+        const auto position = std::find_if(tool_order.begin(), tool_order.end(),
+            [&](unsigned int ordered_filament) {
+                return min_areas_per_filament.at(ordered_filament) < area;
+            });
+        tool_order.insert(position, filament);
+    }
+    return tool_order;
+}
+
 // BBS
 std::vector<unsigned int> ToolOrdering::generate_first_layer_tool_order(const Print& print)
 {
-    std::vector<unsigned int> tool_order;
-    int initial_extruder_id = -1;
-    std::map<int, double> min_areas_per_extruder;
+    std::map<unsigned int, double> min_areas_per_filament;
+    for (const PrintObject *object : print.objects())
+        if (!collect_first_layer_wall_areas(*object, min_areas_per_filament))
+            return {};
 
-    for (auto object : print.objects()) {
-        const Layer* target_layer = nullptr;
-        for(auto layer : object->layers()){
-            for(auto layerm : layer->regions()){
-                for(auto& expoly : layerm->raw_slices){
-                    if (!offset_ex(expoly, -0.2 * scale_(print.config().initial_layer_line_width)).empty()) {
-                        target_layer = layer;
-                        break;
-                    }
-                }
-                if(target_layer)
-                    break;
-            }
-            if(target_layer)
-                break;
-        }
-
-        if(!target_layer)
-            return tool_order;
-
-        for (auto layerm : target_layer->regions()) {
-            const unsigned int base_outer_wall_filament = layerm->region().config().outer_wall_filament_id.value > 0 ?
-                layerm->region().config().outer_wall_filament_id.value : 1;
-            int extruder_id = int(detail_external_perimeter_filament_1based(&print.config(), layerm->region(),
-                base_outer_wall_filament));
-
-            for (auto expoly : layerm->raw_slices) {
-                const double nozzle_diameter = print.config().nozzle_diameter.get_at(0);
-                const coordf_t initial_layer_line_width = print.config().get_abs_value("initial_layer_line_width", nozzle_diameter);
-
-                if (offset_ex(expoly, -0.2 * scale_(initial_layer_line_width)).empty())
-                    continue;
-
-                double contour_area = expoly.contour.area();
-                auto iter = min_areas_per_extruder.find(extruder_id);
-                if (iter == min_areas_per_extruder.end()) {
-                    min_areas_per_extruder.insert({ extruder_id, contour_area });
-                }
-                else {
-                    if (contour_area < min_areas_per_extruder.at(extruder_id)) {
-                        min_areas_per_extruder[extruder_id] = contour_area;
-                    }
-                }
-            }
-        }
-    }
-
-    double max_minimal_area = 0.;
-    for (auto ape : min_areas_per_extruder) {
-        auto iter = tool_order.begin();
-        for (; iter != tool_order.end(); iter++) {
-            if (min_areas_per_extruder.at(*iter) < min_areas_per_extruder.at(ape.first))
-                break;
-        }
-
-        tool_order.insert(iter, ape.first);
-    }
-
+    std::vector<unsigned int> tool_order = order_wall_filaments_by_minimum_area(min_areas_per_filament);
     apply_first_layer_order(m_print_full_config, tool_order);
-
     return tool_order;
 }
 
 std::vector<unsigned int> ToolOrdering::generate_first_layer_tool_order(const PrintObject& object)
 {
-    std::vector<unsigned int> tool_order;
-    int initial_extruder_id = -1;
-    std::map<int, double> min_areas_per_extruder;
-    const Layer* target_layer = nullptr;
-    for(auto layer : object.layers()){
-        for(auto layerm : layer->regions()){
-            for(auto& expoly : layerm->raw_slices){
-                if (!offset_ex(expoly, -0.2 * scale_(object.config().line_width)).empty()) {
-                    target_layer = layer;
-                    break;
-                }
-            }
-            if(target_layer)
-                break;
-        }
-        if(target_layer)
-            break;
-    }
+    std::map<unsigned int, double> min_areas_per_filament;
+    if (!collect_first_layer_wall_areas(object, min_areas_per_filament))
+        return {};
 
-    if(!target_layer)
-        return tool_order;
-
-    for (auto layerm : target_layer->regions()) {
-        const unsigned int base_outer_wall_filament = layerm->region().config().outer_wall_filament_id.value > 0 ?
-            layerm->region().config().outer_wall_filament_id.value : 1;
-        int extruder_id = int(detail_external_perimeter_filament_1based(&object.print()->config(), layerm->region(),
-            base_outer_wall_filament));
-        for (auto expoly : layerm->raw_slices) {
-            const double nozzle_diameter = object.print()->config().nozzle_diameter.get_at(0);
-            const coordf_t line_width = object.config().get_abs_value("line_width", nozzle_diameter);
-
-            if (offset_ex(expoly, -0.2 * scale_(line_width)).empty())
-                continue;
-
-            double contour_area = expoly.contour.area();
-            auto iter = min_areas_per_extruder.find(extruder_id);
-            if (iter == min_areas_per_extruder.end()) {
-                min_areas_per_extruder.insert({ extruder_id, contour_area });
-            }
-            else {
-                if (contour_area < min_areas_per_extruder.at(extruder_id)) {
-                    min_areas_per_extruder[extruder_id] = contour_area;
-                }
-            }
-        }
-    }
-
-    double max_minimal_area = 0.;
-    for (auto ape : min_areas_per_extruder) {
-        auto iter = tool_order.begin();
-        for (; iter != tool_order.end(); iter++) {
-            if (min_areas_per_extruder.at(*iter) < min_areas_per_extruder.at(ape.first))
-                break;
-        }
-
-        tool_order.insert(iter, ape.first);
-    }
-
+    std::vector<unsigned int> tool_order = order_wall_filaments_by_minimum_area(min_areas_per_filament);
     apply_first_layer_order(m_print_full_config, tool_order);
-
     return tool_order;
 }
 
@@ -1088,49 +1116,15 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                 }
 
                 if (something_nonoverriddable){
-                    const unsigned int base_outer_wall_filament = region.config().outer_wall_filament_id.value > 0 ?
-                        region.config().outer_wall_filament_id.value : 1;
-                    const unsigned int base_inner_wall_filament = region.config().inner_wall_filament_id.value > 0 ?
-                        region.config().inner_wall_filament_id.value : base_outer_wall_filament;
-                    const unsigned int override_wall_hotend = m_print_config_ptr ?
-                        large_nozzle_override_toolhead_1based(region.config(), layer->id(), m_print_config_ptr->nozzle_diameter.values.size()) : 0;
-                    const ResolvedWallTool override_wall_tool = m_print_config_ptr ?
-                        large_nozzle_override_wall_tool(*m_print_config_ptr, region.config(), layer->id(), base_outer_wall_filament) :
-                        ResolvedWallTool {};
-                    bool has_detail_walls = false;
-                    bool has_large_walls = false;
-                    for (const ExtrusionEntity *entity : layerm->perimeters.entities) {
-                        if (entity == nullptr)
-                            continue;
-                        has_detail_walls = has_detail_walls || entity_has_tool_hint(*entity, ExtrusionToolHint::DetailWall);
-                        has_large_walls = has_large_walls || entity_has_tool_hint(*entity, ExtrusionToolHint::LargeWall);
-                    }
-
-                    if (extruder_override != 0) {
-                        layer_tools.extruders.emplace_back(extruder_override);
-                    } else if (override_wall_hotend > 0) {
-                        if (override_wall_tool) {
-                            layer_tools.extruders.emplace_back(override_wall_tool.filament_id_1based);
-                        } else {
-                            layer_tools.extruders.emplace_back(base_outer_wall_filament);
-                            if (region.config().wall_loops.value > 1)
-                                layer_tools.extruders.emplace_back(base_inner_wall_filament);
-                        }
-                    } else if (has_detail_walls || has_large_walls) {
-                        if (has_detail_walls)
-                            layer_tools.extruders.emplace_back(detail_external_perimeter_filament_1based(
-                                m_print_config_ptr, region, base_outer_wall_filament));
-                        if (has_large_walls)
-                            layer_tools.extruders.emplace_back(base_inner_wall_filament);
-                    } else {
-                        layer_tools.extruders.emplace_back(detail_external_perimeter_filament_1based(
-                            m_print_config_ptr, region, base_outer_wall_filament));
-                        if (region.config().wall_loops.value > 1)
-                            layer_tools.extruders.emplace_back(base_inner_wall_filament);
-                    }
-                    if (layerCount == 0) {
-                        firstLayerExtruders.emplace_back(extruder_override == 0 ? base_outer_wall_filament : extruder_override);
-                    }
+                    // m_print_config_ptr also controls wiping policy and may be null
+                    // for sequential printing. Wall routing still needs the printer map.
+                    const PrintConfig &wall_print_config = object.print()->config();
+                    const std::vector<unsigned int> wall_filaments = generated_wall_filaments_1based(
+                        wall_print_config, region, layer->id(), layerm->perimeters, extruder_override);
+                    append(layer_tools.extruders, wall_filaments);
+                    if (layerCount == 0)
+                        for (unsigned int filament : wall_filaments)
+                            firstLayerExtruders.emplace_back(int(filament));
                 }
 
                 layer_tools.has_object = true;
