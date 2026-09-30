@@ -22,6 +22,10 @@ public:
     static DynamicPrintConfig extract(const DynamicPrintConfig &printer_config, size_t index);
     static DynamicPrintConfig normalization_patch(const DynamicPrintConfig &printer_config, size_t index);
     static void apply_nozzle_diameter(DynamicPrintConfig &printer_config, size_t index, double nozzle_diameter);
+    // Handle a confirmed UI edit using the pre-edit printer state. A rejected or
+    // unchanged edit must preserve custom widths, including on shared nozzles.
+    static bool edit_nozzle_diameter(DynamicPrintConfig &printer_config, size_t index, double nozzle_diameter,
+                                     bool all_toolheads, bool accepted = true);
     static void apply_width(DynamicPrintConfig &printer_config, size_t index, const char *key, const FloatOrPercent &width);
     static void apply(DynamicPrintConfig &printer_config, size_t index, const DynamicPrintConfig &hotend_config);
 };

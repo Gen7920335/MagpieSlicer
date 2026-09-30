@@ -208,6 +208,7 @@ GCodeInputData convert(const Slic3r::GCodeProcessorResult& result, const std::ve
     }
 
     const std::vector<Slic3r::GCodeProcessorResult::MoveVertex>& moves = result.moves;
+    const std::vector<unsigned int> preview_layer_ids = result.preview_layer_ids();
     ret.vertices.reserve(2 * moves.size());
     for (size_t i = 1; i < moves.size(); ++i) {
         const Slic3r::GCodeProcessorResult::MoveVertex& curr = moves[i];
@@ -224,7 +225,7 @@ GCodeInputData convert(const Slic3r::GCodeProcessorResult& result, const std::ve
 #if VGCODE_ENABLE_COG_AND_TOOL_MARKERS
                 const libvgcode::PathVertex vertex = { convert(prev.position), curr.height, curr.width, curr.feedrate, prev.actual_feedrate,
                     curr.mm3_per_mm, curr.fan_speed, curr.temperature, 0.0f, convert(curr.extrusion_role), curr_type,
-                    static_cast<uint32_t>(curr.gcode_id), static_cast<uint32_t>(curr.layer_id),
+                    static_cast<uint32_t>(curr.gcode_id), static_cast<uint32_t>(preview_layer_ids[i]),
                     static_cast<uint8_t>(curr.extruder_id), static_cast<uint8_t>(curr.cp_color_id), { 0.0f, 0.0f },
                     /* ORCA: Add Pressure Advance visualization support */ 0.0f, curr.pressure_advance,
                     /* ORCA: Add Acceleration visualization support */ curr.acceleration,
@@ -232,7 +233,7 @@ GCodeInputData convert(const Slic3r::GCodeProcessorResult& result, const std::ve
 #else
               const libvgcode::PathVertex vertex = { convert(prev.position), curr.height, curr.width, curr.feedrate, prev.actual_feedrate,
                     curr.mm3_per_mm, curr.fan_speed, curr.temperature, convert(curr.extrusion_role), curr_type,
-                    static_cast<uint32_t>(curr.gcode_id), static_cast<uint32_t>(curr.layer_id),
+                    static_cast<uint32_t>(curr.gcode_id), static_cast<uint32_t>(preview_layer_ids[i]),
                     static_cast<uint8_t>(curr.extruder_id), static_cast<uint8_t>(curr.cp_color_id), { 0.0f, 0.0f },
                     /* ORCA: Add Pressure Advance visualization support */ 0.0f, curr.pressure_advance,
                     /* ORCA: Add Acceleration visualization support */ curr.acceleration,
@@ -246,7 +247,7 @@ GCodeInputData convert(const Slic3r::GCodeProcessorResult& result, const std::ve
         const libvgcode::PathVertex vertex = { convert(curr.position), curr.height, curr.width, curr.feedrate, curr.actual_feedrate,
             curr.mm3_per_mm, curr.fan_speed, curr.temperature,
             result.filament_densities[curr.extruder_id] * curr.mm3_per_mm * (curr.position - prev.position).norm(),
-            convert(curr.extrusion_role), curr_type, static_cast<uint32_t>(curr.gcode_id), static_cast<uint32_t>(curr.layer_id),
+            convert(curr.extrusion_role), curr_type, static_cast<uint32_t>(curr.gcode_id), static_cast<uint32_t>(preview_layer_ids[i]),
             static_cast<uint8_t>(curr.extruder_id), static_cast<uint8_t>(curr.cp_color_id), curr.time,
             /* ORCA: Add Pressure Advance visualization support */ 0.0f, curr.pressure_advance,
             /* ORCA: Add Acceleration visualization support */ curr.acceleration,
@@ -254,7 +255,7 @@ GCodeInputData convert(const Slic3r::GCodeProcessorResult& result, const std::ve
 #else
         const libvgcode::PathVertex vertex = { convert(curr.position), curr.height, curr.width, curr.feedrate, curr.actual_feedrate,
             curr.mm3_per_mm, curr.fan_speed, curr.temperature, convert(curr.extrusion_role), curr_type,
-            static_cast<uint32_t>(curr.gcode_id), static_cast<uint32_t>(curr.layer_id),
+            static_cast<uint32_t>(curr.gcode_id), static_cast<uint32_t>(preview_layer_ids[i]),
             static_cast<uint8_t>(curr.extruder_id), static_cast<uint8_t>(curr.cp_color_id), curr.time,
             /* ORCA: Add Pressure Advance visualization support */ 0.0f, curr.pressure_advance,
             /* ORCA: Add Acceleration visualization support */ curr.acceleration,

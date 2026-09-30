@@ -1507,7 +1507,7 @@ void PrintConfigDef::init_fff_params()
     def->gui_type = ConfigOptionDef::GUIType::select_open;
     def->label = L("Crisp corner toolhead");
     def->category = L("Quality");
-    def->tooltip = L("Toolhead used when no same-colour smaller nozzle is found. Auto keeps the slicer's automatic selection.");
+    def->tooltip = L("Toolhead used when no same-colour smaller nozzle is found. Auto preserves the assigned filament unless a smaller nozzle with the same colour and material is available. Explicit toolhead selection may change colour or material.");
     def->min = 0;
     def->max = 16;
     def->enum_values.push_back("0");

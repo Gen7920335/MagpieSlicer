@@ -174,6 +174,34 @@ void HotendConfigService::apply_width(DynamicPrintConfig &printer_config, size_t
     set_width_at(printer_config, original, key, index, width);
 }
 
+bool HotendConfigService::edit_nozzle_diameter(DynamicPrintConfig &printer_config, size_t index, double diameter,
+                                               bool all_toolheads, bool accepted)
+{
+    const auto *nozzles = printer_config.option<ConfigOptionFloats>("nozzle_diameter");
+    if (nozzles == nullptr || index >= nozzles->values.size())
+        throw std::out_of_range("Hotend index is outside the configured toolhead range.");
+    if (!std::isfinite(diameter) || diameter <= 0.)
+        throw std::invalid_argument("Hotend nozzle diameter must be a positive finite value.");
+    if (!accepted)
+        return false;
+
+    // Compare before committing any diameter. A field write before this comparison
+    // hides the edited tool's change and leaves its old linked widths in place.
+    const std::vector<double> old_nozzles = nozzles->values;
+    std::vector<double> desired = old_nozzles;
+    desired[index] = diameter;
+    if (all_toolheads)
+        std::fill(desired.begin(), desired.end(), diameter);
+    constexpr double nozzle_diameter_tolerance_mm = EPSILON;
+    bool changed = false;
+    for (size_t i = 0; i < desired.size(); ++i)
+        if (std::abs(desired[i] - old_nozzles[i]) > nozzle_diameter_tolerance_mm) {
+            set_toolhead_nozzle_diameter(printer_config, i, desired[i]);
+            changed = true;
+        }
+    return changed;
+}
+
 void HotendConfigService::apply(DynamicPrintConfig &printer_config, size_t index, const DynamicPrintConfig &hotend_config)
 {
     if (index >= toolhead_count(printer_config))

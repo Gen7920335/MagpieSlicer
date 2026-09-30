@@ -32,6 +32,8 @@
 #include "slic3r/Utils/PresetUpdater.hpp"
 
 #include <unordered_map>
+#include <atomic>
+#include <memory>
 
 #include <nlohmann/json.hpp>
 
@@ -101,6 +103,7 @@ public:
 
 private:
     void handle_load_failure(const wxString &detail);
+    void send_profile_load_status();
 
     GUI_App *m_MainPtr;
     AppConfig m_appconfig_new;
@@ -121,7 +124,11 @@ private:
 
     //First Load
     bool bFirstComplete{false};
-    bool m_destroy{false};
+    std::atomic<bool> m_destroy{false};
+    // Profile readiness is published on the UI thread, after selections are populated.
+    bool m_profile_ready {false};
+    wxString m_profile_error;
+    std::shared_ptr<int> m_profile_lifetime {std::make_shared<int>(0)};
     boost::thread* m_load_task{ nullptr };
 
     // User Config

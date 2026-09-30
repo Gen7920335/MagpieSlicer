@@ -247,6 +247,11 @@ public:
 
 class ConfigOptionsGroup: public OptionsGroup {
 public:
+
+    // Optional semantic edit, before the raw field write. Return true when the
+    // edit (including rejection) is handled; all other groups keep the old order.
+    std::function<bool(const t_config_option_key&, const boost::any&, int)> m_config_value_handler;
+
 	ConfigOptionsGroup(	wxWindow* parent, const wxString& title, const wxString& icon, DynamicPrintConfig* config = nullptr,
 						bool is_tab_opt = false, column_t extra_clmn = nullptr) :
 		OptionsGroup(parent, title, icon, is_tab_opt, extra_clmn), m_config(config) {}

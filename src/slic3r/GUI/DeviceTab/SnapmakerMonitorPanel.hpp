@@ -73,6 +73,8 @@ private:
     void apply_system_info(const std::string &body);
     void apply_camera(wxImage image, std::uint64_t frame_hash, long latency_ms);
     void apply_duplicate_camera_frame(long latency_ms);
+    void camera_request_failed(unsigned status);
+    void update_camera_poll_interval();
     void set_connection_error(const wxString &message);
     void send_print_command(const std::string &endpoint, const wxString &success_message);
     void send_delete_command(const std::string &endpoint, const wxString &success_message);
@@ -136,6 +138,7 @@ private:
     bool m_cavity_fan_supported {false};
     bool m_light_supported {false};
     bool m_camera_paused {false};
+    SnapmakerCameraPollState m_camera_poll_state;
     int m_camera_interval_ms {150};
     int m_slow_refresh_tick {0};
     unsigned m_camera_frames_in_window {0};

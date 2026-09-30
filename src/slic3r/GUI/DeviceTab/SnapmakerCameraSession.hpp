@@ -33,6 +33,8 @@ public:
 
     void start(std::string base_url, std::string api_key, StateCallback callback);
     void stop();
+    // Nonblocking: the worker owns cancellation/reconnection, never the UI.
+    void request_reconnect() { m_reconnect_requested.store(true); }
     bool is_running() const { return m_running.load(); }
 
 private:
@@ -40,6 +42,7 @@ private:
     bool wait_for_stop(std::chrono::milliseconds duration);
 
     std::atomic_bool m_stop_requested {false};
+    std::atomic_bool m_reconnect_requested {false};
     std::atomic_bool m_running {false};
     std::mutex m_wait_mutex;
     std::condition_variable m_wait_condition;

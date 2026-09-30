@@ -93,10 +93,11 @@ TEST_CASE("Snapmaker camera stop cancels a silent local server", "[SnapmakerMoni
     namespace net = boost::asio;
     using tcp = net::ip::tcp;
     const bool handshake = GENERATE(false, true);
+    const bool request_reconnect = GENERATE(false, true);
     net::io_context server_io;
     tcp::acceptor acceptor(server_io, tcp::endpoint(net::ip::address_v4::loopback(), 0));
     acceptor.non_blocking(true);
-    std::atomic<bool> connected{false}, active{false}, release{false};
+    std::atomic<bool> connected{false}, active{false}, release{false}, reconnecting{false};
     std::thread server([&] {
         tcp::socket socket(server_io);
         boost::system::error_code ec;
@@ -126,17 +127,25 @@ TEST_CASE("Snapmaker camera stop cancels a silent local server", "[SnapmakerMoni
     session.start("http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port()), "",
         [&](auto state, const std::string &) {
             if (state == Slic3r::GUI::SnapmakerCameraSession::State::Active) active.store(true);
+            if (state == Slic3r::GUI::SnapmakerCameraSession::State::Reconnecting) reconnecting.store(true);
         });
     const auto ready_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (!(handshake ? active.load() : connected.load()) && std::chrono::steady_clock::now() < ready_deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     const bool reached = handshake ? active.load() : connected.load();
+    if (request_reconnect) {
+        session.request_reconnect();
+        const auto reconnect_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!reconnecting.load() && std::chrono::steady_clock::now() < reconnect_deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
     const auto before_stop = std::chrono::steady_clock::now();
     session.stop();
     const auto stop_time = std::chrono::steady_clock::now() - before_stop;
     release.store(true);
     server.join();
     CHECK(reached);
+    if (request_reconnect) CHECK(reconnecting.load());
     CHECK(stop_time < std::chrono::seconds(1)); // User-facing stop latency, wall time.
     CHECK_FALSE(session.is_running());
 }
@@ -605,4 +614,39 @@ TEST_CASE("Snapmaker HTTP status classification is explicit", "[SnapmakerMonitor
     CHECK_FALSE(is_success_http_status(300));
     CHECK_FALSE(is_success_http_status(404));
     CHECK_FALSE(is_success_http_status(500));
+}
+
+TEST_CASE("Snapmaker local setup pages never enter network monitor mode", "[SnapmakerMonitor][CameraRecovery]")
+{
+    using Slic3r::GUI::is_snapmaker_http_url;
+    for (const char *url : {"", "file:///C:/resources/web/orca/missing_connection.html",
+                            "file://C:\\resources/web/orca/missing_connection.html", "about:blank",
+                            "http://", "http:///missing", "https://"})
+        CHECK_FALSE(is_snapmaker_http_url(url));
+    for (const char *url : {"http://192.168.1.20", "http://printer.local:7125/ui",
+                            "http://[::1]:7125", "https://printer.local"})
+        CHECK(is_snapmaker_http_url(url));
+}
+
+TEST_CASE("Snapmaker camera failure polling backs off with a finite recovery budget", "[SnapmakerMonitor][CameraRecovery]")
+{
+    Slic3r::GUI::SnapmakerCameraPollState state;
+    CHECK(state.interval_ms() == 150);
+    unsigned recoveries = 0;
+    for (unsigned failure = 1; failure <= 100; ++failure) {
+        const bool recover = state.failure();
+        CHECK(recover == (failure == 3 || failure == 6 || failure == 9));
+        recoveries += recover;
+        CHECK(state.interval_ms() <= 5000);
+        if (failure == 1) CHECK(state.interval_ms() == 300);
+        if (failure == 2) CHECK(state.interval_ms() == 600);
+        if (failure >= 6) CHECK(state.interval_ms() == 5000);
+    }
+    CHECK(recoveries == 3);
+    state.success(); // A valid duplicate JPEG is also success, not a frozen camera.
+    CHECK(state.failures() == 0);
+    CHECK(state.interval_ms() == 150);
+    CHECK_FALSE(state.failure());
+    CHECK_FALSE(state.failure());
+    CHECK(state.failure());
 }

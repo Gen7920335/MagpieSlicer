@@ -1,6 +1,7 @@
 #include "Config.hpp"
 #include "Exception.hpp"
 #include "Print.hpp"
+#include "FilamentMapPolicy.hpp"
 #include "BoundingBox.hpp"
 #include "Brim.hpp"
 #include "ClipperUtils.hpp"
@@ -1300,6 +1301,123 @@ StringObjectException Print::check_multi_filament_valid(const Print& print)
     return ret;
 }
 
+// Preflight uses the same logical-filament/physical-nozzle and width resolvers
+// as geometry. Only the roles actually split by H/2 get the smaller height.
+static StringObjectException validate_half_layer_flows(const PrintObject &object,
+    double first_model_height_mm, double maximum_model_height_mm)
+{
+    const auto &config = object.config();
+    const auto &print = *object.print();
+    const auto &pc = print.config();
+    const auto &sp = object.slicing_parameters();
+    StringObjectException error;
+    std::set<unsigned int> used_filaments;
+    auto check = [&](unsigned int filament, FlowRole role, ConfigOptionFloatOrPercent width,
+                     double height_mm, bool first, const char *width_key) {
+        if (!error.string.empty()) return;
+        filament = std::max(1u, filament);
+        used_filaments.insert(filament);
+        const auto tool = wall_tool_for_filament(pc, filament);
+        if (!tool || height_mm > tool.nozzle_diameter + EPSILON) {
+            error = {L("Layer height cannot exceed nozzle diameter."), &object,
+                     first && !object.has_raft() ? "initial_layer_print_height" : "layer_height"};
+            return;
+        }
+        if (first && !object.has_raft() && pc.initial_layer_line_width.value > 0.)
+            width = pc.initial_layer_line_width;
+        if (width.value == 0.) width = config.line_width;
+        width = toolhead_line_width_or(pc, role, int(tool.hotend_id_1based), first && !object.has_raft(), width);
+        const double width_mm = width.get_abs_value(tool.nozzle_diameter);
+        if (width_mm != 0. && width_mm <= height_mm)
+            error = {L("Line width too small"), &object, width_key};
+        else if (width_mm > tool.nozzle_diameter * MAX_LINE_WIDTH_MULTIPLIER)
+            error = {L("Line width too large"), &object, width_key};
+    };
+    for (const bool first : {true, false}) {
+        const double parent_height_mm = first ? first_model_height_mm : maximum_model_height_mm;
+        const double outer_height_mm = config.outer_wall_half_layer_height ? 0.5 * parent_height_mm : parent_height_mm;
+        for (const PrintRegion &region : object.all_regions()) {
+            const auto &rc = region.config();
+            const unsigned int outer = std::max(1, rc.outer_wall_filament_id.value);
+            const unsigned int inner = rc.inner_wall_filament_id.value > 0 ? rc.inner_wall_filament_id.value : outer;
+            if (rc.wall_loops.value > 0) {
+                check(outer, frExternalPerimeter, rc.outer_wall_line_width, outer_height_mm, first, "outer_wall_line_width");
+                const int outer_count = config.outer_wall_half_layer_height ? 2 : 1;
+                if (rc.wall_loops.value > outer_count || detail_walls_enabled(rc))
+                    check(inner, frPerimeter, rc.inner_wall_line_width, parent_height_mm, first, "inner_wall_line_width");
+                if (detail_walls_enabled(rc)) {
+                    const auto detail = detail_wall_tool(pc, rc, outer);
+                    if (detail) {
+                        const double detail_height_mm = rc.crisp_corner_small_nozzle_wall_count.value > outer_count ?
+                            parent_height_mm : outer_height_mm;
+                        check(detail.filament_id_1based, frExternalPerimeter, rc.outer_wall_line_width,
+                              detail_height_mm, first, "outer_wall_line_width");
+                    }
+                }
+                for (const auto &serialized : rc.crisp_corner_large_nozzle_override_regions.values) {
+                    const auto range = parse_large_nozzle_override_region(serialized);
+                    if (!range) continue;
+                    const auto tool = wall_tool_for_hotend(pc, range->toolhead_1based, outer);
+                    if (!tool) continue;
+                    check(tool.filament_id_1based, frExternalPerimeter, rc.outer_wall_line_width,
+                          outer_height_mm, first, "outer_wall_line_width");
+                    if (rc.wall_loops.value > outer_count)
+                        check(tool.filament_id_1based, frPerimeter, rc.inner_wall_line_width,
+                              parent_height_mm, first, "inner_wall_line_width");
+                }
+            }
+            if (rc.sparse_infill_density.value > 0.)
+                check(rc.sparse_infill_filament_id.value, frInfill, rc.sparse_infill_line_width,
+                      parent_height_mm, first, "sparse_infill_line_width");
+            if (rc.sparse_infill_density.value > 0. || rc.top_shell_layers.value > 0 || rc.bottom_shell_layers.value > 0) {
+                check(rc.internal_solid_filament_id.value, frSolidInfill, rc.internal_solid_infill_line_width,
+                      parent_height_mm, first, "internal_solid_infill_line_width");
+                check(rc.internal_solid_filament_id.value, frSolidInfill, rc.skin_infill_line_width,
+                      parent_height_mm, first, "skin_infill_line_width");
+                check(rc.internal_solid_filament_id.value, frSolidInfill, rc.skeleton_infill_line_width,
+                      parent_height_mm, first, "skeleton_infill_line_width");
+            }
+            if (rc.top_shell_layers.value > 0)
+                check(rc.top_surface_filament_id.value, frTopSolidInfill, rc.top_surface_line_width,
+                      parent_height_mm, first, "top_surface_line_width");
+            if (rc.bottom_shell_layers.value > 0)
+                check(rc.bottom_surface_filament_id.value, frSolidInfill, rc.internal_solid_infill_line_width,
+                      parent_height_mm, first, "internal_solid_infill_line_width");
+        }
+        if (object.has_support() || object.has_raft()) {
+            for (const int filament : {config.support_filament.value, config.support_interface_filament.value}) {
+                const auto candidates = filament > 0 ? std::vector<unsigned int>{unsigned(filament - 1)} : object.object_extruders();
+                for (const unsigned int candidate : candidates) {
+                    const double support_height_mm = config.support_half_layer_height ? 0.5 * parent_height_mm : parent_height_mm;
+                    check(candidate + 1, frSupportMaterial, config.support_line_width, support_height_mm, first, "support_line_width");
+                    // Genuine raft bands are deliberately not split by H/2.
+                    if (object.has_raft()) {
+                        const double raft_height_mm = std::max({sp.first_print_layer_height, sp.base_raft_layer_height,
+                            sp.interface_raft_layer_height, sp.contact_raft_layer_height});
+                        check(candidate + 1, frSupportMaterial, config.support_line_width, raft_height_mm, true, "support_line_width");
+                    }
+                    if (config.support_interface_temperature_drop_tower)
+                        check(candidate + 1, frSupportMaterial, config.support_line_width,
+                              parent_height_mm, first, "support_line_width");
+                }
+            }
+        }
+    }
+    // Skirts, brims and tower bands are not outer-wall H/2 paths. Their nozzle
+    // safety must not be weakened by enabling a half-height model role.
+    const bool skirt = pc.skirt_loops.value > 0 && (print.has_skirt() || print.has_infinite_skirt());
+    if (error.string.empty() && (skirt || object.has_brim() || print.has_wipe_tower())) {
+        const double auxiliary_height_mm = print.has_wipe_tower() || (skirt && (pc.skirt_height.value > 1 || print.has_infinite_skirt())) ?
+            std::max(first_model_height_mm, maximum_model_height_mm) : pc.initial_layer_print_height.value;
+        for (const auto filament : used_filaments) {
+            const auto tool = wall_tool_for_filament(pc, filament);
+            if (!tool || auxiliary_height_mm > tool.nozzle_diameter + EPSILON)
+                return {L("Layer height cannot exceed nozzle diameter."), &object, "layer_height"};
+        }
+    }
+    return error;
+}
+
 // Precondition: Print::validate() requires the Print::apply() to be called its invocation.
 //BBS: refine seq-print validation logic
 StringObjectException Print::validate(std::vector<StringObjectException> *warnings, Polygons* collison_polygons, std::vector<std::pair<Polygon, float>>* height_polygons) const
@@ -1322,6 +1440,13 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 
     if (m_objects.empty())
         return {std::string()};
+
+    if (const char *error = FilamentMapPolicy::export_error(m_config, is_BBL_printer())) {
+        StringObjectException ret;
+        ret.string = error;
+        ret.opt_key = "filament_map";
+        return ret;
+    }
 
     if (extruders.empty())
         return { L("No extrusions under current settings.") };
@@ -1418,12 +1543,18 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         return profile;
     };
 
+    std::vector<std::pair<double, double>> validation_layer_heights(m_objects.size());
     // Checks that the print does not exceed the max print height
     for (size_t print_object_idx = 0; print_object_idx < m_objects.size(); ++ print_object_idx) {
         const PrintObject &print_object = *m_objects[print_object_idx];
         //FIXME It is quite expensive to generate object layers just to get the print height!
         if (auto layers = generate_object_layers(print_object.slicing_parameters(), layer_height_profile(print_object_idx), print_object.config().precise_z_height.value);
             !layers.empty()) {
+            auto &heights = validation_layer_heights[print_object_idx];
+            heights.first = layers[1] - layers[0];
+            heights.second = print_object.config().layer_height.value;
+            for (size_t i = 2; i + 1 < layers.size(); i += 2)
+                heights.second = std::max(heights.second, layers[i + 1] - layers[i]);
 
             Vec3d test =this->shrinkage_compensation();
             const double shrinkage_compensation_z = this->shrinkage_compensation().z();
@@ -1609,7 +1740,8 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 			}
 			return true;
 		};
-        for (PrintObject *object : m_objects) {
+        for (size_t object_idx = 0; object_idx < m_objects.size(); ++object_idx) {
+            PrintObject *object = m_objects[object_idx];
             if (object->has_support_material()) {
                 // BBS: remove useless logics and L()
 #if 0
@@ -1676,6 +1808,14 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                 }
             }
 
+            const bool half_height = object->config().outer_wall_half_layer_height || object->config().support_half_layer_height;
+            double layer_height = object->config().layer_height.value;
+            std::string err_msg;
+            if (half_height) {
+                const auto &heights = validation_layer_heights[object_idx];
+                if (const auto error = validate_half_layer_flows(*object, heights.first, heights.second); !error.string.empty())
+                    return error;
+            } else {
             double initial_layer_print_height = m_config.initial_layer_print_height.value;
             double first_layer_min_nozzle_diameter;
             if (object->has_raft()) {
@@ -1694,12 +1834,10 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                 return {L("Layer height cannot exceed nozzle diameter."), object, "initial_layer_print_height"};
 
             // validate layer_height
-            double layer_height = object->config().layer_height.value;
             if (layer_height > min_nozzle_diameter)
                 return {L("Layer height cannot exceed nozzle diameter."), object, "layer_height"};
 
             // Validate extrusion widths.
-            std::string err_msg;
             if (!validate_extrusion_width(object->config(), "line_width", layer_height, err_msg))
             	return {err_msg, object, "line_width"};
             if (object->has_support() || object->has_raft()) {
@@ -1710,12 +1848,15 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 				for (const PrintRegion &region : object->all_regions())
                     if (!validate_extrusion_width(region.config(), opt_key, layer_height, err_msg))
 		            	return  {err_msg, object, opt_key};
+            }
 
             const bool allow_thin_bridge_width = object->config().thick_bridges && object->config().thick_internal_bridges;
             for (const PrintRegion &region : object->all_regions()) {
                 const auto &bridge_width_opt = region.config().bridge_line_width;
                 for (FlowRole bridge_role : { frPerimeter, frInfill, frSolidInfill, frTopSolidInfill }) {
-                    const double nozzle_diameter = m_config.nozzle_diameter.get_at(region.extruder(bridge_role) - 1);
+                    const auto bridge_tool = half_height ? wall_tool_for_filament(m_config, region.extruder(bridge_role)) : ResolvedWallTool{};
+                    const double nozzle_diameter = bridge_tool ? bridge_tool.nozzle_diameter :
+                        m_config.nozzle_diameter.get_at(region.extruder(bridge_role) - 1);
                     const double bridge_width    = bridge_width_opt.get_abs_value(nozzle_diameter);
                     if (bridge_width <= 0.)
                         continue;
@@ -1723,7 +1864,8 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                         err_msg = L("Bridge line width must not exceed nozzle diameter");
                         return { err_msg, object, "bridge_line_width" };
                     }
-                    if (!allow_thin_bridge_width && bridge_width <= layer_height) {
+                    const double bridge_layer_height_mm = half_height ? validation_layer_heights[object_idx].second : layer_height;
+                    if (!allow_thin_bridge_width && bridge_width <= bridge_layer_height_mm) {
                         err_msg = L("Line width too small");
                         return { err_msg, object, "bridge_line_width" };
                     }
@@ -3241,6 +3383,10 @@ void Print::update_filament_maps_to_config(std::vector<int> f_maps)
 {
     if (m_config.filament_map.values != f_maps)
     {
+        // PERMANENT DIAGNOSTIC: geometry was created with the fixed Auto map.
+        // Never let late grouping feedback silently rebind its nozzle/flow.
+        if (FilamentMapPolicy::uses_fixed_tools(m_config, is_BBL_printer()))
+            throw SlicingError("Direct-tool filament mapping changed after geometry generation. Re-slice with matching filament and toolhead numbers.");
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": filament maps changed after pre-slicing.");
         m_ori_full_print_config.option<ConfigOptionInts>("filament_map", true)->values = f_maps;
         m_config.filament_map.values = f_maps;

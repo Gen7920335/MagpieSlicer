@@ -581,7 +581,7 @@ namespace {
 using json = nlohmann::json;
 
 constexpr int POLL_INTERVAL_MS = 1000;
-constexpr int CAMERA_INTERVAL_MS = 150;
+constexpr int CAMERA_INTERVAL_MS = SnapmakerCameraPollState::normal_interval_ms;
 constexpr size_t MAX_GCODE_BYTES = 512ULL * 1024ULL * 1024ULL;
 const wxColour ACCENT_BLUE(61, 145, 232);
 
@@ -1412,7 +1412,7 @@ void SnapmakerMonitorPanel::update_numeric_input(wxSpinCtrlDouble *control, doub
 
 void SnapmakerMonitorPanel::set_server(const wxString &url, const wxString &api_key)
 {
-    const std::string base_url = normalize_base_url(url);
+    const std::string base_url = is_snapmaker_http_url(url.ToStdString()) ? normalize_base_url(url) : std::string();
     const std::string key = api_key.ToUTF8().data();
     if (base_url == m_base_url && key == m_api_key)
         return;
@@ -1465,6 +1465,9 @@ void SnapmakerMonitorPanel::set_server(const wxString &url, const wxString &api_
     m_layer_view->set_status(_L("Waiting for G-code"));
     m_layer_view->set_objects({});
     m_camera_interval_ms = CAMERA_INTERVAL_MS;
+    m_camera_poll_state.success();
+    if (m_camera_timer.IsRunning())
+        m_camera_timer.Start(m_camera_interval_ms);
     m_camera_frames_in_window = 0;
     m_camera_fps = 0.0;
     m_camera_latency_ms = 0;
@@ -1542,9 +1545,7 @@ void SnapmakerMonitorPanel::start_camera_session()
                     break;
                 case SnapmakerCameraSession::State::Active:
                     m_camera_session_status = _L("Camera: waiting for frames");
-                    m_camera_interval_ms = CAMERA_INTERVAL_MS;
-                    if (m_camera_timer.IsRunning())
-                        m_camera_timer.Start(m_camera_interval_ms);
+                    update_camera_poll_interval();
                     request_camera();
                     break;
                 case SnapmakerCameraSession::State::Reconnecting:
@@ -1704,7 +1705,7 @@ void SnapmakerMonitorPanel::request_system_info()
 
 void SnapmakerMonitorPanel::request_camera()
 {
-    if (m_camera_paused || m_camera_in_flight || m_base_url.empty())
+    if (!m_active || m_camera_paused || m_camera_in_flight || m_base_url.empty())
         return;
     m_camera_in_flight = true;
     const auto lifetime = std::weak_ptr<int>(m_lifetime);
@@ -1754,13 +1755,13 @@ void SnapmakerMonitorPanel::request_camera()
                 if (image.IsOk())
                     apply_camera(std::move(image), hash, static_cast<long>(elapsed));
                 else
-                    apply_duplicate_camera_frame(static_cast<long>(elapsed));
+                    camera_request_failed(0); // HTTP succeeded, but the payload was not a valid JPEG.
             });
         })
-        .on_error([this, lifetime, generation](std::string, std::string, unsigned) {
-            wxTheApp->CallAfter([this, lifetime, generation]() {
+        .on_error([this, lifetime, generation](std::string, std::string, unsigned status) {
+            wxTheApp->CallAfter([this, lifetime, generation, status]() {
                 if (!lifetime.expired() && generation == m_server_generation)
-                    m_camera_in_flight = false;
+                    camera_request_failed(status);
             });
         })
         .perform();
@@ -2356,6 +2357,8 @@ void SnapmakerMonitorPanel::apply_system_info(const std::string &body)
 
 void SnapmakerMonitorPanel::apply_camera(wxImage image, std::uint64_t frame_hash_value, long latency_ms)
 {
+    m_camera_poll_state.success();
+    update_camera_poll_interval();
     m_last_frame_hash = frame_hash_value;
     m_camera_latency_ms = latency_ms;
     m_camera->set_frame(std::move(image));
@@ -2366,8 +2369,48 @@ void SnapmakerMonitorPanel::apply_camera(wxImage image, std::uint64_t frame_hash
 
 void SnapmakerMonitorPanel::apply_duplicate_camera_frame(long latency_ms)
 {
+    m_camera_poll_state.success();
+    m_camera_session_status = _L("Camera: receiving frames");
+    update_camera_poll_interval();
     m_camera_latency_ms = latency_ms;
     update_camera_rate();
+    update_footer();
+}
+
+void SnapmakerMonitorPanel::update_camera_poll_interval()
+{
+    const int interval_ms = m_camera_poll_state.interval_ms();
+    if (m_camera_interval_ms == interval_ms)
+        return;
+    m_camera_interval_ms = interval_ms;
+    if (m_camera_timer.IsRunning())
+        m_camera_timer.Start(m_camera_interval_ms);
+}
+
+void SnapmakerMonitorPanel::camera_request_failed(unsigned status)
+{
+    m_camera_in_flight = false;
+    if (!m_active || m_camera_paused)
+        return;
+    const bool recover = m_camera_poll_state.failure();
+    m_camera_fps = 0.0;
+    m_camera_frames_in_window = 0;
+    m_camera_latency_ms = 0;
+    m_fps_window_started = std::chrono::steady_clock::now();
+    m_camera_session_status = _L("Camera: frame unavailable");
+    if (status != 0)
+        m_camera_session_status += wxString::Format(" (HTTP %u)", status);
+    update_camera_poll_interval();
+    // PERMANENT DIAGNOSTIC: no URLs, API keys or response bodies in failure logs.
+    if (m_camera_poll_state.failures() == 1 || recover)
+        BOOST_LOG_TRIVIAL(warning) << "Snapmaker camera frame failed: status=" << status
+            << ", failures=" << m_camera_poll_state.failures() << ", reconnect=" << recover;
+    if (recover) {
+        if (m_camera_session->is_running())
+            m_camera_session->request_reconnect();
+        else
+            start_camera_session();
+    }
     update_footer();
 }
 
@@ -2741,8 +2784,12 @@ void SnapmakerMonitorPanel::on_camera_pause()
     m_camera_paused = !m_camera_paused;
     if (m_camera_pause_button != nullptr)
         m_camera_pause_button->SetLabel(m_camera_paused ? _L("Resume camera") : _L("Pause camera"));
-    if (!m_camera_paused)
+    if (!m_camera_paused) {
+        // An explicit user retry starts a new bounded recovery window.
+        m_camera_poll_state.success();
+        update_camera_poll_interval();
         request_camera();
+    }
     update_footer();
 }
 
@@ -3076,6 +3123,8 @@ void SnapmakerMonitorPanel::update_footer()
 
 void SnapmakerMonitorPanel::on_status_timer(wxTimerEvent &)
 {
+    if (!m_active || m_base_url.empty())
+        return;
     if (m_status_objects.empty())
         request_object_list();
     else

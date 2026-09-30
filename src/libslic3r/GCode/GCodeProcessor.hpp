@@ -273,6 +273,9 @@ class Print;
 
         BedType bed_type = BedType::btCount;
         void reset();
+        // Split a logical layer into physical preview bands when its extrusion
+        // top Z rises. The parsed moves and their logical layer ids stay intact.
+        std::vector<unsigned int> preview_layer_ids() const;
 
         //BBS: add mutex for protection of gcode result
         mutable std::mutex result_mutex;

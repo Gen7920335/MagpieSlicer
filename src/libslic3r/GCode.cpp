@@ -23,8 +23,10 @@
 #include "GCode/SnapmakerHomingPolicy.hpp"
 #include "GCode/Thumbnails.hpp"
 #include "GCode/WipeTower.hpp"
+#include "GCode/WipeTowerTravel.hpp"
 #include "ShortestPath.hpp"
 #include "Print.hpp"
+#include "FilamentMapPolicy.hpp"
 #include "Utils.hpp"
 #include "ClipperUtils.hpp"
 #include "libslic3r.h"
@@ -1885,6 +1887,44 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         return res;
     }
 
+    static double prepare_wipe_tower_travel_config(DynamicConfig &variables, const PrintConfig &config,
+                                                   bool enabled, double parent_height_mm, double tower_z_mm)
+    {
+        // Both tower backends and nested nozzle-change blocks use this policy.
+        // The caller supplies original logical H, never the tower/physical H.
+        const double minimum_lift_mm = enabled ? half_layer_travel_lift_mm(0., parent_height_mm, true, false) : 0.;
+        variables.set_key_value("half_layer_tower_travel_enabled", new ConfigOptionBool(enabled));
+        const size_t filament_count = std::max(config.filament_diameter.size(), config.filament_colour.size());
+        for (size_t filament = 0; filament < filament_count; ++filament) {
+            std::string lift, restore;
+            if (enabled) {
+                GCodeWriter travel_writer;
+                travel_writer.apply_print_config(config);
+                travel_writer.set_extruders({static_cast<unsigned int>(filament)});
+                travel_writer.set_extruder(static_cast<unsigned int>(filament));
+                travel_writer.set_position(Vec3d(0., 0., tower_z_mm));
+                lift = "; half-layer tower connection\n" + travel_writer.ensure_travel_clearance(
+                    tower_z_mm, tower_z_mm, minimum_lift_mm);
+                restore = travel_writer.unlift() + "; half-layer tower connection end\n";
+            }
+            variables.set_key_value(wipe_tower_travel_key(true, int(filament)), new ConfigOptionString(std::move(lift)));
+            variables.set_key_value(wipe_tower_travel_key(false, int(filament)), new ConfigOptionString(std::move(restore)));
+        }
+        return minimum_lift_mm;
+    }
+
+    static void record_half_layer_tower_source(GCodeWriter &writer, const std::string &emitted,
+                                               double tower_z_mm, double &pending_source_z_mm)
+    {
+        double actual_z_mm = tower_z_mm;
+        GCodeProcessor::get_last_z_from_gcode(emitted, tower_z_mm, actual_z_mm);
+        Vec3d actual_position = writer.get_position();
+        actual_position.z() = actual_z_mm;
+        writer.set_position_with_nominal_z(actual_position, tower_z_mm);
+        pending_source_z_mm = std::isfinite(pending_source_z_mm) ?
+            std::max(pending_source_z_mm, tower_z_mm) : tower_z_mm;
+    }
+
     std::string WipeTowerIntegration::append_tcr(GCode& gcodegen, const WipeTower::ToolChangeResult& tcr, int new_filament_id, double z) const
     {
         if (new_filament_id != -1 && new_filament_id != tcr.new_tool)
@@ -2008,7 +2048,16 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
             check_add_eol(start_pos_str);
             nozzle_change_gcode_trans += start_pos_str;
             nozzle_change_gcode_trans += gcodegen.unretract();
-            nozzle_change_gcode_trans += transform_gcode(tcr.nozzle_change_result.gcode, tcr.nozzle_change_result.start_pos, wipe_tower_offset, wipe_tower_rotation);
+            DynamicConfig travel_variables;
+            prepare_wipe_tower_travel_config(travel_variables, gcodegen.config(),
+                gcodegen.m_half_layer_dispatch_active, gcodegen.m_half_layer_motion_reference_height,
+                gcodegen.writer().get_position().z());
+            const std::string nozzle_template = transform_gcode(tcr.nozzle_change_result.gcode,
+                tcr.nozzle_change_result.start_pos, wipe_tower_offset, wipe_tower_rotation);
+            std::string nozzle_moves;
+            unescape_string_cstyle(gcodegen.placeholder_parser_process("nozzle_change_travel", nozzle_template,
+                new_filament_id, &travel_variables), nozzle_moves);
+            nozzle_change_gcode_trans += nozzle_moves;
             gcodegen.set_last_pos(wipe_tower_point_to_object_point(gcodegen, transform_wt_pt(tcr.nozzle_change_result.end_pos) + plate_origin_2d));
             gcodegen.m_wipe.reset_path();
             for (const Vec2f& wipe_pt : tcr.nozzle_change_result.wipe_path)
@@ -2281,6 +2330,9 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         config.set_key_value("filament_end_gcode", new ConfigOptionString(end_filament_gcode_str));
         config.set_key_value("change_filament_gcode", new ConfigOptionString(toolchange_gcode_str));
         config.set_key_value("filament_start_gcode", new ConfigOptionString(start_filament_gcode_str));
+        const bool half_layer_travel = gcodegen.m_half_layer_dispatch_active;
+        const double minimum_lift_mm = prepare_wipe_tower_travel_config(config, gcodegen.config(),
+            half_layer_travel, gcodegen.m_half_layer_motion_reference_height, z);
         std::string tcr_gcode, tcr_escaped_gcode = gcodegen.placeholder_parser_process("tcr_rotated_gcode", tcr_rotated_gcode, new_filament_id, &config);
         unescape_string_cstyle(tcr_escaped_gcode, tcr_gcode);
         gcode += tcr_gcode;
@@ -2297,9 +2349,14 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         // A phony move to the end position at the wipe tower.
         gcodegen.writer().travel_to_xy((end_pos + plate_origin_2d).cast<double>());
         gcodegen.set_last_pos(wipe_tower_point_to_object_point(gcodegen, end_pos + plate_origin_2d));
+        if (half_layer_travel)
+            record_half_layer_tower_source(gcodegen.writer(), tcr_gcode, z, gcodegen.m_half_layer_pending_source_z);
         if (!is_approx(z, current_z)) {
             gcode += gcodegen.writer().retract();
-            gcode += gcodegen.writer().travel_to_z(current_z, "Travel back up to the topmost object layer.");
+            if (half_layer_travel)
+                gcode += gcodegen.writer().ensure_travel_clearance(z, current_z, minimum_lift_mm);
+            else
+                gcode += gcodegen.writer().travel_to_z(current_z, "Travel back up to the topmost object layer.");
             gcode += gcodegen.writer().unretract();
         }
 
@@ -2562,6 +2619,10 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         config.set_key_value("layer_z", new ConfigOptionFloat(tcr.print_z));
         config.set_key_value("toolchange_z", new ConfigOptionFloat(z));
 
+        const bool half_layer_travel = gcodegen.m_half_layer_dispatch_active;
+        const double minimum_lift_mm = prepare_wipe_tower_travel_config(config, gcodegen.config(),
+            half_layer_travel, gcodegen.m_half_layer_motion_reference_height, z);
+
         std::string tcr_gcode,
             tcr_escaped_gcode = gcodegen.placeholder_parser_process("tcr_rotated_gcode", tcr_rotated_gcode, new_extruder_id, &config);
         unescape_string_cstyle(tcr_escaped_gcode, tcr_gcode);
@@ -2579,9 +2640,14 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         // A phony move to the end position at the wipe tower.
         gcodegen.writer().travel_to_xy((end_pos + plate_origin_2d).cast<double>());
         gcodegen.set_last_pos(wipe_tower_point_to_object_point(gcodegen, end_pos + plate_origin_2d));
+        if (half_layer_travel)
+            record_half_layer_tower_source(gcodegen.writer(), tcr_gcode, z, gcodegen.m_half_layer_pending_source_z);
         if (!is_approx(z, current_z)) {
             gcode += gcodegen.writer().retract();
-            gcode += gcodegen.writer().travel_to_z(current_z, "Travel back up to the topmost object layer.");
+            if (half_layer_travel)
+                gcode += gcodegen.writer().ensure_travel_clearance(z, current_z, minimum_lift_mm);
+            else
+                gcode += gcodegen.writer().travel_to_z(current_z, "Travel back up to the topmost object layer.");
             gcode += gcodegen.writer().unretract();
         }
 
@@ -2972,7 +3038,9 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
         layer_to_print.original_object = &object;
         layers_to_print.push_back(layer_to_print);
 
-        bool has_extrusions = (layer_to_print.object_layer && layer_to_print.object_layer->has_extrusions())
+        const bool model_has_extrusions = layer_to_print.object_layer &&
+            object.model_layer_has_extrusions(idx_object_layer - 1);
+        const bool has_extrusions = model_has_extrusions
             || (layer_to_print.support_layer && layer_to_print.support_layer->has_extrusions());
 
         // Check that there are extrusions on the very first layer. The case with empty
@@ -2983,7 +3051,7 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
         }
 
         // In case there are extrusions on this layer, check there is a layer to lay it on.
-        if ((layer_to_print.object_layer && layer_to_print.object_layer->has_extrusions())
+        if (model_has_extrusions
             // Allow empty support layers, as the support generator may produce no extrusions for non-empty support regions.
             || (layer_to_print.support_layer /* && layer_to_print.support_layer->has_extrusions() */)) {
             double top_cd = object.config().support_top_z_distance;
@@ -3241,6 +3309,11 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
 
     GCodeWriter::full_gcode_comment = print->config().gcode_comments;
     CNumericLocalesSetter locales_setter;
+
+    // Also enforce this for callers that skip Print::validate / use no_check,
+    // and before the cache fast path or removal of an existing output file.
+    if (const char *error = FilamentMapPolicy::export_error(print->config(), print->is_BBL_printer()))
+        throw SlicingError(error);
 
     // Does the file exist? If so, we hope that it is still valid.
     if (print->is_step_done(psGCodeExport) && boost::filesystem::exists(boost::filesystem::path(path)))
@@ -5485,29 +5558,27 @@ static unsigned int marked_detail_wall_filament_1based(const PrintConfig &config
     return tool ? tool.filament_id_1based : base_filament;
 }
 
-static bool entity_has_tool_hint(const ExtrusionEntity &entity, ExtrusionToolHint hint)
-{
-    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection*>(&entity)) {
-        for (const ExtrusionEntity *child : collection->entities)
-            if (child != nullptr && entity_has_tool_hint(*child, hint))
-                return true;
-        return false;
-    }
-    return entity.tool_hint == hint;
-}
-
-static void partition_wall_entities_by_hint(const ExtrusionEntity &entity,
+static void partition_wall_entities_by_tool(const ExtrusionEntity &entity,
+                                            const LayerTools &tools, const PrintRegion &region,
                                             ExtrusionEntityCollection &detail,
                                             ExtrusionEntityCollection &large)
 {
     if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection*>(&entity)) {
+        ExtrusionEntityCollection nested_detail, nested_large;
+        nested_detail.no_sort = nested_large.no_sort = collection->no_sort;
+        if (!collection->can_reverse()) {
+            nested_detail.set_reverse();
+            nested_large.set_reverse();
+        }
         for (const ExtrusionEntity *child : collection->entities)
             if (child != nullptr)
-                partition_wall_entities_by_hint(*child, detail, large);
+                partition_wall_entities_by_tool(*child, tools, region, nested_detail, nested_large);
+        if (!nested_detail.empty()) detail.append(std::move(nested_detail));
+        if (!nested_large.empty()) large.append(std::move(nested_large));
         return;
     }
 
-    if (entity.tool_hint == ExtrusionToolHint::DetailWall)
+    if (tools.wall_extruder_id(region, entity) == tools.wall_extruder_id(region))
         detail.append(entity);
     else
         large.append(entity);
@@ -5689,10 +5760,9 @@ void append_half_layer_model_tasks(const PrintObject &object, size_t parent_inde
                     if (perimeter) {
                         if (override_tool)
                             filament = override_tool.filament_id_1based - 1;
-                        else if (entity.tool_hint == ExtrusionToolHint::DetailWall)
-                            filament = marked_detail_wall_filament_1based(print_config, region->region()) - 1;
-                        else if (entity.tool_hint == ExtrusionToolHint::LargeWall)
-                            filament = effective_inner_wall_filament_1based(region_config) - 1;
+                        else
+                            filament = tools.wall_extruder_id(region->region(), entity,
+                                object.config().outer_wall_half_layer_height.value);
                     } else if (entity.role() == erGapFill) {
                         // Gap demand is created with LayerRegion's frSolidInfill
                         // Flow, not sparse-infill Flow. Keep that material owner.
@@ -6181,7 +6251,11 @@ std::string GCode::generate_skirt(const Print &print,
         unsigned int extruder_id,
         std::vector<coordf_t> &skirt_done)
 {
-    
+    // The planner assigns a combined skirt to the first logical-layer tool.
+    // H/2 visits may start with support on another tool. Do not consume the
+    // shared completion state until the owning visit actually reaches it.
+    if (layer_tools.extruders.empty() || extruder_id != layer_tools.extruders.front())
+        return {};
     bool first_layer = (layer.id() == 0 && abs(layer.bottom_z()) < EPSILON);
     std::string gcode;
     // Extrude skirt at the print_z of the raft layers and normal object layers
@@ -6953,9 +7027,8 @@ LayerResult GCode::process_layer(
                             override_wall_tool.filament_id_1based : effective_inner_wall_filament_1based(region.config());
                         bool split_mixed_perimeters =
                             entity_type == ObjectByExtruder::Island::Region::PERIMETERS &&
+                            layer_tools.extruder_override == 0 &&
                             external_wall_filament != inner_wall_filament &&
-                            (entity_has_tool_hint(*extrusions, ExtrusionToolHint::DetailWall) ||
-                             entity_has_tool_hint(*extrusions, ExtrusionToolHint::LargeWall)) &&
                             (extrusions->role() == erMixed ||
                              extrusions->role() == erPerimeter ||
                              extrusions->role() == erExternalPerimeter ||
@@ -6964,9 +7037,14 @@ LayerResult GCode::process_layer(
                         if (split_mixed_perimeters) {
                             auto detail_perimeters = std::make_unique<ExtrusionEntityCollection>();
                             auto large_perimeters = std::make_unique<ExtrusionEntityCollection>();
+                            detail_perimeters->no_sort = large_perimeters->no_sort = extrusions->no_sort;
+                            if (!extrusions->can_reverse()) {
+                                detail_perimeters->set_reverse();
+                                large_perimeters->set_reverse();
+                            }
                             for (const ExtrusionEntity *entity : extrusions->entities) {
                                 if (entity != nullptr)
-                                    partition_wall_entities_by_hint(*entity, *detail_perimeters, *large_perimeters);
+                                    partition_wall_entities_by_tool(*entity, layer_tools, region, *detail_perimeters, *large_perimeters);
                             }
 
                             if (!detail_perimeters->entities.empty()) {
@@ -7320,7 +7398,8 @@ LayerResult GCode::process_layer(
                 result.spiral_vase_enable = false;
             gcode += std::move(gcode_toolchange);
             if (visit_changes_tool)
-                m_half_layer_pending_source_z = visit_source_nominal_z;
+                m_half_layer_pending_source_z = std::isfinite(m_half_layer_pending_source_z) ?
+                    std::max(m_half_layer_pending_source_z, visit_source_nominal_z) : visit_source_nominal_z;
             if (has_wipe_tower)
                 m_last_processor_extrusion_role = erWipeTower;
             if (visit.tower_only)

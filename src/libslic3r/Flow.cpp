@@ -310,7 +310,7 @@ ResolvedWallTool detail_wall_tool(const PrintConfig &print_config, const PrintRe
                 (!print_config.filament_soluble.values.empty() &&
                  print_config.filament_soluble.get_at(candidate_filament_idx) != print_config.filament_soluble.get_at(base_filament_idx)))
                 continue;
-            if (require_same_colour && (!base_colour_known || candidate_filament_idx >= print_config.filament_colour.values.size() ||
+            if (require_same_colour && (!base_colour_known || base_colour.empty() || candidate_filament_idx >= print_config.filament_colour.values.size() ||
                                         print_config.filament_colour.values[candidate_filament_idx] != base_colour))
                 continue;
             if (!best || candidate.nozzle_diameter < best.nozzle_diameter ||
@@ -329,8 +329,12 @@ ResolvedWallTool detail_wall_tool(const PrintConfig &print_config, const PrintRe
             return manual;
     }
 
-    if (ResolvedWallTool any_smaller = best_smaller(false); any_smaller)
-        return any_smaller;
+    // Auto must preserve the assigned colour when no compatible same-colour
+    // smaller nozzle exists. Keep the legacy fallback for explicit tool choices.
+    if (manual_toolhead > 0) {
+        if (ResolvedWallTool any_smaller = best_smaller(false); any_smaller)
+            return any_smaller;
+    }
 
     return base_tool;
 }

@@ -1150,6 +1150,19 @@ const HalfLayerSupportSources *PrintObject::half_layer_support_sources() const
         m_half_layer_support_sources.get() : nullptr;
 }
 
+bool PrintObject::model_layer_has_extrusions(size_t parent_index) const
+{
+    if (parent_index >= m_layers.size())
+        return false;
+    if (m_layers[parent_index]->has_extrusions())
+        return true;
+    if (const auto *sources = half_layer_sources())
+        for (const auto &phase : sources->phases)
+            if (parent_index < phase.size() && phase[parent_index] && phase[parent_index]->has_extrusions())
+                return true;
+    return false;
+}
+
 Layer* PrintObject::add_layer(int id, coordf_t height, coordf_t print_z, coordf_t slice_z)
 {
     m_layers.emplace_back(new Layer(id, this, height, print_z, slice_z));

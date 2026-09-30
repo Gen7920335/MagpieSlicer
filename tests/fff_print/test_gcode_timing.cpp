@@ -82,6 +82,81 @@ double filament_change_delay(const GCodeProcessorResult& r)
 
 } // namespace
 
+TEST_CASE("Preview layers follow physical extrusion bands without changing normal logical layers",
+          "[GCodeProcessor][PreviewLayers][HalfLayer]")
+{
+    auto append_move = [](GCodeProcessorResult &result, EMoveType type, unsigned int logical_layer,
+                          float z_mm, ExtrusionRole role = erNone) {
+        GCodeProcessorResult::MoveVertex move;
+        move.type = type;
+        move.layer_id = logical_layer;
+        move.position.z() = z_mm;
+        move.extrusion_role = role;
+        result.moves.emplace_back(move);
+    };
+
+    SECTION("ordinary layers retain their logical grouping") {
+        GCodeProcessorResult result;
+        result.spiral_vase_mode = false;
+        append_move(result, EMoveType::Noop,     0, 0.0f);
+        append_move(result, EMoveType::Travel,   0, 0.2f);
+        append_move(result, EMoveType::Extrude, 0, 0.2f, erExternalPerimeter);
+        append_move(result, EMoveType::Travel,   0, 0.6f);
+        append_move(result, EMoveType::Travel,   0, 0.2f);
+        append_move(result, EMoveType::Extrude, 0, 0.2f, erPerimeter);
+        append_move(result, EMoveType::Travel,   1, 0.4f);
+        append_move(result, EMoveType::Extrude, 1, 0.4f, erExternalPerimeter);
+        CHECK(result.preview_layer_ids() == std::vector<unsigned int>{0, 0, 0, 0, 0, 0, 1, 1});
+    }
+
+    SECTION("half-height bands become separately selectable preview layers") {
+        GCodeProcessorResult result;
+        result.spiral_vase_mode = false;
+        append_move(result, EMoveType::Noop,     0, 0.0f);
+        append_move(result, EMoveType::Travel,   0, 0.06f);
+        append_move(result, EMoveType::Extrude,  0, 0.06f, erExternalPerimeter);
+        append_move(result, EMoveType::Travel,   0, 0.40f);
+        append_move(result, EMoveType::Travel,   0, 0.12f);
+        append_move(result, EMoveType::Extrude,  0, 0.12f, erPerimeter);
+        append_move(result, EMoveType::Extrude,  0, 0.12f, erExternalPerimeter);
+        append_move(result, EMoveType::Travel,   1, 0.18f);
+        append_move(result, EMoveType::Extrude,  1, 0.18f, erExternalPerimeter);
+        append_move(result, EMoveType::Travel,   1, 0.24f);
+        append_move(result, EMoveType::Extrude,  1, 0.24f, erPerimeter);
+        CHECK(result.preview_layer_ids() == std::vector<unsigned int>{0, 0, 0, 0, 0, 1, 1, 2, 2, 2, 3});
+    }
+
+    SECTION("custom extrusion and z-hop do not invent physical layers") {
+        GCodeProcessorResult result;
+        result.spiral_vase_mode = false;
+        append_move(result, EMoveType::Extrude, 0, 0.2f, erExternalPerimeter);
+        append_move(result, EMoveType::Travel,  0, 1.0f);
+        append_move(result, EMoveType::Travel,  0, 0.8f);
+        append_move(result, EMoveType::Extrude, 0, 0.8f, erCustom);
+        append_move(result, EMoveType::Travel,  0, 0.2f);
+        append_move(result, EMoveType::Extrude, 0, 0.2f, erPerimeter);
+        CHECK(result.preview_layer_ids() == std::vector<unsigned int>{0, 0, 0, 0, 0, 0});
+    }
+
+    SECTION("spiral extrusion keeps upstream logical preview layers") {
+        GCodeProcessorResult result;
+        result.spiral_vase_mode = true;
+        append_move(result, EMoveType::Extrude, 0, 0.20f, erExternalPerimeter);
+        append_move(result, EMoveType::Extrude, 0, 0.21f, erExternalPerimeter);
+        append_move(result, EMoveType::Extrude, 1, 0.40f, erExternalPerimeter);
+        CHECK(result.preview_layer_ids() == std::vector<unsigned int>{0, 0, 1});
+    }
+
+    SECTION("non-planar extrusion does not create a layer for every rising segment") {
+        GCodeProcessorResult result;
+        result.spiral_vase_mode = false;
+        append_move(result, EMoveType::Extrude, 0, 0.20f, erExternalPerimeter);
+        append_move(result, EMoveType::Extrude, 0, 0.21f, erExternalPerimeter);
+        append_move(result, EMoveType::Extrude, 0, 0.21f, erExternalPerimeter);
+        CHECK(result.preview_layer_ids() == std::vector<unsigned int>{0, 0, 0});
+    }
+}
+
 TEST_CASE("Filament-change time is attributed to tool-change moves, not extrusion roles", "[GCodeTiming]")
 {
     // Relative extrusion (M83) so every "E5" is a real 5mm extrusion move rather

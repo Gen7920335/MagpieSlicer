@@ -1788,6 +1788,91 @@ TEST_CASE("Resin style Default and Branching generate printable FFF support",
     }
 }
 
+TEST_CASE("Elevated Resin support remains continuous when synchronized with a prime tower",
+          "[SupportMaterial][Resin][ElevatedSupportRegression]")
+{
+    const auto strategy = GENERATE(rstDefault, rstBranching);
+    const bool synchronized = GENERATE(false, true);
+    const bool half = GENERATE(false, true);
+    const int raft = GENERATE(0, 2);
+    const bool dense = GENERATE(false, true);
+    const int support_walls = GENERATE(0, 1);
+    const int interface_layers = GENERATE(0, 3);
+    auto config = multifilament_config(2, {
+        {"enable_support", true}, {"support_type", "resin(auto)"},
+        {"support_filament", 2}, {"support_interface_filament", 2},
+        {"resin_support_object_elevation", 1.2}, {"resin_branching_support_object_elevation", 1.2},
+        {"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
+        {"support_half_layer_height", half}, {"raft_layers", raft},
+        {"enable_prime_tower", synchronized}, {"independent_support_layer_height", !synchronized},
+        {"single_extruder_multi_material", true}, {"use_relative_e_distances", true},
+        {"layer_change_gcode", "G92 E0\n"}, {"skirt_loops", 0}, {"brim_type", "no_brim"},
+    });
+    config.set_key_value("resin_support_tree_type", new ConfigOptionEnum<ResinSupportTreeType>(strategy));
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 1});
+    config.set_key_value("max_layer_height", new ConfigOptionFloats{0.2, 0.2});
+    config.set("support_wall_count", support_walls);
+    config.set("support_interface_top_layers", interface_layers);
+    if (dense) {
+        config.set_key_value("support_interface_spacing", new ConfigOptionFloat(0.));
+        config.set_key_value("support_base_pattern_spacing", new ConfigOptionFloat(0.));
+    }
+    Print print;
+    Model model;
+    init_print({make_cube(8., 8., 2.)}, print, model, config);
+    CAPTURE(int(strategy), synchronized, half, raft, dense, support_walls, interface_layers);
+    REQUIRE_NOTHROW(print.process());
+    const PrintObject &object = *print.objects().front();
+    REQUIRE_FALSE(object.support_layers().empty());
+    const double model_bottom_mm = object.layers().front()->bottom_z();
+    const std::string artifact_stem = "elevated-resin-" + std::to_string(int(strategy)) + "-" +
+        std::to_string(synchronized) + "-" + std::to_string(half) + "-" + std::to_string(raft) + "-" + std::to_string(dense) + "-" + std::to_string(support_walls) + "-" + std::to_string(interface_layers);
+    std::ofstream geometry_log(artifact_stem + ".layers.txt");
+    for (const auto *layer : object.support_layers()) {
+        geometry_log << "Z " << layer->print_z << " H " << layer->height << " paths " << layer->support_fills.items_count()
+                     << " islands " << layer->support_islands.size();
+        for (const auto &island : layer->support_islands) {
+            const auto box = get_extents(island);
+            geometry_log << " [" << unscale<double>(box.size().x()) << ',' << unscale<double>(box.size().y()) << ']';
+        }
+        geometry_log << '\n';
+    }
+    double previous_top_mm = 0.;
+    size_t below_model_layers = 0;
+    // This fixture uses 0.2 mm layers; auto raft layers may be 0.3 mm.
+    const double maximum_step_mm = raft ? 0.3 : 0.2;
+    constexpr double z_tolerance_mm = 0.00001;
+    for (const auto *layer : object.support_layers()) {
+        INFO("support plane Z=" << layer->print_z << " H=" << layer->height << " extrusions=" << layer->has_extrusions());
+        if (!layer->has_extrusions() || layer->print_z >= model_bottom_mm) continue;
+        CAPTURE(previous_top_mm, layer->print_z, layer->height, model_bottom_mm);
+        CHECK(layer->print_z - previous_top_mm <= maximum_step_mm + z_tolerance_mm);
+        previous_top_mm = layer->print_z;
+        ++below_model_layers;
+    }
+    CHECK(below_model_layers >= 3);
+    // Allow the configured model-contact air gap, but not the elevation void.
+    CHECK(model_bottom_mm - previous_top_mm <= maximum_step_mm + 0.2 + z_tolerance_mm);
+    std::string output;
+    REQUIRE_NOTHROW(output = gcode(print));
+    REQUIRE_FALSE(output.empty());
+    std::ofstream(artifact_stem + ".gcode") << output;
+    GCodeReader reader;
+    reader.apply_config(config);
+    std::set<float> support_z;
+    reader.parse_buffer(output, [&](GCodeReader &state, const GCodeReader::GCodeLine &line) {
+        if (line.extruding(state) && line.dist_XY(state) > 0. &&
+            std::string(line.comment()).find("support material") != std::string::npos && line.new_Z(state) < model_bottom_mm)
+            support_z.insert(line.new_Z(state));
+    });
+    REQUIRE(support_z.size() >= 3);
+    double last_z_mm = 0.;
+    for (const double z_mm : support_z) {
+        CHECK(z_mm - last_z_mm <= maximum_step_mm + z_tolerance_mm);
+        last_z_mm = z_mm;
+    }
+}
+
 TEST_CASE("Resin style zero elevation omits bed-face points but keeps overhang support",
           "[SupportMaterial][Resin][Integration][Elevation]")
 {

@@ -35,6 +35,21 @@ struct SnapmakerWebSocketEndpoint
     std::string target {"/websocket"};
 };
 
+// UI-thread camera failure policy. Recovery is bounded to three session retries
+// until a valid JPEG arrives; steady failures continue at the capped poll rate.
+class SnapmakerCameraPollState
+{
+public:
+    static constexpr int normal_interval_ms = 150;
+    void success() { m_failures = 0; m_recoveries = 0; }
+    bool failure();
+    int interval_ms() const;
+    unsigned failures() const { return m_failures; }
+private:
+    unsigned m_failures {0};
+    unsigned m_recoveries {0};
+};
+
 struct SnapmakerControlAvailability
 {
     bool pause_resume {false};
@@ -46,6 +61,7 @@ struct SnapmakerControlAvailability
 
 SnapmakerWebSocketEndpoint parse_snapmaker_websocket_endpoint(std::string base_url);
 std::string normalize_snapmaker_base_url(std::string value);
+bool is_snapmaker_http_url(std::string_view value);
 bool is_valid_snapmaker_object_name(std::string_view name);
 bool is_public_snapmaker_macro(std::string_view name);
 std::string snapmaker_jog_script(char axis, double distance);

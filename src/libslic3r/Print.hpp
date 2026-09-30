@@ -447,6 +447,9 @@ public:
     // perimeter work. Does not change model layer IDs or retain an extra cache.
     HalfLayerSourceLayers make_half_layer_source_layers();
     const HalfLayerSourceLayers *half_layer_sources() const;
+    // Logical model-layer index, not Layer::id() (which may include raft layers).
+    // Includes detached physical shells; Layer::has_extrusions remains physical-only.
+    bool model_layer_has_extrusions(size_t parent_index) const;
     const HalfLayerSupportSources *half_layer_support_sources() const;
 
     // Helpers to slice support enforcer / blocker meshes by the support generator.

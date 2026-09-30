@@ -1,5 +1,6 @@
 // Orca: WipeTower2 for all non bbl printers, support all MMU device and toolchanger.
 #include "WipeTower2.hpp"
+#include "WipeTowerTravel.hpp"
 
 #include <cassert>
 #include <iostream>
@@ -728,10 +729,24 @@ public:
 
 	// Travel to a new XY position. f=0 means use the current value.
 	WipeTowerWriter2& travel(float x, float y, float f = 0.f)
-		{ return extrude_explicit(x, y, 0.f, f); }
+	{
+        const bool relocate = !m_preview_suppressed && Vec2f(x, y) != m_current_pos;
+        const size_t begin = m_gcode.size();
+        extrude_explicit(x, y, 0.f, f);
+        if (relocate) {
+            const std::string move = m_gcode.substr(begin);
+            m_gcode.resize(begin);
+            m_gcode += wipe_tower_interblock_travel(move, int(m_current_tool), m_current_feedrate);
+        }
+        return *this;
+    }
 
 	WipeTowerWriter2& travel(const Vec2f &dest, float f = 0.f) 
-		{ return extrude_explicit(dest.x(), dest.y(), 0.f, f); }
+		{ return travel(dest.x(), dest.y(), f); }
+
+    // Intentional surface wiping/ironing is not a relocation.
+    WipeTowerWriter2& wipe_travel(float x, float y, float f = 0.f)
+        { return extrude_explicit(x, y, 0.f, f); }
 
 	// Extrude a line from current position to x, y with the extrusion amount given by m_extrusion_flow.
 	WipeTowerWriter2& extrude(float x, float y, float f = 0.f)
@@ -981,10 +996,10 @@ public:
         if (n <= 0)
             return;
         while (n--) {
-            travel(box_max.x(), m_current_pos.y(), feedrate);
-            travel(m_current_pos.x(), box_max.y(), feedrate);
-            travel(box_min.x(), m_current_pos.y(), feedrate);
-            travel(m_current_pos.x(), box_min.y(), feedrate);
+            wipe_travel(box_max.x(), m_current_pos.y(), feedrate);
+            wipe_travel(m_current_pos.x(), box_max.y(), feedrate);
+            wipe_travel(box_min.x(), m_current_pos.y(), feedrate);
+            wipe_travel(m_current_pos.x(), box_min.y(), feedrate);
 
             box_max += Vec2f{step_length, step_length};
             box_min -= Vec2f{step_length, step_length};
@@ -1985,7 +2000,7 @@ void WipeTower2::toolchange_Wipe(
 		traversed_x -= writer.x();
         x_to_wipe -= std::abs(traversed_x);
 		if (x_to_wipe < WT_EPSILON) {
-            writer.travel(m_left_to_right ? xl + 1.5f*line_width : xr - 1.5f*line_width, writer.y(), 7200);
+            writer.wipe_travel(m_left_to_right ? xl + 1.5f*line_width : xr - 1.5f*line_width, writer.y(), 7200);
 			break;
 		}
 		// stepping to the next line:
@@ -2356,9 +2371,9 @@ static WipeTower::ToolChangeResult merge_tcr(WipeTower::ToolChangeResult& first,
     WipeTower::ToolChangeResult out = first;
     out.is_contact = first.is_contact || second.is_contact;
     if (first.end_pos != second.start_pos)
-        out.gcode += "G1 X" + Slic3r::float_to_string_decimal_point(second.start_pos.x(), 3)
+        out.gcode += wipe_tower_interblock_travel("G1 X" + Slic3r::float_to_string_decimal_point(second.start_pos.x(), 3)
                      + " Y" + Slic3r::float_to_string_decimal_point(second.start_pos.y(), 3)
-                     + " F7200\n";
+                     + " F7200\n", first.new_tool, 7200.f);
     out.gcode += second.gcode;
     out.extrusions.insert(out.extrusions.end(), second.extrusions.begin(), second.extrusions.end());
     out.end_pos = second.end_pos;

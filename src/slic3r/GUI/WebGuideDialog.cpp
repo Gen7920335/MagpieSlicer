@@ -200,6 +200,7 @@ GuideFrame::~GuideFrame()
         delete m_load_task;
         m_load_task = nullptr;
     }
+    m_profile_lifetime.reset();
     if (m_browser) {
         delete m_browser;
         m_browser = nullptr;
@@ -430,7 +431,14 @@ void GuideFrame::OnScriptMessage(wxWebViewEvent &evt)
                 PrivacyUse = false;
             }
         }
+        else if (strCmd == "request_userguide_load_status") {
+            send_profile_load_status();
+        }
         else if (strCmd == "request_userguide_profile") {
+            if (!m_profile_ready) {
+                send_profile_load_status();
+                return;
+            }
             json m_Res = json::object();
             m_Res["command"] = "response_userguide_profile";
             m_Res["sequence_id"] = "10001";
@@ -594,7 +602,8 @@ void GuideFrame::OnScriptMessage(wxWebViewEvent &evt)
         BOOST_LOG_TRIVIAL(trace) << "GuideFrame::OnScriptMessage;Error:" << e.what();
     }
 
-    wxString strAll = m_ProfileJson.dump(-1,' ',false, json::error_handler_t::ignore);
+    // Do not read/dump the profile here: the worker may still be populating it
+    // while the loading page asks for readiness (or the user closes the dialog).
 }
 
 void GuideFrame::RunScript(const wxString &javascript)
@@ -1212,8 +1221,19 @@ int GuideFrame::GetFilamentInfo( std::string VendorDirectory, json & pFilaList, 
     return status;
 }
 
+void GuideFrame::send_profile_load_status()
+{
+    if (!m_profile_ready && m_profile_error.empty())
+        return;
+    json response = {{"command", m_profile_ready ? "userguide_profile_load_finish" : "userguide_profile_load_error"}};
+    if (!m_profile_error.empty())
+        response["message"] = into_u8(m_profile_error);
+    RunScript(wxString::Format("HandleStudio(%s)", response.dump(-1, ' ', true)));
+}
+
 int GuideFrame::LoadProfileData()
 {
+    const std::weak_ptr<int> lifetime = m_profile_lifetime;
     try {
         m_ProfileJson             = json::parse("{}");
         m_ProfileJson["model"]    = json::array();
@@ -1229,10 +1249,12 @@ int GuideFrame::LoadProfileData()
         orca_bundle_rsrc = true;
 
         // search if there exists a .json file in vendor_dir folder, if exists, set orca_bundle_rsrc to false
-        for (const auto& entry : boost::filesystem::directory_iterator(vendor_dir)) {
-            if (!boost::filesystem::is_directory(entry) && boost::iequals(entry.path().extension().string(), ".json") && !boost::iequals(entry.path().stem().string(), PresetBundle::ORCA_FILAMENT_LIBRARY)) {
-                orca_bundle_rsrc = false;
-                break;
+        if (boost::filesystem::is_directory(vendor_dir)) {
+            for (const auto& entry : boost::filesystem::directory_iterator(vendor_dir)) {
+                if (!boost::filesystem::is_directory(entry) && boost::iequals(entry.path().extension().string(), ".json") && !boost::iequals(entry.path().stem().string(), PresetBundle::ORCA_FILAMENT_LIBRARY)) {
+                    orca_bundle_rsrc = false;
+                    break;
+                }
             }
         }
 
@@ -1250,7 +1272,8 @@ int GuideFrame::LoadProfileData()
 
         //load custom bundle from user data path
         boost::filesystem::directory_iterator endIter;
-        for (boost::filesystem::directory_iterator iter(vendor_dir); iter != endIter; iter++) {
+        for (boost::filesystem::directory_iterator iter(boost::filesystem::is_directory(vendor_dir) ?
+                 boost::filesystem::directory_iterator(vendor_dir) : endIter); iter != endIter; iter++) {
             if (!boost::filesystem::is_directory(*iter)) {
                 wxString strVendor = from_u8(iter->path().string()).BeforeLast('.');
                 strVendor          = strVendor.AfterLast('\\');
@@ -1284,27 +1307,28 @@ int GuideFrame::LoadProfileData()
                 return 0;
         }
 
-        wxGetApp().CallAfter([this] {
-            if (!m_destroy) {
+        wxGetApp().CallAfter([this, lifetime] {
+            if (!lifetime.expired() && !m_destroy) {
                 //sync to appconfig first to populate current selections
-                SaveProfileData();
-
-                //sync to web after selections are populated
-                std::string strAll = m_ProfileJson.dump(-1, ' ', false, json::error_handler_t::ignore);
-
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ", finished, json contents: " << std::endl << strAll;
-                json m_Res           = json::object();
-                m_Res["command"]     = "userguide_profile_load_finish";
-                m_Res["sequence_id"] = "10001";
-                wxString strJS       = wxString::Format("HandleStudio(%s)", m_Res.dump(-1, ' ', true));
-
-                RunScript(strJS);
+                if (SaveProfileData() != 0)
+                    m_profile_error = _L("Failed to load filament presets. Close this window and try again.");
+                else
+                    m_profile_ready = true;
+                BOOST_LOG_TRIVIAL(info) << "Guide profile load finished; ready=" << m_profile_ready;
+                send_profile_load_status();
             }
         });
     } catch (std::exception& e) {
         // wxLogMessage("GUIDE: load_profile_error  %s ", e.what());
         //  wxMessageBox(e.what(), "", MB_OK);
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ", error: " << e.what() << std::endl;
+        // PERMANENT DIAGNOSTIC: profile failures must leave Loading, not silently wait.
+        wxGetApp().CallAfter([this, lifetime] {
+            if (lifetime.expired())
+                return;
+            m_profile_error = _L("Failed to load filament presets. Close this window and try again.");
+            send_profile_load_status();
+        });
     }
 
     filament_info_cache.clear();
@@ -1384,6 +1408,7 @@ int GuideFrame::SaveProfileData()
     }
     catch (std::exception &e) {
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ", error: "<< e.what() <<std::endl;
+        return -1;
     }
 
     return 0;

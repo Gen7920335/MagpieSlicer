@@ -1818,13 +1818,15 @@ static inline std::pair<SupportGeneratorLayer*, SupportGeneratorLayer*> new_cont
     assert(layer.id() >= slicing_params.raft_layers());
     size_t layer_id = layer.id() - slicing_params.raft_layers();
 
-    if (layer_id == 0) {
+    const bool elevated_first_layer = layer_id == 0 &&
+        layer.bottom_z() > slicing_params.raft_contact_top_z + slicing_params.gap_raft_object + EPSILON;
+    if (layer_id == 0 && slicing_params.has_raft() && !elevated_first_layer) {
         // This is a raft contact layer sitting directly on the print bed.
         assert(slicing_params.has_raft());
         print_z  = slicing_params.raft_contact_top_z;
         bottom_z = slicing_params.raft_interface_top_z;
         height   = slicing_params.contact_raft_layer_height;
-    } else if (slicing_params.zero_gap_interface_top) {
+    } else if (slicing_params.zero_gap_interface_top && layer.lower_layer != nullptr) {
         // Align the contact surface height with a layer immediately below the supported layer.
         // Interface layer will be synchronized with the object.
         print_z  = layer.bottom_z();
@@ -1833,9 +1835,12 @@ static inline std::pair<SupportGeneratorLayer*, SupportGeneratorLayer*> new_cont
     }
     else {
         // BBS: need to consider adaptive layer heights
-        if (print_config.independent_support_layer_height) {
+        if (print_config.independent_support_layer_height || layer.lower_layer == nullptr) {
             print_z = layer.bottom_z() - slicing_params.gap_support_object;
-            height = 0;
+            // An elevated first model layer has no model layer to synchronize
+            // against. Its contact belongs below the model, not on the bed/raft.
+            height = print_config.independent_support_layer_height && !slicing_params.zero_gap_interface_top ?
+                0. : std::min(layer.height, slicing_params.max_suport_layer_height);
         }
         else {
             Layer* synced_layer = sync_gap_with_object_layer(layer, slicing_params.gap_support_object, true);
@@ -1927,6 +1932,15 @@ static inline void fill_contact_layer(
 #endif // SLIC3R_DEBUG
     )
 {
+    if (layer_id == 0 && is_resin(object_config.support_type.value) &&
+        new_layer.print_z > slicing_params.raft_contact_top_z + EPSILON) {
+        // This is Resin's elevated first contact, not a raft footprint. Keep
+        // the authoritative head demand instead of expanding it into a raft.
+        new_layer.polygons = overhang_polygons;
+        new_layer.contact_polygons = std::make_unique<Polygons>(overhang_polygons);
+        new_layer.overhang_polygons = std::make_unique<Polygons>(overhang_polygons);
+        return;
+    }
     const SupportGridParams grid_params(object_config, support_material_flow);
 
     Polygons lower_layer_polygons_for_dense_interface_cache;
@@ -3036,7 +3050,23 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::raft_and_intermediate_supp
             // Find the first object layer, which has its print_z in this support Z range.
             while (idx_layer_object < object.layers().size() && object.layers()[idx_layer_object]->print_z < extr1z + EPSILON)
                 ++ idx_layer_object;
-            if (idx_layer_object == 0 && extr1z == m_slicing_params.raft_interface_top_z) {
+            const coordf_t model_bottom = object.layers().front()->bottom_z();
+            if (is_resin(m_object_config->support_type.value) && extr1z < model_bottom - EPSILON) {
+                // The model grid starts above Resin's elevation. Extend the
+                // support grid only through this uncovered interval; a single
+                // elevation-thick layer is not printable.
+                const coordf_t top = std::min(extr2z, model_bottom);
+                const coordf_t max_step = std::min(object.layers().front()->height,
+                                                   m_slicing_params.max_suport_layer_height);
+                const size_t count = size_t(std::ceil((top - extr1z - EPSILON) / max_step));
+                for (size_t i = 0; i < count; ++i) {
+                    SupportGeneratorLayer &layer_new = layer_storage.allocate(SupporLayerType::Intermediate);
+                    layer_new.bottom_z = extr1z + (top - extr1z) * coordf_t(i) / coordf_t(count);
+                    layer_new.print_z = extr1z + (top - extr1z) * coordf_t(i + 1) / coordf_t(count);
+                    layer_new.height = layer_new.print_z - layer_new.bottom_z;
+                    intermediate_layers.push_back(&layer_new);
+                }
+            } else if (idx_layer_object == 0 && extr1z == m_slicing_params.raft_interface_top_z) {
                 // Insert one base support layer below the object.
                 SupportGeneratorLayer &layer_new = layer_storage.allocate(SupporLayerType::Intermediate);
                 layer_new.print_z  = m_slicing_params.object_print_z_min;

@@ -297,7 +297,10 @@ void ResinStyleSupport::generate()
     tree_cfg.bridge_slope = values.critical_angle * PI / 180.;
     tree_cfg.max_bridge_length_mm = values.max_bridge_length;
     tree_cfg.max_pillar_link_distance_mm = values.max_pillar_link_distance;
-    tree_cfg.object_elevation_mm = values.object_elevation;
+    // FFF columns fuse to the raft interface, not to the floating model's
+    // raft-contact/air-gap plane. SLA derives its ground from this distance.
+    tree_cfg.object_elevation_mm = m_slicing_parameters.object_print_z_min -
+        m_slicing_parameters.raft_interface_top_z;
     tree_cfg.max_bridges_on_pillar = unsigned(std::max(0, values.max_bridges));
     tree_cfg.max_weight_on_model_support = values.max_weight_on_model;
 

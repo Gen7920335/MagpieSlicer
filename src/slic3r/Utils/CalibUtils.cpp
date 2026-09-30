@@ -1745,10 +1745,12 @@ bool CalibUtils::process_and_store_3mf(Model *model, const DynamicPrintConfig &f
 
     // apply the new print config
     DynamicPrintConfig new_print_config = full_config;
+    // This calibration uses the Bambu material protocol. Set its identity before
+    // apply resolves nozzle bindings, just as the CLI/background entry points do.
+    fff_print->is_BBL_printer() = true;
     print->apply(*model, new_print_config);
 
     fff_print->set_calib_params(params);
-    fff_print->is_BBL_printer() = true;
 
     //StringObjectException warning;
     //auto err = print->validate(&warning);

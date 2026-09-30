@@ -4734,8 +4734,8 @@ void TabFilament::build()
 
             try {
                 if (short_key == "nozzle_diameter") {
-                    HotendConfigService::apply_nozzle_diameter(
-                        new_conf, m_hotend_index, boost::any_cast<double>(value));
+                    HotendConfigService::edit_nozzle_diameter(
+                        new_conf, m_hotend_index, boost::any_cast<double>(value), false);
                 } else if (boost::algorithm::starts_with(short_key, "toolhead_")) {
                     std::string serialized = boost::any_cast<std::string>(value);
                     if (serialized.empty() || serialized.back() == '%')
@@ -6145,45 +6145,41 @@ if (is_marlin_flavor)
             option.opt.full_width = true;
             optgroup->append_single_option_line(option, "printer_extruder_basic_information#extruder-offset-position");
 
-            optgroup->m_on_change = [this, extruder_idx](const t_config_option_key& opt_key, boost::any value)
-            {
-                bool is_SEMM = m_config->opt_bool("single_extruder_multi_material");
-                if (opt_key.find("nozzle_diameter") != std::string::npos) {
-                    SuppressBackgroundProcessingUpdate sbpu;
-                    const double new_nd = boost::any_cast<double>(value);
-                    DynamicPrintConfig new_conf = *m_config;
-                    std::vector<double> nozzle_diameters = static_cast<const ConfigOptionFloats*>(m_config->option("nozzle_diameter"))->values;
-                    if (nozzle_diameters.size() <= extruder_idx)
-                        nozzle_diameters.resize(extruder_idx + 1, new_nd);
-                    if (is_SEMM && nozzle_diameters.size() < size_t(m_extruders_count))
-                        nozzle_diameters.resize(size_t(m_extruders_count), new_nd);
-                    nozzle_diameters[extruder_idx] = new_nd;
-
-                    if (is_SEMM && m_extruders_count > 1)
-                    {
-                        // if value was changed
-                        if (fabs(nozzle_diameters[extruder_idx == 0 ? 1 : 0] - new_nd) > EPSILON)
-                        {
-                            const wxString msg_text = _(L("This is a single extruder multi-material printer, diameters of all extruders "
-                                "will be set to the new value. Do you want to proceed?"));
-                            //wxMessageDialog dialog(parent(), msg_text, _(L("Nozzle diameter")), wxICON_WARNING | wxYES_NO);
-                            MessageDialog dialog(parent(), msg_text, _(L("Nozzle diameter")), wxICON_WARNING | wxYES_NO);
-
-                            if (dialog.ShowModal() == wxID_YES) {
-                                for (size_t i = 0; i < nozzle_diameters.size(); i++)
-                                    nozzle_diameters[i] = new_nd;
-                            }
-                            else
-                                nozzle_diameters[extruder_idx] = nozzle_diameters[extruder_idx == 0 ? 1 : 0];
-                        }
-                    }
-
-                    const auto &old_nozzles = m_config->option<ConfigOptionFloats>("nozzle_diameter")->values;
-                    for (size_t i = 0; i < nozzle_diameters.size(); ++i)
-                        if (i >= old_nozzles.size() || std::abs(nozzle_diameters[i] - old_nozzles[i]) > EPSILON)
-                            set_toolhead_nozzle_diameter(new_conf, i, nozzle_diameters[i]);
+            optgroup->m_config_value_handler = [this, extruder_idx](const t_config_option_key& key,
+                                                                   const boost::any& value, int) {
+                if (key != "nozzle_diameter")
+                    return false;
+                SuppressBackgroundProcessingUpdate sbpu;
+                const double new_nd = boost::any_cast<double>(value);
+                DynamicPrintConfig new_conf = *m_config;
+                const bool shared = m_config->opt_bool("single_extruder_multi_material");
+                const size_t required_count = shared ? std::max(size_t(m_extruders_count), size_t(extruder_idx + 1)) :
+                                                       size_t(extruder_idx + 1);
+                if (new_conf.option<ConfigOptionFloats>("nozzle_diameter")->values.size() < required_count)
+                    new_conf.set_num_extruders(unsigned(required_count));
+                const auto &nozzles = new_conf.option<ConfigOptionFloats>("nozzle_diameter")->values;
+                bool accepted = true;
+                constexpr double nozzle_diameter_tolerance_mm = EPSILON;
+                if (shared && nozzles.size() > 1 &&
+                    std::any_of(nozzles.begin(), nozzles.end(), [new_nd, nozzle_diameter_tolerance_mm](double d) {
+                        return std::abs(d - new_nd) > nozzle_diameter_tolerance_mm;
+                    })) {
+                    const wxString msg_text = _(L("This is a single extruder multi-material printer, diameters of all extruders "
+                        "will be set to the new value. Do you want to proceed?"));
+                    MessageDialog dialog(parent(), msg_text, _(L("Nozzle diameter")), wxICON_WARNING | wxYES_NO);
+                    accepted = dialog.ShowModal() == wxID_YES;
+                }
+                HotendConfigService::edit_nozzle_diameter(new_conf, extruder_idx, new_nd, shared, accepted);
+                if (accepted)
                     load_config(new_conf);
-                    wxGetApp().sidebar().sync_toolhead_nozzle_combos(new_conf);
+                // Also restore the displayed value after a rejected or unchanged edit.
+                reload_config();
+                return true;
+            };
+            optgroup->m_on_change = [this](const t_config_option_key& opt_key, boost::any value)
+            {
+                if (opt_key.find("nozzle_diameter") != std::string::npos) {
+                    wxGetApp().sidebar().sync_toolhead_nozzle_combos(*m_config);
                     if (auto *filament_tab = dynamic_cast<TabFilament *>(wxGetApp().get_tab(Preset::TYPE_FILAMENT)))
                         filament_tab->reload_config();
                 }

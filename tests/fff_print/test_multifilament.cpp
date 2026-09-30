@@ -6,14 +6,21 @@
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/GCode/ToolOrdering.hpp"
 #include "libslic3r/Layer.hpp"
+#include "libslic3r/HotendConfigService.hpp"
+#include "libslic3r/HalfLayerSources.hpp"
+#include "libslic3r/FilamentMapPolicy.hpp"
 
 #include "test_helpers.hpp"
+#include "test_utils.hpp"
 
 #include <cctype>
 #include <algorithm>
 #include <set>
 #include <string>
 #include <vector>
+#include <tuple>
+#include <fstream>
+#include <iterator>
 
 using namespace Slic3r;
 using namespace Slic3r::Test;
@@ -257,32 +264,132 @@ TEST_CASE("First-layer material order remains valid when the saved list omits a 
     } while (std::next_permutation(area_order.begin(), area_order.end()));
 }
 
-TEST_CASE("Automatic mapping feedback does not restart completed geometry", "[MaterialCache][MultiNozzle]")
+TEST_CASE("Automatic direct-tool maps are resolved before geometry and stale feedback is inert",
+          "[MaterialCache][MultiNozzle][FilamentMapSafety]")
 {
     const auto mode = GENERATE(fmmAutoForFlush, fmmAutoForMatch);
     const bool enabled = GENERATE(false, true);
-    CAPTURE(mode, enabled);
-    auto config = mapped_four_hotend_wall_config({1, 2, 3, 4}, 3, "classic");
+    const char *engine = GENERATE("classic", "arachne");
+    const bool half_height = GENERATE(false, true);
+    CAPTURE(mode, enabled, engine, half_height);
+    auto config = mapped_four_hotend_wall_config({1, 1, 1, 1}, 3, engine);
     config.set_key_value("filament_map_mode", new ConfigOptionEnum<FilamentMapMode>(mode));
     config.set_key_value("use_smaller_nozzles_in_crisp_corners", new ConfigOptionBool(enabled));
+    config.set_key_value("outer_wall_half_layer_height", new ConfigOptionBool(half_height));
     Print print;
     Model model;
     init_print(std::vector<TriangleMesh>{cube(4)}, print, model, config);
     print.apply(model, config);
+    const std::vector<int> expected{1, 2, 3, 4};
+    REQUIRE(print.config().filament_map.values == expected);
     REQUIRE_FALSE(print.objects().front()->config().enable_support.value);
     print.process();
     REQUIRE(print.objects().front()->is_step_done(posPerimeters));
-    // The automatic planner reports a recommended map back to the GUI config.
-    // This feedback is not a new manual geometry request.
+    // A direct-tool printer has no late grouping decision. Stale GUI feedback
+    // must neither change the geometry's binding nor trigger another slice.
     auto feedback = config;
     auto map = print.config().filament_map.values;
     REQUIRE(map.size() == 4);
     map[0] = map[0] == 1 ? 2 : 1;
     feedback.set_key_value("filament_map", new ConfigOptionInts(map));
     print.apply(model, feedback);
-    CHECK(print.config().filament_map.values == map);
+    CHECK(print.config().filament_map.values == expected);
     CHECK(print.objects().front()->is_step_done(posSlice));
     CHECK(print.objects().front()->is_step_done(posPerimeters));
+    CHECK_THROWS_AS(print.update_filament_maps_to_config(map), Slic3r::SlicingError);
+    CHECK(print.config().filament_map.values == expected);
+    CHECK_NOTHROW(print.update_filament_maps_to_config(expected));
+}
+
+TEST_CASE("Unsafe direct-tool maps are rejected even when validation is bypassed",
+          "[FilamentMapSafety]")
+{
+    const char *engine = GENERATE("classic", "arachne");
+    const bool half_height = GENERATE(false, true);
+    const int mapping = GENERATE(0, 1, 2);
+    const std::array<int, 4> map = mapping == 0 ? std::array<int, 4>{1, 2, 3, 4} :
+        mapping == 1 ? std::array<int, 4>{2, 1, 3, 4} : std::array<int, 4>{1, 1, 3, 4};
+    CAPTURE(engine, half_height, mapping);
+    auto config = mapped_four_hotend_wall_config(map, 3, engine);
+    config.set_deserialize_strict({{"outer_wall_half_layer_height", half_height},
+        {"layer_height", 0.1}, {"initial_layer_print_height", 0.1}});
+    Print print;
+    Model model;
+    init_print({cube(3)}, print, model, config);
+    if (mapping != 0) {
+        CHECK(print.validate().opt_key == "filament_map");
+        print.set_no_check_flag(true);
+        print.process();
+        CHECK_THROWS_AS(gcode(print), Slic3r::SlicingError);
+        CHECK(print.config().filament_map.values == std::vector<int>(map.begin(), map.end()));
+    } else {
+        CHECK(print.validate().opt_key != "filament_map");
+        print.process();
+        CHECK_FALSE(gcode(print).empty());
+    }
+}
+
+TEST_CASE("Direct-tool mapping policy preserves logical material protocols and bounds",
+          "[FilamentMapSafety]")
+{
+    auto config = mapped_four_hotend_wall_config({2, 1, 3, 4}, 3, "classic");
+    config.set_key_value("filament_map_mode", new ConfigOptionEnum<FilamentMapMode>(fmmAutoForFlush));
+    const auto original = config.option<ConfigOptionInts>("filament_map")->values;
+    SECTION("Bambu owns its AMS mapping") {
+        FilamentMapPolicy::resolve_auto(config, true);
+        CHECK(FilamentMapPolicy::export_error(config, true) == nullptr);
+        CHECK(config.option<ConfigOptionInts>("filament_map")->values == original);
+    }
+    SECTION("Single-extruder multi-material owns its logical T IDs") {
+        config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(true));
+        FilamentMapPolicy::resolve_auto(config, false);
+        CHECK(FilamentMapPolicy::export_error(config, false) == nullptr);
+        CHECK(config.option<ConfigOptionInts>("filament_map")->values == original);
+    }
+    SECTION("Single physical hotend is not a fixed multi-tool printer") {
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.4});
+        config.set_key_value("filament_map", new ConfigOptionInts{1, 1, 1, 1});
+        CHECK_FALSE(FilamentMapPolicy::uses_fixed_tools(config, false));
+        CHECK(FilamentMapPolicy::export_error(config, false) == nullptr);
+    }
+    SECTION("Excess materials cannot become out-of-range physical tools") {
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.4, 0.4, 0.4});
+        FilamentMapPolicy::resolve_auto(config, false);
+        CHECK(FilamentMapPolicy::export_error(config, false) != nullptr);
+        CHECK(config.option<ConfigOptionInts>("filament_map")->values == original);
+    }
+    SECTION("Unused physical tools do not require extra material rows") {
+        config.set_key_value("filament_diameter", new ConfigOptionFloats{1.75, 1.75});
+        FilamentMapPolicy::resolve_auto(config, false);
+        CHECK(config.option<ConfigOptionInts>("filament_map")->values == std::vector<int>{1, 2});
+        CHECK(FilamentMapPolicy::export_error(config, false) == nullptr);
+    }
+}
+
+TEST_CASE("Unsafe export cannot bypass the cache guard or remove a previous output",
+          "[FilamentMapSafety]")
+{
+    auto config = mapped_four_hotend_wall_config({1, 2, 3, 4}, 3, "classic");
+    Print print;
+    Model model;
+    init_print({cube(3)}, print, model, config);
+    print.process();
+    ScopedTemporaryFile temp(".gcode");
+    REQUIRE_NOTHROW(print.export_gcode(temp.string(), nullptr, nullptr));
+    auto read_output = [&]() {
+        std::ifstream in(temp.string());
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    };
+    const auto original = read_output();
+    REQUIRE_FALSE(original.empty());
+    REQUIRE(print.is_step_done(psGCodeExport));
+    // Deliberately simulate a caller corrupting the binding without invalidating
+    // the completed export: the independent output-boundary guard must still run.
+    auto &corrupted = const_cast<PrintConfig &>(print.config());
+    corrupted.filament_map.values = {2, 1, 3, 4};
+    print.set_no_check_flag(true);
+    REQUIRE_THROWS_AS(print.export_gcode(temp.string(), nullptr, nullptr), Slic3r::SlicingError);
+    CHECK(read_output() == original);
 }
 
 static void collect_perimeter_inset_indices(const ExtrusionEntity &entity, std::vector<int> &indices)
@@ -426,6 +533,74 @@ TEST_CASE("Each feature prints with its assigned filament", "[MultiFilament]")
     }
 }
 
+TEST_CASE("Different inner and outer materials retain their actual tools with every half-layer mode",
+          "[MultiFilament][WallOwnershipRegression]")
+{
+    const char *engine = GENERATE("classic", "arachne");
+    const bool mixed_sizes = GENERATE(false, true);
+    const bool reversed = GENERATE(false, true);
+    const int half_mode = GENERATE(0, 1, 2, 3);
+    const bool sequential = GENERATE(false, true);
+    const int outer = reversed ? 2 : 1;
+    const int inner = reversed ? 1 : 2;
+    auto config = multi_nozzle_wall_config(mixed_sizes ? 0.15 : 0.4, 0.4, outer, engine, false);
+    config.set_deserialize_strict({
+        {"inner_wall_filament_id", inner}, {"wall_loops", 4},
+        {"layer_height", 0.12}, {"initial_layer_print_height", 0.12},
+        {"outer_wall_half_layer_height", (half_mode & 1) != 0},
+        {"support_half_layer_height", (half_mode & 2) != 0},
+        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
+        {"enable_prime_tower", false}, {"enable_overhang_speed", "0,0"},
+        {"print_sequence", sequential ? "by object" : "by layer"},
+    });
+    config.set_key_value("filament_colour", new ConfigOptionStrings{"#FF0000", "#00FF00"});
+    TriangleMesh mesh = cube(6);
+    mesh.scale(Vec3f(1.f, 1.f, 0.2f));
+    const std::string output = slice({mesh}, config);
+    std::string role;
+    int tool = -1;
+    std::set<int> outer_tools, inner_tools;
+    GCodeReader reader;
+    reader.parse_buffer(output, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw()), cmd(line.cmd());
+        if (raw.rfind(";TYPE:", 0) == 0)
+            role = raw.substr(6);
+        else if (cmd.size() > 1 && cmd[0] == 'T' && std::isdigit(static_cast<unsigned char>(cmd[1])))
+            tool = std::stoi(cmd.substr(1));
+        else if (line.extruding(self) && line.dist_XY(self) > 0.) {
+            if (role == "Outer wall") outer_tools.insert(tool);
+            if (role == "Inner wall") inner_tools.insert(tool);
+        }
+    });
+    CAPTURE(engine, mixed_sizes, reversed, half_mode, sequential);
+    CHECK(outer_tools == std::set<int>{outer - 1});
+    CHECK(inner_tools == std::set<int>{inner - 1});
+}
+
+TEST_CASE("A whole wall owns every overhang segment independent of its first path",
+          "[MultiFilament][WallOwnershipRegression]")
+{
+    PrintRegionConfig config;
+    config.outer_wall_filament_id.value = 2;
+    config.inner_wall_filament_id.value = 1;
+    const PrintRegion region(config);
+    LayerTools tools(0.2);
+    for (bool half : {false, true}) {
+        for (int inset = 0; inset < 4; ++inset) {
+            ExtrusionLoop loop{ExtrusionPath(erOverhangPerimeter)};
+            loop.inset_idx = inset;
+            const unsigned expected = inset < (half ? 2 : 1) ? 1u : 0u;
+            CHECK(tools.wall_extruder_id(region, loop, half) == expected);
+            loop.paths.emplace_back(expected == 1 ? erExternalPerimeter : erPerimeter);
+            CHECK(tools.wall_extruder_id(region, loop, half) == expected);
+            loop.tool_hint = ExtrusionToolHint::DetailWall;
+            CHECK(tools.wall_extruder_id(region, loop, half) == 1);
+            loop.tool_hint = ExtrusionToolHint::LargeWall;
+            CHECK(tools.wall_extruder_id(region, loop, half) == 0);
+        }
+    }
+}
+
 TEST_CASE("Each feature prints with its assigned filament (three filaments)", "[MultiFilament]")
 {
     const std::string gcode = slice({ cube(20) },
@@ -479,7 +654,7 @@ TEST_CASE("Classic and Arachne route detail walls to a smaller nozzle", "[MultiF
     }
 }
 
-TEST_CASE("FFF routing honors nonidentity logical-filament to physical-hotend maps",
+TEST_CASE("Nonidentity geometry routing cannot be exported as direct physical tool commands",
           "[MultiFilament][MultiNozzleWalls][FilamentMap][GCode]")
 {
     const char *wall_generator = GENERATE("classic", "arachne");
@@ -496,18 +671,29 @@ TEST_CASE("FFF routing honors nonidentity logical-filament to physical-hotend ma
     DYNAMIC_SECTION(wall_generator << " map=" << map_a << map_b << map_c << map_d) {
         DynamicPrintConfig detail_config = mapped_four_hotend_wall_config(
             filament_map, base_filament, wall_generator);
-        const std::string detail_gcode = slice({ cube(20) }, detail_config);
-        CHECK(tools_for_role(detail_gcode, "perimeter") ==
-              std::set<int>{ base_filament - 1, detail_filament - 1 });
-        CHECK(tools_for_role(detail_gcode, "infill") == std::set<int>{ base_filament - 1 });
+        Print detail_print;
+        Model detail_model;
+        init_print({cube(6)}, detail_print, detail_model, detail_config);
+        detail_print.process();
+        const ToolOrdering detail_ordering(detail_print, unsigned(-1), false);
+        const auto &detail_tools = detail_ordering.all_extruders();
+        CHECK(std::set<unsigned int>(detail_tools.begin(), detail_tools.end()) ==
+              std::set<unsigned int>{unsigned(base_filament - 1), unsigned(detail_filament - 1)});
+        CHECK_THROWS_AS(gcode(detail_print), Slic3r::SlicingError);
 
         DynamicPrintConfig override_config = mapped_four_hotend_wall_config(
             filament_map, base_filament, wall_generator);
         override_config.set_key_value("crisp_corner_large_nozzle_override_regions",
                                       new ConfigOptionStrings{ "1:999:1" });
-        const std::string override_gcode = slice({ cube(20) }, override_config);
-        CHECK(tools_for_role(override_gcode, "perimeter") == std::set<int>{ override_filament - 1 });
-        CHECK(tools_for_role(override_gcode, "infill") == std::set<int>{ base_filament - 1 });
+        Print override_print;
+        Model override_model;
+        init_print({cube(6)}, override_print, override_model, override_config);
+        override_print.process();
+        const ToolOrdering override_ordering(override_print, unsigned(-1), false);
+        const auto &override_tools = override_ordering.all_extruders();
+        CHECK(std::set<unsigned int>(override_tools.begin(), override_tools.end()) ==
+              std::set<unsigned int>{unsigned(base_filament - 1), unsigned(override_filament - 1)});
+        CHECK_THROWS_AS(gcode(override_print), Slic3r::SlicingError);
     }
 }
 
@@ -520,9 +706,14 @@ TEST_CASE("Sequential dynamic walls register tools from every object",
     const size_t dynamic_object = GENERATE(size_t(0), size_t(1));
     CAPTURE(wall_generator, large_override, half_height, dynamic_object);
 
-    // Logical F1 -> physical 3 (0.4 mm), F4 -> physical 2 (0.15 mm),
-    // F2 -> physical 1 (0.8 mm). No ordinary role names F2 or F4.
-    auto config = mapped_four_hotend_wall_config({3, 1, 4, 2}, 1, wall_generator);
+    // Reindex the same material/nozzle pairs to the supported direct-tool
+    // identity contract. No ordinary role names F2 (0.8) or F4 (0.15).
+    auto config = mapped_four_hotend_wall_config({1, 2, 3, 4}, 1, wall_generator);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.4, 0.8, 0.6, 0.15});
+    for (const char *key : {"toolhead_outer_wall_line_width", "toolhead_inner_wall_line_width"})
+        config.set_key_value(key, new ConfigOptionFloatsOrPercents{
+            FloatOrPercent(0.44, false), FloatOrPercent(0.88, false),
+            FloatOrPercent(0.66, false), FloatOrPercent(0.165, false)});
     config.set_deserialize_strict({
         { "print_sequence", "by object" },
         { "use_smaller_nozzles_in_crisp_corners", false },
@@ -537,7 +728,7 @@ TEST_CASE("Sequential dynamic walls register tools from every object",
     auto &object_config = model.objects[dynamic_object]->config;
     if (large_override)
         object_config.set_key_value("crisp_corner_large_nozzle_override_regions",
-                                    new ConfigOptionStrings{"1:999:1"});
+                                    new ConfigOptionStrings{"1:999:2"});
     else
         object_config.set_key_value("use_smaller_nozzles_in_crisp_corners", new ConfigOptionBool(true));
     print.apply(model, config);
@@ -576,6 +767,96 @@ TEST_CASE("Sequential dynamic walls register tools from every object",
     const std::string output = gcode(print);
     CHECK(tools_for_role(output, "perimeter") == std::set<int>{0, int(dynamic_filament)});
     CHECK(tools_for_role(output, "infill") == std::set<int>{0});
+}
+
+using NozzleEditPath = std::tuple<Points3, float, float, double, int>;
+
+static void nozzle_edit_paths(const ExtrusionEntity &entity, std::vector<NozzleEditPath> &out)
+{
+    if (const auto *path = dynamic_cast<const ExtrusionPath *>(&entity))
+        out.emplace_back(path->polyline.points, path->width, path->height, path->mm3_per_mm, int(path->role()));
+    else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(&entity))
+        for (const auto &path : loop->paths) nozzle_edit_paths(path, out);
+    else if (const auto *multi = dynamic_cast<const ExtrusionMultiPath *>(&entity))
+        for (const auto &path : multi->paths) nozzle_edit_paths(path, out);
+    else if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity))
+        for (const auto *child : collection->entities) if (child) nozzle_edit_paths(*child, out);
+}
+
+TEST_CASE("Nozzle and width edits reslice the same Print like a fresh Print",
+          "[MultiFilament][NozzleDiameterEdit][NozzleEditReslice]")
+{
+    const bool half_height = GENERATE(false, true);
+    const bool swapped_materials = GENERATE(false, true);
+    const int large_filament = swapped_materials ? 1 : 2;
+    auto config = multi_nozzle_wall_config(0.4, 0.4, large_filament, "arachne", true);
+    config.set_key_value("filament_map", new ConfigOptionInts(swapped_materials ?
+        std::vector<int>{2, 1} : std::vector<int>{1, 2}));
+    config.set_deserialize_strict({
+        {"layer_height", 0.12}, {"initial_layer_print_height", 0.12},
+        {"crisp_corner_detail_toolhead", 1}, {"crisp_corner_small_nozzle_wall_count", 2},
+        {"outer_wall_half_layer_height", half_height}, {"gcode_comments", true},
+        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}
+    });
+    TriangleMesh mesh = cube(8);
+    mesh.scale(Vec3f(1.f, 1.f, 0.15f));
+    Print print;
+    Model model;
+    init_print({mesh}, print, model, config);
+    print.process();
+    REQUIRE(print.objects().front()->is_step_done(posPerimeters));
+
+    for (int edit = 0; edit < 2; ++edit) {
+        CAPTURE(half_height, swapped_materials, edit);
+        if (edit == 0)
+            REQUIRE(HotendConfigService::edit_nozzle_diameter(config, 0, 0.15, false));
+        else
+            HotendConfigService::apply_width(config, 0, "toolhead_outer_wall_line_width", FloatOrPercent(0.15, false));
+        print.apply(model, config);
+        REQUIRE_FALSE(print.objects().front()->is_step_done(posPerimeters));
+        print.process();
+        Print fresh;
+        fresh.apply(model, config);
+        fresh.process();
+        REQUIRE(print.objects().front()->layers().size() == fresh.objects().front()->layers().size());
+        bool found_small_outer = false;
+        for (size_t layer = 1; layer < fresh.objects().front()->layers().size(); ++layer) {
+            std::vector<NozzleEditPath> actual, expected;
+            nozzle_edit_paths(print.objects().front()->layers()[layer]->regions().front()->perimeters, actual);
+            nozzle_edit_paths(fresh.objects().front()->layers()[layer]->regions().front()->perimeters, expected);
+            // H/2 shells belong to the two phase layers, not the full-height core.
+            if (half_height) {
+                const auto *actual_sources = print.objects().front()->half_layer_sources();
+                const auto *expected_sources = fresh.objects().front()->half_layer_sources();
+                REQUIRE(actual_sources != nullptr);
+                REQUIRE(expected_sources != nullptr);
+                for (unsigned phase = 0; phase < 2; ++phase) {
+                    REQUIRE(actual_sources->phases[phase].size() > layer);
+                    REQUIRE(expected_sources->phases[phase].size() > layer);
+                    nozzle_edit_paths(actual_sources->phases[phase][layer]->regions().front()->perimeters, actual);
+                    nozzle_edit_paths(expected_sources->phases[phase][layer]->regions().front()->perimeters, expected);
+                }
+            }
+            CHECK(actual == expected);
+            // Width in mm: separates this fixture's 0.15 and 0.4 nozzle beads.
+            constexpr float small_bead_limit_mm = 0.25f;
+            for (const auto &path : actual) {
+                if (std::get<4>(path) == int(erExternalPerimeter) && std::get<1>(path) < small_bead_limit_mm) {
+                    found_small_outer = true;
+                    CHECK(std::get<2>(path) == Catch::Approx(half_height ? 0.06 : 0.12));
+                }
+            }
+        }
+        REQUIRE(found_small_outer);
+        if (swapped_materials) {
+            CHECK_THROWS_AS(gcode(print), Slic3r::SlicingError);
+        } else {
+            const std::string output = gcode(print);
+            CHECK(output.find(";TYPE:Outer wall") != std::string::npos);
+            CHECK(output.find(";TYPE:Inner wall") != std::string::npos);
+        }
+    }
 }
 
 TEST_CASE("First-layer wall ordering uses the mapped physical hotend width",

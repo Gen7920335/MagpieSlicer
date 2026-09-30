@@ -539,6 +539,9 @@ SupportGeneratorLayersPtr generate_raft_base(
             //if (object.has_brim())
             //    trimming = offset(object.layers().front()->lslices, (float)scale_(object.config().brim_object_gap.value), SUPPORT_SURFACES_OFFSET_PARAMETERS);
             //else
+            // An elevated Resin model does not occupy its XY footprint on the
+            // bed. Removing that footprint also removes the support feet.
+            if (!is_resin(object.config().support_type.value) || object.layers().front()->bottom_z() <= EPSILON)
                 trimming = offset(object.layers().front()->lslices, (float)scale_(support_params.gap_xy_first_layer), SUPPORT_SURFACES_OFFSET_PARAMETERS);
             if (inflate_factor_1st_layer > SCALED_EPSILON) {
                 // Inflate in multiple steps to avoid leaking of the support 1st layer through object walls.
@@ -568,6 +571,8 @@ SupportGeneratorLayersPtr generate_raft_base(
     return raft_layers;
 }
 
+static Polylines draw_perimeters(const ExPolygon &expoly, double clip_length);
+
 static inline void fill_expolygon_generate_paths(
     ExtrusionEntitiesPtr    &dst,
     ExPolygon              &&expolygon,
@@ -575,7 +580,8 @@ static inline void fill_expolygon_generate_paths(
     const FillParams        &fill_params,
     float                    density,
     ExtrusionRole            role,
-    const Flow              &flow)
+    const Flow              &flow,
+    bool                     preserve_resin_island = false)
 {
     Surface surface(stInternal, std::move(expolygon));
     Polylines polylines;
@@ -585,6 +591,20 @@ static inline void fill_expolygon_generate_paths(
         effective_fill_params.extrusion_role = role;
         polylines = filler->fill_surface(&surface, effective_fill_params);
     } catch (InfillFailedException &) {
+    }
+    if (preserve_resin_island && density > 0.f && polylines.empty()) {
+        // A routed Resin branch is structural even when a global fill lattice
+        // misses it. Fill a narrow island with an inset contour and a local
+        // bead width; never enlarge the source geometry. The configured pattern
+        // and wall count still own every island they can already print.
+        const auto size = get_extents(surface.expolygon).size();
+        const double island_width_mm = unscale<double>(std::min(size.x(), size.y()));
+        const double bead_width_mm = std::max(double(flow.height()),
+            std::min(double(flow.width()), 0.5 * island_width_mm));
+        const Flow narrow_flow(float(bead_width_mm), flow.height(), flow.nozzle_diameter());
+        for (const ExPolygon &inset : offset_ex(surface.expolygon, -0.5 * scale_(bead_width_mm)))
+            extrusion_entities_append_paths(dst, draw_perimeters(inset, 0.), role,
+                narrow_flow.mm3_per_mm(), narrow_flow.width(), narrow_flow.height());
     }
     extrusion_entities_append_paths(
         dst,
@@ -600,10 +620,11 @@ static inline void fill_expolygons_generate_paths(
     const FillParams        &fill_params,
     float                    density,
     ExtrusionRole            role,
-    const Flow              &flow)
+    const Flow              &flow,
+    bool                     preserve_resin_islands = false)
 {
     for (ExPolygon &expoly : expolygons)
-        fill_expolygon_generate_paths(dst, std::move(expoly), filler, fill_params, density, role, flow);
+        fill_expolygon_generate_paths(dst, std::move(expoly), filler, fill_params, density, role, flow, preserve_resin_islands);
 }
 
 static inline void fill_expolygons_generate_paths(
@@ -612,12 +633,13 @@ static inline void fill_expolygons_generate_paths(
     Fill                    *filler,
     float                    density,
     ExtrusionRole            role,
-    const Flow              &flow)
+    const Flow              &flow,
+    bool                     preserve_resin_islands = false)
 {
     FillParams fill_params;
     fill_params.density     = density;
     fill_params.dont_adjust = true;
-    fill_expolygons_generate_paths(dst, std::move(expolygons), filler, fill_params, density, role, flow);
+    fill_expolygons_generate_paths(dst, std::move(expolygons), filler, fill_params, density, role, flow, preserve_resin_islands);
 }
 
 static Polylines draw_perimeters(const ExPolygon &expoly, double clip_length)
@@ -2216,11 +2238,11 @@ void generate_support_toolpaths(
                         fill_params.anchor_length_max = 0.f;
                         fill_expolygons_generate_paths(
                             layer_ex.extrusions, std::move(regions), filler, fill_params,
-                            float(density), role, interface_flow);
+                            float(density), role, interface_flow, is_resin(config.support_type.value));
                     } else {
                         fill_expolygons_generate_paths(
                             layer_ex.extrusions, std::move(regions), filler, float(density),
-                            role, interface_flow);
+                            role, interface_flow, is_resin(config.support_type.value));
                     }
                 }
                 interface_timing.finish(layer_ex.extrusions.size(), layer_diagnostic);
@@ -2252,7 +2274,7 @@ void generate_support_toolpaths(
                     // Filler and its parameters
                     filler, float(support_params.top_interface_density),
                     // Extrusion parameters
-                    ExtrusionRole::erSupportMaterial, interface_flow);
+                    ExtrusionRole::erSupportMaterial, interface_flow, is_resin(config.support_type.value));
             }
             base_interface_timing.finish(base_interface_layer.extrusions.size(), layer_diagnostic);
 
@@ -2314,6 +2336,22 @@ void generate_support_toolpaths(
                     config.support_base_pattern == smpNone && !solid_cura_first_layer) {
                     hollow_support_generate_paths(
                         base_layer.extrusions, base_layer.polygons_to_extrude(), flow);
+                    done = true;
+                }
+                if (!done && is_resin(config.support_type.value)) {
+                    for (const ExPolygon &island : union_safety_offset_ex(base_layer.polygons_to_extrude())) {
+                        const size_t before = base_layer.extrusions.size();
+                        if (sheath)
+                            fill_expolygons_with_sheath_generate_paths(base_layer.extrusions,
+                                to_polygons(island), filler, density, ExtrusionRole::erSupportMaterial,
+                                flow, support_params, true, no_sort);
+                        // A configured wall may also erase a taper when its
+                        // nominal-width inset is empty. Keep printable walls;
+                        // use the same contained-island fill only if none fit.
+                        if (!sheath || base_layer.extrusions.size() == before)
+                            fill_expolygons_generate_paths(base_layer.extrusions,
+                                ExPolygons{island}, filler, density, ExtrusionRole::erSupportMaterial, flow, true);
+                    }
                     done = true;
                 }
                 if (! done)

@@ -1,4 +1,5 @@
 #include "WipeTower.hpp"
+#include "WipeTowerTravel.hpp"
 
 #include <cassert>
 #include <iostream>
@@ -736,10 +737,24 @@ public:
 
 	// Travel to a new XY position. f=0 means use the current value.
 	WipeTowerWriter& travel(float x, float y, float f = 0.f)
-		{ return extrude_explicit(x, y, 0.f, f); }
+	{
+        const bool relocate = !m_preview_suppressed && Vec2f(x, y) != m_current_pos;
+        const size_t begin = m_gcode.size();
+        extrude_explicit(x, y, 0.f, f);
+        if (relocate) {
+            const std::string move = m_gcode.substr(begin);
+            m_gcode.resize(begin);
+            m_gcode += wipe_tower_interblock_travel(move, int(m_current_tool), m_current_feedrate);
+        }
+        return *this;
+    }
 
 	WipeTowerWriter& travel(const Vec2f &dest, float f = 0.f)
-		{ return extrude_explicit(dest.x(), dest.y(), 0.f, f); }
+		{ return travel(dest.x(), dest.y(), f); }
+
+    // Intentional surface wiping/ironing is not a relocation.
+    WipeTowerWriter& wipe_travel(float x, float y, float f = 0.f)
+        { return extrude_explicit(x, y, 0.f, f); }
 
 	// Extrude a line from current position to x, y with the extrusion amount given by m_extrusion_flow.
 	WipeTowerWriter& extrude(float x, float y, float f = 0.f)
@@ -1159,10 +1174,10 @@ public:
         int   n           = std::ceil(edge_length / step_length / 2.f);
         assert(n > 0);
         while (n--) {
-            travel(box_max.x(), m_current_pos.y(), feedrate);
-            travel(m_current_pos.x(), box_max.y(), feedrate);
-            travel(box_min.x(), m_current_pos.y(), feedrate);
-            travel(m_current_pos.x(), box_min.y(), feedrate);
+            wipe_travel(box_max.x(), m_current_pos.y(), feedrate);
+            wipe_travel(m_current_pos.x(), box_max.y(), feedrate);
+            wipe_travel(box_min.x(), m_current_pos.y(), feedrate);
+            wipe_travel(m_current_pos.x(), box_min.y(), feedrate);
 
             box_max += Vec2f{step_length, step_length};
             box_min -= Vec2f{step_length, step_length};
@@ -1754,14 +1769,14 @@ WipeTower::ToolChangeResult WipeTower::tool_change(size_t tool, bool extrude_per
 
             for (int i = 0; true; ++i) {
                 if (left_to_right)
-                    writer.travel(xr - m_perimeter_width, writer.y(), nozzle_change_speed);
+                    writer.wipe_travel(xr - m_perimeter_width, writer.y(), nozzle_change_speed);
                 else
-                    writer.travel(xl + m_perimeter_width, writer.y(), nozzle_change_speed);
+                    writer.wipe_travel(xl + m_perimeter_width, writer.y(), nozzle_change_speed);
 
                 if (i == tpu_line_count - 1)
                     break;
 
-                writer.travel(writer.x(), writer.y() + dy);
+                writer.wipe_travel(writer.x(), writer.y() + dy);
                 left_to_right = !left_to_right;
             }
         }
@@ -1927,14 +1942,14 @@ WipeTower::NozzleChangeResult WipeTower::nozzle_change(int old_filament_id, int 
 
         for (int i = 0; true; ++i) {
             if (left_to_right)
-                writer.travel(xr - m_perimeter_width, writer.y(), nozzle_change_speed);
+                writer.wipe_travel(xr - m_perimeter_width, writer.y(), nozzle_change_speed);
             else
-                writer.travel(xl + m_perimeter_width, writer.y(), nozzle_change_speed);
+                writer.wipe_travel(xl + m_perimeter_width, writer.y(), nozzle_change_speed);
 
             if (i == tpu_line_count - 1)
                 break;
 
-            writer.travel(writer.x(), writer.y() - dy);
+            writer.wipe_travel(writer.x(), writer.y() - dy);
             left_to_right = !left_to_right;
         }
     }
@@ -2698,7 +2713,7 @@ static WipeTower::ToolChangeResult merge_tcr(WipeTower::ToolChangeResult& first,
         }
 
         if (need_insert_travel)
-            out.gcode += travel_gcode;
+            out.gcode += wipe_tower_interblock_travel(travel_gcode, first.new_tool, 5400.f);
     }
     out.gcode += second.gcode;
     out.extrusions.insert(out.extrusions.end(), second.extrusions.begin(), second.extrusions.end());

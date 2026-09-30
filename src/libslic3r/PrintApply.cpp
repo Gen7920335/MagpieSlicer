@@ -1,6 +1,7 @@
 #include "ClipperUtils.hpp"
 #include "Model.hpp"
 #include "Print.hpp"
+#include "FilamentMapPolicy.hpp"
 
 #include <boost/log/trivial.hpp>
 #include <cfloat>
@@ -1145,6 +1146,14 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     else
         m_support_used = false;
 
+    // Resolve physical printer variants before normalizing material bindings.
+    // variant_2 must precede variant_1 (the latter shrinks variant index vectors).
+    if (!extruder_applied) {
+        new_full_config.update_values_to_printer_extruders(new_full_config, printer_options_with_variant_2, "printer_extruder_id", "printer_extruder_variant", 2);
+        new_full_config.update_values_to_printer_extruders(new_full_config, printer_options_with_variant_1, "printer_extruder_id", "printer_extruder_variant");
+        new_full_config.update_values_to_printer_extruders(new_full_config, print_options_with_variant, "print_extruder_id", "print_extruder_variant");
+    }
+
     // Project files and imported configs may contain a missing, short, or stale
     // 1-based filament map. Many downstream paths index this vector directly,
     // so normalize it once before comparing or applying the print config.
@@ -1166,6 +1175,7 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                     mapped_extruder = fallback_extruder;
         }
     }
+    FilamentMapPolicy::resolve_auto(new_full_config, is_BBL_printer());
 
     {
         const auto& o = model.objects;
@@ -1187,12 +1197,6 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 
     //apply extruder related values
     if (!extruder_applied) {
-        // variant_2 must be processed first, because variant_1 will make `printer_extruder_id` and `printer_extruder_variant` half of the size that makes `get_index_for_extruder` no longer work properly
-        new_full_config.update_values_to_printer_extruders(new_full_config, printer_options_with_variant_2, "printer_extruder_id", "printer_extruder_variant", 2);
-        new_full_config.update_values_to_printer_extruders(new_full_config, printer_options_with_variant_1, "printer_extruder_id", "printer_extruder_variant");
-        //update print config related with variants
-        new_full_config.update_values_to_printer_extruders(new_full_config, print_options_with_variant, "print_extruder_id", "print_extruder_variant");
-
         m_ori_full_print_config = new_full_config;
         new_full_config.update_values_to_printer_extruders_for_multiple_filaments(new_full_config, filament_options_with_variant,  "filament_self_index", "filament_extruder_variant");
     }
@@ -1225,13 +1229,11 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     {
         FilamentMapMode map_mode = new_full_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value;
         if (map_mode < fmmManual) {
-            if (print_diff_set.find("filament_map") != print_diff_set.end()) {
+            if (!FilamentMapPolicy::uses_fixed_tools(new_full_config, is_BBL_printer()) &&
+                print_diff_set.find("filament_map") != print_diff_set.end()) {
                 print_diff_set.erase("filament_map");
-                //full_config_diff.erase("filament_map");
-                ConfigOptionInts* old_opt = m_full_print_config.option<ConfigOptionInts>("filament_map", true);
-                ConfigOptionInts* new_opt = new_full_config.option<ConfigOptionInts>("filament_map", true);
-                old_opt->set(new_opt);
-                m_config.filament_map = *new_opt;
+                // Apply feedback only under the state lock, after stopping export.
+                apply_unused_filament_map = true;
             }
         }
         else {

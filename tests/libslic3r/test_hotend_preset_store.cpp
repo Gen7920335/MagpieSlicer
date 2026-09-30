@@ -5,6 +5,7 @@
 #include <boost/filesystem.hpp>
 
 #include <map>
+#include <limits>
 
 using namespace Slic3r;
 
@@ -146,6 +147,95 @@ TEST_CASE("Hotend normalization preserves explicit millimeter widths", "[HotendC
     for (const char *key : hotend_preset_width_keys())
         REQUIRE(patch.option<ConfigOptionFloatsOrPercents>(key)->values ==
                 printer.option<ConfigOptionFloatsOrPercents>(key)->values);
+}
+
+TEST_CASE("Nozzle edits update linked widths from the pre-edit state", "[HotendConfigService][NozzleDiameterEdit]")
+{
+    const size_t edited = GENERATE(size_t(0), size_t(3));
+    const double diameter = GENERATE(0.15, 0.2);
+    DynamicPrintConfig printer = printer_config();
+    printer.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4, 0.4, 0.4, 0.4}));
+    const DynamicPrintConfig before = printer;
+    REQUIRE(HotendConfigService::edit_nozzle_diameter(printer, edited, diameter, false));
+    // Independent millimetre expectations, in hotend_preset_width_keys order.
+    const std::array<double, 9> expected = diameter == 0.15 ?
+        std::array<double, 9>{0.169, 0.21, 0.169, 0.169, 0.15, 0.169, 0.169, 0.15, 0.15} :
+        std::array<double, 9>{0.225, 0.28, 0.225, 0.225, 0.2, 0.225, 0.225, 0.2, 0.2};
+    for (size_t k = 0; k < expected.size(); ++k) {
+        const char *key = hotend_preset_width_keys()[k];
+        const auto &widths = printer.option<ConfigOptionFloatsOrPercents>(key)->values;
+        REQUIRE(widths.size() == 4);
+        for (size_t i = 0; i < widths.size(); ++i) {
+            CAPTURE(edited, diameter, key, i);
+            if (i == edited) {
+                CHECK(widths[i].value == Catch::Approx(expected[k]));
+                CHECK_FALSE(widths[i].percent);
+            } else {
+                CHECK(widths[i] == before.option<ConfigOptionFloatsOrPercents>(key)->values[i]);
+            }
+            CHECK(printer.option<ConfigOptionFloats>("nozzle_diameter")->values[i] ==
+                  Catch::Approx(i == edited ? diameter : 0.4));
+        }
+    }
+}
+
+TEST_CASE("Rejected and unchanged nozzle edits preserve all explicit widths", "[HotendConfigService][NozzleDiameterEdit]")
+{
+    const bool shared = GENERATE(false, true);
+    const size_t edited = GENERATE(size_t(0), size_t(3));
+    DynamicPrintConfig printer = printer_config();
+    printer.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4, 0.4, 0.4, 0.4}));
+    const DynamicPrintConfig before = printer;
+    CHECK_FALSE(HotendConfigService::edit_nozzle_diameter(printer, edited, 0.4, shared));
+    CHECK(before.diff(printer).empty());
+    CHECK_FALSE(HotendConfigService::edit_nozzle_diameter(printer, edited, 0.15, shared, false));
+    CHECK(before.diff(printer).empty());
+}
+
+TEST_CASE("Shared nozzle acceptance only resets tools whose diameter changes", "[HotendConfigService][NozzleDiameterEdit]")
+{
+    DynamicPrintConfig printer = printer_config();
+    printer.option<ConfigOptionFloats>("nozzle_diameter")->values[1] = 0.15;
+    const DynamicPrintConfig before = printer;
+    REQUIRE(HotendConfigService::edit_nozzle_diameter(printer, 3, 0.15, true));
+    CHECK(printer.option<ConfigOptionFloats>("nozzle_diameter")->values == std::vector<double>{0.15, 0.15, 0.15, 0.15});
+    for (const char *key : hotend_preset_width_keys())
+        CHECK(printer.option<ConfigOptionFloatsOrPercents>(key)->values[1] ==
+              before.option<ConfigOptionFloatsOrPercents>(key)->values[1]);
+    CHECK(printer.option<ConfigOptionFloatsOrPercents>("toolhead_outer_wall_line_width")->values[3].value == Catch::Approx(0.169));
+}
+
+TEST_CASE("Edited nozzle and explicit widths survive JSON reload", "[HotendConfigService][NozzleDiameterEdit]")
+{
+    TemporaryDirectory temporary;
+    DynamicPrintConfig printer = printer_config();
+    REQUIRE(HotendConfigService::edit_nozzle_diameter(printer, 0, 0.15, false));
+    HotendConfigService::apply_width(printer, 0, "toolhead_outer_wall_line_width", FloatOrPercent(0.15, false));
+    CHECK_FALSE(HotendConfigService::edit_nozzle_diameter(printer, 0, 0.15, false));
+    const fs::path path = temporary.path / "edited-nozzle.json";
+    printer.save_to_json(path.string(), "Edited nozzle", "User", "2.5.0");
+    DynamicPrintConfig loaded;
+    std::map<std::string, std::string> metadata;
+    std::string reason;
+    REQUIRE(loaded.load_from_json(path.string(), ForwardCompatibilitySubstitutionRule::Disable, metadata, reason).empty());
+    REQUIRE(reason.empty());
+    HotendConfigService::normalize_printer_config(loaded);
+    CHECK(loaded.option<ConfigOptionFloats>("nozzle_diameter")->values ==
+          printer.option<ConfigOptionFloats>("nozzle_diameter")->values);
+    for (const char *key : hotend_preset_width_keys())
+        CHECK(loaded.option<ConfigOptionFloatsOrPercents>(key)->values ==
+              printer.option<ConfigOptionFloatsOrPercents>(key)->values);
+    CHECK(loaded.option<ConfigOptionFloatsOrPercents>("toolhead_inner_wall_line_width")->values[0].value == Catch::Approx(0.169));
+}
+
+TEST_CASE("Invalid nozzle edits leave printer state unchanged", "[HotendConfigService][NozzleDiameterEdit]")
+{
+    DynamicPrintConfig printer = printer_config();
+    const DynamicPrintConfig before = printer;
+    for (double value : {0., -0.1, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
+        CHECK_THROWS_AS(HotendConfigService::edit_nozzle_diameter(printer, 0, value, true), std::invalid_argument);
+    CHECK_THROWS_AS(HotendConfigService::edit_nozzle_diameter(printer, 4, 0.15, false), std::out_of_range);
+    CHECK(before.diff(printer).empty());
 }
 
 TEST_CASE("Hotend single-value updates preserve unrelated settings", "[HotendConfigService]")

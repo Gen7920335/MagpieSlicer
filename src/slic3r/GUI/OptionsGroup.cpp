@@ -1283,6 +1283,8 @@ std::pair<OG_CustomCtrl*, bool*> ConfigOptionsGroup::get_custom_ctrl_with_blinki
 void ConfigOptionsGroup::change_opt_value(const t_config_option_key& opt_key, const boost::any& value, int opt_index /*= 0*/)
 
 {
+	if (m_config_value_handler && m_config_value_handler(opt_key, value, opt_index))
+		return;
 	Slic3r::GUI::change_opt_value(const_cast<DynamicPrintConfig&>(*m_config), opt_key, value, opt_index);
 	if (m_modelconfig)
 		m_modelconfig->touch();

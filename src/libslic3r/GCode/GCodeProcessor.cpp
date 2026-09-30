@@ -3066,6 +3066,50 @@ bool GCodeProcessor::get_last_z_from_gcode(const std::string& gcode_str, double&
     return is_z_changed;
 }
 
+std::vector<unsigned int> GCodeProcessorResult::preview_layer_ids() const
+{
+    std::vector<unsigned int> ids(moves.size(), 0);
+    if (moves.empty())
+        return ids;
+
+    if (spiral_vase_mode) {
+        for (size_t i = 0; i < moves.size(); ++i)
+            ids[i] = moves[i].layer_id;
+        return ids;
+    }
+
+    // Physical extrusion-top comparison tolerance, in millimetres. This is
+    // smaller than emitted G-code Z precision and only rejects numeric noise.
+    constexpr float physical_layer_z_tolerance_mm = 0.0001f;
+    unsigned int preview_layer_id = 0;
+    unsigned int logical_layer_id = moves.front().layer_id;
+    std::optional<float> maximum_extrusion_z;
+
+    for (size_t i = 0; i < moves.size(); ++i) {
+        const MoveVertex &move = moves[i];
+        if (move.layer_id != logical_layer_id) {
+            ++preview_layer_id;
+            logical_layer_id = move.layer_id;
+            maximum_extrusion_z.reset();
+        }
+
+        if (move.type == EMoveType::Extrude && move.extrusion_role != erCustom) {
+            const float extrusion_z = move.position.z();
+            const bool horizontal_extrusion = i == 0 ||
+                std::abs(extrusion_z - moves[i - 1].position.z()) <= physical_layer_z_tolerance_mm;
+            if (maximum_extrusion_z.has_value() &&
+                horizontal_extrusion &&
+                extrusion_z > *maximum_extrusion_z + physical_layer_z_tolerance_mm)
+                ++preview_layer_id;
+            maximum_extrusion_z = maximum_extrusion_z.has_value() ?
+                std::max(*maximum_extrusion_z, extrusion_z) : extrusion_z;
+        }
+        ids[i] = preview_layer_id;
+    }
+
+    return ids;
+}
+
 bool GCodeProcessor::get_last_z_from_gcode(const std::string &gcode_str, double initial_z_mm, double &z_mm)
 {
     if (!std::isfinite(initial_z_mm))

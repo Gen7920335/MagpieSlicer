@@ -3,6 +3,7 @@
 #include "libslic3r/SlicingProfiler.hpp"
 #endif
 #include "libslic3r/Config.hpp"
+#include "libslic3r/HotendConfigService.hpp"
 #include "libslic3r_version.h"
 
 #include <cstddef>
@@ -2521,7 +2522,8 @@ void Sidebar::init_filament_combo(PlaterPresetComboBox **combo, const int filame
         const double nozzle_diameter = selected_nozzle->diameter;
 
         DynamicPrintConfig new_config = current_config;
-        set_toolhead_nozzle_diameter(new_config, toolhead_index, nozzle_diameter);
+        if (!HotendConfigService::edit_nozzle_diameter(new_config, toolhead_index, nozzle_diameter, false))
+            return;
 
         wxGetApp().get_tab(Preset::TYPE_PRINTER)->load_config(new_config);
         sync_toolhead_nozzle_combos(new_config);

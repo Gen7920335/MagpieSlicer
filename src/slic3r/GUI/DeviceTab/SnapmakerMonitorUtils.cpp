@@ -147,6 +147,35 @@ std::string normalize_snapmaker_base_url(std::string value)
     return value;
 }
 
+bool is_snapmaker_http_url(std::string_view value)
+{
+    // Local setup pages must never become printer API endpoints.
+    const size_t scheme_length = value.substr(0, 7) == "http://" ? 7 :
+                                 value.substr(0, 8) == "https://" ? 8 : 0;
+    return scheme_length != 0 && value.size() > scheme_length &&
+           value[scheme_length] != '/' && value[scheme_length] != '\\';
+}
+
+bool SnapmakerCameraPollState::failure()
+{
+    // Counts, not elapsed-time thresholds: one recovery per three failures,
+    // at most three recoveries between successful JPEG responses.
+    constexpr unsigned failures_per_recovery = 3;
+    constexpr unsigned maximum_recoveries = 3;
+    m_failures = std::min(m_failures + 1, failures_per_recovery * maximum_recoveries);
+    if (m_failures % failures_per_recovery != 0 || m_recoveries >= maximum_recoveries)
+        return false;
+    ++m_recoveries;
+    return true;
+}
+
+int SnapmakerCameraPollState::interval_ms() const
+{
+    constexpr int maximum_interval_ms = 5000;
+    constexpr unsigned maximum_backoff_shift = 6;
+    return std::min(maximum_interval_ms, normal_interval_ms << std::min(m_failures, maximum_backoff_shift));
+}
+
 bool is_valid_snapmaker_object_name(std::string_view name)
 {
     return !name.empty() &&

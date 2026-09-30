@@ -818,6 +818,8 @@ Print::ApplyStatus BackgroundSlicingProcess::apply(const Model &model, const Dyn
 	// TODO: add partplate config
 	DynamicPrintConfig new_config = config;
 	new_config.apply(*m_current_plate->config());
+	if (m_print->technology() == ptFFF)
+		m_fff_print->is_BBL_printer() = wxGetApp().preset_bundle->is_bbl_vendor();
 	Print::ApplyStatus invalidated = m_print->apply(model, new_config);
 
 	// Orca: prevent resetting under gcode viewer mode

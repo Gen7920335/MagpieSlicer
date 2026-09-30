@@ -75,6 +75,7 @@ void SnapmakerCameraSession::start(std::string base_url, std::string api_key, St
         return;
 
     m_stop_requested.store(false);
+    m_reconnect_requested.store(false);
     m_running.store(true);
     m_thread = std::thread(
         [this, base_url = std::move(base_url), api_key = std::move(api_key), callback = std::move(callback)]() mutable {
@@ -134,7 +135,8 @@ void SnapmakerCameraSession::run(std::string base_url, std::string api_key, Stat
                     while (!done) {
                         ioc.restart();
                         ioc.run_for(STOP_POLL_INTERVAL);
-                        if (m_stop_requested.load() || std::chrono::steady_clock::now() >= deadline) {
+                        if (m_stop_requested.load() || m_reconnect_requested.exchange(false) ||
+                            std::chrono::steady_clock::now() >= deadline) {
                             if (send_stop && m_stop_requested.load() && ws.is_open()) {
                                 // A write may coexist with the outstanding read.
                                 // Keep its buffer alive until completion/cancellation.

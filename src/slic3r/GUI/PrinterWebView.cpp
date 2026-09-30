@@ -3,6 +3,7 @@
 #include "I18N.hpp"
 #include "PrinterWebViewHandler.hpp"
 #include "DeviceTab/SnapmakerMonitorPanel.hpp"
+#include "DeviceTab/SnapmakerMonitorUtils.hpp"
 #include "slic3r/GUI/PrinterWebView.hpp"
 #include "slic3r/GUI/wxExtensions.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
@@ -180,7 +181,7 @@ void PrinterWebView::load_url(wxString& url, wxString apikey)
 {
 //    this->Show();
 //    this->Raise();
-    m_snapmaker_mode = use_snapmaker_monitor();
+    m_snapmaker_mode = use_snapmaker_monitor() && is_snapmaker_http_url(url.ToStdString());
     if (m_snapmaker_mode) {
         m_url_deferred.clear();
         if (m_browser != nullptr)
@@ -193,6 +194,8 @@ void PrinterWebView::load_url(wxString& url, wxString apikey)
     }
 
     m_snapmaker_monitor->set_active(false);
+    // Clear an old server when switching back to a missing-connection/local page.
+    m_snapmaker_monitor->set_server(wxEmptyString, wxEmptyString);
     m_snapmaker_monitor->Hide();
     if (m_browser == nullptr)
         return;

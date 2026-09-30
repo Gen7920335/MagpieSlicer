@@ -1,5 +1,6 @@
 #include "ExtrusionEntity.hpp"
 #include "Print.hpp"
+#include "FilamentMapPolicy.hpp"
 #include "ToolOrdering.hpp"
 #include "Layer.hpp"
 #include "HalfLayerSources.hpp"
@@ -66,7 +67,7 @@ static bool entity_has_tool_hint(const ExtrusionEntity &entity, ExtrusionToolHin
 
 static std::vector<unsigned int> generated_wall_filaments_1based(
     const PrintConfig &print_config, const PrintRegion &region, size_t layer_id,
-    const ExtrusionEntityCollection &perimeters, unsigned int extruder_override)
+    const ExtrusionEntityCollection &perimeters, unsigned int extruder_override, bool half_layer_outer_walls)
 {
     if (extruder_override != 0)
         return {extruder_override};
@@ -92,27 +93,18 @@ static std::vector<unsigned int> generated_wall_filaments_1based(
         return filaments;
     }
 
-    bool has_detail_walls = false;
-    bool has_large_walls = false;
-    for (const ExtrusionEntity *entity : perimeters.entities) {
-        if (entity == nullptr)
-            continue;
-        has_detail_walls = has_detail_walls || entity_has_tool_hint(*entity, ExtrusionToolHint::DetailWall);
-        has_large_walls = has_large_walls || entity_has_tool_hint(*entity, ExtrusionToolHint::LargeWall);
-    }
-
-    if (has_detail_walls || has_large_walls) {
-        if (has_detail_walls)
-            filaments.emplace_back(detail_external_perimeter_filament_1based(
-                &print_config, region, base_outer_wall_filament));
-        if (has_large_walls)
-            filaments.emplace_back(base_inner_wall_filament);
-    } else {
-        filaments.emplace_back(detail_external_perimeter_filament_1based(
-            &print_config, region, base_outer_wall_filament));
-        if (region_config.wall_loops.value > 1)
-            filaments.emplace_back(base_inner_wall_filament);
-    }
+    LayerTools tools(0.);
+    tools.print_config = &print_config;
+    auto collect = [&](auto &&self, const ExtrusionEntity &entity) -> void {
+        if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+            for (const auto *child : collection->entities)
+                if (child != nullptr)
+                    self(self, *child);
+        } else {
+            filaments.emplace_back(tools.wall_extruder_id(region, entity, half_layer_outer_walls) + 1);
+        }
+    };
+    collect(collect, perimeters);
     sort_remove_duplicates(filaments);
     return filaments;
 }
@@ -486,8 +478,9 @@ void ToolOrdering::sort_and_build_data(const Print& print, unsigned int first_ex
     double max_layer_height = 0.;
     double object_bottom_z = 0.;
     for (const auto& object : print.objects()) {
-        for (const Layer* layer : object->layers()) {
-            if (layer->has_extrusions()) {
+        for (size_t parent_index = 0; parent_index < object->layers().size(); ++parent_index) {
+            const Layer *layer = object->layers()[parent_index];
+            if (object->model_layer_has_extrusions(parent_index)) {
                 object_bottom_z = layer->print_z - layer->height;
                 break;
             }
@@ -532,6 +525,26 @@ void ToolOrdering::sort_and_build_data(const PrintObject& object , unsigned int 
         this->build_half_layer_execution(object);
 
     this->collect_extruder_statistics(prime_multi_material);
+}
+
+unsigned int LayerTools::wall_extruder_id(const PrintRegion &region, const ExtrusionEntity &entity,
+                                        bool half_layer_outer_walls) const
+{
+    if (extruder_override != 0)
+        return extruder_override - 1;
+    // The first path can be an overhang in either an inner or an outer loop.
+    // Producer-owned inset identity survives that split and seam reordering.
+    bool outer = entity.role() != erPerimeter;
+    if (entity.tool_hint == ExtrusionToolHint::DetailWall)
+        outer = true;
+    else if (entity.tool_hint == ExtrusionToolHint::LargeWall)
+        outer = false;
+    else if (entity.inset_idx >= 0)
+        outer = entity.inset_idx < (half_layer_outer_walls ? 2 : 1);
+    if (outer)
+        return wall_extruder_id(region);
+    const unsigned int inner = region.config().inner_wall_filament_id.value;
+    return inner > 0 ? inner - 1 : wall_extruder_id(region);
 }
 
 static bool half_layer_features_enabled(const PrintObject &object)
@@ -956,7 +969,8 @@ static bool collect_first_layer_wall_areas(
                 if (source_region == nullptr || source_region->perimeters.entities.empty())
                     return;
                 append(wall_filaments, generated_wall_filaments_1based(
-                    print_config, source_region->region(), layer->id(), source_region->perimeters, 0));
+                    print_config, source_region->region(), layer->id(), source_region->perimeters, 0,
+                    object.config().outer_wall_half_layer_height.value));
             };
             collect_generated(layer_region);
             if (half_sources != nullptr) {
@@ -1090,7 +1104,7 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
     // Collect the object extruders.
     for (auto layer : object.layers()) {
         LayerTools &layer_tools = this->tools_for_layer(layer->print_z);
-        layer_tools.print_config = m_print_config_ptr;
+        layer_tools.print_config = &object.print()->config();
 
         // Override extruder with the next
     	for (; it_per_layer_extruder_override != per_layer_extruder_switches.end() && it_per_layer_extruder_override->first < layer->print_z + EPSILON; ++ it_per_layer_extruder_override)
@@ -1120,7 +1134,8 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                     // for sequential printing. Wall routing still needs the printer map.
                     const PrintConfig &wall_print_config = object.print()->config();
                     const std::vector<unsigned int> wall_filaments = generated_wall_filaments_1based(
-                        wall_print_config, region, layer->id(), layerm->perimeters, extruder_override);
+                        wall_print_config, region, layer->id(), layerm->perimeters, extruder_override,
+                        object.config().outer_wall_half_layer_height.value);
                     append(layer_tools.extruders, wall_filaments);
                     if (layerCount == 0)
                         for (unsigned int filament : wall_filaments)
@@ -1194,7 +1209,7 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
             continue;
         LayerTools &layer_tools = dynamic_cast<const HalfLayerSupportEvent *>(support_layer) != nullptr ?
             this->tools_for_deadline(physical_layer->print_z) : this->tools_for_layer(support_layer->print_z);
-        layer_tools.print_config = m_print_config_ptr;
+        layer_tools.print_config = &object.print()->config();
         ExtrusionRole role          = physical_layer->support_fills.role();
         bool          has_support   = false;
         bool          has_interface = false;
@@ -1575,6 +1590,18 @@ std::vector<int> ToolOrdering::get_recommended_filament_maps(const std::vector<s
 
     const auto& print_config = print->config();
     const unsigned int filament_nums = (unsigned int)(print_config.filament_colour.values.size() + EPSILON);
+
+    // This assignment is not an optimization result. Use the same fixed policy
+    // as Print::apply. Manual mode also calls this for comparative flush stats;
+    // that must not validate or mutate the user's manual geometry binding.
+    if (FilamentMapPolicy::uses_fixed_tools(print_config, print->is_BBL_printer())) {
+        if (print_config.filament_diameter.size() > print_config.nozzle_diameter.size())
+            throw SlicingError("This direct-tool printer cannot assign more filaments than physical toolheads.");
+        auto map = FilamentMapPolicy::canonical_map(print_config.filament_diameter.size());
+        for (int &tool : map)
+            --tool; // ToolOrdering groups are zero-based; stored config is one-based.
+        return map;
+    }
 
     // get flush matrix
     std::vector<FlushMatrix> nozzle_flush_mtx;
@@ -2037,6 +2064,12 @@ bool WipingExtrusions::is_overriddable(const ExtrusionEntityCollection& eec, con
     // both the requested wall count and the small/large wall boundary.
     if (entity_has_tool_hint(eec, ExtrusionToolHint::DetailWall) ||
         entity_has_tool_hint(eec, ExtrusionToolHint::LargeWall))
+        return false;
+
+    // A whole-island purge claim cannot describe two separately owned walls.
+    // Keep eligible infill claims; never credit purge which emission discards.
+    if (!eec.has_infill() && region.config().inner_wall_filament_id.value > 0 &&
+        unsigned(region.config().inner_wall_filament_id.value - 1) != m_layer_tools->wall_extruder_id(region))
         return false;
 
     if (print_config.filament_soluble.get_at(m_layer_tools->extruder(eec, region)))

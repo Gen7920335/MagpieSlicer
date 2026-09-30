@@ -57,6 +57,102 @@ TEST_CASE("Automatic detail walls do not substitute a different material", "[Wal
     CHECK(detail_wall_tool(config, detail_region(), 3).filament_id_1based == 2);
 }
 
+TEST_CASE("Auto detail routing preserves distinct assigned colours for every hotend permutation",
+          "[WallToolRouting][PaintColourSafety]")
+{
+    std::array<int, 4> map {1, 2, 3, 4};
+    do {
+        PrintConfig config = routing_config(std::vector<int>(map.begin(), map.end()));
+        config.filament_type.values.assign(4, "PLA");
+        config.filament_soluble.values.assign(4, false);
+        for (unsigned int filament = 1; filament <= 4; ++filament) {
+            CAPTURE(map, filament);
+            const ResolvedWallTool tool = detail_wall_tool(config, detail_region(), filament);
+            REQUIRE(tool);
+            CHECK(tool.filament_id_1based == filament);
+            CHECK(tool.hotend_id_1based == unsigned(map[filament - 1]));
+            CHECK(tool.nozzle_diameter == Catch::Approx(config.nozzle_diameter.values[map[filament - 1] - 1]));
+        }
+    } while (std::next_permutation(map.begin(), map.end()));
+}
+
+TEST_CASE("Auto detail routing requires known matching colour metadata", "[WallToolRouting][PaintColourSafety]")
+{
+    PrintConfig config = routing_config({3, 1, 4, 2});
+    config.filament_type.values.assign(4, "PLA");
+    config.filament_soluble.values.assign(4, false);
+
+    SECTION("missing colour vector") { config.filament_colour.values.clear(); }
+    SECTION("empty colour strings are not colour matches") { config.filament_colour.values.assign(4, ""); }
+    SECTION("short colour vector does not identify any smaller candidate") { config.filament_colour.values = {"blue"}; }
+    SECTION("same nozzle sizes preserve the assignment") { config.nozzle_diameter.values.assign(4, 0.4); }
+
+    const ResolvedWallTool tool = detail_wall_tool(config, detail_region(), 1);
+    REQUIRE(tool);
+    CHECK(tool.filament_id_1based == 1);
+    CHECK(tool.hotend_id_1based == 3);
+    CHECK(tool.nozzle_diameter == Catch::Approx(0.4));
+}
+
+TEST_CASE("Auto detail routing still selects a compatible same-colour smaller nozzle",
+          "[WallToolRouting][PaintColourSafety]")
+{
+    PrintConfig config = routing_config({3, 1, 4, 2}, {"blue", "red", "green", "blue"});
+    config.filament_type.values.assign(4, "PLA");
+    config.filament_soluble.values.assign(4, false);
+    unsigned int expected_filament = 4;
+    unsigned int expected_hotend = 2;
+    double expected_nozzle = 0.2;
+
+    SECTION("same colour remains available in Auto") {}
+    SECTION("different material is not compatible") {
+        config.filament_type.values[3] = "PETG";
+        expected_filament = 1;
+        expected_hotend = 3;
+        expected_nozzle = 0.4;
+    }
+
+    const ResolvedWallTool tool = detail_wall_tool(config, detail_region(), 1);
+    REQUIRE(tool);
+    CHECK(tool.filament_id_1based == expected_filament);
+    CHECK(tool.hotend_id_1based == expected_hotend);
+    CHECK(tool.nozzle_diameter == Catch::Approx(expected_nozzle));
+    // A compatible same-colour candidate still takes precedence over manual fallback.
+    if (expected_filament == 4)
+        CHECK(detail_wall_tool(config, detail_region(1), 1).filament_id_1based == 4);
+}
+
+TEST_CASE("Explicit detail tool choices and feature-off assignments are preserved",
+          "[WallToolRouting][PaintColourSafety]")
+{
+    PrintConfig config = routing_config({3, 1, 4, 2});
+    config.filament_type.values.assign(4, "PLA");
+    config.filament_soluble.values.assign(4, false);
+    PrintRegionConfig region = detail_region(2);
+    unsigned int expected_filament = 4;
+    unsigned int expected_hotend = 2;
+
+    SECTION("explicit tool can use another colour") {}
+    SECTION("explicit tool can use another material") { config.filament_type.values[3] = "PETG"; }
+    SECTION("legacy explicit fallback remains available when the requested nozzle is not smaller") {
+        region.crisp_corner_detail_toolhead.value = 4;
+        expected_filament = 2;
+        expected_hotend = 1;
+    }
+
+    const ResolvedWallTool manual = detail_wall_tool(config, region, 1);
+    REQUIRE(manual);
+    CHECK(manual.filament_id_1based == expected_filament);
+    CHECK(manual.hotend_id_1based == expected_hotend);
+
+    region.use_smaller_nozzles_in_crisp_corners.value = false;
+    const ResolvedWallTool disabled = detail_wall_tool(config, region, 1);
+    REQUIRE(disabled);
+    CHECK(disabled.filament_id_1based == 1);
+    CHECK(disabled.hotend_id_1based == 3);
+    CHECK(disabled.nozzle_diameter == Catch::Approx(0.4));
+}
+
 TEST_CASE("Wall tool routing resolves identity and permuted filament maps", "[WallToolRouting]")
 {
     SECTION("identity map") {

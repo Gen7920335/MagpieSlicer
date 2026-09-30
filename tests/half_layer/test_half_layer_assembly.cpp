@@ -643,6 +643,63 @@ TEST_CASE("Half-height wall setting owns live source geometry and invalidates on
     }
 }
 
+TEST_CASE("Shell-only half layers participate in first-layer and empty-layer validation",
+    "[HalfLayer][EmptyLayerSafety]")
+{
+    const std::string engine = GENERATE(std::string("classic"), std::string("arachne"));
+    const int walls = GENERATE(1, 2, 4);
+    CAPTURE(engine, walls);
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"wall_generator", engine}, {"wall_loops", walls},
+        {"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
+        {"outer_wall_half_layer_height", true}, {"top_shell_layers", 0}, {"bottom_shell_layers", 0},
+        {"sparse_infill_density", "0%"}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    struct ExportStagePrint : Print {
+        using Print::invalidate_step;
+        using Print::set_started;
+        using Print::set_done;
+    } print;
+    Model model;
+    init_print({make_cube(10., 10., 3.)}, print, model, config);
+    REQUIRE_NOTHROW(print.process());
+    auto &object = *print.get_object(size_t(0));
+    const auto *sources = object.half_layer_sources();
+    REQUIRE(sources != nullptr);
+    REQUIRE(sources->phases[0][0]->has_extrusions());
+    REQUIRE(sources->phases[1][0]->has_extrusions());
+    REQUIRE_FALSE(gcode(print).empty());
+    for (const auto &warning : print.step_state_with_warnings(psGCodeExport).warnings)
+        CHECK(warning.message_id != PrintStateBase::SlicingEmptyGcodeLayers);
+
+    auto clear_physical = [](Layer &layer) {
+        for (auto *region : layer.regions()) {
+            region->perimeters.clear();
+            region->fills.clear();
+        }
+    };
+    // A real internal gap must still warn; accepting shell-only layers must not
+    // turn off the safety check. Remove 1.0 mm of every physical source.
+    for (size_t index = 3; index < 8; ++index) {
+        clear_physical(*object.layers()[index]);
+        for (unsigned phase = 0; phase < 2; ++phase)
+            clear_physical(*sources->phases[phase][index]);
+    }
+    print.invalidate_step(psGCodeExport);
+    REQUIRE(print.set_started(psGCodeExport));
+    GCode::collect_layers_to_print(object);
+    const auto warnings = print.step_state_with_warnings(psGCodeExport).warnings;
+    CHECK(std::any_of(warnings.begin(), warnings.end(), [](const auto &warning) {
+        return warning.message_id == PrintStateBase::SlicingEmptyGcodeLayers;
+    }));
+    print.set_done(psGCodeExport);
+    // Delete every physical source at the first parent: this really is empty.
+    clear_physical(*object.layers().front());
+    for (unsigned phase = 0; phase < 2; ++phase)
+        clear_physical(*sources->phases[phase].front());
+    REQUIRE_THROWS_AS(GCode::collect_layers_to_print(object), Slic3r::SlicingError);
+}
+
 TEST_CASE("Half-layer settings survive process-preset and 3MF project round trips",
     "[HalfLayer][Persistence]")
 {
@@ -866,7 +923,9 @@ TEST_CASE("Tool and seam consumers retain auxiliary physical walls under their l
         {"layer_height", h_mm}, {"initial_layer_print_height", h_mm}, {"wall_loops", 2},
         {"outer_wall_half_layer_height", true}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"detect_overhang_wall", false}, {"use_smaller_nozzles_in_crisp_corners", true},
-        {"crisp_corner_small_nozzle_wall_count", detail_count}});
+        // This fixture intentionally needs both different-colored materials;
+        // Auto must not substitute another color just to obtain a small nozzle.
+        {"crisp_corner_detail_toolhead", 2}, {"crisp_corner_small_nozzle_wall_count", detail_count}});
     config.set_key_value("seam_position", new ConfigOptionEnum<SeamPosition>(spRear));
     Print print;
     Model model;
@@ -910,7 +969,8 @@ TEST_CASE("Sliced half-height paths produce a complete material-resolved executi
         set_toolhead_nozzle_diameter(config, 1, 0.2);
         config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
         config.set_deserialize_strict({{"single_extruder_multi_material", false},
-            {"use_smaller_nozzles_in_crisp_corners", true}, {"crisp_corner_small_nozzle_wall_count", detail_count}});
+            {"use_smaller_nozzles_in_crisp_corners", true}, {"crisp_corner_detail_toolhead", 2},
+            {"crisp_corner_small_nozzle_wall_count", detail_count}});
     }
     config.set_deserialize_strict({{"wall_generator", engine}, {"layer_height", h_mm},
         {"initial_layer_print_height", h_mm}, {"wall_loops", detail_count == 0 ? 4 : 2},
@@ -1140,11 +1200,12 @@ TEST_CASE("Native support generators produce half-height paths without changing 
     CHECK(paths > 0);
 }
 
-TEST_CASE("Both wipe tower planners consume repeated half-layer visits", "[HalfLayer][ExecutionTower]")
+TEST_CASE("Both wipe tower planners consume repeated half-layer visits", "[HalfLayer][ExecutionTower][TowerClearanceRegression]")
 {
     const bool type1 = GENERATE(false, true);
     const bool separate_nozzles = GENERATE(false, true);
     const bool dense_tower = GENERATE(false, true);
+    const double configured_hop_mm = GENERATE(0., 0.6);
     auto config = multifilament_config(2);
     if (separate_nozzles) {
         config.set_num_extruders(2);
@@ -1162,6 +1223,7 @@ TEST_CASE("Both wipe tower planners consume repeated half-layer visits", "[HalfL
         {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"wall_loops", 4},
         {"outer_wall_half_layer_height", true}, {"only_one_wall_top", false},
         {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
+        {"z_hop", configured_hop_mm},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}});
     config.set_key_value("flush_volumes_matrix", new ConfigOptionFloats{0., 100., 20., 0.});
     config.set_key_value("flush_multiplier", new ConfigOptionFloats{1., 1.});
@@ -1249,6 +1311,72 @@ TEST_CASE("Both wipe tower planners consume repeated half-layer visits", "[HalfL
     });
     CHECK(tower_entries > 0);
     CHECK(tower_extrusions_at_plan_z >= tower_entries);
+
+    // Independent motion oracle: a tower-to-model transit must clear the last
+    // deposited plane, not the lower nominal plane of the next half shell.
+    std::string role, previous_role;
+    double previous_deposition_z_mm = 0.;
+    std::vector<double> transit_z_mm;
+    size_t returns = 0, connections = 0;
+    bool connection = false;
+    bool motion_failed = false;
+    GCodeReader motion;
+    motion.apply_config(config);
+    motion.parse_buffer(exported, [&](GCodeReader &state, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw());
+        if (raw.rfind(";TYPE:", 0) == 0) role = raw.substr(6);
+        else if (raw.rfind("; FEATURE: ", 0) == 0) role = raw.substr(11);
+        if (raw.find("; half-layer tower connection end") != std::string::npos) {
+            REQUIRE(connection);
+            // End marker follows restoration to the actual tower plane.
+            const double required_z_mm = line.new_Z(state) + std::max(configured_hop_mm, 0.3);
+            constexpr double encoded_z_tolerance_mm = 0.00051;
+            for (const double z_mm : transit_z_mm) {
+                CAPTURE(type1, separate_nozzles, dense_tower, configured_hop_mm, z_mm, required_z_mm);
+                motion_failed |= std::abs(z_mm - required_z_mm) > encoded_z_tolerance_mm;
+                CHECK(z_mm == Catch::Approx(required_z_mm).margin(encoded_z_tolerance_mm));
+            }
+            ++connections;
+            connection = false;
+            transit_z_mm.clear();
+        } else if (raw.find("; half-layer tower connection") != std::string::npos) {
+            connection = true;
+            transit_z_mm.clear();
+        }
+        if (line.dist_XY(state) <= 0.) return;
+        if (!line.extruding(state)) {
+            // Auto Z-hop may tessellate its rising helix into XYZ segments.
+            // Judge the horizontal transit, not an intermediate ascent point.
+            constexpr double horizontal_z_tolerance_mm = 0.00001;
+            if (std::abs(line.dist_Z(state)) <= horizontal_z_tolerance_mm)
+                transit_z_mm.push_back(line.new_Z(state));
+            return;
+        }
+        const bool tower_return = previous_role == "Prime tower" && role != "Prime tower";
+        if (tower_return) {
+            REQUIRE_FALSE(transit_z_mm.empty());
+            // Fixture parent height is 0.2 mm, independently of tower metadata.
+            const double required_z_mm = std::max(previous_deposition_z_mm, double(line.new_Z(state))) +
+                std::max(configured_hop_mm, 0.3);
+            constexpr double encoded_z_tolerance_mm = 0.00051;
+            for (const double z_mm : transit_z_mm) {
+                CAPTURE(type1, separate_nozzles, dense_tower, configured_hop_mm, raw, z_mm, required_z_mm,
+                    previous_deposition_z_mm, connection, tower_return);
+                motion_failed |= z_mm < required_z_mm - encoded_z_tolerance_mm;
+                CHECK(z_mm >= required_z_mm - encoded_z_tolerance_mm);
+            }
+            if (tower_return) ++returns;
+        }
+        connection = false;
+        transit_z_mm.clear();
+        previous_deposition_z_mm = line.new_Z(state);
+        previous_role = role;
+    });
+    CHECK(returns > 0);
+    CHECK(connections > 0);
+    if (motion_failed || returns == 0 || connections == 0)
+        std::ofstream("tower-clearance-" + std::to_string(type1) + "-" + std::to_string(separate_nozzles) +
+            "-" + std::to_string(dense_tower) + "-" + std::to_string(configured_hop_mm) + ".gcode") << exported;
 }
 
 TEST_CASE("Dedicated wipe-tower material is an explicit execution visit", "[HalfLayer][TowerAuxiliary]")
@@ -2091,6 +2219,49 @@ TEST_CASE("Sequential copies receive independent half-layer execution plans", "[
     }
     const std::string output = gcode(print);
     CHECK_FALSE(output.empty());
+}
+
+TEST_CASE("Half-layer skirt is consumed only by its scheduled filament", "[HalfLayer][GCodeInteractions][SkirtOwnershipRegression]")
+{
+    const char *engine = GENERATE("classic", "arachne");
+    const bool support_half = GENERATE(false, true);
+    const int skirt_height = GENERATE(1, 2);
+    CAPTURE(engine, support_half, skirt_height);
+    auto config = multifilament_config(2, {
+        {"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
+        {"wall_generator", engine}, {"wall_loops", 4},
+        {"outer_wall_filament_id", 1}, {"inner_wall_filament_id", 2},
+        {"sparse_infill_filament_id", 2}, {"internal_solid_filament_id", 2},
+        {"top_surface_filament_id", 2}, {"bottom_surface_filament_id", 2},
+        {"outer_wall_half_layer_height", true}, {"support_half_layer_height", support_half},
+        {"only_one_wall_first_layer", false}, {"enable_support", true},
+        {"support_filament", 2}, {"support_interface_filament", 2}, {"support_threshold_angle", 60},
+        {"skirt_type", "combined"}, {"skirt_loops", 2}, {"skirt_height", skirt_height},
+        {"brim_type", "no_brim"}, {"enable_prime_tower", false},
+        {"use_relative_e_distances", true}, {"layer_change_gcode", "G92 E0\n"},
+    });
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    Print print;
+    Model model;
+    init_print({TestMesh::overhang}, print, model, config);
+    const std::string output = gcode(print);
+    std::set<int> skirt_planes_um;
+    std::string role;
+    size_t skirt_moves = 0;
+    GCodeReader reader;
+    reader.apply_config(config);
+    reader.parse_buffer(output, [&](GCodeReader &state, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw());
+        if (raw.rfind(";TYPE:", 0) == 0)
+            role = raw.substr(6);
+        if (role == "Skirt" && line.extruding(state) && line.dist_XY(state) > 0.) {
+            ++skirt_moves;
+            skirt_planes_um.insert(int(std::lround(line.new_Z(state) * 1000.)));
+        }
+    });
+    // Config/footer strings containing "skirt" are not extrusion evidence.
+    CHECK(skirt_moves > 0);
+    CHECK(skirt_planes_um == (skirt_height == 1 ? std::set<int>{200} : std::set<int>{200, 400}));
 }
 
 TEST_CASE("Half-layer dispatcher retains auxiliary and sequential workflows", "[HalfLayer][GCodeInteractions]")

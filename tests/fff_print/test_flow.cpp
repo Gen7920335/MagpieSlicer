@@ -256,9 +256,19 @@ TEST_CASE("Detail tool selection uses actual nozzle diameters", "[Flow][MultiNoz
         CHECK(detail_wall_tool(config, config, 2).filament_id_1based == 1);
     }
 
-    SECTION("four independent hotends use the smallest valid nozzle for each base tool") {
+    SECTION("Auto preserves four distinct filament colours despite smaller nozzles") {
         config.nozzle_diameter.values = { 0.4, 0.15, 0.6, 0.8 };
         config.filament_colour.values = { "#110000", "#001100", "#000011", "#111100" };
+        config.crisp_corner_detail_toolhead.value = 0;
+        CHECK(detail_wall_tool(config, config, 1).filament_id_1based == 1);
+        CHECK(detail_wall_tool(config, config, 2).filament_id_1based == 2);
+        CHECK(detail_wall_tool(config, config, 3).filament_id_1based == 3);
+        CHECK(detail_wall_tool(config, config, 4).filament_id_1based == 4);
+    }
+
+    SECTION("same-colour independent hotends still use the smallest valid nozzle") {
+        config.nozzle_diameter.values = { 0.4, 0.15, 0.6, 0.8 };
+        config.filament_colour.values.assign(4, "#FF0000");
         config.crisp_corner_detail_toolhead.value = 0;
         CHECK(detail_wall_tool(config, config, 1).filament_id_1based == 2);
         CHECK(detail_wall_tool(config, config, 2).filament_id_1based == 2);
