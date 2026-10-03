@@ -1599,8 +1599,16 @@ std::vector<double> half_height_support_z_grid(const PrintObject &object)
     return cuts_mm;
 }
 
+std::pair<double, double> half_height_support_band_limits_mm(const PrintObject &object)
+{
+    // Nominal H/2 band and half of it. The logical support grid keeps independent support
+    // layer heights, whose boundaries sit off the model grid (0.011 mm bands under 0.2 mm layers).
+    const double band_mm = 0.5 * object.config().layer_height.value;
+    return {0.5 * band_mm, band_mm};
+}
+
 std::vector<double> half_height_support_band_ends(
-    const std::vector<double> &cuts_mm, double bottom_mm, double top_mm)
+    const std::vector<double> &cuts_mm, double bottom_mm, double top_mm, double min_band_mm, double max_band_mm)
 {
     if (!std::isfinite(bottom_mm) || !std::isfinite(top_mm) || top_mm <= bottom_mm)
         throw std::invalid_argument("Half-height support needs a positive physical print interval");
@@ -1611,6 +1619,19 @@ std::vector<double> half_height_support_band_ends(
     for (; it != cuts_mm.end() && *it < top_mm - z_tolerance_mm; ++it)
         ends.push_back(*it);
     ends.push_back(top_mm);
+    // Replace the cut beside a sliver: drop it when the merged band fits, otherwise move it to
+    // the middle of the merged band. Each half then lies between min_band_mm and the neighbour.
+    auto fix_sliver = [&](size_t cut_idx, double below_mm, double above_mm) {
+        const double merged_mm = above_mm - below_mm;
+        if (merged_mm <= max_band_mm + z_tolerance_mm)
+            ends.erase(ends.begin() + cut_idx);
+        else
+            ends[cut_idx] = below_mm + 0.5 * merged_mm;
+    };
+    if (ends.size() >= 2 && ends[0] - bottom_mm < min_band_mm - z_tolerance_mm)
+        fix_sliver(0, bottom_mm, ends[1]);
+    if (const size_t n = ends.size(); n >= 2 && top_mm - ends[n - 2] < min_band_mm - z_tolerance_mm)
+        fix_sliver(n - 2, n >= 3 ? ends[n - 3] : bottom_mm, top_mm);
     return ends;
 }
 
@@ -1619,6 +1640,7 @@ static void refine_half_height_support_regions(const PrintObject &object,
     std::initializer_list<SupportGeneratorLayersPtr *> groups)
 {
     const auto cuts_mm = half_height_support_z_grid(object);
+    const auto [min_band_mm, max_band_mm] = half_height_support_band_limits_mm(object);
     // Z-coalescing tolerance, mm, matching fixed-point geometry precision.
     constexpr double z_tolerance_mm = 0.000001;
     const double raft_top_mm = object.slicing_parameters().raft_contact_top_z;
@@ -1634,7 +1656,7 @@ static void refine_half_height_support_regions(const PrintObject &object,
                     bands.push_back(original);
                 } else {
                     const double bottom_mm = original->bottom_print_z();
-                    const auto ends = half_height_support_band_ends(cuts_mm, bottom_mm, original->print_z);
+                    const auto ends = half_height_support_band_ends(cuts_mm, bottom_mm, original->print_z, min_band_mm, max_band_mm);
                     double previous_mm = bottom_mm;
                     for (size_t i = 0; i < ends.size(); ++i) {
                         auto &band = storage.allocate_unguarded(original->layer_type);
@@ -2313,9 +2335,9 @@ void generate_support_toolpaths(
                         //FIXME When paralellizing, each thread shall have its own copy of the fillers.
                         filler->spacing = flow.spacing();
                         filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / density));
-                        // A zero normal-wall count is an explicit request for
-                        // pattern-only support, including the bed layer.
-                        sheath  = support_params.support_wall_count > 0;
+                        // Upstream always sheathes the bed flange for adhesion; support_wall_count
+                        // (default 0) only controls walls above it, so the default keeps upstream output.
+                        sheath  = true;
                         no_sort = true;
                     }
                 } else if (support_params.support_style == SupportMaterialStyle::smsTreeOrganic &&

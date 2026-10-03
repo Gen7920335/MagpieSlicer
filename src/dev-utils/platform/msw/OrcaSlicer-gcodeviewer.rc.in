@@ -10,7 +10,7 @@ PRODUCTVERSION @SLIC3R_FILE_VERSION_COMMA@
    VALUE "FileDescription", "@SLIC3R_APP_NAME@ G-code Viewer"
    VALUE "FileVersion", "@SLIC3R_DISPLAY_VERSION@"
    VALUE "ProductName", "@SLIC3R_APP_NAME@ G-code Viewer"
-   VALUE "ProductVersion", "@SLIC3R_DISPLAY_VERSION@"
+   VALUE "ProductVersion", "@MAGPIE_PACKAGE_VERSION@"
    VALUE "InternalName", "@SLIC3R_APP_NAME@ G-code Viewer"
    VALUE "LegalCopyright", ""
    VALUE "OriginalFilename", "magpie-gcodeviewer.exe"

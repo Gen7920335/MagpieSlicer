@@ -3754,6 +3754,10 @@ PrintObjectConfig PrintObject::object_config_from_model_object(const PrintObject
         src_normalized.normalize_fdm();
         config.apply(src_normalized, true);
     }
+    // Half-height outer walls need support built on the same half-height grid underneath them
+    // (user decision 2026-10-03). This is the single owner of that rule for GUI, CLI and 3MF input.
+    if (config.outer_wall_half_layer_height.value)
+        config.support_half_layer_height.value = true;
     // Clamp invalid extruders to the default extruder (with index 1).
     clamp_exturder_to_default(config.support_filament,           num_extruders);
     clamp_exturder_to_default(config.support_interface_filament, num_extruders);

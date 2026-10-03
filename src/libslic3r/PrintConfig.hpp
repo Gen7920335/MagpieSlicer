@@ -518,6 +518,10 @@ static std::set<NozzleVolumeType> get_valid_nozzle_volume_type() {
 
 std::string get_nozzle_volume_type_string(NozzleVolumeType nozzle_volume_type);
 
+// Reads a printer profile's default_bed_type: a legacy enum number ("4") or a plate
+// name ("Textured PEI Plate"). Returns btDefault when the value names no plate.
+BedType parse_default_bed_type(const std::string &value);
+
 static std::string bed_type_to_gcode_string(const BedType type)
 {
     std::string type_str;

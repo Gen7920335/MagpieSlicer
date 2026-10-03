@@ -911,3 +911,23 @@ TEST_CASE("Custom process settings survive JSON save and reload", "[Preset][Roun
     }
 }
 
+
+TEST_CASE("Default bed type accepts plate names and legacy numbers", "[Preset][BedType]")
+{
+    PresetBundle bundle;
+    Preset &printer = bundle.printers.get_edited_preset();
+    auto bed_type_for = [&](const std::string &value) {
+        printer.config.set_key_value("default_bed_type", new ConfigOptionString(value));
+        return printer.get_default_bed_type(&bundle);
+    };
+    // Snapmaker U1 and 42 other vendor profiles store the plate name.
+    CHECK(bed_type_for("Textured PEI Plate") == btPTE);
+    CHECK(bed_type_for("Cool Plate") == btPC);
+    CHECK(bed_type_for("Supertack Plate") == btSuperTack);
+    // Legacy numeric values keep their enum meaning.
+    CHECK(bed_type_for("4") == btPTE);
+    CHECK(bed_type_for("1") == btPC);
+    // Unknown and out-of-range values keep the previous High Temp Plate fallback.
+    CHECK(bed_type_for("Glass Plate") == btPEI);
+    CHECK(bed_type_for(std::to_string(int(btCount))) == btPEI);
+}

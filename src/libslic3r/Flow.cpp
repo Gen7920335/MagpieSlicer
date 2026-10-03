@@ -127,6 +127,12 @@ ConfigOptionFloatOrPercent toolhead_line_width_or(const PrintConfig &print_confi
     return fallback;
 }
 
+ConfigOptionFloatOrPercent toolhead_bridge_line_width_or(const PrintConfig &print_config, int hotend_id_1based, const ConfigOptionFloatOrPercent &fallback)
+{
+    const ConfigOptionFloatOrPercent bridge_width = indexed_toolhead_line_width(print_config.toolhead_bridge_line_width, hotend_id_1based);
+    return is_line_width_set(bridge_width) ? bridge_width : fallback;
+}
+
 bool detail_walls_enabled(const PrintRegionConfig &region_config)
 {
     return region_config.use_smaller_nozzles_in_crisp_corners.value;

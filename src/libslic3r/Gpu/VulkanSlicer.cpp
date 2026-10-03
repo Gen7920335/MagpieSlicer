@@ -33,6 +33,15 @@
 
 #ifdef SLIC3R_ENABLE_VULKAN_SLICER
 #include <vulkan/vulkan.h>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 #endif
 
 namespace Slic3r::Gpu {
@@ -53,6 +62,23 @@ constexpr size_t   kRetainedTreeEdgeCapacity = 128 * 1024;
 constexpr uint64_t kDispatchFenceTimeoutNs = 10'000'000'000ULL;
 constexpr auto     kInitializationRetryDelay = std::chrono::seconds(5);
 constexpr int      kDispatchPolicyCacheSchema = 1;
+
+#ifdef SLIC3R_ENABLE_VULKAN_SLICER
+// vulkan-1.dll is delay-loaded (src/libslic3r/CMakeLists.txt) so a PC without the
+// Vulkan loader still starts. Every vk* call follows a successful vkCreateInstance,
+// so checking here keeps the delay-load helper from raising on a missing loader.
+// The loader is pinned from System32 and the helper then binds to that module.
+bool vulkan_loader_available()
+{
+#ifdef _WIN32
+    static const bool available =
+        LoadLibraryExW(L"vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32) != nullptr;
+    return available;
+#else
+    return true;
+#endif
+}
+#endif
 
 // The GUI changes this flag through VulkanSlicerBackend. Keeping it here
 // avoids coupling the slicing engine to GUI/AppConfig headers.
@@ -731,6 +757,10 @@ private:
 
         VkInstanceCreateInfo instance_info { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
         instance_info.pApplicationInfo = &application_info;
+        if (!vulkan_loader_available()) {
+            m_diagnostic = "Vulkan loader (vulkan-1.dll) is not installed; CPU fallback is active.";
+            return;
+        }
         if (vkCreateInstance(&instance_info, nullptr, &m_instance) != VK_SUCCESS) {
             m_diagnostic = "Vulkan instance creation failed for infill compute.";
             return;
@@ -1871,6 +1901,10 @@ VulkanSlicerCapabilities VulkanSlicerBackend::query_capabilities()
     VkInstanceCreateInfo instance_info { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     instance_info.pApplicationInfo = &application_info;
 
+    if (!vulkan_loader_available()) {
+        capabilities.diagnostic = "Vulkan loader (vulkan-1.dll) is not installed";
+        return capabilities;
+    }
     VkInstance instance = VK_NULL_HANDLE;
     const VkResult create_result = vkCreateInstance(&instance_info, nullptr, &instance);
     if (create_result != VK_SUCCESS) {

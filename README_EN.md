@@ -12,16 +12,24 @@ An OrcaSlicer-based fork integrating mixed nozzle sizes, extended supports, and 
 
 ## Latest Release
 
-- Version: **2.5.0.0.9 Beta 2**
-- Tag: `v2.5.0.0.9-beta.2`
+- Version: **2.5.0.0.9 Beta 6**
+- Tag: `v2.5.0.0.9-beta.6` (not yet published)
 - Platform: **Windows x64**
 - Status: **Pre-release**
-- [Go directly to the latest GitHub release](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.9-beta.2)
-- [Feature-by-feature changes](docs/MAGPIE_FEATURE_CHANGES_2.5.0.0.8.md)
+- [GitHub releases](https://github.com/Gen7920335/MagpieSlicer/releases)
+- [Release record](docs/RELEASE_HISTORY.md) · [Development documents](docs/DOCUMENT_INDEX.md)
 
 The source commit and SHA-256 are recorded in the GitHub release notes.
 
-This beta retains optional CUDA acceleration and detailed timing while fixing state synchronization across materials, nozzles, supports, cancellation, device inputs, Resin and Mixed supports, low-temperature interfaces, and multi-nozzle temperature towers. The release notes separate automated evidence from the remaining limitations.
+Beta 6 highlights:
+
+- Snapmaker U1 defaults now follow Snapmaker's own Orca: 20,000 acceleration and 500 mm/s (the stock firmware limits), per-nozzle retraction, and default processes with tree support and Classic walls. The default plate reads as Textured PEI, so no `Z_OFFSET -0.07` is added.
+- Enabling half-height outer walls (H/2) also enables half-height support, and the print order keeps the time between the two outer-wall passes even when support is present. The preview steps one half layer at a time.
+- The app starts and slices on the CPU on PCs without a Vulkan loader.
+- Fixed: Classic walls + H/2 + four walls failing to slice, the missing first-layer normal-support outline, missing per-toolhead line-width range checks, and missing low-temperature interface temperature checks.
+- Add/Remove Programs and the installer name show the beta number, and file associations no longer collide with OrcaSlicer.
+
+Development documents distinguish automated evidence from remaining installer GUI and physical-print validation.
 
 > This fork is under active development. Inspect the preview and generated G-code before printing on real hardware.
 
@@ -131,6 +139,12 @@ The temperature-drop tower is visible and movable before slicing. It has a five-
 - Tree Slim and Organic wall counts accept `0-10`.
 - `0` preserves automatic behavior; narrow branches generate only walls that physically fit.
 
+### Half-height outer walls and support (H/2)
+
+- `Half-height outer walls`: print the outer two XY walls twice at half the model layer height, without changing the total wall count.
+- `Half-height support`: print support at half height. It is always on while half-height outer walls are enabled, so the walls are supported on the same grid.
+- Within a layer, the lower half (support and outer wall) prints first, then the upper half. The upper outer wall is placed where the two outer-wall passes are evenly spaced in time, avoiding banding every half layer.
+
 ## Vulkan-Assisted Slicing
 
 The top selector provides:
@@ -140,13 +154,13 @@ The top selector provides:
 - `Vulkan: Max GPU`: expand GPU use to the maximum supported range
 - `Vulkan: Off`: use the CPU pipeline only
 
-Validation and CPU fallback paths remain for topology-sensitive work. Performance depends on the GPU, driver, CPU, and model complexity.
+Validation and CPU fallback paths remain for topology-sensitive work. Performance depends on the GPU, driver, CPU, and model complexity. Without an installed Vulkan loader, slicing runs on the CPU even when Vulkan is enabled.
 
 ## Device and Calibration Features
 
 ### Snapmaker device view
 
-Magpie extends the Snapmaker U1 print-start flow and native device panel. Camera, current layer, temperatures, fans, motion state, and common device controls are available in one view. PA calibration, bed leveling, and timelapse options default to off.
+Magpie extends the Snapmaker U1 print-start flow and native device panel. Camera, current layer, temperatures, fans, motion state, and common device controls are available in one view. PA calibration, bed leveling, and timelapse options default to off. U1 printer and default process values follow Snapmaker's official Orca (2026-09-30).
 
 ### LESIC
 
@@ -154,14 +168,13 @@ LESIC creates a centered cylindrical calibration model sized to bed dimensions m
 
 ## Verification
 
-Completed for the latest release:
+Completed for Beta 6:
 
-- Full CTest suite: **349/349 passed**
-- Release-readiness suite: **12/12 passed**
-- Real installer extraction: **15,093 files verified**
-- Installed Cura geometry slices: **3/3 passed**
-- Support-off regression: `0` support layers without raft, exactly `1` raft layer when requested
-- Installed EXE/DLL SHA-256 values match the verified build
+- Unit and integration tests: fff_print **164** (1 skipped), libslic3r **206**, half-layer **69** passed
+- Installer contents: **15,250 files**; EXE/DLL SHA-256 match the build
+- CLI slicing with the packaged program: U1 default Benchy gives identical CPU and Vulkan output and exits normally without a Vulkan loader
+
+A real administrator install and uninstall, the installed GUI, and physical prints were not checked for this beta.
 
 These checks do not guarantee every printer and firmware combination. Review multi-tool output, machine-specific start G-code, and low-temperature interface behavior before uploading a job.
 
@@ -169,7 +182,7 @@ These checks do not guarantee every printer and firmware combination. Review mul
 
 ```powershell
 cmake --build build-vulkan --config Release --parallel 8
-powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -BuildDirectory build-vulkan -Parallel 8
+powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -BuildDirectory build-vulkan -Parallel 4
 ```
 
 ## License and Attribution

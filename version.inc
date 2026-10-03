@@ -14,6 +14,17 @@ set(MAGPIE_RELEASE_VERSION
 math(EXPR MAGPIE_WINDOWS_BUILD_VERSION
      "${MAGPIE_RELEASE_LINE} * 1000 + ${MAGPIE_RELEASE_REVISION}")
 
+# Pre-release label of the next build from this branch; empty for a final release.
+# Betas of one release otherwise share every version field, so Add/Remove Programs,
+# file properties and the installer name could not tell them apart. The G-code
+# producer version and the OTA/update version keep the plain release number.
+set(MAGPIE_PRERELEASE_LABEL "beta.6")
+if(MAGPIE_PRERELEASE_LABEL)
+    set(MAGPIE_PACKAGE_VERSION "${MAGPIE_RELEASE_VERSION}-${MAGPIE_PRERELEASE_LABEL}")
+else()
+    set(MAGPIE_PACKAGE_VERSION "${MAGPIE_RELEASE_VERSION}")
+endif()
+
 if(MAGPIE_SLICING_PROFILER)
     set(SLIC3R_APP_NAME "Magpie Slicer Profiler" CACHE STRING "Application display name" FORCE)
     set(SLIC3R_APP_KEY "MagpieSlicerProfiler" CACHE STRING "Application key for config/data isolation" FORCE)

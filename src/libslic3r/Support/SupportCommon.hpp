@@ -15,8 +15,13 @@ class PrintObject;
 class SupportLayer;
 
 std::vector<double> half_height_support_z_grid(const PrintObject &object);
+// Smallest and largest physical support band, mm, for H/2 refinement.
+std::pair<double, double> half_height_support_band_limits_mm(const PrintObject &object);
+// Band ends follow the model H/2 grid. A support layer boundary off that grid (independent
+// support layer heights) would leave a sliver band; it is merged into its neighbour, or the
+// two are split evenly when the merged band would exceed max_band_mm.
 std::vector<double> half_height_support_band_ends(
-    const std::vector<double> &cuts_mm, double bottom_mm, double top_mm);
+    const std::vector<double> &cuts_mm, double bottom_mm, double top_mm, double min_band_mm, double max_band_mm);
 
 InfillPattern interface_pattern_to_fill_pattern(
     SupportMaterialInterfacePattern pattern,

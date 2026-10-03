@@ -942,8 +942,8 @@ set (CPACK_PACKAGE_VENDOR "${SLIC3R_PACKAGE_VENDOR}")
 set (CPACK_PACKAGE_VERSION_MAJOR "${ORCA_VERSION_MAJOR}")
 set (CPACK_PACKAGE_VERSION_MINOR "${ORCA_VERSION_MINOR}")
 set (CPACK_PACKAGE_VERSION_PATCH "${ORCA_VERSION_PATCH}")
-set (CPACK_PACKAGE_VERSION "${MAGPIE_RELEASE_VERSION}")
-set (CPACK_PACKAGE_FILE_NAME "${SLIC3R_APP_KEY}_Windows_Installer_V${MAGPIE_RELEASE_VERSION}")
+set (CPACK_PACKAGE_VERSION "${MAGPIE_PACKAGE_VERSION}")
+set (CPACK_PACKAGE_FILE_NAME "${SLIC3R_APP_KEY}_Windows_Installer_V${MAGPIE_PACKAGE_VERSION}")
 # Suffix the Windows installer with its target arch so the x64 and arm64 builds
 # produce distinct filenames (matches ARCH_SUFFIX in build_orca.yml). Same
 # CMAKE_SYSTEM_PROCESSOR mapping used by orcaslicer_copy_dlls() above.
@@ -966,6 +966,23 @@ set (CPACK_NSIS_INSTALLED_ICON_NAME  "${SLIC3R_APP_CMD}.exe")
 set (CPACK_PACKAGE_CHECKSUM SHA256)
 set (CPACK_PACKAGE_INSTALL_REGISTRY_KEY "${SLIC3R_APP_KEY}")
 set (CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+# The app writes its HKCU file associations and the shared orcaslicer:// handler itself,
+# so the default uninstaller left them pointing at a deleted exe. Remove only entries that
+# still belong to this installation. Backslashes are doubled once more for CPackConfig.cmake.
+set (MAGPIE_NSIS_FILE_PROG_ID "${SLIC3R_APP_KEY}.File.1")
+set (CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "")
+foreach (MAGPIE_NSIS_EXTENSION 3mf stl step stp gcode)
+    string (APPEND CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
+        "ReadRegStr $0 HKCU 'Software\\\\Classes\\\\.${MAGPIE_NSIS_EXTENSION}' ''\n"
+        "StrCmp $0 '${MAGPIE_NSIS_FILE_PROG_ID}' 0 +2\n"
+        "DeleteRegValue HKCU 'Software\\\\Classes\\\\.${MAGPIE_NSIS_EXTENSION}' ''\n")
+endforeach ()
+string (APPEND CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
+    "DeleteRegKey HKCU 'Software\\\\Classes\\\\${MAGPIE_NSIS_FILE_PROG_ID}'\n"
+    "ReadRegStr $0 HKCU 'Software\\\\Classes\\\\orcaslicer\\\\shell\\\\open\\\\command' ''\n"
+    "StrCmp $0 `\\\"$INSTDIR\\\\${SLIC3R_APP_CMD}.exe\\\" \\\"%1\\\"` 0 +2\n"
+    "DeleteRegKey HKCU 'Software\\\\Classes\\\\orcaslicer'\n"
+    "System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'\n")
 set (CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
 # set (CPACK_NSIS_MODIFY_PATH "ON")
 set(CPACK_PACKAGE_EXECUTABLES "${SLIC3R_APP_CMD};${SLIC3R_APP_NAME}")

@@ -697,7 +697,7 @@ TEST_CASE("Normal and tree support walls plus Cura joining round trip independen
     CHECK(legacy.opt_int("support_wall_count") == 0);
 }
 
-TEST_CASE("Normal support wall count zero disables walls on the bed layer",
+TEST_CASE("Normal support wall count zero keeps the upstream bed-layer sheath only",
           "[SupportMaterial][NormalWallsAudit][Integration]")
 {
     const auto support_has_closed_wall = [](int wall_count) {
@@ -722,13 +722,21 @@ TEST_CASE("Normal support wall count zero disables walls on the bed layer",
         REQUIRE(print.objects().size() == 1);
         const auto support_layers = print.objects().front()->support_layers();
         REQUIRE_FALSE(support_layers.empty());
-        return std::any_of(support_layers.begin(), support_layers.end(), [](const SupportLayer *layer) {
+        // {bed layer has a closed wall, any layer above the bed has a closed wall}
+        const bool bed = collection_has_closed_path_with_role(support_layers.front()->support_fills, erSupportMaterial);
+        const bool above = std::any_of(support_layers.begin() + 1, support_layers.end(), [](const SupportLayer *layer) {
             return collection_has_closed_path_with_role(layer->support_fills, erSupportMaterial);
         });
+        return std::make_pair(bed, above);
     };
 
-    CHECK_FALSE(support_has_closed_wall(0));
-    CHECK(support_has_closed_wall(2));
+    // Upstream always sheathes the bed flange; the wall count governs the layers above it.
+    const auto zero = support_has_closed_wall(0);
+    CHECK(zero.first);
+    CHECK_FALSE(zero.second);
+    const auto two = support_has_closed_wall(2);
+    CHECK(two.first);
+    CHECK(two.second);
 }
 
 TEST_CASE("Mixed support planner uses inclusive coverage boundaries", "[SupportMaterial][Mixed][Planner]")
@@ -3568,4 +3576,38 @@ TEST_CASE("Bunny60 temperature tower adapts to physical nozzle changes",
         CHECK(bad==0);
         CHECK(outside_tool_area==0);
     }
+}
+
+TEST_CASE("Low-temperature interface targets stay within extrudable filament limits", "[SupportMaterial][LowTemperatureInterface]")
+{
+    auto validate = [](bool enabled, int interface_c, int sublayer_c) {
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_deserialize_strict({
+            {"enable_support", true},
+            {"single_nozzle_low_temperature_interface", enabled},
+            {"support_interface_filament", 0},
+            {"support_interface_temperature", interface_c},
+            {"support_interface_sublayer_temperature", sublayer_c},
+            // Relative E needs the per-layer reset; keep that unrelated preflight error out.
+            {"layer_change_gcode", "G92 E0"}});
+        config.set_key_value("nozzle_temperature_range_high", new ConfigOptionInts({240}));
+        Print print;
+        Model model;
+        init_print({make_cube(10., 10., 10.)}, print, model, config);
+        return print.validate();
+    };
+    // Firmware cold-extrusion guard: 170 degC.
+    CHECK(validate(true, 170, 0).string == "");
+    CHECK(validate(true, 169, 0).opt_key == "support_interface_temperature");
+    CHECK(validate(true, 1, 0).opt_key == "support_interface_temperature");
+    // Filament maximum (this fixture: 240 degC).
+    CHECK(validate(true, 240, 0).string == "");
+    CHECK(validate(true, 241, 0).opt_key == "support_interface_temperature");
+    CHECK(validate(true, 350, 0).opt_key == "support_interface_temperature");
+    // The sublayer target is checked only when set.
+    CHECK(validate(true, 200, 169).opt_key == "support_interface_sublayer_temperature");
+    CHECK(validate(true, 200, 241).opt_key == "support_interface_sublayer_temperature");
+    CHECK(validate(true, 200, 190).string == "");
+    // Feature off: the interface targets are never emitted, so they are not judged.
+    CHECK(validate(false, 1, 300).string == "");
 }

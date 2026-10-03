@@ -139,12 +139,9 @@ static Flow half_layer_shell_bridge_flow(const PerimeterGenerator &generator, si
                  *generator.print_config, *generator.config, size_t(generator.layer_id), filament))
         tool = override_tool;
 
-    ConfigOptionFloatOrPercent width = generator.config->bridge_line_width;
-    if (tool) {
-        const auto &tool_width = generator.print_config->toolhead_bridge_line_width.get_at(tool.hotend_id_1based - 1);
-        if (tool_width.value > 0.)
-            width = ConfigOptionFloatOrPercent(tool_width.value, tool_width.percent);
-    }
+    const ConfigOptionFloatOrPercent width = tool ?
+        toolhead_bridge_line_width_or(*generator.print_config, int(tool.hotend_id_1based), generator.config->bridge_line_width) :
+        generator.config->bridge_line_width;
     const float nozzle = tool ? float(tool.nozzle_diameter) : path_flow.nozzle_diameter();
     const double explicit_width_mm = width.get_abs_value(nozzle);
     const float height_mm = float(0.5 * generator.layer_height);
@@ -1614,14 +1611,19 @@ void PerimeterGenerator::process_classic()
     // BBS: this flow is for smaller external perimeter for small area
     coord_t ext_min_spacing_smaller = coord_t(ext_perimeter_spacing * (1 - SMALLER_EXT_INSET_OVERLAP_TOLERANCE));
     this->smaller_ext_perimeter_flow = this->ext_perimeter_flow;
-    if (detail_wall_count_for_layer(*this->config, size_t(this->layer_id), this->print_config->nozzle_diameter.values.size()) > 0 ||
-        detail_candidate_available(*this))
+    const bool smaller_flow_is_detail_nozzle =
+        detail_wall_count_for_layer(*this->config, size_t(this->layer_id), this->print_config->nozzle_diameter.values.size()) > 0 ||
+        detail_candidate_available(*this);
+    if (smaller_flow_is_detail_nozzle)
         this->smaller_ext_perimeter_flow = detail_external_perimeter_flow(*this);
     else {
-        const double min_positive_width = this->layer_height * (1. - 0.25 * PI) + EPSILON;
-        const double smaller_width = std::max(min_positive_width,
-            ext_perimeter_width - 0.5 * SMALLER_EXT_INSET_OVERLAP_TOLERANCE * ext_perimeter_spacing);
-        this->smaller_ext_perimeter_flow = this->smaller_ext_perimeter_flow.with_width(float(smaller_width));
+        // ext_perimeter_width/spacing are scaled (1 unit = 1e-6 mm); Flow widths are in mm.
+        const double smaller_width_mm = SCALING_FACTOR *
+            (ext_perimeter_width - 0.5 * SMALLER_EXT_INSET_OVERLAP_TOLERANCE * ext_perimeter_spacing);
+        // Narrowest width, in mm, whose rounded-rectangle spacing stays positive at this height.
+        const double min_positive_width_mm = this->layer_height * (1. - 0.25 * PI) + EPSILON;
+        this->smaller_ext_perimeter_flow = this->smaller_ext_perimeter_flow.with_width(
+            float(std::max(min_positive_width_mm, smaller_width_mm)));
     }
     m_ext_mm3_per_mm_smaller_width = this->smaller_ext_perimeter_flow.mm3_per_mm();
 
@@ -1632,7 +1634,9 @@ void PerimeterGenerator::process_classic()
     } else {
         m_external_lower_polygons_series = generate_lower_polygons_series(this->ext_perimeter_flow.width());
     }
-    m_smaller_external_lower_polygons_series = m_external_lower_polygons_series;
+    // Without a detail nozzle this is upstream's narrow-loop width; keep upstream's overhang series for it.
+    m_smaller_external_lower_polygons_series = smaller_flow_is_detail_nozzle ? m_external_lower_polygons_series :
+        generate_lower_polygons_series(this->smaller_ext_perimeter_flow.width());
     // we need to process each island separately because we might have different
     // extra perimeters for each one
     Surfaces all_surfaces = this->slices->surfaces;

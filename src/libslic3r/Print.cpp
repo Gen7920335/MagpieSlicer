@@ -1303,8 +1303,11 @@ StringObjectException Print::check_multi_filament_valid(const Print& print)
 
 // Preflight uses the same logical-filament/physical-nozzle and width resolvers
 // as geometry. Only the roles actually split by H/2 get the smaller height.
+// toolhead_overrides_only: without H/2 the upstream region checks stay authoritative;
+// only widths replaced by a per-hotend toolhead_* override are judged here, because
+// those bypass the region checks while still driving the real Flow.
 static StringObjectException validate_half_layer_flows(const PrintObject &object,
-    double first_model_height_mm, double maximum_model_height_mm)
+    double first_model_height_mm, double maximum_model_height_mm, bool toolhead_overrides_only = false)
 {
     const auto &config = object.config();
     const auto &print = *object.print();
@@ -1318,15 +1321,34 @@ static StringObjectException validate_half_layer_flows(const PrintObject &object
         filament = std::max(1u, filament);
         used_filaments.insert(filament);
         const auto tool = wall_tool_for_filament(pc, filament);
-        if (!tool || height_mm > tool.nozzle_diameter + EPSILON) {
+        if (toolhead_overrides_only) {
+            if (!tool)
+                return;
+            // Negative sentinel width: returned only when no toolhead_* entry is set for this hotend/role.
+            const ConfigOptionFloatOrPercent unset_marker(-1., false);
+            const ConfigOptionFloatOrPercent override_width = toolhead_line_width_or(
+                pc, role, int(tool.hotend_id_1based), first && !object.has_raft(), unset_marker);
+            if (override_width.value < 0.)
+                return;
+            width = override_width;
+            const bool from_initial_layer_key = first && !object.has_raft() &&
+                !(toolhead_line_width_or(pc, role, int(tool.hotend_id_1based), false, unset_marker) == override_width);
+            width_key = from_initial_layer_key ? "toolhead_initial_layer_line_width" :
+                role == frExternalPerimeter ? "toolhead_outer_wall_line_width" :
+                role == frPerimeter ? "toolhead_inner_wall_line_width" :
+                role == frInfill ? "toolhead_sparse_infill_line_width" :
+                role == frSolidInfill ? "toolhead_internal_solid_infill_line_width" :
+                role == frTopSolidInfill ? "toolhead_top_surface_line_width" : "toolhead_support_line_width";
+        } else if (!tool || height_mm > tool.nozzle_diameter + EPSILON) {
             error = {L("Layer height cannot exceed nozzle diameter."), &object,
                      first && !object.has_raft() ? "initial_layer_print_height" : "layer_height"};
             return;
+        } else {
+            if (first && !object.has_raft() && pc.initial_layer_line_width.value > 0.)
+                width = pc.initial_layer_line_width;
+            if (width.value == 0.) width = config.line_width;
+            width = toolhead_line_width_or(pc, role, int(tool.hotend_id_1based), first && !object.has_raft(), width);
         }
-        if (first && !object.has_raft() && pc.initial_layer_line_width.value > 0.)
-            width = pc.initial_layer_line_width;
-        if (width.value == 0.) width = config.line_width;
-        width = toolhead_line_width_or(pc, role, int(tool.hotend_id_1based), first && !object.has_raft(), width);
         const double width_mm = width.get_abs_value(tool.nozzle_diameter);
         if (width_mm != 0. && width_mm <= height_mm)
             error = {L("Line width too small"), &object, width_key};
@@ -1406,7 +1428,7 @@ static StringObjectException validate_half_layer_flows(const PrintObject &object
     // Skirts, brims and tower bands are not outer-wall H/2 paths. Their nozzle
     // safety must not be weakened by enabling a half-height model role.
     const bool skirt = pc.skirt_loops.value > 0 && (print.has_skirt() || print.has_infinite_skirt());
-    if (error.string.empty() && (skirt || object.has_brim() || print.has_wipe_tower())) {
+    if (!toolhead_overrides_only && error.string.empty() && (skirt || object.has_brim() || print.has_wipe_tower())) {
         const double auxiliary_height_mm = print.has_wipe_tower() || (skirt && (pc.skirt_height.value > 1 || print.has_infinite_skirt())) ?
             std::max(first_model_height_mm, maximum_model_height_mm) : pc.initial_layer_print_height.value;
         for (const auto filament : used_filaments) {
@@ -1460,6 +1482,36 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                 add_warning(ret);
             }else
                 return ret;
+        }
+    }
+
+    // The low-temperature support interface waits on its targets with M109, so a typo either
+    // stalls on the firmware cold-extrusion guard or overheats the support filament.
+    for (const PrintObject *object : m_objects) {
+        const PrintObjectConfig &oc = object->config();
+        if (!object->has_support_material() || !oc.single_nozzle_low_temperature_interface.value ||
+            oc.support_interface_filament.value != 0)
+            continue;
+        // Marlin EXTRUDE_MINTEMP and Klipper min_extrude_temp both default to 170 degC.
+        constexpr int firmware_min_extrude_temperature_c = 170;
+        const std::vector<unsigned int> support_filaments = oc.support_filament.value > 0 ?
+            std::vector<unsigned int>{unsigned(oc.support_filament.value - 1)} : object->object_extruders();
+        const std::pair<const char *, int> targets[] = {
+            {"support_interface_temperature", oc.support_interface_temperature.value},
+            // 0 disables the separate sublayer target.
+            {"support_interface_sublayer_temperature", oc.support_interface_sublayer_temperature.value}};
+        for (const auto &[opt_key, temperature_c] : targets) {
+            if (temperature_c == 0)
+                continue;
+            if (temperature_c < firmware_min_extrude_temperature_c)
+                return {Slic3r::format(_u8L("Support interface temperature %1% °C is below the firmware cold-extrusion limit of %2% °C."),
+                                       temperature_c, firmware_min_extrude_temperature_c), object, opt_key};
+            for (const unsigned int filament : support_filaments) {
+                const int max_temperature_c = m_config.nozzle_temperature_range_high.get_at(filament);
+                if (max_temperature_c > 0 && temperature_c > max_temperature_c)
+                    return {Slic3r::format(_u8L("Support interface temperature %1% °C exceeds the maximum nozzle temperature %2% °C of filament %3%."),
+                                           temperature_c, max_temperature_c, filament + 1), object, opt_key};
+            }
         }
     }
 
@@ -1848,26 +1900,36 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 				for (const PrintRegion &region : object->all_regions())
                     if (!validate_extrusion_width(region.config(), opt_key, layer_height, err_msg))
 		            	return  {err_msg, object, opt_key};
+            // Per-hotend toolhead_* widths replace the region widths checked above inside Flow.
+            const auto &heights = validation_layer_heights[object_idx];
+            if (const auto error = validate_half_layer_flows(*object, heights.first, heights.second, true); !error.string.empty())
+                return error;
             }
 
             const bool allow_thin_bridge_width = object->config().thick_bridges && object->config().thick_internal_bridges;
             for (const PrintRegion &region : object->all_regions()) {
-                const auto &bridge_width_opt = region.config().bridge_line_width;
                 for (FlowRole bridge_role : { frPerimeter, frInfill, frSolidInfill, frTopSolidInfill }) {
-                    const auto bridge_tool = half_height ? wall_tool_for_filament(m_config, region.extruder(bridge_role)) : ResolvedWallTool{};
+                    const int  bridge_filament = int(region.extruder(bridge_role));
+                    const auto flow_tool = wall_tool_for_filament(m_config, bridge_filament);
+                    // Same resolution as region_bridging_flow(); unset overrides keep the region width and the original nozzle choice.
+                    const ConfigOptionFloatOrPercent bridge_width_opt = toolhead_bridge_line_width_or(
+                        m_config, flow_tool ? int(flow_tool.hotend_id_1based) : bridge_filament, region.config().bridge_line_width);
+                    const bool toolhead_override = !(bridge_width_opt == region.config().bridge_line_width);
+                    const auto bridge_tool = half_height || toolhead_override ? flow_tool : ResolvedWallTool{};
                     const double nozzle_diameter = bridge_tool ? bridge_tool.nozzle_diameter :
-                        m_config.nozzle_diameter.get_at(region.extruder(bridge_role) - 1);
+                        m_config.nozzle_diameter.get_at(bridge_filament - 1);
+                    const char *bridge_key = toolhead_override ? "toolhead_bridge_line_width" : "bridge_line_width";
                     const double bridge_width    = bridge_width_opt.get_abs_value(nozzle_diameter);
                     if (bridge_width <= 0.)
                         continue;
                     if (bridge_width > nozzle_diameter) {
                         err_msg = L("Bridge line width must not exceed nozzle diameter");
-                        return { err_msg, object, "bridge_line_width" };
+                        return { err_msg, object, bridge_key };
                     }
                     const double bridge_layer_height_mm = half_height ? validation_layer_heights[object_idx].second : layer_height;
                     if (!allow_thin_bridge_width && bridge_width <= bridge_layer_height_mm) {
                         err_msg = L("Line width too small");
-                        return { err_msg, object, "bridge_line_width" };
+                        return { err_msg, object, bridge_key };
                     }
                 }
             }

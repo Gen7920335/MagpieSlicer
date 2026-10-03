@@ -1493,6 +1493,7 @@ void TreeSupport::generate_toolpaths()
     std::vector<size_t> half_layer_source_ids;
     if (m_object->config().support_half_layer_height.value) {
         const auto cuts_mm = half_height_support_z_grid(*m_object);
+        const auto [min_band_mm, max_band_mm] = half_height_support_band_limits_mm(*m_object);
         std::vector<std::unique_ptr<SupportLayer>> physical_layers;
         const double raft_top_mm = m_slicing_params.raft_contact_top_z;
         constexpr double z_tolerance_mm = 0.000001; // Physical raft endpoint tolerance, mm.
@@ -1501,7 +1502,7 @@ void TreeSupport::generate_toolpaths()
                 throw std::logic_error("Classic tree half-height refinement must precede toolpath generation");
             const bool raft = m_slicing_params.has_raft() && original->print_z <= raft_top_mm + z_tolerance_mm;
             const auto ends = raft ? std::vector<double>{original->print_z} :
-                half_height_support_band_ends(cuts_mm, original->bottom_z(), original->print_z);
+                half_height_support_band_ends(cuts_mm, original->bottom_z(), original->print_z, min_band_mm, max_band_mm);
             double bottom_mm = original->bottom_z();
             for (double top_mm : ends) {
                 auto layer = std::unique_ptr<SupportLayer>(new SupportLayer(physical_layers.size(),

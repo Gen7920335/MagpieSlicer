@@ -41,10 +41,9 @@ static Flow region_bridging_flow(const LayerRegion &source, FlowRole role, bool 
     const int          extruder_id  = int(region.extruder(role));
     const ResolvedWallTool tool = wall_tool_for_filament(print_config, extruder_id);
     auto nozzle_diameter = tool ? float(tool.nozzle_diameter) : float(print_config.nozzle_diameter.get_at(extruder_id - 1));
-    ConfigOptionFloatOrPercent bridge_width_opt = region_config.bridge_line_width;
-    const FloatOrPercent       toolhead_bridge_width = print_config.toolhead_bridge_line_width.get_at(extruder_id > 0 ? size_t(extruder_id - 1) : 0);
-    if (toolhead_bridge_width.value > 0.)
-        bridge_width_opt = ConfigOptionFloatOrPercent(toolhead_bridge_width.value, toolhead_bridge_width.percent);
+    // Toolhead widths are indexed by physical hotend; the material index differs under a non-identity filament_map.
+    const ConfigOptionFloatOrPercent bridge_width_opt = toolhead_bridge_line_width_or(
+        print_config, tool ? int(tool.hotend_id_1based) : extruder_id, region_config.bridge_line_width);
     const double bridge_width      = bridge_width_opt.get_abs_value(nozzle_diameter);
     const bool   has_bridge_width  = bridge_width > 0.;
     const double bridge_flow_ratio = region_config.bridge_flow;
@@ -383,6 +382,10 @@ static HalfLayerGapFill assign_joint_half_layer_gaps(const HalfLayerRegionWallCa
         Polygons occupied = reserved_core;
         half_layer_volume_footprint(*candidate.shells[phase], occupied);
         owned.regions = diff_ex(owned.regions, occupied);
+        // The producer opens its gaps by half the minimum gap width (PerimeterGenerator); the boolean
+        // steps above recreate slivers below that width, which broke the medial axis Voronoi
+        // ("source index out of range", Classic Benchy with 4 walls). The medial axis would drop them anyway.
+        owned.regions = opening_ex(owned.regions, float(0.5 * owned.min_spacing_scaled));
         result.phases[phase] = make_perimeter_gap_fill(std::move(owned));
     }
     return result;

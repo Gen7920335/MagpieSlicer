@@ -30,24 +30,24 @@
 	],
 	"machine_end_gcode": ";===== date: 20260605 =====================\n; layer [layer_num]\n; max_layer_z [max_layer_z]\n; print_sequence [print_sequence]\n\n{if print_sequence == \"by object\"}\n{\nlocal move_z = max_print_height;\n\nif max_layer_z < ((max_print_height - z_offset) - 2) then\n    move_z = z_offset + min(((max_layer_z - z_offset) + 2), max_print_height);\nendif\n}\n\nG91\nG1 X2 Y2 Z1 F24000\nG90\nG1 Z{move_z} F600\n{endif}\n\nPRINT_END\nTIMELAPSE_STOP\n",
 	"machine_max_acceleration_extruding": [
-		"25000",
-		"25000"
+		"20000",
+		"20000"
 	],
 	"machine_max_acceleration_retracting": [
 		"5000",
 		"5000"
 	],
 	"machine_max_acceleration_travel": [
-		"25000",
-		"25000"
+		"20000",
+		"20000"
 	],
 	"machine_max_acceleration_x": [
-		"25000",
-		"25000"
+		"20000",
+		"20000"
 	],
 	"machine_max_acceleration_y": [
-		"25000",
-		"25000"
+		"20000",
+		"20000"
 	],
 	"machine_max_acceleration_z": [
 		"500",
@@ -70,11 +70,11 @@
 		"25"
 	],
 	"machine_max_speed_x": [
-		"1000",
+		"500",
 		"200"
 	],
 	"machine_max_speed_y": [
-		"1000",
+		"500",
 		"200"
 	],
 	"machine_max_speed_z": [
@@ -104,7 +104,7 @@
 		"0.4",
 		"0.4"
 	],
-	"nozzle_type": "stainless_steel",
+	"nozzle_type": "hardened_steel",
 	"printable_area": [
 		"0.5x1",
 		"270.5x1",
@@ -168,10 +168,10 @@
 		"18"
 	],
 	"retraction_length": [
-		"0.8",
-		"0.8",
-		"0.8",
-		"0.8"
+		"1.5",
+		"1.5",
+		"1.5",
+		"1.5"
 	],
 	"retraction_minimum_travel": [
 		"1",
@@ -180,16 +180,16 @@
 		"1"
 	],
 	"retraction_speed": [
-		"40",
-		"40",
-		"40",
-		"40"
+		"30",
+		"30",
+		"30",
+		"30"
 	],
 	"deretraction_speed": [
-		"35",
-		"35",
-		"35",
-		"35"
+		"30",
+		"30",
+		"30",
+		"30"
 	],
 	"thumbnails": "48x48/PNG, 300x300/PNG",
 	"travel_slope": [
@@ -240,5 +240,6 @@
 	"machine_pause_gcode": "M600",
 	"default_bed_type": "Textured PEI Plate",
 	"layer_change_gcode": ";AFTER_LAYER_CHANGE\n;[layer_z]\nSET_PRINT_STATS_INFO TOTAL_LAYER={total_layer_count}\nSET_PRINT_STATS_INFO CURRENT_LAYER={layer_num+1}",
-	"nozzle_volume": "143"
+	"nozzle_volume": "143",
+	"default_print_profile": "0.20 Standard @Snapmaker U1 (0.4 nozzle)"
 }

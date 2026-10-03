@@ -7,6 +7,7 @@
 
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Fill/Fill.hpp"
+#include "libslic3r/Arachne/WallToolPaths.hpp"
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/Print.hpp"
@@ -559,4 +560,14 @@ bool test_if_solid_surface_filled(const ExPolygon& expolygon, double flow_spacin
 #endif
 
     return uncovered.empty(); // solid surface is fully filled
+}
+
+TEST_CASE("Arachne parameters left unset by FillConcentricInternal have defined defaults", "[Fill][ArachneParams]")
+{
+    // FillConcentricInternal fills only part of WallToolPathsParams; removeSmallLines() still reads
+    // min_length_factor and is_top_or_bottom_layer. Unset values made tiny-line removal depend on
+    // stack contents (different G-code per build, per run with supports).
+    Arachne::WallToolPathsParams params; // default-initialized, exactly as FillConcentricInternal does
+    CHECK(params.min_length_factor == Catch::Approx(0.5f));
+    CHECK_FALSE(params.is_top_or_bottom_layer);
 }

@@ -24,6 +24,8 @@
 #include <cassert>
 #include <limits>
 #include <algorithm>
+#include <iterator>
+#include <map>
 #include <unordered_map>
 
 #include <libslic3r.h>
@@ -564,6 +566,32 @@ static void finalize_half_layer_frame(LayerTools &tools, HalfLayerPrintExecution
     if (prefix.empty() && lower.empty() && core.empty() && upper.empty()) {
         tools.half_layer_frame_index = size_t(-1);
         return;
+    }
+    // Support whose physical band ends above an object's lower outer-wall pass belongs to the upper
+    // plane. Printing it before the lower pass put the nozzle back down beside 0.1 mm taller support
+    // and left one outer-wall gap holding all support time (3.3 s / 26 s on the overhang fixture).
+    // Moving it to the front of the core lets the existing midpoint scan balance it like any other
+    // upper-plane extrusion; Z then only rises within the frame. Relative order inside each group
+    // is kept, so support body/interface dependencies are unchanged.
+    if (!prefix.empty() && !lower.empty()) {
+        // Physical Z tolerance, mm, matching fixed-point geometry precision.
+        constexpr double z_tolerance_mm = 0.000001;
+        std::map<const PrintObject *, double> lower_top_mm;
+        for (const HalfLayerExecutionTask &task : lower)
+            if (task.physical_layer != nullptr) {
+                const auto [it, inserted] = lower_top_mm.emplace(task.object, task.physical_layer->print_z);
+                if (!inserted)
+                    it->second = std::max(it->second, task.physical_layer->print_z);
+            }
+        std::vector<HalfLayerExecutionTask> prefix_lower, prefix_upper;
+        for (HalfLayerExecutionTask &task : prefix) {
+            const auto it = lower_top_mm.find(task.object);
+            const bool upper_plane = it != lower_top_mm.end() && task.physical_layer != nullptr &&
+                task.physical_layer->print_z > it->second + z_tolerance_mm;
+            (upper_plane ? prefix_upper : prefix_lower).push_back(std::move(task));
+        }
+        prefix = std::move(prefix_lower);
+        core.insert(core.begin(), std::make_move_iterator(prefix_upper.begin()), std::make_move_iterator(prefix_upper.end()));
     }
     // Producers already traverse dependency/no-sort collections in their
     // stored order. Material grouping here would turn A-B-A into A-A-B and can

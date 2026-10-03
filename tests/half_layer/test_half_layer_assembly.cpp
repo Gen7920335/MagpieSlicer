@@ -2501,3 +2501,117 @@ TEST_CASE("Shared speed calculation preserves captured machine commands", "[.Spe
         CHECK(commands == expected.str());
     }
 }
+
+TEST_CASE("Half-height support band ends never leave a sliver", "[HalfLayer][SupportBands]")
+{
+    // Model grid of a 0.2 mm layer: H/2 cuts every 0.1 mm. Band limits 0.05 to 0.1 mm.
+    const std::vector<double> cuts_mm{0.1, 0.2, 0.3, 0.4};
+    auto ends = [&](double bottom_mm, double top_mm) {
+        return half_height_support_band_ends(cuts_mm, bottom_mm, top_mm, 0.05, 0.1);
+    };
+    auto same_ends = [](const std::vector<double> &a, const std::vector<double> &b) {
+        if (a.size() != b.size())
+            return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (std::abs(a[i] - b[i]) > 0.000001) // Endpoint tolerance, mm.
+                return false;
+        return true;
+    };
+    // Thin off-grid support layers straddling a cut stay whole (0.022 and 0.044 mm).
+    CHECK(same_ends(ends(0.189, 0.211), {0.211}));
+    CHECK(same_ends(ends(0.189, 0.233), {0.233}));
+    // A bottom or top sliver shares the neighbouring band evenly instead.
+    CHECK(same_ends(ends(0.189, 0.4), {0.2445, 0.3, 0.4}));
+    CHECK(same_ends(ends(0.0, 0.211), {0.1, 0.1555, 0.211}));
+    // Aligned layers and bands of exactly the minimum keep every grid cut.
+    CHECK(same_ends(ends(0.0, 0.4), {0.1, 0.2, 0.3, 0.4}));
+    CHECK(same_ends(ends(0.05, 0.25), {0.1, 0.2, 0.25}));
+    // Without a minimum the grid cut is reproduced.
+    CHECK(same_ends(half_height_support_band_ends(cuts_mm, 0.189, 0.211, 0., 0.1), {0.2, 0.211}));
+}
+
+TEST_CASE("Independent support layers under H/2 support produce no sliver bands", "[HalfLayer][SupportBands]")
+{
+    constexpr double h_mm = 0.2;
+    auto config = DynamicPrintConfig::full_print_config();
+    // An off-grid gap: independent support layers put the contact 0.15 mm under the model.
+    config.set_deserialize_strict({{"layer_height", h_mm}, {"initial_layer_print_height", h_mm},
+        {"support_half_layer_height", true}, {"enable_support", true}, {"support_threshold_angle", 60},
+        {"independent_support_layer_height", true}, {"support_top_z_distance", 0.15},
+        {"support_bottom_z_distance", 0.15}, {"support_on_build_plate_only", true}});
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormalAuto));
+    TriangleMesh mesh = make_cube(5., 10., 6.);
+    TriangleMesh ceiling = make_cube(20., 10., 1.2);
+    ceiling.translate(0.f, 0.f, 6.f);
+    mesh.merge(ceiling);
+    Print print;
+    Model model;
+    init_print({mesh}, print, model, config);
+    print.process();
+    const auto &object = *print.get_object(size_t(0));
+    REQUIRE_FALSE(object.support_layers().empty());
+    // Physical band limits, mm: a quarter and a half of the 0.2 mm layer. The defect left 0.003 mm bands.
+    for (const auto *layer : object.support_layers()) {
+        CAPTURE(layer->print_z, layer->height);
+        CHECK(layer->height >= 0.25 * h_mm - 0.000001);
+        CHECK(layer->height <= 0.5 * h_mm + 0.000001);
+    }
+}
+
+TEST_CASE("Half-height outer walls force half-height support", "[HalfLayer][SupportForced]")
+{
+    const bool outer_walls = GENERATE(false, true);
+    const bool support = GENERATE(false, true);
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"outer_wall_half_layer_height", outer_walls}, {"support_half_layer_height", support},
+        {"enable_support", true}});
+    Print print;
+    Model model;
+    init_print({make_cube(10., 10., 10.)}, print, model, config);
+    CAPTURE(outer_walls, support);
+    // Global settings: support follows the outer walls, and stays as configured otherwise.
+    CHECK(print.get_object(0)->config().support_half_layer_height.value == (outer_walls || support));
+    // A per-object override of the outer walls forces the object's support too.
+    model.objects.front()->config.set("outer_wall_half_layer_height", true);
+    print.apply(model, config);
+    CHECK(print.get_object(0)->config().support_half_layer_height.value);
+}
+
+TEST_CASE("Half-height frames print upper-plane support after the lower outer-wall pass", "[HalfLayer][SupportOrder]")
+{
+    const int generator = GENERATE(0, 2);
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
+        {"outer_wall_half_layer_height", true}, {"enable_support", true}, {"support_threshold_angle", 60},
+        {"support_on_build_plate_only", true}, {"layer_change_gcode", "G92 E0"}});
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(generator == 0 ? stNormalAuto : stTreeAuto));
+    TriangleMesh mesh = make_cube(5., 10., 6.);
+    TriangleMesh ceiling = make_cube(20., 10., 1.2);
+    ceiling.translate(0.f, 0.f, 6.f);
+    mesh.merge(ceiling);
+    Print print;
+    Model model;
+    init_print({mesh}, print, model, config);
+    print.process();
+    REQUIRE(print.half_layer_execution_plan() != nullptr);
+    CAPTURE(generator);
+    size_t frames_with_both = 0;
+    for (const HalfLayerExecutionFrame &frame : print.half_layer_execution_plan()->frames) {
+        const auto &tasks = frame.plan.tasks;
+        if (frame.plan.lower_begin == frame.plan.lower_end)
+            continue;
+        const double lower_z = tasks[frame.plan.lower_begin].physical_layer->print_z;
+        bool support_above = false;
+        // Physical Z never drops within a frame, so the nozzle never returns beside a taller deposit.
+        for (size_t i = 1; i < tasks.size(); ++i) {
+            CAPTURE(frame.print_z, i);
+            CHECK(tasks[i].physical_layer->print_z >= tasks[i - 1].physical_layer->print_z - 0.000001);
+        }
+        for (size_t i = 0; i < frame.plan.lower_begin; ++i)
+            CHECK(tasks[i].physical_layer->print_z <= lower_z + 0.000001);
+        for (const auto &task : tasks)
+            support_above |= task.support && task.physical_layer->print_z > lower_z + 0.000001;
+        frames_with_both += support_above;
+    }
+    CHECK(frames_with_both > 0);
+}

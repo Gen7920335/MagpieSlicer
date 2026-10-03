@@ -7,6 +7,7 @@
 
 #include "test_helpers.hpp"
 
+#include <functional>
 #include <iterator>
 #include <set>
 
@@ -129,4 +130,53 @@ TEST_CASE("Initial layer height is honored", "[PrintObject]")
     REQUIRE(layer_zs.size() > 1);
     REQUIRE_THAT(*layer_zs.begin(),            Catch::Matchers::WithinAbs(0.3, 1e-4));
     REQUIRE_THAT(*std::next(layer_zs.begin()), Catch::Matchers::WithinAbs(0.5, 1e-4));
+}
+
+TEST_CASE("Classic walls keep narrow islands with the narrow external width", "[PrintObject][NarrowExternalLoop]")
+{
+    // 0.7 mm x 8 mm island: too narrow for two 0.42 mm external beads, small enough
+    // for the narrow-loop branch, so Classic must print it with a narrower bead.
+    Slic3r::Print print;
+    Slic3r::Test::init_and_process_print({ make_cube(0.7, 8., 1.) }, print, {
+        { "wall_generator",             "classic" },
+        { "wall_loops",                 2 },
+        { "nozzle_diameter",            0.4 },
+        { "layer_height",               0.2 },
+        { "initial_layer_print_height", 0.2 },
+        { "initial_layer_line_width",   0.42 },
+        { "outer_wall_line_width",      0.42 },
+        { "detect_thin_wall",           false },
+        { "skirt_loops",                0 },
+        { "brim_type",                  "no_brim" },
+        { "enable_support",             false }
+    });
+    const auto layers = print.objects().front()->layers();
+    REQUIRE(layers.size() >= 4);
+    for (const Layer *layer : layers) {
+        CAPTURE(layer->print_z);
+        std::vector<float> external_widths_mm;
+        std::function<void(const ExtrusionEntity &)> collect = [&](const ExtrusionEntity &entity) {
+            if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+                for (const ExtrusionEntity *child : collection->entities)
+                    collect(*child);
+            } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(&entity)) {
+                for (const ExtrusionPath &path : loop->paths)
+                    collect(path);
+            } else if (const auto *multi = dynamic_cast<const ExtrusionMultiPath *>(&entity)) {
+                for (const ExtrusionPath &path : multi->paths)
+                    collect(path);
+            } else if (const auto *path = dynamic_cast<const ExtrusionPath *>(&entity)) {
+                if (is_external_perimeter(path->role()))
+                    external_widths_mm.push_back(path->width);
+            }
+        };
+        for (const LayerRegion *region : layer->regions())
+            collect(region->perimeters);
+        REQUIRE_FALSE(external_widths_mm.empty());
+        // A real bead on a 0.4 mm nozzle: wider than 0.1 mm, not wider than the configured 0.42 mm.
+        for (const float width_mm : external_widths_mm) {
+            CHECK(width_mm > 0.1f);
+            CHECK(width_mm <= 0.42f + 1e-3f);
+        }
+    }
 }

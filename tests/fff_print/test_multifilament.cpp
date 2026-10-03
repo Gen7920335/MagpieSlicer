@@ -1225,3 +1225,68 @@ TEST_CASE("Support pipeline remains valid with multiple configured extruders", "
         REQUIRE_NOTHROW(gcode(print));
     }
 }
+
+TEST_CASE("Per-hotend toolhead width overrides are validated like the region widths they replace",
+          "[ToolheadWidthValidation]")
+{
+    const bool half_height = GENERATE(false, true);
+    CAPTURE(half_height);
+    // Hotend 1 is the 0.8 mm nozzle printing every role of filament 1.
+    auto make_print = [half_height](const char *key, FloatOrPercent hotend1_width, Print &print, Model &model) {
+        auto config = mapped_four_hotend_wall_config({1, 2, 3, 4}, 1, "classic");
+        // Relative E needs the per-layer reset; keep the baseline free of that unrelated preflight error.
+        config.set_deserialize_strict({{"outer_wall_half_layer_height", half_height},
+            {"layer_height", 0.1}, {"initial_layer_print_height", 0.1}, {"layer_change_gcode", "G92 E0"}});
+        if (key != nullptr) {
+            auto *widths = config.option<ConfigOptionFloatsOrPercents>(key, true);
+            widths->values.assign(4, FloatOrPercent(0., false));
+            widths->values[0] = hotend1_width;
+        }
+        init_print({cube(6)}, print, model, config);
+    };
+
+    {
+        Print print; Model model;
+        make_print(nullptr, {}, print, model);
+        CHECK(print.validate().string.empty());
+    }
+    {
+        // 0.9 mm on a 0.8 mm nozzle: a legitimate override stays accepted.
+        Print print; Model model;
+        make_print("toolhead_sparse_infill_line_width", FloatOrPercent(0.9, false), print, model);
+        CHECK(print.validate().string.empty());
+    }
+    // The generic toolhead_line_width is shadowed here: the fixture's role widths are populated per nozzle.
+    for (const char *key : {"toolhead_inner_wall_line_width", "toolhead_sparse_infill_line_width",
+                            "toolhead_internal_solid_infill_line_width", "toolhead_top_surface_line_width"}) {
+        CAPTURE(key);
+        {
+            // 10 mm on a 0.8 mm nozzle (12.5x) is a typo, not a bead.
+            Print print; Model model;
+            make_print(key, FloatOrPercent(10., false), print, model);
+            const auto error = print.validate();
+            CHECK(error.string == "Line width too large");
+            if (!half_height)
+                CHECK(std::string(error.opt_key).rfind("toolhead_", 0) == 0);
+        }
+        {
+            // 0.05 mm is below the 0.1 mm layer height.
+            Print print; Model model;
+            make_print(key, FloatOrPercent(0.05, false), print, model);
+            CHECK(print.validate().string == "Line width too small");
+        }
+    }
+    {
+        // 1.2 mm bridge on a 0.8 mm nozzle: the toolhead override must meet the bridge rule.
+        Print print; Model model;
+        make_print("toolhead_bridge_line_width", FloatOrPercent(1.2, false), print, model);
+        const auto error = print.validate();
+        CHECK(error.string == "Bridge line width must not exceed nozzle diameter");
+        CHECK(error.opt_key == "toolhead_bridge_line_width");
+    }
+    {
+        Print print; Model model;
+        make_print("toolhead_bridge_line_width", FloatOrPercent(0.7, false), print, model);
+        CHECK(print.validate().string.empty());
+    }
+}

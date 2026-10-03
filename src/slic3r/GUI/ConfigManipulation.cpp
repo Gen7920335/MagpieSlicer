@@ -271,6 +271,15 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
         is_msg_dlg_already_exist = false;
     }
 
+    // Half-height outer walls force half-height support (PrintObject::object_config_from_model_object
+    // applies the same rule when slicing); keep the shown value in step with it.
+    if (config->has("outer_wall_half_layer_height") && config->has("support_half_layer_height") &&
+        config->opt_bool("outer_wall_half_layer_height") && !config->opt_bool("support_half_layer_height")) {
+        DynamicPrintConfig new_conf = *config;
+        new_conf.set_key_value("support_half_layer_height", new ConfigOptionBool(true));
+        apply(config, &new_conf);
+    }
+
     //BBS: limite the max layer_herght
     auto max_lh = gpreset.config.opt_float("max_layer_height",0);
     if (max_lh > 0.2 && layer_height > max_lh+ EPSILON)
@@ -794,6 +803,8 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
 
     bool have_raft = config->opt_int("raft_layers") > 0;
     bool have_support_material = config->opt_bool("enable_support") || have_raft;
+    // Locked on while half-height outer walls are enabled.
+    toggle_field("support_half_layer_height", !config->opt_bool("outer_wall_half_layer_height"));
 
     SupportType support_type = config->opt_enum<SupportType>("support_type");
     const bool support_type_is_mixed = is_mixed(support_type);

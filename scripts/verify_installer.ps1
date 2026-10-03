@@ -4,7 +4,11 @@ param(
     [int]$SliceTimeoutSeconds = 180,
     [int]$GuiStartupTimeoutSeconds = 45,
     [int]$GuiStabilitySeconds = 15,
-    [switch]$AllowElevationPrompt
+    [switch]$AllowElevationPrompt,
+    # The installer silently uninstalls any registered Magpie Slicer before installing.
+    [switch]$AllowReplacingExistingInstall,
+    # Leave the test installation in place instead of uninstalling it afterwards.
+    [switch]$KeepInstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,13 +16,41 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $verificationRoot = Join-Path $root "build\verification\installer\$stamp"
-$installRoot = "C:\MagpieInstallTest\$stamp"
+$testInstallParent = "C:\MagpieInstallTest"
+$installRoot = Join-Path $testInstallParent $stamp
 
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
-    $InstallerPath = Get-ChildItem -LiteralPath (Join-Path $root "build\installer") `
-        -Recurse -File -Filter "MagpieSlicer_Windows_Installer_*_x64.exe" |
+    # Release builds package from build-vulkan; older trees used build.
+    $InstallerPath = @("build-vulkan\installer", "build\installer") |
+        ForEach-Object { Join-Path $root $_ } |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
+        ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter "MagpieSlicer_Windows_Installer_*_x64.exe" } |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1 -ExpandProperty FullName
+}
+
+# CPack enables uninstall-before-install: a silent install removes whatever Magpie Slicer is
+# registered, including a user's real installation. Refuse unless that is explicitly allowed.
+$registeredInstalls = @()
+foreach ($hive in @([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryHive]::CurrentUser)) {
+    foreach ($view in @([Microsoft.Win32.RegistryView]::Registry32, [Microsoft.Win32.RegistryView]::Registry64)) {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, $view)
+        $key = $base.OpenSubKey("Software\Microsoft\Windows\CurrentVersion\Uninstall\MagpieSlicer")
+        if ($null -ne $key) {
+            $uninstaller = [string]$key.GetValue("UninstallString")
+            if (-not [string]::IsNullOrWhiteSpace($uninstaller)) {
+                $registeredInstalls += Split-Path -Parent $uninstaller.Trim('"')
+            }
+            $key.Close()
+        }
+        $base.Close()
+    }
+}
+$foreignInstalls = @($registeredInstalls | Sort-Object -Unique | Where-Object {
+    -not $_.StartsWith($testInstallParent + "\", [StringComparison]::OrdinalIgnoreCase)
+})
+if ($foreignInstalls.Count -gt 0 -and -not $AllowReplacingExistingInstall) {
+    throw "Magpie Slicer is installed at $($foreignInstalls -join ', '). The installer would uninstall it first. Pass -AllowReplacingExistingInstall to accept that."
 }
 if (-not (Test-Path -LiteralPath $InstallerPath -PathType Leaf)) {
     throw "Installer not found: $InstallerPath"
@@ -64,6 +96,8 @@ if ($installerProcess.ExitCode -ne 0) {
     throw "Installer exited with code $($installerProcess.ExitCode)."
 }
 
+# Every check below runs inside this try so a failed check still removes the test install.
+try {
 $installedExe = Join-Path $installRoot "magpie-slicer.exe"
 $installedDll = Join-Path $installRoot "MagpieSlicer.dll"
 $installedResources = Join-Path $installRoot "resources"
@@ -162,3 +196,24 @@ $report | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $reportPath -Encodi
 
 Write-Output "INSTALLER_VERIFICATION=PASS"
 Write-Output "REPORT_PATH=$reportPath"
+} finally {
+    $uninstaller = Join-Path $installRoot "Uninstall.exe"
+    if (-not $KeepInstall -and (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
+        # _?= runs the uninstaller in place so this script can wait for it.
+        $uninstallInfo = @{
+            FilePath = $uninstaller
+            ArgumentList = @("/S", "_?=$installRoot")
+            PassThru = $true
+        }
+        if (-not $isAdmin) {
+            $uninstallInfo.Verb = "RunAs"
+        }
+        $uninstallProcess = Start-Process @uninstallInfo
+        if ($uninstallProcess.WaitForExit($InstallTimeoutSeconds * 1000) -and $uninstallProcess.ExitCode -eq 0) {
+            Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Output "TestInstallRemoved=$installRoot"
+        } else {
+            Write-Warning "Uninstalling the test install at $installRoot failed; remove it from Apps & features."
+        }
+    }
+}

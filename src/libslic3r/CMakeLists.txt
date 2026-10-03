@@ -610,6 +610,12 @@ if (SLIC3R_ENABLE_VULKAN_SLICER)
         message(FATAL_ERROR "Vulkan glslc is required when SLIC3R_ENABLE_VULKAN_SLICER=ON")
     endif ()
     target_link_libraries(libslic3r PRIVATE Vulkan::Vulkan)
+    if (MSVC)
+        # Vulkan is optional: without the loader the app must start and slice on the CPU.
+        # VulkanSlicer.cpp checks for the loader before the first vk* call.
+        target_link_libraries(libslic3r INTERFACE delayimp)
+        target_link_options(libslic3r INTERFACE "/DELAYLOAD:vulkan-1.dll")
+    endif ()
     target_compile_definitions(libslic3r PRIVATE SLIC3R_ENABLE_VULKAN_SLICER=1)
     target_compile_definitions(libslic3r PRIVATE
         SLIC3R_VULKAN_BUILD_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/resources/vulkan")

@@ -974,14 +974,11 @@ BedType Preset::get_default_bed_type(PresetBundle* preset_bundle)
         try {
             std::string str_bed_type = config.opt_string("default_bed_type");
             
-            // Try parsing as integer first (legacy format)
-            int bed_type_value = atoi(str_bed_type.c_str());
-            if (bed_type_value > 0) {
-                return BedType(bed_type_value);
-            }
-            else {
-                BOOST_LOG_TRIVIAL(error) << "default_bed_type: invalid bed type: " << str_bed_type;
-            }
+            // Most vendor profiles store the plate name ("Textured PEI Plate"), which the former
+            // atoi()-only parse turned into 0 and then into High Temp Plate.
+            if (const BedType bed_type = parse_default_bed_type(str_bed_type); bed_type != btDefault)
+                return bed_type;
+            BOOST_LOG_TRIVIAL(error) << "default_bed_type: invalid bed type: " << str_bed_type;
             return BedType::btPEI;
 
         } catch(...) {

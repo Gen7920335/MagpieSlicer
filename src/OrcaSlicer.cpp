@@ -3679,6 +3679,13 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    // Without a project bed type the CLI fell back to the Cool Plate default and ignored the
+    // printer's default_bed_type, unlike the GUI. A --curr_bed_type option still overrides this.
+    if (!m_print_config.has("curr_bed_type") && m_print_config.has("default_bed_type")) {
+        if (const BedType bed_type = parse_default_bed_type(m_print_config.opt_string("default_bed_type")); bed_type != btDefault)
+            m_print_config.set_key_value("curr_bed_type", new ConfigOptionEnum<BedType>(bed_type));
+    }
+
     // Apply command line options to a more specific DynamicPrintConfig which provides normalize()
     // (command line options override --load files)
     m_print_config.apply(m_extra_config, true);

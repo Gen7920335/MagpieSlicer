@@ -499,6 +499,17 @@ static const t_config_enum_values s_keys_map_BedType = {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(BedType)
 
+BedType parse_default_bed_type(const std::string &value)
+{
+    const int number = atoi(value.c_str());
+    if (number > 0 && number < btCount)
+        return BedType(number);
+    BedType named = btDefault;
+    if (ConfigOptionEnum<BedType>::from_string(value, named))
+        return named;
+    return btDefault;
+}
+
 // BBS
 static const t_config_enum_values s_keys_map_LayerSeq = {
     { "Auto",              flsAuto },
@@ -7090,7 +7101,7 @@ void PrintConfigDef::init_fff_params()
     def->label = L("Half-height support");
     def->category = L("Support");
     def->tooltip = L("Generate support at half the model layer height while preserving physical contact gaps, interface thickness and raft thickness. "
-                     "Travel Z hop is at least 1.5 times the model layer height.");
+                     "Travel Z hop is at least 1.5 times the model layer height. Always on while half-height outer walls are enabled.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 

@@ -36,5 +36,10 @@
     "slowdown_for_curled_perimeters": "0",
     "standby_temperature_delta": "-150",
     "support_threshold_angle": "35",
-    "support_type": "tree(auto)"
+    "support_type": "tree(auto)",
+    "sparse_infill_pattern": "grid",
+    "initial_layer_line_width": "0.62",
+    "enable_arc_fitting": "0",
+    "tree_support_branch_angle_organic": "45",
+    "wall_generator": "classic"
 }

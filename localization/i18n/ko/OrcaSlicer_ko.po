@@ -7056,7 +7056,7 @@ msgstr "노즐"
 
 #, boost-format
 msgid "It is not recommended to print the following filament(s) with %1%: %2%\n"
-msgstr "다음 필라멘트로 출력하지 않는 것이 좋습니다: %1%%2%\n"
+msgstr "%1%(으)로 다음 필라멘트를 출력하지 않는 것이 좋습니다: %2%\n"
 
 msgid "It is not recommended to use the following nozzle and filament combinations:\n"
 msgstr "다음과 같은 노즐과 필라멘트 조합은 사용하지 않는 것이 좋습니다.\n"
@@ -22176,8 +22176,8 @@ msgid "Half-height support"
 msgstr "절반 높이 서포트"
 
 #: src/libslic3r/PrintConfig.cpp
-msgid "Generate support at half the model layer height while preserving physical contact gaps, interface thickness and raft thickness. Travel Z hop is at least 1.5 times the model layer height."
-msgstr "물리적 접촉 간격, 인터페이스 두께 및 래프트 두께를 유지하면서 서포트를 모델 레이어 높이의 절반으로 생성합니다. 이동 Z 홉은 모델 레이어 높이의 최소 1.5배입니다."
+msgid "Generate support at half the model layer height while preserving physical contact gaps, interface thickness and raft thickness. Travel Z hop is at least 1.5 times the model layer height. Always on while half-height outer walls are enabled."
+msgstr "물리적 접촉 간격, 인터페이스 두께 및 래프트 두께를 유지하면서 서포트를 모델 레이어 높이의 절반으로 생성합니다. 이동 Z 홉은 모델 레이어 높이의 최소 1.5배입니다. 절반 높이 외벽을 켜면 항상 켜집니다."
 
 #: src/libslic3r/Print.cpp
 msgid "Half-height outer walls or supports cannot be combined with spiral vase mode because their discrete Z passes require ordinary layer geometry."

@@ -164,7 +164,9 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
     config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.15, 0.4});
     config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
     config.set_key_value("max_layer_height", new ConfigOptionFloats{0.4, 0.4});
-    bool should_pass = scenario == 0 || scenario == 5 || scenario == 8;
+    // Scenario 6 asks for full-height support under half-height outer walls; that combination is
+    // now forced to half-height support (user decision 2026-10-03), so it validates like scenario 5.
+    bool should_pass = scenario == 0 || scenario == 5 || scenario == 6 || scenario == 8;
     if (scenario == 1) config.set("outer_wall_half_layer_height", false);
     if (scenario == 2) config.set("inner_wall_filament_id", 1);
     if (scenario == 3) config.set("sparse_infill_filament_id", 1);
