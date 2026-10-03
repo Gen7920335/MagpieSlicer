@@ -4,187 +4,117 @@
 
 # Magpie Slicer
 
-An OrcaSlicer-based fork integrating mixed nozzle sizes, extended supports, and GPU-assisted slicing
-
-</div>
+An OrcaSlicer-based slicer that combines different nozzle sizes in one print and gives finer control over supports
 
 [한국어](README.md) | **English**
 
-## Latest Release
+</div>
 
-- Version: **2.5.0.0.9 Beta 6**
-- Tag: `v2.5.0.0.9-beta.6` (not yet published)
-- Platform: **Windows x64**
-- Status: **Pre-release**
-- [GitHub releases](https://github.com/Gen7920335/MagpieSlicer/releases)
-- [Release record](docs/RELEASE_HISTORY.md) · [Development documents](docs/DOCUMENT_INDEX.md)
+> This fork is under active development. Inspect the preview and the generated G-code before sending a job to real hardware.
 
-The source commit and SHA-256 are recorded in the GitHub release notes.
+## Download
 
-Beta 6 highlights:
-
-- Snapmaker U1 defaults now follow Snapmaker's own Orca: 20,000 acceleration and 500 mm/s (the stock firmware limits), per-nozzle retraction, and default processes with tree support and Classic walls. The default plate reads as Textured PEI, so no `Z_OFFSET -0.07` is added.
-- Enabling half-height outer walls (H/2) also enables half-height support, and the print order keeps the time between the two outer-wall passes even when support is present. The preview steps one half layer at a time.
-- The app starts and slices on the CPU on PCs without a Vulkan loader.
-- Fixed: Classic walls + H/2 + four walls failing to slice, the missing first-layer normal-support outline, missing per-toolhead line-width range checks, and missing low-temperature interface temperature checks.
-- Add/Remove Programs and the installer name show the beta number, and file associations no longer collide with OrcaSlicer.
-
-Development documents distinguish automated evidence from remaining installer GUI and physical-print validation.
-
-> This fork is under active development. Inspect the preview and generated G-code before printing on real hardware.
-
-## Main Features
-
-| Feature | Purpose |
+| Item | Details |
 | --- | --- |
-| Mixed-nozzle walls | Print internal structure quickly with a large nozzle and sharp outer details with a smaller nozzle |
-| Multi-nozzle interlocking | Move the small/large wall boundary between adjacent layers to reduce delamination |
-| Large-hotend override | Force selected layer ranges to a chosen hotend |
-| `Nozzle used` preview | Show the actual nozzle used independently of material color |
-| Cura-style normal support | Provide continuous Cura-style support paths while preserving the original support modes |
-| Mixed automatic support | Split build-plate-reachable demand to normal support and the remainder to tree support in one print |
-| Resin-style automatic support | Use current PrusaSlicer SLA Default/Branching trees through the FFF material and interface pipeline |
-| Triangle interfaces and sublayers | Control pattern, angle, and temperature for selected interface layers |
-| Low-temperature interface | Print model and interface at different temperatures with one nozzle |
-| Tree wall count | Reinforce tree branches with up to ten walls |
-| Vulkan-assisted slicing | Select Auto, On, Max GPU, or Off acceleration modes |
-| LESIC | Integrated temperature and volumetric-flow calibration model |
+| Latest version | **2.5.0.0.9 Beta 6** (tag `v2.5.0.0.9-beta.6`, publication pending) |
+| Platform | Windows x64 installer |
+| Status | Pre-release |
+| Get it | [GitHub Releases](https://github.com/Gen7920335/MagpieSlicer/releases) |
 
-## Mixed-Nozzle Printing
+- Installs alongside OrcaSlicer without sharing its settings folder or file associations. `orcaslicer://` links are still handled for website integration.
+- The installer is not code-signed, so Windows SmartScreen may warn.
+- Runs without Vulkan or NVIDIA drivers; slicing then uses the CPU.
 
-### Per-hotend configuration
+## What's new in Beta 6
 
-Each toolhead has an independent nozzle diameter and extrusion widths. The toolhead selector, printer extruder settings, and `Hotend` page share the same source value. These values are stored in projects and presets.
+- **Snapmaker U1 defaults:** printer and default process values follow Snapmaker's official Orca (2026-09-30): 20,000 acceleration and 500 mm/s (the stock firmware limits), per-nozzle retraction, and tree support with Classic walls by default. The default plate reads as Textured PEI, so the smooth-plate `Z_OFFSET -0.07` is not added.
+- **Half-height outer walls (H/2):** enabling them also enables half-height support. The print order keeps the time between the two outer-wall passes even when support is present, and the preview slider steps one half layer at a time.
+- **Stability:** starts on PCs without a Vulkan loader. Fixed Classic walls + H/2 + four walls failing to slice, the missing first-layer normal-support outline, and missing range checks for per-toolhead line widths and low-temperature interface temperatures.
+- **Installer:** Add/Remove Programs and the installer name show the beta number, and uninstalling removes the file associations Magpie created.
 
-- Nozzle diameter and default width
-- First-layer, outer-wall, inner-wall, top-surface, infill, and support widths
-- Separate hotend and filament preset save/load actions
-- Small-nozzle wall speed override
+## Main features
 
-### Automatic detail-nozzle selection
+| Feature | What it does |
+| --- | --- |
+| Mixed-nozzle walls | Large nozzle for fast internals, small nozzle for text and sharp outer walls |
+| Multi-nozzle interlocking | Offsets the small/large wall boundary by one line per layer to reduce delamination |
+| Large-hotend override | Forces selected layer ranges to a chosen hotend |
+| Half-height outer walls and support (H/2) | Prints the outer two walls and support at half layer height for better surfaces |
+| Cura-style normal support | Continuous Cura-style support paths alongside the Prusa-style modes |
+| Mixed automatic support | Normal support where it reaches the bed, tree support elsewhere, in one print |
+| Resin-style automatic support | PrusaSlicer SLA supports printed through the FFF interface and material pipeline |
+| Triangle interfaces and sublayers | Separate pattern, angle, and temperature for selected interface layers |
+| Low-temperature interface | One nozzle prints model and support interface at different temperatures |
+| Tree support wall count | Reinforces branches with up to ten walls |
+| GPU-assisted slicing | Accelerates parts of slicing with Vulkan or CUDA, validated against the CPU |
+| LESIC | Temperature and volumetric-flow calibration in one model |
+| `Nozzle used` preview | Colors paths by the nozzle actually used, independent of material color |
 
-`Use smaller nozzles in crisp corners` finds the smallest usable configured nozzle. If a large-nozzle path cannot cover any part of a connected outer-wall loop, the complete loop is assigned to the smaller nozzle to avoid tool-change seams in the middle of that loop. Inner walls and infill remain on the larger nozzle where space permits.
+## Mixed-nozzle printing
 
-- Small-nozzle wall count is configured independently from the normal wall count.
-- Small outer walls have priority when space is limited.
-- Both Classic and Arachne wall generators are supported.
-- Tool selection reverses automatically when tool 2 has a larger nozzle than tool 1.
+- **Per-hotend settings:** each toolhead has its own nozzle diameter and line widths (first layer, outer wall, inner wall, top surface, infill, support, bridge). Values that do not fit the nozzle are reported before slicing.
+- **Automatic detail nozzle:** with `Use smaller nozzles in crisp corners`, sharp wall loops the large nozzle cannot fill are printed whole by the small nozzle. Inner walls and infill stay on the large nozzle. Classic and Arachne are both supported.
+- **Interlocking:** the small/large wall boundary moves one line between odd and even layers.
 
-### Interlocking
+  ```text
+  L L L S S S S
+  L L L L S S S
+  ```
 
-Interlocking moves one wall between the small- and large-nozzle regions on alternating layers.
+- **Large-hotend override:** set start and end layers and a hotend to bypass automatic selection for that range. Multiple ranges are supported.
 
-```text
-L L L S S S S
-L L L L S S S
-L L L S S S S
-L L L L S S S
-```
+## Half-height outer walls and support (H/2)
 
-Only the wall/infill boundary moves. The infill pattern itself remains stable.
-
-### Large-hotend override
-
-Specify a start layer, end layer, and hotend to bypass automatic small-nozzle selection in that range. `Add region` creates additional ranges. Reversed and overlapping ranges are normalized safely.
-
-### Preview
-
-- `Nozzle used`: fixed colors per nozzle diameter
-- `Layer width`: actual extrusion width
-- Slicing time: includes G-code generation and post-processing
-
-## Support
-
-### Cura-style normal support
-
-The original Orca/Prusa normal and tree supports remain available. Magpie adds:
-
-- `Normal (Cura style) auto`: threshold-angle detection
-- `Normal (Cura style)`: manual and painted support regions
-
-The Cura-style path propagates required support regions between layers and produces continuous zigzag paths. Its generator is not invoked when support is disabled.
-
-`Cura solid support raft` fills the first Cura support layer at 100% density for bed adhesion. It does not implicitly enable automatic support.
-
-### Interfaces
-
-- Triangle patterns use exactly three directions separated by 120 degrees.
-- `Interface density / spacing` keeps both representations synchronized.
-- A selected interface hotend uses that nozzle diameter and support width.
-- Requested interface thickness is preserved, with underside smoothing for stepped curved surfaces.
-
-### Interface sublayers
-
-The model-contacting interface is layer 1. A selected start/end range may use a different pattern, angle, and temperature. End values are clamped to the available interface layers, and the feature is disabled for a single-layer interface.
-
-### Low-temperature interface
-
-Single-nozzle printing can use separate model and support-interface temperatures.
-
-```text
-model -> support body -> cooling/temperature transition -> interface -> reheating -> next layer
-```
-
-The temperature-drop tower is visible and movable before slicing. It has a five-line brim and does not automatically move away from models.
-
-- Temperature delta up to 30 C: 50 mm path
-- Above 30 C: add 1 mm per degree
-- Maximum path: 80 mm
-- Final 10 mm: 10 mm/s
-- AUX cooling and nozzle wiping are enabled only for supported hardware profiles
-
-### Tree support
-
-- Automatic tree support receives the configured threshold angle.
-- Tree Slim and Organic wall counts accept `0-10`.
-- `0` preserves automatic behavior; narrow branches generate only walls that physically fit.
-
-### Half-height outer walls and support (H/2)
-
-- `Half-height outer walls`: print the outer two XY walls twice at half the model layer height, without changing the total wall count.
-- `Half-height support`: print support at half height. It is always on while half-height outer walls are enabled, so the walls are supported on the same grid.
+- `Half-height outer walls`: prints the outer two XY walls twice at half the layer height. The total wall count and the inner wall and infill heights are unchanged.
+- `Half-height support`: prints support at half height. It is always on while half-height outer walls are enabled, so the walls are supported on the same grid.
 - Within a layer, the lower half (support and outer wall) prints first, then the upper half. The upper outer wall is placed where the two outer-wall passes are evenly spaced in time, avoiding banding every half layer.
+- Travel Z lift is at least 1.5 times the layer height.
 
-## Vulkan-Assisted Slicing
+## Supports
 
-The top selector provides:
+- **Cura-style normal support:** `Normal (Cura style) auto/manual` propagates demand downward and generates continuous ZigZag paths. `Cura solid support raft` fills the first support layer at 100%.
+- **Mixed / Resin style:** split one print between normal and tree support, or use SLA-style thin pillar supports.
+- **Tree support:** the automatic threshold angle drives overhang detection. Tree Slim and Organic wall counts accept `0-10` (`0` is automatic).
+- **Interfaces:** triangle pattern (three directions at 120 degrees), synchronized density and spacing, a dedicated interface hotend, and underside smoothing. Sublayers count the model-contact face as layer 1 and apply their own pattern, angle, and temperature to a chosen range.
+- **Low-temperature interface:** one nozzle prints model and interface at different temperatures.
 
-- `Vulkan: Auto`: use calibrated CPU/GPU detection to select profitable work
-- `Vulkan: On`: prefer validated GPU paths
-- `Vulkan: Max GPU`: expand GPU use to the maximum supported range
-- `Vulkan: Off`: use the CPU pipeline only
+  ```text
+  model -> support body -> cooling/temperature change -> interface -> reheating -> next layer
+  ```
 
-Validation and CPU fallback paths remain for topology-sensitive work. Performance depends on the GPU, driver, CPU, and model complexity. Without an installed Vulkan loader, slicing runs on the CPU even when Vulkan is enabled.
+  The interface temperature must be at least 170 °C (the firmware cold-extrusion limit) and no higher than the filament's maximum. The temperature-drop tower is visible before slicing and can be moved by hand.
 
-## Device and Calibration Features
+## GPU-assisted slicing
 
-### Snapmaker device view
+Choose Vulkan or CUDA in the top bar (only one is active at a time).
 
-Magpie extends the Snapmaker U1 print-start flow and native device panel. Camera, current layer, temperatures, fans, motion state, and common device controls are available in one view. PA calibration, bed leveling, and timelapse options default to off. U1 printer and default process values follow Snapmaker's official Orca (2026-09-30).
+- `Vulkan: Auto / On / Max GPU / Off`
+- `CUDA: Off / On / Max GPU` (NVIDIA)
 
-### LESIC
+Geometry-sensitive stages are validated against or fall back to the CPU. Speedups depend on the GPU, driver, and model.
 
-LESIC creates a centered cylindrical calibration model sized to bed dimensions minus 20 mm. It includes floor labels, perimeter marks, and an internal brim, with reduced label sizing for small beds. Temperature and maximum volumetric speed can be evaluated in one print.
+## Snapmaker U1 and calibration
 
-## Verification
+- **Snapmaker U1:** the native device panel shows the camera, current layer, temperatures, fans, motion state, and common controls in one view. PA calibration, bed leveling, and timelapse default to off. Printer and default process values follow Snapmaker's official Orca.
+- **LESIC:** one bed-sized cylindrical model checks temperature and maximum volumetric flow together.
 
-Completed for Beta 6:
+## Verification (Beta 6)
 
-- Unit and integration tests: fff_print **164** (1 skipped), libslic3r **206**, half-layer **69** passed
-- Installer contents: **15,250 files**; EXE/DLL SHA-256 match the build
-- CLI slicing with the packaged program: U1 default Benchy gives identical CPU and Vulkan output and exits normally without a Vulkan loader
+- Tests: fff_print 164 (1 skipped), libslic3r 206, half-layer 69 passed
+- Installer: 15,250 files; EXE/DLL SHA-256 match the build
+- U1 default Benchy sliced with the packaged program: identical CPU and Vulkan output, normal exit without a Vulkan loader
 
-A real administrator install and uninstall, the installed GUI, and physical prints were not checked for this beta.
+A real administrator install and uninstall, the installed GUI, and physical prints were not checked for this beta. Review multi-tool output, machine-specific start G-code, and low-temperature interface behavior before sending a job.
 
-These checks do not guarantee every printer and firmware combination. Review multi-tool output, machine-specific start G-code, and low-temperature interface behavior before uploading a job.
-
-## Building on Windows
+## Building from source (Windows)
 
 ```powershell
 cmake --build build-vulkan --config Release --parallel 8
 powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -BuildDirectory build-vulkan -Parallel 4
 ```
 
-## License and Attribution
+The installer script will not start while another build is running, or with less than 8 GiB of free memory or 20 GiB of free staging disk.
 
-Magpie Slicer is based on [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer). OrcaSlicer-specific calibration tools and model names retain their original names. See [LICENSE](LICENSE.txt) and the upstream project license for usage and distribution terms.
+## License and attribution
+
+Magpie Slicer is based on [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer). OrcaSlicer's own calibration tools and model names keep their original names. Use and distribution follow [LICENSE](LICENSE.txt) and the original project's license.
