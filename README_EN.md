@@ -16,7 +16,7 @@ An OrcaSlicer-based slicer that combines different nozzle sizes in one print and
 
 | Item | Details |
 | --- | --- |
-| Latest version | **2.5.0.0.9 Beta 6** (tag `v2.5.0.0.9-beta.6`, publication pending) |
+| Latest version | **2.5.0.0.9 Beta 6** ([v2.5.0.0.9-beta.6](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.9-beta.6)) |
 | Platform | Windows x64 installer |
 | Status | Pre-release |
 | Get it | [GitHub Releases](https://github.com/Gen7920335/MagpieSlicer/releases) |

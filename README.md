@@ -16,7 +16,7 @@
 
 | 항목 | 내용 |
 | --- | --- |
-| 최신 버전 | **2.5.0.0.9 Beta 6** (태그 `v2.5.0.0.9-beta.6`, 게시 준비 중) |
+| 최신 버전 | **2.5.0.0.9 Beta 6** ([v2.5.0.0.9-beta.6](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.9-beta.6)) |
 | 플랫폼 | Windows x64 설치파일 |
 | 상태 | Pre-release |
 | 받기 | [GitHub Releases](https://github.com/Gen7920335/MagpieSlicer/releases) |
