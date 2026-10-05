@@ -16,7 +16,7 @@ An OrcaSlicer-based slicer that combines different nozzle sizes in one print and
 
 | Item | Details |
 | --- | --- |
-| Latest version | **2.5.0.0.9 Beta 6** ([v2.5.0.0.9-beta.6](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.9-beta.6)) |
+| Latest version | **2.5.0.0.9 Beta 7** ([v2.5.0.0.9-beta.7](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.9-beta.7)) |
 | Platform | Windows x64 installer |
 | Status | Pre-release |
 | Get it | [GitHub Releases](https://github.com/Gen7920335/MagpieSlicer/releases) |
@@ -24,6 +24,14 @@ An OrcaSlicer-based slicer that combines different nozzle sizes in one print and
 - Installs alongside OrcaSlicer without sharing its settings folder or file associations. `orcaslicer://` links are still handled for website integration.
 - The installer is not code-signed, so Windows SmartScreen may warn.
 - Runs without Vulkan or NVIDIA drivers; slicing then uses the CPU.
+
+## What's new in Beta 7
+
+- **Toolhead materials:** a material picked in the Toolhead / Material settings window now reaches that toolhead's slicing settings however the window was opened, not only from the sidebar edit button. The window title names the toolhead (T number) it edits.
+- **Toolheads in older projects:** wall and infill filament choices in 3MF files saved before Orca 2.4 act as defaults again, so object and part toolheads take priority. Previously a TPU part assigned to toolhead 1 printed almost entirely with another filament.
+- **Preview:** the Filament view and its legend show each toolhead's filament colour instead of the nozzle palette.
+- **Rafts:** Cura-style support no longer prints a single raft layer with nothing under the object, and Resin support with three or more raft layers no longer stops slicing.
+- **Resin elevation:** the object is raised only while support is enabled. With support off it sits on the bed and slices normally.
 
 ## What's new in Beta 6
 
@@ -98,11 +106,11 @@ Geometry-sensitive stages are validated against or fall back to the CPU. Speedup
 - **Snapmaker U1:** the native device panel shows the camera, current layer, temperatures, fans, motion state, and common controls in one view. PA calibration, bed leveling, and timelapse default to off. Printer and default process values follow Snapmaker's official Orca.
 - **LESIC:** one bed-sized cylindrical model checks temperature and maximum volumetric flow together.
 
-## Verification (Beta 6)
+## Verification (Beta 7)
 
-- Tests: fff_print 164 (1 skipped), libslic3r 206, half-layer 69 passed
-- Installer: 15,250 files; EXE/DLL SHA-256 match the build
-- U1 default Benchy sliced with the packaged program: identical CPU and Vulkan output, normal exit without a Vulkan loader
+- Tests: fff_print 167 (1 skipped), libslic3r 210, half-layer 69 passed
+- An Orca 2.3 project (mainbody.3mf) sliced with the installer build: the toolhead-1 TPU part prints on T0 and the toolhead-3 cubes on T2
+- 204 random setting combinations sliced and their G-code checked automatically (coordinates, temperatures, layer heights, extrusion)
 
 A real administrator install and uninstall, the installed GUI, and physical prints were not checked for this beta. Review multi-tool output, machine-specific start G-code, and low-temperature interface behavior before sending a job.
 
