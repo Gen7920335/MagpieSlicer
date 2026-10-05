@@ -1212,8 +1212,11 @@ void GCodeViewer::load_as_gcode(const GCodeProcessorResult& gcode_result, const 
     }
 
     // convert data from PrusaSlicer format to libvgcode format
+    // Only the "Nozzle used" view takes the generated nozzle palette. The "Filament" view must keep
+    // the toolheads' filament colours, so it gets them explicitly instead of falling back to the palette.
     const std::vector<std::string> nozzle_colors = nozzle_used_palette(str_tool_colors.size());
-    libvgcode::GCodeInputData data = libvgcode::convert(gcode_result, nozzle_colors, str_color_print_colors, m_viewer);
+    libvgcode::GCodeInputData data = libvgcode::convert(gcode_result, nozzle_colors,
+        str_color_print_colors.empty() ? str_tool_colors : str_color_print_colors, m_viewer);
 
 //#define ENABLE_DATA_EXPORT 1
 //#if ENABLE_DATA_EXPORT
@@ -4106,7 +4109,8 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
         // shows only extruders actually used
         size_t i = 0;
         const std::vector<uint8_t>& used_extruders_ids = m_viewer.get_used_extruders_ids();
-        auto tool_colors = m_viewer.get_tool_colors();
+        // Filament colours lead the colour-print palette; the tool palette is the generated nozzle one.
+        const auto& tool_colors = m_viewer.get_color_print_colors();
         for (auto extruder_idx : used_extruders_ids) {
             if (i < model_used_filaments_m.size() && i < model_used_filaments_g.size()) {
                 std::vector<std::pair<std::string, float>> columns_offsets;
@@ -4261,7 +4265,7 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
             //BBS: replace model custom gcode with current plate custom gcode
             std::vector<CustomGCode::Item> custom_gcode_per_print_z = wxGetApp().is_editor() ? wxGetApp().plater()->model().get_curr_plate_custom_gcodes().gcodes : m_custom_gcode_per_print_z;
             const size_t extruders_count = get_extruders_count();
-            const auto& tool_colors = m_viewer.get_tool_colors();
+            const auto& tool_colors = m_viewer.get_color_print_colors(); // filament colours lead this palette
             std::vector<ColorRGBA> last_color(std::max<size_t>(1, extruders_count), ColorRGBA::WHITE());
             for (size_t i = 0; i < extruders_count && i < tool_colors.size(); ++i) {
                 last_color[i] = libvgcode::convert(tool_colors[i]);
