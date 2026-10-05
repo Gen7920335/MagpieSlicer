@@ -55,6 +55,18 @@ std::vector<std::string> normalize_filament_assignment_options(
 
 size_t normalize_model_filament_assignments(Model &model, size_t filament_count);
 
+// Raw project-config keys of the pre-2.4 feature filament selectors (wall_filament, ...).
+std::vector<std::string> legacy_feature_filament_keys(const std::vector<std::string> &raw_keys);
+
+// Pre-2.4 projects stored feature filaments as fallbacks that an object or part toolhead
+// overrides. Since 2.4 a global feature filament is explicit and beats that toolhead, so an old
+// project printed its assigned parts with the global filament. `legacy_keys` are the keys
+// legacy_feature_filament_keys() found in the file; each fallback they carried moves onto the
+// model parts that have no toolhead of their own and the global value becomes Default.
+// Returns the number of part options written.
+size_t apply_legacy_feature_filament_fallbacks(
+    DynamicConfig &config, Model &model, const std::vector<std::string> &legacy_keys);
+
 // Filament indices are zero-based; replacement is already indexed after deletion.
 // A replacement of -1 removes the deleted filament's explicit tool changes.
 void remap_model_tool_changes_after_filament_delete(

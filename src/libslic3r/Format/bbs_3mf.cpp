@@ -1163,6 +1163,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         bool m_load_restore = false;
         std::string m_backup_path;
         std::string m_origin_file;
+        std::vector<std::string> m_legacy_feature_filament_keys;
         // Semantic version of Orca Slicer, that generated this 3MF.
         boost::optional<Semver> m_bambuslicer_generator_version;
         // Semantic version from the OrcaSlicer metadata tag (if present).
@@ -1242,6 +1243,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         bool get_thumbnail(const std::string &filename, std::string &data);
         bool load_gcode_3mf_from_stream(std::istream & data, Model& model, PlateDataPtrs& plate_data_list, DynamicPrintConfig& config, Semver& file_version);
         unsigned int version() const { return m_version; }
+        // Pre-2.4 feature filament keys the project config carried; see apply_legacy_feature_filament_fallbacks().
+        const std::vector<std::string>& legacy_feature_filament_keys() const { return m_legacy_feature_filament_keys; }
 
     private:
         void _destroy_xml_parser();
@@ -2703,6 +2706,17 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             if (ret) {
                 add_error("Error load config from json:"+reason);
                 return;
+            }
+            // Loading renames the pre-2.4 keys, so read which ones the file itself carried.
+            try {
+                boost::nowide::ifstream raw(dest_file);
+                const nlohmann::json raw_json = nlohmann::json::parse(raw);
+                std::vector<std::string> raw_keys;
+                for (auto it = raw_json.begin(); it != raw_json.end(); ++it)
+                    raw_keys.emplace_back(it.key());
+                m_legacy_feature_filament_keys = Slic3r::legacy_feature_filament_keys(raw_keys);
+            } catch (const std::exception &err) {
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": cannot list project config keys: " << err.what();
             }
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", load project config file successfully from %1%\n") %dest_file;
         }
@@ -9050,6 +9064,11 @@ bool load_bbs_3mf(const char* path, DynamicPrintConfig* config, ConfigSubstituti
         normalize_loaded_project_config(*config, mapping_context);
         const bool model_assignments_repaired =
             normalize_model_filament_assignments(*model, mapping_context.filament_count) != 0;
+        if (!importer.legacy_feature_filament_keys().empty()) {
+            const size_t moved = apply_legacy_feature_filament_fallbacks(
+                *config, *model, importer.legacy_feature_filament_keys());
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": legacy feature filaments became fallbacks on %1% part options") % moved;
+        }
         for (PlateData *plate : *plate_data_list)
             if (plate != nullptr) {
                 const bool plate_mapping_repaired =

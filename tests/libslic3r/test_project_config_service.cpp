@@ -745,3 +745,60 @@ TEST_CASE("Compatible plate metadata survives filament and tool boundary cross p
         }
     }
 }
+
+TEST_CASE("Pre-2.4 feature filaments stay fallbacks behind part toolheads",
+          "[ProjectConfigService][Compatibility][FeatureFilament]")
+{
+    // mainbody.3mf (an Orca 2.3 project): walls, infill and solid infill on filament 4, parts
+    // assigned to toolheads 1 and 3. Orca 2.3 printed each assigned part with its toolhead and
+    // only unassigned parts with filament 4.
+    DynamicPrintConfig config;
+    config.set_deserialize_strict({{"wall_filament", "4"}, {"sparse_infill_filament", "4"},
+        {"solid_infill_filament", "4"}});
+    REQUIRE(config.opt_int("outer_wall_filament_id") == 4);
+
+    Model model;
+    ModelObject *assembly = model.add_object();
+    ModelVolume *tpu_part = assembly->add_volume(TriangleMesh{});
+    tpu_part->config.set_key_value("extruder", new ConfigOptionInt(1));
+    ModelVolume *plain_part = assembly->add_volume(TriangleMesh{});
+    ModelVolume *modifier = assembly->add_volume(TriangleMesh{}, ModelVolumeType::PARAMETER_MODIFIER);
+    ModelObject *cube = model.add_object();
+    cube->config.set_key_value("extruder", new ConfigOptionInt(3));
+    ModelVolume *cube_part = cube->add_volume(TriangleMesh{});
+
+    const std::vector<std::string> legacy = legacy_feature_filament_keys(
+        {"wall_filament", "sparse_infill_filament", "solid_infill_filament", "layer_height"});
+    CHECK(legacy.size() == 3);
+    CHECK(apply_legacy_feature_filament_fallbacks(config, model, legacy) == 6);
+
+    const std::array<const char *, 6> features{"outer_wall_filament_id", "inner_wall_filament_id",
+        "sparse_infill_filament_id", "internal_solid_filament_id", "top_surface_filament_id",
+        "bottom_surface_filament_id"};
+    for (const char *feature : features) {
+        CAPTURE(feature);
+        CHECK(config.opt_int(feature) == 0);
+        CHECK(plain_part->config.opt_int(feature) == 4);
+        CHECK_FALSE(tpu_part->config.has(feature));
+        CHECK_FALSE(cube_part->config.has(feature));
+        CHECK_FALSE(modifier->config.has(feature));
+    }
+}
+
+TEST_CASE("Current projects keep explicit feature filaments", "[ProjectConfigService][FeatureFilament]")
+{
+    DynamicPrintConfig config;
+    config.set_key_value("outer_wall_filament_id", new ConfigOptionInt(4));
+    Model model;
+    ModelVolume *part = model.add_object()->add_volume(TriangleMesh{});
+
+    // A 2.4+ file carries only *_id keys, and a legacy "1" meant the active filament.
+    CHECK(legacy_feature_filament_keys({"outer_wall_filament_id", "inner_wall_filament_id"}).empty());
+    CHECK(apply_legacy_feature_filament_fallbacks(config, model, {}) == 0);
+    CHECK(config.opt_int("outer_wall_filament_id") == 4);
+
+    DynamicPrintConfig legacy_default;
+    legacy_default.set_deserialize_strict({{"wall_filament", "1"}});
+    CHECK(apply_legacy_feature_filament_fallbacks(legacy_default, model, {"wall_filament"}) == 0);
+    CHECK_FALSE(part->config.has("outer_wall_filament_id"));
+}

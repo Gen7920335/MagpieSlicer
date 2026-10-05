@@ -363,6 +363,103 @@ size_t normalize_model_filament_assignments(Model &model, size_t filament_count)
     return repaired;
 }
 
+namespace {
+
+// Pre-2.4 key -> the 2.4 feature keys it fed. A combined wall key covered inner walls too, and
+// solid infill covered top and bottom surfaces unless the file set them separately.
+struct LegacyFeatureKey
+{
+    const char *legacy;
+    std::vector<const char *> features;
+};
+
+const std::vector<LegacyFeatureKey> &legacy_feature_key_table()
+{
+    static const std::vector<LegacyFeatureKey> table {
+        { "wall_filament",                { "outer_wall_filament_id", "inner_wall_filament_id" } },
+        { "perimeter_extruder",           { "outer_wall_filament_id", "inner_wall_filament_id" } },
+        { "outer_wall_filament",          { "outer_wall_filament_id" } },
+        { "inner_wall_filament",          { "inner_wall_filament_id" } },
+        { "sparse_infill_filament",       { "sparse_infill_filament_id" } },
+        { "infill_extruder",              { "sparse_infill_filament_id" } },
+        { "solid_infill_filament",        { "internal_solid_filament_id", "top_surface_filament_id", "bottom_surface_filament_id" } },
+        { "solid_infill_extruder",        { "internal_solid_filament_id", "top_surface_filament_id", "bottom_surface_filament_id" } },
+        { "top_solid_infill_filament",    { "top_surface_filament_id" } },
+        { "bottom_solid_infill_filament", { "bottom_surface_filament_id" } },
+    };
+    return table;
+}
+
+int option_int(const ConfigBase &config, const char *key)
+{
+    const ConfigOption *option = config.option(key);
+    return option != nullptr ? option->getInt() : 0;
+}
+
+// The toolhead a part prints with when no feature filament overrides it; 0 means none.
+int part_toolhead(const ModelVolume &volume)
+{
+    if (const int toolhead = option_int(volume.config.get(), "extruder"); toolhead > 0)
+        return toolhead;
+    return option_int(volume.get_object()->config.get(), "extruder");
+}
+
+} // namespace
+
+std::vector<std::string> legacy_feature_filament_keys(const std::vector<std::string> &raw_keys)
+{
+    std::vector<std::string> found;
+    for (const LegacyFeatureKey &entry : legacy_feature_key_table())
+        if (std::find(raw_keys.begin(), raw_keys.end(), entry.legacy) != raw_keys.end())
+            found.emplace_back(entry.legacy);
+    return found;
+}
+
+size_t apply_legacy_feature_filament_fallbacks(
+    DynamicConfig &config, Model &model, const std::vector<std::string> &legacy_keys)
+{
+    auto carried = [&legacy_keys](const char *legacy) {
+        return std::find(legacy_keys.begin(), legacy_keys.end(), legacy) != legacy_keys.end();
+    };
+    // The migrated 2.4 value of the first feature each legacy key fed is that key's fallback.
+    // A separately stored key (inner_wall_filament, top_solid_infill_filament, ...) wins over
+    // the combined one, so read the specific keys last.
+    std::vector<std::pair<const char *, int>> fallbacks;
+    auto set_fallback = [&fallbacks](const char *feature, int value) {
+        for (auto &fallback : fallbacks)
+            if (std::string_view(fallback.first) == feature) {
+                fallback.second = value;
+                return;
+            }
+        fallbacks.emplace_back(feature, value);
+    };
+    for (const bool specific : { false, true })
+        for (const LegacyFeatureKey &entry : legacy_feature_key_table())
+            if ((entry.features.size() == 1) == specific && carried(entry.legacy)) {
+                const int value = option_int(config, entry.features.front());
+                for (const char *feature : entry.features)
+                    set_fallback(feature, value);
+            }
+
+    size_t written = 0;
+    for (const auto &[feature, value] : fallbacks) {
+        if (value <= 0)
+            continue;
+        config.set_key_value(feature, new ConfigOptionInt(0));
+        for (ModelObject *object : model.objects) {
+            if (object == nullptr)
+                continue;
+            for (ModelVolume *volume : object->volumes)
+                if (volume != nullptr && volume->is_model_part() && part_toolhead(*volume) == 0 &&
+                    option_int(volume->config.get(), feature) == 0) {
+                    volume->config.set_key_value(feature, new ConfigOptionInt(value));
+                    ++written;
+                }
+        }
+    }
+    return written;
+}
+
 void remap_model_tool_changes_after_filament_delete(
     Model &model, size_t filament_index, int replacement_index)
 {
