@@ -6604,7 +6604,7 @@ void PrintConfigDef::init_fff_params()
         def = this->add(prefix + "support_object_elevation", coFloat);
         def->label = L("Object elevation");
         def->category = L("Support");
-        def->tooltip = L("Raises the entire FFF object by this amount. This remains active and visible even when support generation is disabled.");
+        def->tooltip = L("Raises the entire FFF object by this amount. Applies only while support is enabled.");
         def->sidetext = L("mm");
         def->min = 0;
         def->max = 150;

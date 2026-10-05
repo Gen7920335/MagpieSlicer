@@ -1345,6 +1345,13 @@ bool PrintObject::invalidate_state_by_config_options(
             steps.emplace_back(posSlice);
         } else if (opt_key == "enable_support") {
             steps.emplace_back(posSupportMaterial);
+            // Resin elevation follows Enable support, so toggling it moves the object in Z.
+            const auto resin_type = [](const ConfigOptionResolver &config) {
+                const ConfigOption *type = config.option("support_type");
+                return type != nullptr && is_resin(SupportType(type->getInt()));
+            };
+            if (resin_type(old_config) || resin_type(new_config))
+                steps.emplace_back(posSlice);
             if (m_config.support_top_z_distance == 0.) {
             	// Enabling / disabling supports while soluble support interface is enabled.
             	// This changes the bridging logic (bridging enabled without supports, disabled with supports).

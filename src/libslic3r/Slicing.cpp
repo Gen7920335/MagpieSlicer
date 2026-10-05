@@ -233,10 +233,10 @@ SlicingParameters SlicingParameters::create_from_config(
         params.object_print_z_uncompensated_max += print_z;
     }
 
-    // Resin-style object elevation is an object placement parameter, not a
-    // support enablement side effect. Keep it active when supports are off so
-    // presets and project files retain the requested floating Z placement.
-    if (is_resin(object_config.support_type.value)) {
+    // Resin-style object elevation lifts the object onto its support tree. Without
+    // supports nothing holds it up, so it applies only while support is enabled
+    // (user decision 2026-10-05: a floating object only produced "empty layers").
+    if (object_config.enable_support.value && is_resin(object_config.support_type.value)) {
         const coordf_t elevation = object_config.resin_support_tree_type.value == rstBranching ?
             object_config.resin_branching_support_object_elevation.value :
             object_config.resin_support_object_elevation.value;

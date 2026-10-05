@@ -22050,8 +22050,8 @@ msgstr "서포트 트리 연결 브릿지의 최대 길이입니다."
 msgid "Maximum distance between pillars that may be linked. Zero disables pillar cascading."
 msgstr "서로 연결할 수 있는 기둥 사이의 최대 거리입니다. 0이면 기둥 연쇄 연결을 사용하지 않습니다."
 
-msgid "Raises the entire FFF object by this amount. This remains active and visible even when support generation is disabled."
-msgstr "FFF 출력물 전체를 이 높이만큼 띄웁니다. 서포트 생성을 꺼도 이 설정은 계속 적용되고 표시됩니다."
+msgid "Raises the entire FFF object by this amount. Applies only while support is enabled."
+msgstr "FFF 출력물 전체를 이 높이만큼 띄웁니다. 서포트를 켰을 때만 적용됩니다."
 
 msgid "Mixed support: analyzing overhangs"
 msgstr "혼합 서포트: 오버행 분석 중"

@@ -830,7 +830,10 @@ static SupportGeneratorLayersPtr make_base_layers_from_support_body(
         const Layer &object_layer = *object.layers()[layer_idx];
         SupportGeneratorLayer &support_layer = layer_storage.allocate(SupporLayerType::Base);
         support_layer.print_z  = object_layer.print_z;
-        support_layer.bottom_z = layer_idx > 0 ? object.layers()[layer_idx - 1]->print_z : 0.;
+        // The first column starts where the first object layer starts: on the bed, or above the raft
+        // contact with the same gap as the object. Starting it on the bed under a raft made one support
+        // bead as tall as the whole raft; starting it on the raft contact made it layer height + gap tall.
+        support_layer.bottom_z = layer_idx > 0 ? object.layers()[layer_idx - 1]->print_z : object_layer.bottom_z();
         support_layer.height   = support_layer.print_z - support_layer.bottom_z;
         support_layer.polygons = std::move(base_polygons);
         base_layers.push_back(&support_layer);
@@ -936,6 +939,28 @@ void CuraStyleSupportGenerator::generate(PrintObject &object)
         SupporLayerType::BottomContact, layer_storage);
     SupportGeneratorLayersPtr base_layers = make_base_layers_from_support_body(
         object, std::move(support_body), non_base_support_by_layer, layer_storage);
+    if (m_slicing_params.has_raft()) {
+        // As in the classic generator, the raft contact layer carries the first object layer
+        // (expanded by raft_expansion) and the feet of the columns. generate_raft_base builds
+        // the raft base and interface below it from this layer.
+        const Layer &first_layer = *object.layers().front();
+        Polygons raft_contact = to_polygons(first_layer.lslices);
+        if (object.config().raft_expansion.value > 0)
+            raft_contact = expand(raft_contact, scaled<float>(object.config().raft_expansion.value));
+        if (!base_layers.empty() && is_approx(base_layers.front()->print_z, first_layer.print_z))
+            raft_contact = union_(raft_contact, base_layers.front()->polygons);
+        if (!raft_contact.empty()) {
+            SupportGeneratorLayer &contact = layer_storage.allocate(SupporLayerType::TopContact);
+            contact.print_z               = m_slicing_params.raft_contact_top_z;
+            contact.bottom_z              = m_slicing_params.raft_interface_top_z;
+            contact.height                = m_slicing_params.contact_raft_layer_height;
+            contact.idx_object_layer_above = 0;
+            contact.contact_polygons      = std::make_unique<Polygons>(raft_contact);
+            contact.overhang_polygons     = std::make_unique<Polygons>(raft_contact);
+            contact.polygons              = std::move(raft_contact);
+            top_contacts.insert(top_contacts.begin(), &contact);
+        }
+    }
     layers_timing.finish(base_layers.size() + top_contacts.size() + bottom_contacts.size());
     const auto layers_ready_at = Clock::now();
     const auto milliseconds = [](const Clock::time_point &begin, const Clock::time_point &end) {

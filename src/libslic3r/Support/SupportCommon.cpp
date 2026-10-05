@@ -1750,6 +1750,12 @@ SupportGeneratorLayersPtr generate_support_layers(
                     //assert(num_top_contacts == 1 || (top_contact_bottom_z - layer.bottom_z) < EPSILON);
                     top_contact_bottom_z = layer.bottom_z;
                 }
+            } else if (layer.layer_type == SupporLayerType::RaftInterface && layer.contact_polygons != nullptr &&
+                       ! layer.contact_polygons->empty()) {
+                // Under a floating (Resin-elevated) object a raft interface layer has no contact area and
+                // carries only the support columns. Dropping it left a hole in the raft and shifted the
+                // raft toolpath indices onto the first column layer.
+                empty = false;
             }
             layer.print_z = zavg;
             height_min = std::min(height_min, layer.height);

@@ -1537,9 +1537,11 @@ TEST_CASE("Legacy process presets materialize every Resin editor option from sch
     }
 }
 
-TEST_CASE("Resin style elevation remains active with support disabled",
+TEST_CASE("Resin style elevation applies only while support is enabled",
           "[SupportMaterial][Resin][Elevation]")
 {
+    // Before: the object floated 5 mm with nothing under it and slicing stopped with
+    // "The object has empty layers". User decision 2026-10-05: elevation follows Enable support.
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_key_value("enable_support", new ConfigOptionBool(false));
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stResinAuto));
@@ -1551,8 +1553,17 @@ TEST_CASE("Resin style elevation remains active with support disabled",
     REQUIRE_NOTHROW(init_and_process_print({ make_cube(20., 20., 10.) }, print, config));
     REQUIRE(print.objects().size() == 1);
     const PrintObject *object = print.objects().front();
-    CHECK(object->slicing_parameters().object_print_z_min == Catch::Approx(5.));
+    CHECK(object->slicing_parameters().object_print_z_min == Catch::Approx(0.));
     CHECK(object->support_layers().empty());
+    CHECK(object->layers().front()->bottom_z() == Catch::Approx(0.));
+
+    // Turning support on in place re-slices the object at its elevation.
+    DynamicPrintConfig enabled = config;
+    enabled.set_key_value("enable_support", new ConfigOptionBool(true));
+    print.apply(print.model(), enabled);
+    REQUIRE_NOTHROW(print.process());
+    CHECK(print.objects().front()->slicing_parameters().object_print_z_min == Catch::Approx(5.));
+    CHECK(print.objects().front()->layers().front()->bottom_z() == Catch::Approx(5.));
 }
 
 TEST_CASE("Support threshold uses one inclusive angle conversion",
@@ -3233,6 +3244,93 @@ TEST_CASE("Cura raft does not enable automatic support when support is off", "[S
     Slic3r::Test::init_and_process_print({ TestMesh::overhang }, print, config);
 
     REQUIRE(print.objects().front()->support_layers().size() == 1);
+}
+
+TEST_CASE("Cura-style support stands on a full raft under the object", "[SupportMaterial][CuraStyle][Raft]")
+{
+    // Before: the first Cura column started on the bed, so generate_raft_base took it for an
+    // organic foot. A 3-layer raft printed one layer of column feet, nothing under the object,
+    // and one support bead about 0.9 mm tall.
+    const SupportType type = GENERATE(stNormalAuto, stNormalCuraAuto);
+    const int raft_layers = GENERATE(1, 3);
+    const double layer_height_mm = GENERATE(0.2, 0.28);
+    TriangleMesh fixture = make_cube(5., 10., 6.);
+    TriangleMesh ceiling = make_cube(20., 10., 1.2);
+    ceiling.translate(0.f, 0.f, 6.f);
+    fixture.merge(ceiling);
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"layer_height", layer_height_mm}, {"initial_layer_print_height", 0.2},
+        {"enable_support", true}, {"support_threshold_angle", 60}, {"support_on_build_plate_only", true},
+        {"support_interface_top_layers", 2}, {"support_interface_bottom_layers", 2},
+        {"raft_layers", raft_layers}});
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(type));
+
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({ fixture }, print, config));
+    const PrintObject &object = *print.objects().front();
+    const SlicingParameters &slicing = object.slicing_parameters();
+    CAPTURE(int(type), raft_layers, layer_height_mm);
+
+    const double max_support_layer_height_mm = 0.32; // Maximum layer height of a 0.4 mm nozzle.
+    const SupportLayer *raft_contact = nullptr;
+    size_t printed_raft_layers = 0;
+    for (const SupportLayer *layer : object.support_layers()) {
+        CHECK(layer->height <= max_support_layer_height_mm + EPSILON);
+        if (layer->print_z <= slicing.raft_contact_top_z + EPSILON && layer->has_extrusions())
+            ++printed_raft_layers;
+        if (is_approx(layer->print_z, slicing.raft_contact_top_z))
+            raft_contact = layer;
+    }
+    // Classic support may add its own column layer inside the raft range, hence at least.
+    CHECK(printed_raft_layers >= size_t(raft_layers));
+    REQUIRE(raft_contact != nullptr);
+    // The raft contact carries the whole first object layer.
+    const ExPolygons &first_layer = object.layers().front()->lslices;
+    const double uncovered_mm2 = unscaled<double>(unscaled<double>(area(diff_ex(first_layer, raft_contact->support_islands))));
+    CHECK(uncovered_mm2 < 0.01 * unscaled<double>(unscaled<double>(area(first_layer)))); // Under 1 % of the footprint.
+}
+
+TEST_CASE("Resin support keeps every raft layer under an elevated object", "[SupportMaterial][Resin][Raft]")
+{
+    // Before: with 3 raft layers the raft interface layer under a Resin-elevated object had no
+    // contact area, so it was dropped. Slicing stopped with "empty layers between 0.25 and 0.86".
+    const auto strategy = GENERATE(rstDefault, rstBranching);
+    const int raft_layers = GENERATE(2, 3, 4);
+    TriangleMesh fixture = make_cube(5., 10., 6.);
+    TriangleMesh ceiling = make_cube(20., 10., 1.2);
+    ceiling.translate(0.f, 0.f, 6.f);
+    fixture.merge(ceiling);
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"layer_height", 0.24}, {"initial_layer_print_height", 0.25},
+        {"enable_support", true}, {"raft_layers", raft_layers}});
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stResinAuto));
+    config.set_key_value("resin_support_tree_type", new ConfigOptionEnum<ResinSupportTreeType>(strategy));
+
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({ fixture }, print, config));
+    const PrintObject &object = *print.objects().front();
+    const SlicingParameters &slicing = object.slicing_parameters();
+    CAPTURE(int(strategy), raft_layers);
+    REQUIRE(object.layers().front()->bottom_z() > slicing.raft_contact_top_z); // The object floats.
+
+    const auto support_layers = object.support_layers();
+    REQUIRE(support_layers.size() > size_t(raft_layers));
+    size_t raft_with_paths = 0;
+    for (size_t k = 0; k < support_layers.size(); ++k) {
+        const SupportLayer &layer = *support_layers[k];
+        if (layer.print_z > slicing.raft_interface_top_z + EPSILON)
+            break;
+        raft_with_paths += layer.has_extrusions();
+    }
+    // Every raft layer below the columns. The raft contact layer is not generated under a floating object.
+    CHECK(raft_with_paths == size_t(slicing.raft_layers() - 1));
+    // No vertical hole from the bed up to the first column layer above the raft.
+    for (size_t k = 1; k < support_layers.size() && support_layers[k - 1]->print_z <= slicing.raft_interface_top_z + EPSILON; ++k) {
+        CAPTURE(k, support_layers[k - 1]->print_z, support_layers[k]->print_z, support_layers[k]->height);
+        CHECK(support_layers[k]->print_z - support_layers[k]->height <= support_layers[k - 1]->print_z + EPSILON);
+    }
 }
 
 TEST_CASE("Enforced support layers are generated", "[SupportMaterial]")

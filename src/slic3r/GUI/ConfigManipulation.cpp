@@ -884,9 +884,8 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
              "resin_support_critical_angle", "resin_support_max_bridge_length",
              "resin_support_max_pillar_link_distance", "resin_support_object_elevation" }) {
         toggle_line(key, support_type_is_resin && !resin_branching);
-        // Elevation is an object-placement control and intentionally remains
-        // editable even when Enable support is off.
-        toggle_field(key, support_is_resin || std::string(key) == "resin_support_object_elevation");
+        // Elevation applies only while support is enabled, like the other Resin settings.
+        toggle_field(key, support_is_resin);
     }
     for (const char *key : {
              "resin_branching_support_head_front_diameter", "resin_branching_support_head_width",
@@ -898,7 +897,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
              "resin_branching_support_critical_angle", "resin_branching_support_max_bridge_length",
              "resin_branching_support_max_pillar_link_distance", "resin_branching_support_object_elevation" }) {
         toggle_line(key, support_type_is_resin && resin_branching);
-        toggle_field(key, support_is_resin || std::string(key) == "resin_branching_support_object_elevation");
+        toggle_field(key, support_is_resin);
     }
 
     // hide settings that are not used by tree supports
