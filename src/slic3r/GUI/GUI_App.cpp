@@ -2731,6 +2731,29 @@ std::string get_system_info()
     return out.str();
 }
 
+// A fresh install only has the vendors the user enabled (often none), and PresetUpdater removes disabled
+// vendor folders on every start. Enable, persist and install the vendors from resources that hold the parents
+// of OrcaSlicer user presets, so the import keeps those parents instead of flattening the presets.
+void GUI_App::install_vendors_for_orca_import(const std::string &source_data_dir)
+{
+    if (preset_bundle == nullptr || preset_updater == nullptr || app_config == nullptr)
+        return;
+    const auto needs = preset_bundle->find_orca_import_vendors(
+        source_data_dir, (boost::filesystem::path(Slic3r::resources_dir()) / "profiles").string());
+    if (needs.vendors.empty())
+        return;
+    AppConfig::VendorMap vendors = app_config->vendors();
+    for (const std::string &vendor : needs.vendors)
+        vendors[vendor];
+    for (const auto &[vendor, models] : needs.printer_variants)
+        for (const auto &[model, variants] : models)
+            vendors[vendor][model].insert(variants.begin(), variants.end());
+    app_config->set_vendors(vendors);
+    app_config->save();
+    preset_updater->install_bundles_rsrc(std::vector<std::string>(needs.vendors.begin(), needs.vendors.end()), false);
+    BOOST_LOG_TRIVIAL(info) << "OrcaSlicer user preset import enabled vendors: " << boost::algorithm::join(needs.vendors, ", ");
+}
+
 bool GUI_App::on_init_inner()
 {
     wxLog::SetActiveTarget(new wxBoostLog());
@@ -2971,45 +2994,6 @@ bool GUI_App::on_init_inner()
     // supplied as argument to --datadir; in that case we should still run the wizard
     preset_bundle->setup_directories();
 
-    // Keep the branded build isolated while carrying user-created presets over from
-    // stock OrcaSlicer once. Existing files always win, so this is safe to retry.
-    if (is_editor() && std::string(SLIC3R_APP_KEY) != "OrcaSlicer" &&
-        app_config->get("orcaslicer_user_presets_import_version") != "1") {
-        namespace fs = boost::filesystem;
-
-        const fs::path current_data_dir = fs::path(data_dir());
-        std::vector<fs::path> source_candidates {
-            current_data_dir.parent_path() / "OrcaSlicerTrInterface",
-            current_data_dir.parent_path() / "OrcaSlicer",
-            fs::path(wxStandardPaths::Get().GetUserConfigDir().ToUTF8().data()) / "OrcaSlicer"
-        };
-
-        for (const fs::path &source_data_dir : source_candidates) {
-            if (source_data_dir == current_data_dir ||
-                !fs::is_directory(source_data_dir / PRESET_USER_DIR))
-                continue;
-
-            try {
-                const auto result = preset_bundle->import_user_presets_from(source_data_dir.string());
-                BOOST_LOG_TRIVIAL(info)
-                    << "Automatic OrcaSlicer user preset import from " << source_data_dir
-                    << ": copied=" << result.copied
-                    << ", skipped=" << result.skipped
-                    << ", failed=" << result.failed;
-
-                if (result.failed == 0) {
-                    app_config->set("orcaslicer_user_presets_import_version", "1");
-                    app_config->save();
-                }
-            } catch (const std::exception &error) {
-                BOOST_LOG_TRIVIAL(error)
-                    << "Automatic OrcaSlicer user preset import failed: " << error.what();
-            }
-            break;
-        }
-    }
-
-
     if (m_init_app_config_from_older)
         copy_older_config();
 
@@ -3169,6 +3153,53 @@ bool GUI_App::on_init_inner()
         enable_user_preset_folder(true);
     } else {
         enable_user_preset_folder(false);
+    }
+
+    // Keep the branded build isolated while carrying user-created presets over from
+    // stock OrcaSlicer once. Existing files always win, so this is safe to retry.
+    // Runs after PresetUpdater installed the bundled vendors into data_dir/system: the import
+    // keeps a parent only when Magpie has it there, and flattens everything else.
+    // Version 2 converts presets for Magpie; it reruns once over version 1's raw copies.
+    if (is_editor() && std::string(SLIC3R_APP_KEY) != "OrcaSlicer" &&
+        app_config->get("orcaslicer_user_presets_import_version") != "2") {
+        namespace fs = boost::filesystem;
+
+        // Stock OrcaSlicer first: that is the install people actually use day to day.
+        const fs::path current_data_dir = fs::path(data_dir());
+        std::vector<fs::path> source_candidates {
+            current_data_dir.parent_path() / "OrcaSlicer",
+            fs::path(wxStandardPaths::Get().GetUserConfigDir().ToUTF8().data()) / "OrcaSlicer",
+            current_data_dir.parent_path() / "OrcaSlicerTrInterface"
+        };
+
+        for (const fs::path &source_data_dir : source_candidates) {
+            if (source_data_dir == current_data_dir ||
+                !fs::is_directory(source_data_dir / PRESET_USER_DIR))
+                continue;
+
+            try {
+                install_vendors_for_orca_import(source_data_dir.string());
+                const auto result = preset_bundle->import_user_presets_from(source_data_dir.string());
+                BOOST_LOG_TRIVIAL(info)
+                    << "Automatic OrcaSlicer user preset import from " << source_data_dir
+                    << ": copied=" << result.copied
+                    << ", skipped=" << result.skipped
+                    << ", failed=" << result.failed
+                    << ", flattened=" << result.flattened
+                    << ", reparented=" << result.reparented
+                    << ", detached=" << result.detached
+                    << ", renamed=" << result.renamed;
+
+                if (result.failed == 0) {
+                    app_config->set("orcaslicer_user_presets_import_version", "2");
+                    app_config->save();
+                }
+            } catch (const std::exception &error) {
+                BOOST_LOG_TRIVIAL(error)
+                    << "Automatic OrcaSlicer user preset import failed: " << error.what();
+            }
+            break;
+        }
     }
 
     // BBS if load user preset failed

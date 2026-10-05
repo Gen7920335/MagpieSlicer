@@ -3,10 +3,18 @@
 #include <algorithm>
 #include <array>
 #include <boost/filesystem.hpp>
+#include <boost/filesystem/fstream.hpp>
+#include <boost/algorithm/string/join.hpp>
+#include <boost/nowide/filesystem.hpp>
+#include <cstdlib>
+#include <memory>
+#include <set>
 
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/AppConfig.hpp"
 #include "libslic3r/Utils.hpp"
+
+#include <nlohmann/json.hpp>
 
 using namespace Slic3r;
 
@@ -202,14 +210,14 @@ TEST_CASE("User preset import is recursive and never overwrites local files", "[
 
     const fs::path source_user      = source.path / PRESET_USER_DIR;
     const fs::path destination_user = destination.path / PRESET_USER_DIR;
-    const fs::path nested_file      = fs::path("default") / "process" / "Imported.json";
-    const fs::path collision_file   = fs::path("default") / "printer" / "Existing.json";
+    const fs::path nested_file      = fs::path("default") / "process" / "nested" / "Imported.json";
+    const fs::path collision_file   = fs::path("default") / "machine" / "Existing.json";
 
     fs::create_directories((source_user / nested_file).parent_path());
     fs::create_directories((source_user / collision_file).parent_path());
     fs::create_directories((destination_user / collision_file).parent_path());
-    save_string_file((source_user / nested_file).string(), "imported");
-    save_string_file((source_user / collision_file).string(), "source");
+    save_string_file((source_user / nested_file).string(), R"({ "name": "Imported", "inherits": "", "layer_height": "0.1" })");
+    save_string_file((source_user / collision_file).string(), R"({ "name": "Existing", "inherits": "" })");
     save_string_file((destination_user / collision_file).string(), "destination");
 
     ScopedDataDir scoped_data_dir(destination.path);
@@ -223,7 +231,8 @@ TEST_CASE("User preset import is recursive and never overwrites local files", "[
     std::string existing_contents;
     load_string_file(destination_user / nested_file, imported_contents);
     load_string_file(destination_user / collision_file, existing_contents);
-    CHECK(imported_contents == "imported");
+    CHECK(nlohmann::json::parse(imported_contents).at("layer_height") == "0.1");
+    CHECK(fs::exists(destination_user / "default" / "process" / "nested" / "Imported.info"));
     CHECK(existing_contents == "destination");
 
     const auto second = bundle.import_user_presets_from(source.path.string());
@@ -231,6 +240,481 @@ TEST_CASE("User preset import is recursive and never overwrites local files", "[
     CHECK(second.copied == 0);
     CHECK(second.skipped == 2);
     CHECK(second.failed == 0);
+}
+
+namespace {
+
+nlohmann::json load_json(const fs::path &path)
+{
+    std::string text;
+    REQUIRE(fs::exists(path));
+    load_string_file(path, text);
+    return nlohmann::json::parse(text);
+}
+
+void save_json(const fs::path &path, const std::string &text)
+{
+    fs::create_directories(path.parent_path());
+    save_string_file(path.string(), text);
+}
+
+} // namespace
+
+TEST_CASE("OrcaSlicer import converts presets whose parents Magpie does not ship", "[Preset][Import]")
+{
+    TempPresetDir source;
+    TempPresetDir destination;
+    const fs::path orca_system   = source.path / PRESET_SYSTEM_DIR / "VendorX";
+    const fs::path orca_user     = source.path / PRESET_USER_DIR;
+    const fs::path magpie_system = destination.path / PRESET_SYSTEM_DIR;
+    const fs::path magpie_user   = destination.path / PRESET_USER_DIR / "default";
+
+    // Orca vendor chain: Common <- VendorX Process. Magpie has no VendorX.
+    save_json(orca_system / "process" / "Common.json",
+              R"({ "type": "process", "name": "Common", "instantiation": "false", "layer_height": "0.2",
+                   "wall_loops": "2", "orca_only_key": "1" })");
+    save_json(orca_system / "process" / "VendorX Process.json",
+              R"({ "type": "process", "name": "VendorX Process", "inherits": "Common", "instantiation": "true",
+                   "wall_loops": "3", "compatible_printers_condition": "printer_model==\"X1\"" })");
+    save_json(magpie_system / "OrcaFilamentLibrary" / "filament" / "Generic ABS @System.json",
+              R"({ "type": "filament", "name": "Generic ABS @System", "inherits": "" })");
+
+    save_json(orca_user / "default" / "process" / "Mine.json",
+              R"({ "name": "Mine", "inherits": "VendorX Process", "layer_height": "0.1", "wall_filament": "3",
+                   "sparse_infill_filament": "1", "print_settings_id": "Mine", "compatible_printers": [],
+                   "compatible_printers_condition": "" })");
+    save_string_file((orca_user / "default" / "process" / "Mine.info").string(), "sync_info = update\nbase_id = GP004\nupdated_time = 42\n");
+    save_json(orca_user / "default" / "filament" / "My ABS.json",
+              R"({ "name": "My ABS", "inherits": "Voron Generic ABS", "nozzle_temperature": ["250"] })");
+    // Another Orca account: a different "Mine" is kept under a new name, an identical one is not duplicated.
+    save_json(orca_user / "123" / "process" / "Mine.json",
+              R"({ "name": "Mine", "inherits": "VendorX Process", "layer_height": "0.3", "print_settings_id": "Mine" })");
+    save_json(orca_user / "123" / "filament" / "My ABS.json",
+              R"({ "name": "My ABS", "inherits": "Voron Generic ABS", "nozzle_temperature": ["250"] })");
+    save_json(orca_user / "123" / "process" / "Gone.json",
+              R"({ "name": "Gone", "inherits": "Removed Parent", "layer_height": "0.15" })");
+
+    ScopedDataDir scoped_data_dir(destination.path);
+    PresetBundle  bundle;
+    const auto    result = bundle.import_user_presets_from(source.path.string());
+
+    CHECK(result.copied == 4);
+    CHECK(result.skipped == 1); // the identical "My ABS" of account 123
+    CHECK(result.failed == 0);
+    CHECK(result.flattened == 2);
+    CHECK(result.reparented == 1);
+    CHECK(result.detached == 1);
+    CHECK(result.renamed == 1);
+
+    const nlohmann::json mine = load_json(magpie_user / "process" / "Mine.json");
+    CHECK(mine.at("inherits") == "");
+    CHECK(mine.at("from") == "User");
+    CHECK(mine.at("layer_height") == "0.1");
+    CHECK(mine.at("wall_loops") == "3");
+    CHECK(mine.at("compatible_printers").empty());
+    // The vendor condition named a printer model that a flattened printer no longer carries.
+    CHECK(mine.at("compatible_printers_condition") == "");
+    CHECK_FALSE(mine.contains("orca_only_key"));
+    CHECK_FALSE(mine.contains("instantiation"));
+    CHECK_FALSE(mine.contains("type"));
+    CHECK_FALSE(mine.contains("wall_filament"));
+    CHECK(mine.at("outer_wall_filament_id") == "3");
+    CHECK(mine.at("inner_wall_filament_id") == "3");
+    CHECK(mine.at("sparse_infill_filament_id") == "0");
+    std::string info;
+    load_string_file(magpie_user / "process" / "Mine.info", info);
+    CHECK(info.find("base_id = \n") != std::string::npos);
+    CHECK(info.find("updated_time = 42") != std::string::npos);
+    CHECK(info.find("sync_info = update") != std::string::npos);
+
+    const nlohmann::json other = load_json(magpie_user / "process" / "Mine (123).json");
+    CHECK(other.at("name") == "Mine (123)");
+    CHECK(other.at("print_settings_id") == "Mine (123)");
+    CHECK(other.at("layer_height") == "0.3");
+
+    const nlohmann::json abs = load_json(magpie_user / "filament" / "My ABS.json");
+    CHECK(abs.at("inherits") == "Generic ABS @System");
+    CHECK(abs.at("nozzle_temperature") == nlohmann::json::array({ "250" }));
+    CHECK_FALSE(fs::exists(magpie_user / "filament" / "My ABS (123).json"));
+
+    const nlohmann::json gone = load_json(magpie_user / "process" / "Gone.json");
+    CHECK(gone.at("inherits") == "");
+    CHECK(gone.at("layer_height") == "0.15");
+
+    CHECK_FALSE(fs::exists(destination.path / PRESET_USER_DIR / "123"));
+
+    // Idempotent: a second run changes nothing.
+    const auto again = bundle.import_user_presets_from(source.path.string());
+    CHECK(again.copied == 0);
+    CHECK(again.failed == 0);
+}
+
+TEST_CASE("OrcaSlicer import rewrites printer compatibility for flattened printers", "[Preset][Import]")
+{
+    TempPresetDir source;
+    TempPresetDir destination;
+    const fs::path orca_system = source.path / PRESET_SYSTEM_DIR / "VendorX";
+    const fs::path orca_user   = source.path / PRESET_USER_DIR / "default";
+    const fs::path magpie_user = destination.path / PRESET_USER_DIR / "default";
+
+    save_json(orca_system / "machine" / "VendorX P1.json",
+              R"({ "type": "machine", "name": "VendorX P1", "inherits": "", "instantiation": "true",
+                   "printer_model": "VendorX P1", "bed_model": "p1.stl", "printable_height": "250" })");
+    save_json(orca_system / "filament" / "VendorX PLA.json",
+              R"({ "type": "filament", "name": "VendorX PLA", "inherits": "", "instantiation": "true",
+                   "compatible_printers": ["VendorX P1", "VendorX Missing"], "filament_type": ["PLA"] })");
+    save_json(destination.path / PRESET_SYSTEM_DIR / "Custom" / "machine" / "Magpie Printer.json",
+              R"({ "type": "machine", "name": "Magpie Printer", "inherits": "", "instantiation": "true" })");
+
+    save_json(orca_user / "machine" / "My P1.json", R"({ "name": "My P1", "inherits": "VendorX P1", "printable_height": "200" })");
+    save_json(orca_user / "filament" / "My PLA.json", R"({ "name": "My PLA", "inherits": "VendorX PLA" })");
+    // A user list naming a Magpie printer, an imported printer and an unknown one.
+    save_json(orca_user / "filament" / "Picky @Somewhere.json",
+              R"({ "name": "Picky @Somewhere", "inherits": "VendorX PLA",
+                   "compatible_printers": ["Magpie Printer", "My P1", "Nowhere"] })");
+    // Flattened, empty list after rewrite, '@' in the name: must not collapse onto "Elsewhere".
+    save_json(source.path / PRESET_SYSTEM_DIR / "VendorY" / "filament" / "VendorY PETG.json",
+              R"({ "type": "filament", "name": "VendorY PETG", "inherits": "", "compatible_printers": ["VendorY Q1"] })");
+    save_json(orca_user / "filament" / "Copy @Elsewhere.json", R"({ "name": "Copy @Elsewhere", "inherits": "VendorY PETG" })");
+    // Already detached in Orca with '@': Orca restricted it the same way, so it is left alone.
+    save_json(orca_user / "filament" / "Plain @Q1.json", R"({ "name": "Plain @Q1", "inherits": "" })");
+
+    ScopedDataDir scoped_data_dir(destination.path);
+    PresetBundle  bundle;
+    const auto    result = bundle.import_user_presets_from(source.path.string());
+    CHECK(result.failed == 0);
+    CHECK(result.copied == 5);
+
+    const nlohmann::json printer = load_json(magpie_user / "machine" / "My P1.json");
+    CHECK(printer.at("inherits") == "");
+    CHECK(printer.at("printer_model") == "");
+    // bed_model is a vendor model field, not a preset option, so flattening drops it.
+    CHECK_FALSE(printer.contains("bed_model"));
+    CHECK(printer.at("printable_height") == "200");
+
+    const nlohmann::json pla = load_json(magpie_user / "filament" / "My PLA.json");
+    CHECK(pla.at("compatible_printers") == nlohmann::json::array({ "My P1" }));
+
+    const nlohmann::json picky = load_json(magpie_user / "filament" / "Picky @Somewhere.json");
+    CHECK(picky.at("compatible_printers") == nlohmann::json::array({ "Magpie Printer", "My P1" }));
+
+    const nlohmann::json copy = load_json(magpie_user / "filament" / "Copy @Elsewhere.json");
+    const auto every = copy.at("compatible_printers");
+    CHECK(std::find(every.begin(), every.end(), "Magpie Printer") != every.end());
+    CHECK(std::find(every.begin(), every.end(), "My P1") != every.end());
+
+    const nlohmann::json plain = load_json(magpie_user / "filament" / "Plain @Q1.json");
+    CHECK((!plain.contains("compatible_printers") || plain.at("compatible_printers").empty()));
+}
+
+TEST_CASE("OrcaSlicer import renames presets a system preset would shadow", "[Preset][Import]")
+{
+    TempPresetDir source;
+    TempPresetDir destination;
+    save_json(destination.path / PRESET_SYSTEM_DIR / "Custom" / "process" / "Same Name.json",
+              R"({ "type": "process", "name": "Same Name", "renamed_from": "Old Name", "inherits": "" })");
+    save_json(source.path / PRESET_USER_DIR / "default" / "process" / "Same Name.json", R"({ "name": "Same Name", "inherits": "" })");
+    save_json(source.path / PRESET_USER_DIR / "default" / "process" / "Old Name.json", R"({ "name": "Old Name", "inherits": "" })");
+    // A filament may share a process name: kinds are separate namespaces.
+    save_json(source.path / PRESET_USER_DIR / "default" / "filament" / "Same Name.json", R"({ "name": "Same Name", "inherits": "" })");
+
+    ScopedDataDir scoped_data_dir(destination.path);
+    PresetBundle  bundle;
+    const auto    result = bundle.import_user_presets_from(source.path.string());
+    CHECK(result.copied == 3);
+    CHECK(result.renamed == 2);
+
+    const fs::path user = destination.path / PRESET_USER_DIR / "default";
+    CHECK(load_json(user / "process" / "Same Name (OrcaSlicer).json").at("name") == "Same Name (OrcaSlicer)");
+    CHECK(fs::exists(user / "process" / "Old Name (OrcaSlicer).json"));
+    CHECK_FALSE(fs::exists(user / "process" / "Same Name.json"));
+    CHECK(fs::exists(user / "filament" / "Same Name.json"));
+}
+
+TEST_CASE("OrcaSlicer import keeps non-ASCII preset names", "[Preset][Import]")
+{
+    TempPresetDir source;
+    TempPresetDir destination;
+    // "Generic PETG @System - 복사" written with wide literals so the test does not depend on the
+    // process path codecvt.
+    const std::wstring wide_name   = L"Generic PETG @System - 복사";
+    const std::string  utf8_name   = "Generic PETG @System - \xEB\xB3\xB5\xEC\x82\xAC";
+    const fs::path     source_file = source.path / PRESET_USER_DIR / "default" / "filament" / fs::path(wide_name + L".json");
+    fs::create_directories(source_file.parent_path());
+    {
+        boost::filesystem::ofstream out(source_file, std::ios::binary);
+        out << R"({ "name": ")" << utf8_name << R"(", "inherits": "", "filament_settings_id": [")" << utf8_name << R"("] })";
+    }
+
+    ScopedDataDir scoped_data_dir(destination.path);
+    PresetBundle  bundle;
+    const auto    result = bundle.import_user_presets_from(source.path.string());
+    CHECK(result.copied == 1);
+    CHECK(result.failed == 0);
+
+    const fs::path target = destination.path / PRESET_USER_DIR / "default" / "filament" / fs::path(wide_name + L".json");
+    REQUIRE(fs::exists(target));
+    CHECK(fs::exists(fs::path(target).replace_extension(".info")));
+    boost::filesystem::ifstream in(target, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const nlohmann::json preset = nlohmann::json::parse(text);
+    CHECK(preset.at("name") == utf8_name);
+    CHECK(preset.at("filament_settings_id") == nlohmann::json::array({ utf8_name }));
+}
+
+TEST_CASE("OrcaSlicer import replaces unmodified raw copies from the copy-only import", "[Preset][Import]")
+{
+    TempPresetDir source;
+    TempPresetDir destination;
+    const fs::path    orca_file   = source.path / PRESET_USER_DIR / "default" / "filament" / "My ABS.json";
+    const fs::path    magpie_file = destination.path / PRESET_USER_DIR / "default" / "filament" / "My ABS.json";
+    const std::string raw         = R"({ "name": "My ABS", "inherits": "Voron Generic ABS" })";
+
+    save_json(orca_file, raw);
+    save_json(magpie_file, raw);
+    save_json(destination.path / PRESET_SYSTEM_DIR / "OrcaFilamentLibrary" / "filament" / "Generic ABS @System.json",
+              R"({ "type": "filament", "name": "Generic ABS @System", "inherits": "" })");
+
+    ScopedDataDir scoped_data_dir(destination.path);
+    PresetBundle  bundle;
+    const auto    result = bundle.import_user_presets_from(source.path.string());
+
+    CHECK(result.copied == 1);
+    CHECK(result.skipped == 0);
+    CHECK(load_json(magpie_file).at("inherits") == "Generic ABS @System");
+
+    // A preset the user edited after the old import is left alone.
+    save_json(magpie_file, R"({ "name": "My ABS", "inherits": "Voron Generic ABS", "edited": "1" })");
+    const auto again = bundle.import_user_presets_from(source.path.string());
+    CHECK(again.copied == 0);
+    CHECK(again.skipped == 1);
+    CHECK(load_json(magpie_file).at("edited") == "1");
+}
+
+namespace {
+
+// Independent of the importer: resolves an Orca preset the way OrcaSlicer does. The system loader reads
+// one vendor folder at a time, so a chain is resolved inside the folder holding the parent (base presets
+// like fdm_klipper_common differ between vendors); filaments may fall back to OrcaFilamentLibrary.
+bool orca_effective(const fs::path &orca_system_dir, const std::string &kind, const nlohmann::json &user, nlohmann::json &out)
+{
+    std::map<std::string, std::map<std::string, nlohmann::json>> vendors; // vendor -> name -> preset of `kind`
+    for (fs::recursive_directory_iterator it(orca_system_dir), end; it != end; ++it) {
+        if (!fs::is_regular_file(it->path()) || it->path().extension() != ".json" || it->path().parent_path() == orca_system_dir)
+            continue;
+        boost::filesystem::ifstream in(it->path(), std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+        if (j.is_object() && j.value("type", "") == kind && j.contains("name"))
+            vendors[fs::relative(it->path(), orca_system_dir).begin()->string()][j["name"].get<std::string>()] = j;
+    }
+    const std::string library = "OrcaFilamentLibrary";
+    std::string parent = user.value("inherits", "");
+    if (parent.empty())
+        return false;
+    // The vendor whose instantiable preset the user inherits; a real vendor before the shared library.
+    std::string vendor;
+    for (const auto &[name, presets] : vendors)
+        if (auto p = presets.find(parent); p != presets.end() && p->second.value("instantiation", "true") != "false")
+            if (vendor.empty() || vendor == library)
+                vendor = name;
+    if (vendor.empty())
+        return false;
+    std::vector<const nlohmann::json *> chain;
+    while (!parent.empty()) {
+        const nlohmann::json *preset = nullptr;
+        if (auto v = vendors[vendor].find(parent); v != vendors[vendor].end())
+            preset = &v->second;
+        else if (kind == PRESET_FILAMENT_NAME && vendors[library].count(parent)) {
+            vendor = library;
+            preset = &vendors[library][parent];
+        }
+        if (preset == nullptr || chain.size() > 32)
+            return false;
+        chain.push_back(preset);
+        parent = preset->value("inherits", "");
+    }
+    out = nlohmann::json::object();
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+        for (auto &[key, value] : (*it)->items())
+            out[key] = value;
+    for (auto &[key, value] : user.items())
+        out[key] = value;
+    return true;
+}
+
+// The GUI imbues nowide's UTF-8 codecvt into boost::filesystem at startup (OrcaSlicer.cpp); the preset loader
+// relies on it for non-ASCII names such as "- 복사". Do the same for the duration of a test.
+struct ScopedNowideFilesystem
+{
+    std::locale previous;
+    ScopedNowideFilesystem() : previous(boost::nowide::nowide_filesystem()) {}
+    ~ScopedNowideFilesystem() { boost::filesystem::path::imbue(previous); }
+};
+
+} // namespace
+
+// Real-data check, run on demand: MAGPIE_ORCA_IMPORT_FIXTURE=<dir> with <dir>/OrcaSlicer/{user,system}
+// copied from an OrcaSlicer data folder and <dir>/MagpieSlicer/system from a Magpie one.
+TEST_CASE("OrcaSlicer import of a real data folder loads every preset with Orca's values", "[Preset][Import][Fixture]")
+{
+    const char *fixture_env = std::getenv("MAGPIE_ORCA_IMPORT_FIXTURE");
+    if (fixture_env == nullptr || *fixture_env == 0)
+        SKIP("MAGPIE_ORCA_IMPORT_FIXTURE not set");
+    const fs::path fixture(fixture_env);
+    const fs::path orca = fixture / "OrcaSlicer";
+    REQUIRE(fs::is_directory(orca / PRESET_USER_DIR));
+    REQUIRE(fs::is_directory(fixture / "MagpieSlicer" / PRESET_SYSTEM_DIR));
+
+    ScopedNowideFilesystem utf8_paths;
+    TempPresetDir          destination;
+    copy_directory_recursively(fixture / "MagpieSlicer" / PRESET_SYSTEM_DIR, destination.path / PRESET_SYSTEM_DIR);
+    ScopedDataDir scoped_data_dir(destination.path);
+
+    PresetBundle import_bundle;
+    const auto   result = import_bundle.import_user_presets_from(orca.string());
+    INFO("copied=" << result.copied << " skipped=" << result.skipped << " failed=" << result.failed << " flattened=" << result.flattened
+                   << " reparented=" << result.reparented << " detached=" << result.detached << " renamed=" << result.renamed);
+    CHECK(result.failed == 0);
+    CHECK(result.copied > 0);
+
+    const auto again = import_bundle.import_user_presets_from(orca.string());
+    CHECK(again.copied == 0);
+    CHECK(again.failed == 0);
+
+    AppConfig    app_config;
+    PresetBundle bundle;
+    bundle.load_presets(app_config, ForwardCompatibilitySubstitutionRule::EnableSilent);
+
+    const fs::path user_dir = destination.path / PRESET_USER_DIR / "default";
+    struct Kind { const char *dir; PresetCollection *presets; };
+    for (const Kind &kind : { Kind { PRESET_PRINTER_NAME, &bundle.printers }, Kind { PRESET_PRINT_NAME, &bundle.prints },
+                              Kind { PRESET_FILAMENT_NAME, &bundle.filaments } }) {
+        CAPTURE(kind.dir);
+        size_t files = 0;
+        if (fs::is_directory(user_dir / kind.dir))
+            for (fs::recursive_directory_iterator it(user_dir / kind.dir), end; it != end; ++it)
+                files += fs::is_regular_file(it->path()) && it->path().extension() == ".json";
+        size_t loaded = 0;
+        for (const Preset &preset : kind.presets->get_presets()) {
+            if (!preset.is_user())
+                continue;
+            ++loaded;
+            CAPTURE(preset.name);
+            if (!preset.inherits().empty())
+                CHECK(kind.presets->get_preset_parent(preset) != nullptr);
+        }
+        // Every written file became a loaded preset: none was dropped for a missing parent or a name clash.
+        CHECK(loaded == files);
+    }
+
+    // Values: every setting Orca resolved for a preset, from its system chain and the user's overrides,
+    // is what Magpie loads. Only presets whose Orca parent chain resolves are judged; keys the importer
+    // rewrites on purpose are excluded.
+    static const std::set<std::string> rewritten {
+        "name", "inherits", "from", "version", "compatible_printers", "compatible_printers_condition", "compatible_prints",
+        "compatible_prints_condition", "print_settings_id", "filament_settings_id", "printer_settings_id", "printer_model",
+        "bed_model", "bed_texture", "wall_filament", "sparse_infill_filament", "solid_infill_filament", "inherits_group",
+        "setting_id", "instantiation", "type", "base_id", "is_custom_defined", "description", "renamed_from", "filament_id"
+    };
+    std::vector<std::string> mismatches;
+    size_t                   judged = 0;
+    for (fs::recursive_directory_iterator it(orca / PRESET_USER_DIR), end; it != end; ++it) {
+        if (!fs::is_regular_file(it->path()) || it->path().extension() != ".json")
+            continue;
+        const fs::path    relative = fs::relative(it->path(), orca / PRESET_USER_DIR);
+        const std::string account  = relative.begin()->string();
+        const std::string kind     = std::next(relative.begin())->string();
+        PresetCollection *presets  = kind == PRESET_PRINTER_NAME ? &bundle.printers :
+                                     kind == PRESET_PRINT_NAME   ? &bundle.prints :
+                                     kind == PRESET_FILAMENT_NAME ? &bundle.filaments : nullptr;
+        if (presets == nullptr)
+            continue;
+        boost::filesystem::ifstream in(it->path(), std::ios::binary);
+        const nlohmann::json user = nlohmann::json::parse(std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()), nullptr, false);
+        nlohmann::json expected;
+        if (!user.is_object() || !orca_effective(orca / PRESET_SYSTEM_DIR, kind, user, expected))
+            continue;
+
+        const std::string stem = it->path().stem().string();
+        const Preset     *loaded = nullptr;
+        for (const std::string &candidate : { stem + " (" + account + ")", stem + " (" + account + ") (OrcaSlicer)", stem, stem + " (OrcaSlicer)" })
+            if ((loaded = presets->find_preset(candidate, false)) != nullptr && loaded->is_user())
+                break;
+        if (loaded == nullptr || !loaded->is_user()) {
+            mismatches.push_back(relative.string() + ": not loaded");
+            continue;
+        }
+        ++judged;
+        // When Magpie kept a parent of its own, only the user's overrides are Orca's to judge.
+        const bool magpie_parent = !loaded->inherits().empty();
+        for (auto &[orca_key, orca_value] : expected.items()) {
+            if (rewritten.count(orca_key) || (magpie_parent && !user.contains(orca_key)))
+                continue;
+            // Magpie loads Orca's values through PrintConfigDef::handle_legacy() (e.g. ensure_vertical_shell_thickness
+            // "0" becomes ensure_moderate), so the expected value goes through it as well.
+            std::vector<std::string> want_values;
+            const bool               want_vector = orca_value.is_array();
+            t_config_option_key      key         = orca_key;
+            if (want_vector) {
+                for (const auto &element : orca_value) {
+                    t_config_option_key element_key = orca_key;
+                    std::string         text        = element.is_string() ? element.get<std::string>() : element.dump();
+                    PrintConfigDef::handle_legacy(element_key, text);
+                    key = element_key;
+                    want_values.push_back(text);
+                }
+            } else if (orca_value.is_string()) {
+                std::string text = orca_value.get<std::string>();
+                PrintConfigDef::handle_legacy(key, text);
+                want_values.push_back(text);
+            } else {
+                mismatches.push_back(loaded->name + ": " + orca_key + " has JSON type " + orca_value.type_name());
+                continue;
+            }
+            if (key.empty() || rewritten.count(key) || !print_config_def.has(key))
+                continue;
+            const ConfigOption *actual = loaded->config.option(key);
+            if (actual == nullptr) {
+                mismatches.push_back(loaded->name + ": " + key + " missing");
+                continue;
+            }
+            // Both sides go through the option's own deserialize/serialize so number formatting cannot differ.
+            // Some options (nullable enums such as z_hop_types) cannot be created empty; compare raw text then.
+            const ConfigOptionDef *def = print_config_def.get(key);
+            auto normalized = [def](const std::string &text) -> std::string {
+                try {
+                    std::unique_ptr<ConfigOption> option(def->create_empty_option());
+                    return option->deserialize(text, false) ? option->serialize() : "<unparsable " + text + ">";
+                } catch (const std::exception &) {
+                    return text;
+                }
+            };
+            if (want_vector && actual->is_vector()) {
+                // Element-wise on the overlap: Magpie may extend per-tool vectors to its own tool count.
+                const std::vector<std::string> got = static_cast<const ConfigOptionVectorBase *>(actual)->vserialize();
+                for (size_t i = 0; i < want_values.size() && i < got.size(); ++i)
+                    if (normalized(want_values[i]) != normalized(got[i]))
+                        mismatches.push_back(loaded->name + ": " + key + "[" + std::to_string(i) + "] orca=" + want_values[i] + " magpie=" + got[i]);
+            } else if (!want_vector && actual->is_vector()) {
+                // A scalar in Orca's file for a per-tool option applies to every tool.
+                for (const std::string &got : static_cast<const ConfigOptionVectorBase *>(actual)->vserialize())
+                    if (normalized(want_values.front()) != normalized(got))
+                        mismatches.push_back(loaded->name + ": " + key + " orca=" + want_values.front() + " magpie=" + got);
+            } else {
+                const std::string want = want_vector ? boost::algorithm::join(want_values, ",") : want_values.front();
+                if (normalized(want) != normalized(actual->serialize()))
+                    mismatches.push_back(loaded->name + ": " + key + " orca=" + want + " magpie=" + actual->serialize());
+            }
+        }
+    }
+    INFO("judged presets: " << judged);
+    std::string report;
+    for (const std::string &line : mismatches)
+        report += line + "\n";
+    INFO(report);
+    CHECK(judged > 0);
+    CHECK(mismatches.empty());
 }
 
 void check_json_roundtrip(const DynamicPrintConfig &config,
@@ -981,4 +1465,224 @@ TEST_CASE("Changing one toolhead's material changes only that slot of the slicin
     // Nozzle sizes are owned by the printer preset and do not move with a material change.
     CHECK(after.option<ConfigOptionFloats>("nozzle_diameter")->values ==
           before.option<ConfigOptionFloats>("nozzle_diameter")->values);
+}
+
+namespace {
+
+// Parent laid out the way a four-nozzle system printer is at runtime: set_num_extruders() gives it one
+// "Direct Drive Standard" variant per nozzle and ids 1..4.
+DynamicPrintConfig printer_layout(const std::vector<std::string> &variants, const std::vector<int> &ids, const std::string &z_hop)
+{
+    DynamicPrintConfig config;
+    if (!variants.empty())
+        config.set_key_value("printer_extruder_variant", new ConfigOptionStrings(variants));
+    if (!ids.empty())
+        config.set_key_value("printer_extruder_id", new ConfigOptionInts(ids));
+    config.set_deserialize_strict("z_hop", z_hop);
+    return config;
+}
+
+const std::vector<std::string> four_standard(4, "Direct Drive Standard");
+
+DynamicPrintConfig four_nozzle_parent() { return printer_layout(four_standard, { 1, 2, 3, 4 }, "0.4,0.4,0.4,0.4"); }
+
+std::string diff_into_parent(DynamicPrintConfig child)
+{
+    DynamicPrintConfig parent = four_nozzle_parent();
+    parent.update_diff_values_to_child_config(child, "printer_extruder_id", "printer_extruder_variant", printer_options_with_variant_1,
+                                              printer_options_with_variant_2);
+    return parent.opt_serialize("z_hop");
+}
+
+} // namespace
+
+TEST_CASE("Printer child with full variant layout keeps every toolhead value", "[Preset][Variants]")
+{
+    DynamicPrintConfig child;
+    child = printer_layout(four_standard, { 1, 2, 3, 4 }, "0.11,0.22,0.33,0.44");
+    CHECK(diff_into_parent(child) == "0.11,0.22,0.33,0.44");
+}
+
+TEST_CASE("Printer child without variant keys keeps upstream first-toolhead behaviour", "[Preset][Variants]")
+{
+    // Upstream semantics, unchanged: a child without the layout keys only overrides the first variant.
+    // The OrcaSlicer import writes the keys so imported printers never take this path.
+    DynamicPrintConfig child;
+    child = printer_layout({}, {}, "0.11,0.22,0.33,0.44");
+    CHECK(diff_into_parent(child) == "0.11,0.4,0.4,0.4");
+}
+
+TEST_CASE("Printer child with variants but no extruder ids does not read out of range", "[Preset][Variants]")
+{
+    // Used to index the child's empty printer_extruder_id list (rc 139 on load). Same layout as the parent,
+    // so the parent's ids apply and every toolhead keeps its value.
+    DynamicPrintConfig child;
+    child = printer_layout(four_standard, {}, "0.11,0.22,0.33,0.44");
+    CHECK(diff_into_parent(child) == "0.11,0.22,0.33,0.44");
+
+    // A different layout cannot borrow the parent's ids: no variant matches, the parent's values stay.
+    DynamicPrintConfig other;
+    other = printer_layout({ "Direct Drive High Flow", "Direct Drive High Flow" }, {}, "0.11,0.22");
+    CHECK(diff_into_parent(other) == "0.4,0.4,0.4,0.4");
+}
+
+TEST_CASE("Printer child shorter than its variant layout does not read out of range", "[Preset][Variants]")
+{
+    // Four variants but a single z_hop value: set_only_diff() would read child[1..3]. The child's explicit
+    // value is taken as a whole instead, like the existing length-mismatch fallback.
+    DynamicPrintConfig child;
+    child = printer_layout(four_standard, { 1, 2, 3, 4 }, "0.5");
+    CHECK(diff_into_parent(child) == "0.5");
+}
+
+TEST_CASE("OrcaSlicer import writes the extruder variant layout for multi-nozzle printers", "[Preset][Import]")
+{
+    TempPresetDir source;
+    TempPresetDir destination;
+    save_json(destination.path / PRESET_SYSTEM_DIR / "Snapmaker" / "machine" / "fdm_test_u1.json",
+              R"({ "type": "machine", "name": "fdm_test_u1", "inherits": "", "instantiation": "false",
+                   "nozzle_diameter": ["0.4", "0.4", "0.4", "0.4"] })");
+    save_json(destination.path / PRESET_SYSTEM_DIR / "Snapmaker" / "machine" / "Test U1.json",
+              R"({ "type": "machine", "name": "Test U1", "inherits": "fdm_test_u1", "instantiation": "true" })");
+    save_json(destination.path / PRESET_SYSTEM_DIR / "Snapmaker" / "machine" / "Test Single.json",
+              R"({ "type": "machine", "name": "Test Single", "inherits": "", "instantiation": "true", "nozzle_diameter": ["0.4"] })");
+
+    const fs::path orca_user = source.path / PRESET_USER_DIR / "default" / "machine";
+    save_json(orca_user / "U1 hop.json", R"({ "name": "U1 hop", "inherits": "Test U1", "z_hop": ["0.11", "0.22", "0.33", "0.44"] })");
+    save_json(orca_user / "U1 no ids.json",
+              R"({ "name": "U1 no ids", "inherits": "Test U1", "z_hop": ["0.11", "0.22", "0.33", "0.44"],
+                   "printer_extruder_variant": ["Direct Drive Standard", "Direct Drive Standard", "Direct Drive Standard", "Direct Drive Standard"] })");
+    save_json(orca_user / "U1 two.json",
+              R"({ "name": "U1 two", "inherits": "Test U1", "nozzle_diameter": ["0.4", "0.2"], "z_hop": ["0.11", "0.22"] })");
+    save_json(orca_user / "Single.json", R"({ "name": "Single", "inherits": "Test Single", "z_hop": ["0.3"] })");
+
+    ScopedDataDir scoped_data_dir(destination.path);
+    PresetBundle  bundle;
+    const auto    result = bundle.import_user_presets_from(source.path.string());
+    CHECK(result.copied == 4);
+    CHECK(result.failed == 0);
+
+    const fs::path user = destination.path / PRESET_USER_DIR / "default" / "machine";
+    const nlohmann::json four_variants = nlohmann::json::array({ "Direct Drive Standard", "Direct Drive Standard", "Direct Drive Standard", "Direct Drive Standard" });
+
+    const nlohmann::json hop = load_json(user / "U1 hop.json");
+    CHECK(hop.at("inherits") == "Test U1");
+    CHECK(hop.at("printer_extruder_variant") == four_variants);
+    CHECK(hop.at("printer_extruder_id") == nlohmann::json::array({ "1", "2", "3", "4" }));
+
+    const nlohmann::json no_ids = load_json(user / "U1 no ids.json");
+    CHECK(no_ids.at("printer_extruder_id") == nlohmann::json::array({ "1", "2", "3", "4" }));
+
+    // The child's own nozzle count decides its layout.
+    const nlohmann::json two = load_json(user / "U1 two.json");
+    CHECK(two.at("printer_extruder_variant") == nlohmann::json::array({ "Direct Drive Standard", "Direct Drive Standard" }));
+    CHECK(two.at("printer_extruder_id") == nlohmann::json::array({ "1", "2" }));
+
+    const nlohmann::json single = load_json(user / "Single.json");
+    CHECK_FALSE(single.contains("printer_extruder_variant"));
+    CHECK_FALSE(single.contains("printer_extruder_id"));
+
+    // What the loader makes of the written layout: every toolhead keeps its own z_hop.
+    DynamicPrintConfig child;
+    child = printer_layout(four_standard, { 1, 2, 3, 4 }, "0.11,0.22,0.33,0.44");
+    CHECK(diff_into_parent(child) == "0.11,0.22,0.33,0.44");
+}
+
+TEST_CASE("OrcaSlicer import resolves parent chains inside the parent's vendor folder", "[Preset][Import]")
+{
+    TempPresetDir source;
+    TempPresetDir destination;
+    const fs::path system = source.path / PRESET_SYSTEM_DIR;
+    // The same base name with different values in two vendors, as fdm_klipper_common is in Custom and Voron.
+    save_json(system / "VendorA" / "machine" / "fdm_common.json",
+              R"({ "type": "machine", "name": "fdm_common", "instantiation": "false", "machine_max_jerk_x": ["9", "9"] })");
+    save_json(system / "VendorB" / "machine" / "fdm_common.json",
+              R"({ "type": "machine", "name": "fdm_common", "instantiation": "false", "machine_max_jerk_x": ["12", "12"] })");
+    save_json(system / "VendorB" / "machine" / "B Printer.json",
+              R"({ "type": "machine", "name": "B Printer", "inherits": "fdm_common", "instantiation": "true" })");
+    // A filament base in both the vendor and the shared library: the vendor's wins. A base only in the
+    // library is still found.
+    save_json(system / "OrcaFilamentLibrary" / "filament" / "Shared @base.json",
+              R"({ "type": "filament", "name": "Shared @base", "instantiation": "false", "temperature_vitrification": ["45"] })");
+    save_json(system / "OrcaFilamentLibrary" / "filament" / "Library only @base.json",
+              R"({ "type": "filament", "name": "Library only @base", "instantiation": "false", "temperature_vitrification": ["60"] })");
+    save_json(system / "VendorB" / "filament" / "Shared @base.json",
+              R"({ "type": "filament", "name": "Shared @base", "instantiation": "false", "temperature_vitrification": ["154"] })");
+    save_json(system / "VendorB" / "filament" / "B PLA.json",
+              R"({ "type": "filament", "name": "B PLA", "inherits": "Shared @base", "instantiation": "true" })");
+    save_json(system / "VendorB" / "filament" / "B PETG.json",
+              R"({ "type": "filament", "name": "B PETG", "inherits": "Library only @base", "instantiation": "true" })");
+
+    const fs::path user = source.path / PRESET_USER_DIR / "default";
+    save_json(user / "machine" / "My B.json", R"({ "name": "My B", "inherits": "B Printer" })");
+    save_json(user / "filament" / "My PLA.json", R"({ "name": "My PLA", "inherits": "B PLA" })");
+    save_json(user / "filament" / "My PETG.json", R"({ "name": "My PETG", "inherits": "B PETG" })");
+
+    ScopedDataDir scoped_data_dir(destination.path);
+    PresetBundle  bundle;
+    const auto    result = bundle.import_user_presets_from(source.path.string());
+    CHECK(result.flattened == 3);
+    CHECK(result.failed == 0);
+
+    const fs::path out = destination.path / PRESET_USER_DIR / "default";
+    CHECK(load_json(out / "machine" / "My B.json").at("machine_max_jerk_x") == nlohmann::json::array({ "12", "12" }));
+    CHECK(load_json(out / "filament" / "My PLA.json").at("temperature_vitrification") == nlohmann::json::array({ "154" }));
+    CHECK(load_json(out / "filament" / "My PETG.json").at("temperature_vitrification") == nlohmann::json::array({ "60" }));
+}
+
+TEST_CASE("OrcaSlicer import finds bundled vendors for parents Magpie has not installed", "[Preset][Import]")
+{
+    TempPresetDir source;
+    TempPresetDir destination;
+    TempPresetDir resources;
+    const fs::path profiles = resources.path / "profiles";
+    // Bundled but not installed: VendorR, as Snapmaker is on a fresh install.
+    save_json(profiles / "VendorR.json", R"({ "name": "VendorR", "version": "1.0.0" })");
+    save_json(profiles / "VendorR" / "machine" / "fdm_r.json",
+              R"({ "type": "machine", "name": "fdm_r", "instantiation": "false", "printer_model": "R1", "nozzle_diameter": ["0.4"] })");
+    save_json(profiles / "VendorR" / "machine" / "R Printer.json",
+              R"({ "type": "machine", "name": "R Printer", "inherits": "fdm_r", "instantiation": "true", "printer_variant": "0.4" })");
+    save_json(profiles / "VendorR" / "process" / "R Process.json",
+              R"({ "type": "process", "name": "R Process", "inherits": "", "instantiation": "true" })");
+    // Installed already: neither needs a vendor.
+    save_json(destination.path / PRESET_SYSTEM_DIR / "Custom" / "machine" / "Installed Printer.json",
+              R"({ "type": "machine", "name": "Installed Printer", "inherits": "", "instantiation": "true" })");
+    save_json(destination.path / PRESET_SYSTEM_DIR / "OrcaFilamentLibrary" / "filament" / "Generic ABS @System.json",
+              R"({ "type": "filament", "name": "Generic ABS @System", "inherits": "" })");
+
+    const fs::path user = source.path / PRESET_USER_DIR / "default";
+    save_json(user / "machine" / "My R.json", R"({ "name": "My R", "inherits": "R Printer" })");
+    save_json(user / "machine" / "Mine.json", R"({ "name": "Mine", "inherits": "Installed Printer" })");
+    save_json(user / "process" / "My R Process.json", R"({ "name": "My R Process", "inherits": "R Process" })");
+    save_json(user / "process" / "Lost.json", R"({ "name": "Lost", "inherits": "Nowhere" })");
+    save_json(user / "filament" / "My ABS.json", R"({ "name": "My ABS", "inherits": "Voron Generic ABS" })");
+    // VendorF is needed only by a filament parent: without an enabled printer model AppConfig drops it and
+    // PresetUpdater deletes its folder on the next start, so it must not be installed (the filament is flattened).
+    save_json(profiles / "VendorF.json", R"({ "name": "VendorF", "version": "1.0.0" })");
+    save_json(profiles / "VendorF" / "filament" / "F PLA.json",
+              R"({ "type": "filament", "name": "F PLA", "inherits": "", "instantiation": "true", "nozzle_temperature": ["215"] })");
+    save_json(user / "filament" / "My F.json", R"({ "name": "My F", "inherits": "F PLA" })");
+    save_json(source.path / PRESET_SYSTEM_DIR / "VendorF" / "filament" / "F PLA.json",
+              R"({ "type": "filament", "name": "F PLA", "inherits": "", "instantiation": "true", "nozzle_temperature": ["215"] })");
+
+    ScopedDataDir scoped_data_dir(destination.path);
+    PresetBundle  bundle;
+    const auto    needs = bundle.find_orca_import_vendors(source.path.string(), profiles.string());
+    CHECK(needs.vendors == std::set<std::string>{ "VendorR" });
+    REQUIRE(needs.printer_variants.count("VendorR") == 1);
+    CHECK(needs.printer_variants.at("VendorR") == std::map<std::string, std::set<std::string>>{ { "R1", { "0.4" } } });
+
+    // Once the vendor is installed (what install_bundles_rsrc() does), the presets keep their parents.
+    copy_directory_recursively(profiles / "VendorR", destination.path / PRESET_SYSTEM_DIR / "VendorR");
+    const auto result = bundle.import_user_presets_from(source.path.string());
+    CHECK(result.flattened == 1); // My F
+    CHECK(result.reparented == 1);
+    CHECK(result.detached == 1);
+    const fs::path out = destination.path / PRESET_USER_DIR / "default";
+    CHECK(load_json(out / "filament" / "My F.json").at("inherits") == "");
+    CHECK(load_json(out / "filament" / "My F.json").at("nozzle_temperature") == nlohmann::json::array({ "215" }));
+    CHECK(load_json(out / "machine" / "My R.json").at("inherits") == "R Printer");
+    CHECK(load_json(out / "process" / "My R Process.json").at("inherits") == "R Process");
+    // Only the flattened filament's vendor would still be "missing", and it is never installed.
+    CHECK(bundle.find_orca_import_vendors(source.path.string(), profiles.string()).vendors.empty());
 }
