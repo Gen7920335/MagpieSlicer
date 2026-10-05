@@ -173,13 +173,31 @@ public:
     void            copy_files(const std::string& from);
 
     struct UserPresetImportResult {
-        size_t copied  { 0 };
-        size_t skipped { 0 };
-        size_t failed  { 0 };
+        size_t copied     { 0 };
+        size_t skipped    { 0 };
+        size_t failed     { 0 };
+        // Subsets of `copied`, describing how OrcaSlicer presets were converted.
+        size_t flattened  { 0 }; // parent vendor missing in Magpie, parent values baked in
+        size_t reparented { 0 }; // removed "<vendor> Generic X" parent moved to "Generic X @System"
+        size_t detached   { 0 }; // parent missing in both slicers, imported without a parent
+        size_t renamed    { 0 }; // same name in another Orca account folder with different settings
     };
 
-    // Imports only user-created presets and never overwrites local files.
+    // Imports OrcaSlicer user presets from every account folder into user/default, converting presets whose
+    // parents Magpie does not ship. Never overwrites local files, except unmodified copies made by the old
+    // copy-only import.
     UserPresetImportResult import_user_presets_from(const std::string &source_data_dir);
+
+    // Vendors from resources/profiles holding the printer parents of OrcaSlicer user printers that
+    // data_dir/system lacks, with the printer models and nozzle variants to enable so the vendor persists.
+    // Install them before import_user_presets_from(), which otherwise flattens such presets and loses their
+    // vendor link. Vendors needed only by process or filament parents are left out: without an enabled
+    // printer model PresetUpdater removes them on the next start.
+    struct OrcaImportVendors {
+        std::set<std::string>                                               vendors;
+        std::map<std::string, std::map<std::string, std::set<std::string>>> printer_variants; // vendor -> model -> variants
+    };
+    OrcaImportVendors find_orca_import_vendors(const std::string &source_data_dir, const std::string &profiles_dir) const;
 
     struct PresetPreferences {
         std::string printer_model_id;// name of a preferred printer model

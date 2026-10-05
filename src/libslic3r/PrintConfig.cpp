@@ -10947,7 +10947,7 @@ void DynamicPrintConfig::update_non_diff_values_to_base_config(DynamicPrintConfi
             for (int j = 0; j < cur_variant_count; j++)
             {
                 if ((target_extruder_variants[i] == cur_extruder_variants[j])
-                    &&(target_extruder_ids.empty() || (target_extruder_ids[i] == cur_extruder_ids[j])))
+                    &&(target_extruder_ids.empty() || (size_t(j) < cur_extruder_ids.size() && target_extruder_ids[i] == cur_extruder_ids[j])))
                 {
                     variant_index[i] = j;
                     break;
@@ -11051,6 +11051,18 @@ void DynamicPrintConfig::update_diff_values_to_child_config(DynamicPrintConfig& 
     int cur_variant_count = cur_extruder_variants.size();
     int target_variant_count = target_extruder_variants.size();
 
+    // A child that lists its variants but not their extruder ids (hand-edited or produced by another slicer)
+    // used to index target_extruder_ids out of range below. When its variant list matches the parent's
+    // entry for entry, it can only mean the parent's layout, so take the parent's ids. Otherwise no ids
+    // are matched and the child's per-variant values are ignored, which is safe.
+    if (!cur_extruder_ids.empty() && target_extruder_ids.empty() && target_variant_count > 0) {
+        if (target_extruder_variants == cur_extruder_variants && cur_extruder_ids.size() == cur_extruder_variants.size())
+            target_extruder_ids = cur_extruder_ids;
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(" %1% has %2% entries but no %3%; %4%")
+            %extruder_variant_name %target_variant_count %extruder_id_name
+            %(target_extruder_ids.empty() ? "per-variant values are not applied" : "using the parent's ids");
+    }
+
     if (cur_variant_count > 0)
         variant_index.resize(cur_variant_count, -1);
     else
@@ -11075,7 +11087,7 @@ void DynamicPrintConfig::update_diff_values_to_child_config(DynamicPrintConfig& 
             for (int j = 0; j < target_variant_count; j++)
             {
                 if ((cur_extruder_variants[i] == target_extruder_variants[j])
-                    &&(cur_extruder_ids.empty() || (cur_extruder_ids[i] == target_extruder_ids[j])))
+                    &&(cur_extruder_ids.empty() || (size_t(j) < target_extruder_ids.size() && cur_extruder_ids[i] == target_extruder_ids[j])))
                 {
                     variant_index[i] = j;
                     break;
@@ -11112,7 +11124,13 @@ void DynamicPrintConfig::update_diff_values_to_child_config(DynamicPrintConfig& 
                 // printer_extruder_variant list is empty (variant_index == 1), so base length != variant_index*stride.
                 // Rather than throw (which is caught upstream and DELETES the user preset file), fall back to the
                 // child's explicit value, which is authoritative for its own extruder/variant layout.
-                if (opt_vec_src->size() != variant_index.size() * size_t(stride)) {
+                // set_only_diff() also reads the child at variant_index[i]*stride + (stride-1); a child vector
+                // shorter than that (e.g. one value for a four-nozzle printer) would be read out of range.
+                size_t child_length_needed = 0;
+                for (int index : variant_index)
+                    if (index >= 0)
+                        child_length_needed = std::max(child_length_needed, size_t(index + 1) * size_t(stride));
+                if (opt_vec_src->size() != variant_index.size() * size_t(stride) || opt_vec_dest->size() < child_length_needed) {
                     opt_src->set(opt_target);
                 }
                 else

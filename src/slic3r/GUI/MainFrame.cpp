@@ -3754,12 +3754,23 @@ void MainFrame::import_orcaslicer_user_presets()
         return;
 
     try {
+        wxGetApp().install_vendors_for_orca_import(into_u8(dialog.GetPath()));
         const auto result = wxGetApp().preset_bundle->import_user_presets_from(into_u8(dialog.GetPath()));
-        const wxString message = wxString::Format(
+        wxString message = wxString::Format(
             _L("Imported %llu user preset files.\nSkipped %llu existing files.\nFailed to copy %llu files.\nRestart the slicer to load imported presets."),
             static_cast<unsigned long long>(result.copied),
             static_cast<unsigned long long>(result.skipped),
             static_cast<unsigned long long>(result.failed));
+        if (result.flattened + result.reparented + result.detached + result.renamed > 0)
+            message += "\n\n" + wxString::Format(
+                _L("Converted for Magpie:\n%llu presets made standalone because their printer vendor is not installed\n"
+                   "%llu filaments moved to the matching Generic @System filament\n"
+                   "%llu presets imported without a parent because it no longer exists\n"
+                   "%llu presets renamed because another OrcaSlicer account had a different preset with the same name"),
+                static_cast<unsigned long long>(result.flattened),
+                static_cast<unsigned long long>(result.reparented),
+                static_cast<unsigned long long>(result.detached),
+                static_cast<unsigned long long>(result.renamed));
         wxMessageBox(message, _L("OrcaSlicer User Presets"), wxOK | wxICON_INFORMATION, this);
     } catch (const std::exception &error) {
         show_error(this, error.what());

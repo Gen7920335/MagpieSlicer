@@ -10,18 +10,23 @@
 #include "LocalesUtils.hpp"
 #include "Model.hpp"
 #include "libslic3r_version.h"
+#include "nlohmann/json.hpp"
 
 #include <algorithm>
 #include <mutex>
 #include <set>
 #include <fstream>
 #include <unordered_set>
+#include <regex>
+#include <sstream>
 #include <boost/filesystem.hpp>
 #include <boost/algorithm/clamp.hpp>
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/nowide/cstdio.hpp>
+#include <boost/nowide/convert.hpp>
 #include <boost/nowide/fstream.hpp>
 #include <boost/property_tree/ini_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
@@ -536,52 +541,664 @@ static void copy_dir(const boost::filesystem::path& from_dir, const boost::files
 
 namespace {
 
-void copy_user_presets_without_overwrite(
-    const boost::filesystem::path        &source,
-    const boost::filesystem::path        &destination,
-    PresetBundle::UserPresetImportResult &result)
+namespace fs = boost::filesystem;
+using OrderedJson = nlohmann::ordered_json;
+
+// Preset names are UTF-8 (e.g. Korean "- 복사" copies). Convert explicitly rather than through
+// path::string(), whose encoding depends on whether the process imbued nowide_filesystem().
+std::string path_utf8(const fs::path &path)
 {
-    namespace fs = boost::filesystem;
+#ifdef _WIN32
+    return boost::nowide::narrow(path.wstring());
+#else
+    return path.string();
+#endif
+}
 
-    if (!fs::exists(destination))
-        fs::create_directories(destination);
+fs::path utf8_path(const std::string &utf8)
+{
+#ifdef _WIN32
+    return fs::path(boost::nowide::widen(utf8));
+#else
+    return fs::path(utf8);
+#endif
+}
 
-    for (fs::directory_iterator it(source), end; it != end; ++it) {
-        const fs::path target = destination / it->path().filename();
+// Printer presets come first so process and filament compatibility lists can be rewritten against the
+// final names of the imported printers.
+const std::array<const char *, 3> ORCA_USER_PRESET_KINDS { PRESET_PRINTER_NAME, PRESET_PRINT_NAME, PRESET_FILAMENT_NAME };
 
-        try {
-            if (fs::is_symlink(it->path())) {
-                ++result.skipped;
-            } else if (fs::is_directory(it->path())) {
-                copy_user_presets_without_overwrite(it->path(), target, result);
-            } else if (fs::is_regular_file(it->path())) {
-                if (fs::exists(target)) {
-                    ++result.skipped;
-                } else {
-                    fs::create_directories(target.parent_path());
-                    fs::copy_file(it->path(), target);
-                    ++result.copied;
-                }
+bool read_json_object(const fs::path &path, OrderedJson &out)
+{
+    try {
+        boost::nowide::ifstream ifs(path_utf8(path).c_str());
+        if (!ifs)
+            return false;
+        out = OrderedJson::parse(ifs);
+        return out.is_object();
+    } catch (const std::exception &error) {
+        BOOST_LOG_TRIVIAL(warning) << "OrcaSlicer import: cannot parse " << path << ": " << error.what();
+        return false;
+    }
+}
+
+bool read_text(const fs::path &path, std::string &out)
+{
+    boost::nowide::ifstream ifs(path_utf8(path).c_str(), std::ios::binary);
+    if (!ifs)
+        return false;
+    out.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+    return true;
+}
+
+void write_text(const fs::path &path, const std::string &text)
+{
+    fs::create_directories(path.parent_path());
+    boost::nowide::ofstream ofs(path_utf8(path).c_str(), std::ios::binary | std::ios::trunc);
+    if (!ofs)
+        throw RuntimeError("cannot open " + path_utf8(path) + " for writing");
+    ofs << text;
+    if (!ofs)
+        throw RuntimeError("cannot write " + path_utf8(path));
+}
+
+std::string json_string(const OrderedJson &j, const char *key)
+{
+    auto it = j.find(key);
+    return it != j.end() && it->is_string() ? it->get<std::string>() : std::string();
+}
+
+std::vector<std::string> json_strings(const OrderedJson &j, const char *key)
+{
+    std::vector<std::string> out;
+    auto it = j.find(key);
+    if (it != j.end() && it->is_array())
+        for (const auto &value : *it)
+            if (value.is_string() && !value.get<std::string>().empty())
+                out.push_back(value.get<std::string>());
+    return out;
+}
+
+// System presets of one data directory, by preset kind ("machine", "process", "filament") and name.
+// Base presets such as "fdm_klipper_common" exist in several vendors with different values, and the system
+// loader resolves a vendor's chain inside that vendor's folder. So presets are kept per vendor folder.
+using VendorPresets = std::map<std::string, std::map<std::string, OrderedJson>>; // kind -> name -> json
+struct SystemPresetIndex
+{
+    std::map<std::string, VendorPresets>         vendors;  // vendor folder -> presets
+    std::map<std::string, std::set<std::string>> names;    // kind -> names in any vendor, including renamed_from
+    std::set<std::string>                        printers; // instantiable printer names
+};
+
+// Reads every preset JSON below a "system" folder. Vendor index files sit directly in the root folder
+// and machine_model files have their own type, so neither lands in the per-kind maps. A preset's kind
+// comes from its "type"; the name from "name", which can differ from the file name.
+SystemPresetIndex index_system_presets(const fs::path &root, bool keep_json)
+{
+    SystemPresetIndex index;
+    if (!fs::is_directory(root))
+        return index;
+    boost::system::error_code ec;
+    for (fs::recursive_directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec)) {
+        if (!fs::is_regular_file(it->path()) || it->path().extension() != ".json" || it->path().parent_path() == root)
+            continue;
+        OrderedJson preset;
+        if (!read_json_object(it->path(), preset))
+            continue;
+        const std::string name = json_string(preset, BBL_JSON_KEY_NAME);
+        const std::string kind = json_string(preset, BBL_JSON_KEY_TYPE);
+        if (name.empty() || (kind != PRESET_PRINTER_NAME && kind != PRESET_PRINT_NAME && kind != PRESET_FILAMENT_NAME))
+            continue;
+        std::set<std::string> &names = index.names[kind];
+        names.insert(name);
+        const std::string renamed_from = json_string(preset, "renamed_from");
+        std::vector<std::string> old_names;
+        boost::split(old_names, renamed_from, boost::is_any_of(";"));
+        for (std::string &old_name : old_names) {
+            boost::trim(old_name);
+            if (!old_name.empty())
+                names.insert(old_name);
+        }
+        if (kind == PRESET_PRINTER_NAME && json_string(preset, BBL_JSON_KEY_INSTANTIATION) != "false")
+            index.printers.insert(name);
+        if (keep_json) {
+            const std::string vendor = path_utf8(*fs::relative(it->path(), root).begin());
+            index.vendors[vendor][kind].emplace(name, std::move(preset));
+        }
+    }
+    return index;
+}
+
+// Keys that only describe where a system preset came from. They must not leak into a flattened user preset.
+bool is_system_metadata_key(const std::string &key)
+{
+    static const std::set<std::string> keys {
+        BBL_JSON_KEY_INHERITS, BBL_JSON_KEY_INSTANTIATION, BBL_JSON_KEY_SETTING_ID, BBL_JSON_KEY_TYPE, BBL_JSON_KEY_FROM,
+        BBL_JSON_KEY_BASE_ID, BBL_JSON_KEY_IS_CUSTOM, BBL_JSON_KEY_SUB_PATH, BBL_JSON_KEY_DESCRIPTION, "renamed_from"
+    };
+    return keys.count(key) > 0;
+}
+
+// True when Magpie can load the key, directly or through PrintConfigDef::handle_legacy().
+bool is_loadable_key(const std::string &key)
+{
+    static const std::set<std::string> preset_keys {
+        BBL_JSON_KEY_NAME, BBL_JSON_KEY_VERSION, BBL_JSON_KEY_FILAMENT_ID, "print_settings_id", "filament_settings_id",
+        "printer_settings_id", "compatible_printers", "compatible_printers_condition", "compatible_prints",
+        "compatible_prints_condition"
+    };
+    if (preset_keys.count(key) || print_config_def.has(key))
+        return true;
+    t_config_option_key legacy_key = key;
+    std::string         value;
+    PrintConfigDef::handle_legacy(legacy_key, value);
+    return !legacy_key.empty() && legacy_key != key && print_config_def.has(legacy_key);
+}
+
+// Resolves a system preset with all of its ancestors folded in, child values winning. Each parent is
+// looked up in the vendor folder of the preset that names it, as the system loader does; a filament may
+// also inherit from the shared filament library. Fails when any ancestor is missing, so a half-resolved
+// preset is never written.
+bool flatten_vendor_preset(const SystemPresetIndex &index, const std::string &vendor, const std::string &kind,
+                           const std::string &name, OrderedJson &out, int depth = 0)
+{
+    // Vendor chains are a handful of levels deep; 32 only guards against an inherits cycle.
+    constexpr int max_inherits_depth = 32;
+    if (depth > max_inherits_depth)
+        return false;
+    auto find_in = [&](const std::string &folder) -> const OrderedJson * {
+        auto v = index.vendors.find(folder);
+        if (v == index.vendors.end())
+            return nullptr;
+        auto k = v->second.find(kind);
+        if (k == v->second.end())
+            return nullptr;
+        auto p = k->second.find(name);
+        return p == k->second.end() ? nullptr : &p->second;
+    };
+    std::string     found_in = vendor;
+    const OrderedJson *preset = find_in(vendor);
+    if (preset == nullptr && kind == PRESET_FILAMENT_NAME && vendor != PresetBundle::ORCA_FILAMENT_LIBRARY) {
+        found_in = PresetBundle::ORCA_FILAMENT_LIBRARY;
+        preset   = find_in(found_in);
+    }
+    if (preset == nullptr)
+        return false;
+    const std::string parent = json_string(*preset, BBL_JSON_KEY_INHERITS);
+    if (parent.empty())
+        out = OrderedJson::object();
+    else if (!flatten_vendor_preset(index, found_in, kind, parent, out, depth + 1))
+        return false;
+    for (auto item = preset->begin(); item != preset->end(); ++item)
+        out[item.key()] = item.value();
+    return true;
+}
+
+// Resolves the system preset a user preset inherits. Its vendor is the folder holding a preset of that
+// name; an instantiable one is preferred (user presets inherit instantiable presets), then a vendor over
+// the shared filament library, then the first folder by name, so the choice is deterministic.
+bool flatten_system_preset(const SystemPresetIndex &index, const std::string &kind, const std::string &name, OrderedJson &out,
+                           std::string *vendor_out = nullptr)
+{
+    std::string best_vendor;
+    int         best_rank = -1;
+    for (const auto &[vendor, presets] : index.vendors) {
+        auto k = presets.find(kind);
+        if (k == presets.end())
+            continue;
+        auto p = k->second.find(name);
+        if (p == k->second.end())
+            continue;
+        const int rank = (json_string(p->second, BBL_JSON_KEY_INSTANTIATION) != "false" ? 2 : 0) +
+                         (vendor != PresetBundle::ORCA_FILAMENT_LIBRARY ? 1 : 0);
+        if (rank > best_rank) {
+            best_rank   = rank;
+            best_vendor = vendor;
+        }
+    }
+    if (best_rank < 0 || !flatten_vendor_preset(index, best_vendor, kind, name, out))
+        return false;
+    if (vendor_out != nullptr)
+        *vendor_out = best_vendor;
+    return true;
+}
+
+// OrcaSlicer's per-feature filament selectors map onto Magpie's split *_filament_id keys, the same way
+// ProjectConfigService expands them for projects. Orca's "1" meant "the active filament", which Magpie
+// spells "0" (inherit). An explicit Magpie key in the same preset wins.
+void convert_feature_filament_keys(OrderedJson &preset)
+{
+    static const std::vector<std::pair<const char *, std::vector<const char *>>> table {
+        { "wall_filament",          { "outer_wall_filament_id", "inner_wall_filament_id" } },
+        { "sparse_infill_filament", { "sparse_infill_filament_id" } },
+        { "solid_infill_filament",  { "internal_solid_filament_id", "top_surface_filament_id", "bottom_surface_filament_id" } },
+    };
+    for (const auto &[legacy, features] : table) {
+        auto it = preset.find(legacy);
+        if (it == preset.end())
+            continue;
+        std::string value = it->is_string() ? it->get<std::string>() : it->dump();
+        if (value == "1")
+            value = "0";
+        preset.erase(legacy);
+        for (const char *feature : features)
+            if (!preset.contains(feature))
+                preset[feature] = value;
+    }
+}
+
+std::string orca_generic_library_name(const std::string &parent)
+{
+    // Same rule as PresetCollection::find_preset2(): "<vendor> Generic ABS" became "Generic ABS @System".
+    if (parent.find("Generic") == std::string::npos)
+        return {};
+    static const std::regex re(R"(^(?:.*?\b(?:\w+_)?)(Generic)\b\s+([^@]+?)\s*(?:@.*)?$)");
+    return std::regex_replace(parent, re, "Generic $2 @System");
+}
+
+void set_preset_name(OrderedJson &preset, const std::string &name)
+{
+    preset[BBL_JSON_KEY_NAME] = name;
+    for (const char *key : { "print_settings_id", "filament_settings_id", "printer_settings_id" }) {
+        auto it = preset.find(key);
+        if (it == preset.end())
+            continue;
+        if (it->is_string())
+            *it = name;
+        else if (it->is_array())
+            for (auto &value : *it)
+                if (value.is_string())
+                    value = name;
+    }
+}
+
+std::string info_value(const std::string &info, const std::string &key)
+{
+    std::istringstream lines(info);
+    for (std::string line; std::getline(lines, line);) {
+        const size_t eq = line.find('=');
+        if (eq != std::string::npos && boost::trim_copy(line.substr(0, eq)) == key)
+            return boost::trim_copy(line.substr(eq + 1));
+    }
+    return {};
+}
+
+// A user printer that inherits a multi-nozzle parent but does not store printer_extruder_variant /
+// printer_extruder_id loads through update_diff_values_to_child_config() with only its first toolhead's
+// per-variant values (z_hop, retraction, ...); the others revert to the parent's. Magpie itself always saves
+// both keys, so write them in that format. The layout comes from DynamicPrintConfig::set_num_extruders(),
+// the same call that gives the parent its runtime variants, so both sides match entry for entry.
+void fill_printer_extruder_variants(OrderedJson &printer, const OrderedJson &parent_effective)
+{
+    auto pick = [&](const char *key) {
+        return printer.contains(key) ? json_strings(printer, key) : json_strings(parent_effective, key);
+    };
+    const std::vector<std::string> nozzles = pick("nozzle_diameter");
+    if (nozzles.size() < 2 || (printer.contains("printer_extruder_variant") && printer.contains("printer_extruder_id")))
+        return;
+
+    std::vector<std::string> variants;
+    std::vector<std::string> ids;
+    try {
+        // Start from the full defaults: set_num_extruders() expects every extruder option to exist.
+        DynamicPrintConfig layout;
+        layout.apply(FullPrintConfig::defaults());
+        // deserialize() parses numbers independently of the C locale, unlike std::stod.
+        auto *diameters = layout.option<ConfigOptionFloats>("nozzle_diameter", true);
+        if (!diameters->deserialize(boost::algorithm::join(nozzles, ","), false))
+            return;
+        if (const std::vector<std::string> list = pick("extruder_variant_list"); !list.empty())
+            layout.set_key_value("extruder_variant_list", new ConfigOptionStrings(list));
+        layout.set_num_extruders(unsigned(nozzles.size()));
+        variants = layout.option<ConfigOptionStrings>("printer_extruder_variant", true)->values;
+        for (int id : layout.option<ConfigOptionInts>("printer_extruder_id", true)->values)
+            ids.push_back(std::to_string(id));
+    } catch (const std::exception &error) {
+        BOOST_LOG_TRIVIAL(warning) << "OrcaSlicer import: cannot derive the extruder variant layout: " << error.what();
+        return;
+    }
+    if (variants.empty() || variants.size() != ids.size())
+        return;
+
+    if (!printer.contains("printer_extruder_variant")) {
+        printer["printer_extruder_variant"] = variants;
+        printer["printer_extruder_id"]      = ids;
+    } else if (json_strings(printer, "printer_extruder_variant") == variants) {
+        // Variants without ids: only the layout they already describe gets ids.
+        printer["printer_extruder_id"] = ids;
+    }
+}
+
+void append_unique(std::vector<std::string> &values, const std::string &value)
+{
+    if (std::find(values.begin(), values.end(), value) == values.end())
+        values.push_back(value);
+}
+
+struct OrcaUserPreset
+{
+    fs::path    source;
+    std::string kind;
+    fs::path    relative; // path below the kind folder, without extension; its file name is the preset name
+    std::string account;
+    OrderedJson json;
+};
+
+std::vector<std::string> orca_accounts(const fs::path &source)
+{
+    // Magpie shows only user/default unless a cloud account is signed in, so every Orca account folder is
+    // merged into default. default goes first so its copy keeps the plain name on a clash.
+    std::vector<std::string> accounts;
+    for (fs::directory_iterator it(source), end; it != end; ++it)
+        if (fs::is_directory(it->path()) && !fs::is_symlink(it->path()))
+            accounts.push_back(path_utf8(it->path().filename()));
+    std::sort(accounts.begin(), accounts.end(), [](const std::string &a, const std::string &b) {
+        const bool a_default = a == DEFAULT_USER_FOLDER_NAME;
+        const bool b_default = b == DEFAULT_USER_FOLDER_NAME;
+        return a_default != b_default ? a_default : a < b;
+    });
+    return accounts;
+}
+
+// Reads every Orca user preset, printers first, accounts in orca_accounts() order. Magpie names a loaded
+// preset after its file (PresetCollection::load_presets), so the file stem is the preset name throughout.
+void scan_orca_user_presets(const fs::path &source, std::vector<OrcaUserPreset> &presets,
+                            std::map<std::string, std::set<std::string>> &stems, size_t &skipped, size_t &failed)
+{
+    const std::vector<std::string> accounts = orca_accounts(source);
+    for (const char *kind : ORCA_USER_PRESET_KINDS) {
+        for (const std::string &account : accounts) {
+            const fs::path kind_dir = source / utf8_path(account) / kind;
+            if (!fs::is_directory(kind_dir))
+                continue;
+            std::vector<fs::path> files;
+            boost::system::error_code ec;
+            for (fs::recursive_directory_iterator it(kind_dir, ec), end; !ec && it != end; it.increment(ec)) {
+                if (fs::is_symlink(it->path()))
+                    ++skipped;
+                else if (fs::is_regular_file(it->path()) && it->path().extension() == ".json")
+                    files.push_back(it->path());
             }
-        } catch (const fs::filesystem_error &error) {
-            ++result.failed;
-            BOOST_LOG_TRIVIAL(error) << "Failed to import user preset: " << error.what();
+            // Directory iteration order is unspecified; sort so clashes resolve the same way every run.
+            std::sort(files.begin(), files.end());
+            for (const fs::path &file : files) {
+                OrcaUserPreset preset { file, kind, fs::relative(file, kind_dir).replace_extension(), account, {} };
+                if (!read_json_object(file, preset.json)) {
+                    ++failed;
+                    continue;
+                }
+                stems[kind].insert(path_utf8(preset.relative.filename()));
+                presets.push_back(std::move(preset));
+            }
         }
     }
 }
 
+bool system_has(const SystemPresetIndex &index, const std::string &kind, const std::string &name)
+{
+    auto it = index.names.find(kind);
+    return it != index.names.end() && it->second.count(name) > 0;
+}
+
+// The parent Magpie would use as is, or the "Generic X @System" a removed "<vendor> Generic X" filament
+// parent maps to; empty when neither is installed and the preset has to be flattened or detached.
+std::string installed_parent(const SystemPresetIndex &installed, const std::map<std::string, std::set<std::string>> &stems,
+                             const std::string &kind, const std::string &parent)
+{
+    if (parent.empty() || system_has(installed, kind, parent))
+        return parent;
+    if (auto it = stems.find(kind); it != stems.end() && it->second.count(parent))
+        return parent;
+    const std::string library_parent = kind == PRESET_FILAMENT_NAME ? orca_generic_library_name(parent) : std::string();
+    return !library_parent.empty() && system_has(installed, kind, library_parent) ? library_parent : std::string();
+}
+
 } // namespace
+
+PresetBundle::OrcaImportVendors PresetBundle::find_orca_import_vendors(const std::string &source_data_dir,
+                                                                      const std::string &profiles_dir) const
+{
+    OrcaImportVendors needs;
+    const fs::path    source = utf8_path(source_data_dir) / PRESET_USER_DIR;
+    if (!fs::is_directory(source))
+        return needs;
+    const SystemPresetIndex installed = index_system_presets(utf8_path(Slic3r::data_dir()) / PRESET_SYSTEM_DIR, false);
+    const SystemPresetIndex bundled   = index_system_presets(utf8_path(profiles_dir), true);
+
+    std::vector<OrcaUserPreset>                  presets;
+    std::map<std::string, std::set<std::string>> stems;
+    size_t                                       skipped = 0, failed = 0;
+    scan_orca_user_presets(source, presets, stems, skipped, failed);
+    for (const OrcaUserPreset &preset : presets) {
+        const std::string parent = json_string(preset.json, BBL_JSON_KEY_INHERITS);
+        if (parent.empty() || !installed_parent(installed, stems, preset.kind, parent).empty())
+            continue;
+        std::string vendor;
+        OrderedJson resolved;
+        if (!flatten_system_preset(bundled, preset.kind, parent, resolved, &vendor) || vendor == ORCA_FILAMENT_LIBRARY)
+            continue;
+        // A printer parent is only visible once its model and nozzle variant are enabled (set_visible_from_appconfig).
+        if (preset.kind == PRESET_PRINTER_NAME) {
+            const std::string model   = json_string(resolved, "printer_model");
+            const std::string variant = json_string(resolved, "printer_variant");
+            if (!model.empty() && !variant.empty())
+                needs.printer_variants[vendor][model].insert(variant);
+        }
+    }
+    // AppConfig keeps a vendor only while one of its printer models is enabled, and PresetUpdater deletes the
+    // folder of a vendor it does not keep on the next start. So only vendors with an enabled printer model
+    // are installed; a vendor needed only by process or filament parents would vanish after one start and take
+    // its children with it, so those presets are flattened instead. Their process and filament parents are
+    // installed along with the vendor's printers.
+    for (const auto &[vendor, models] : needs.printer_variants)
+        needs.vendors.insert(vendor);
+    return needs;
+}
 
 PresetBundle::UserPresetImportResult PresetBundle::import_user_presets_from(const std::string &source_data_dir)
 {
-    namespace fs = boost::filesystem;
-
-    const fs::path source = fs::path(source_data_dir) / "user";
+    const fs::path source_root = utf8_path(source_data_dir);
+    const fs::path source      = source_root / PRESET_USER_DIR;
     if (!fs::exists(source) || !fs::is_directory(source))
         throw RuntimeError("The selected directory does not contain an OrcaSlicer user preset directory.");
 
-    UserPresetImportResult result;
-    copy_user_presets_without_overwrite(source, fs::path(Slic3r::data_dir()) / "user", result);
+    // Parents Magpie resolves itself, and the OrcaSlicer system presets used to flatten the rest.
+    // Only data_dir/system counts: load_system_presets_from_json() reads nothing else, so a vendor that
+    // merely ships in resources would leave the imported preset without a loadable parent.
+    const SystemPresetIndex magpie_system = index_system_presets(utf8_path(Slic3r::data_dir()) / PRESET_SYSTEM_DIR, true);
+    const SystemPresetIndex orca_system   = index_system_presets(source_root / PRESET_SYSTEM_DIR, true);
+    auto magpie_has = [&magpie_system](const std::string &kind, const std::string &name) {
+        return system_has(magpie_system, kind, name);
+    };
+
+    // The "name" inside each JSON is rewritten to its file stem, the name Magpie loads it under.
+    UserPresetImportResult                       result;
+    std::vector<OrcaUserPreset>                  presets;
+    std::map<std::string, std::set<std::string>> imported_names; // kind -> stems
+    scan_orca_user_presets(source, presets, imported_names, result.skipped, result.failed);
+
+    const fs::path destination = utf8_path(Slic3r::data_dir()) / PRESET_USER_DIR / DEFAULT_USER_FOLDER_NAME;
+    std::map<std::string, OrderedJson>              written;              // "<kind>/<orca name>" -> converted preset
+    std::map<std::string, std::vector<std::string>> printers_by_orca_name; // Orca parent or own name -> imported printers
+    std::map<std::string, std::set<std::string>>    final_names;          // kind -> names of imported presets
+
+    // Rewrites a compatible_printers / compatible_prints list to names Magpie will have. A printer that lost
+    // its parent by flattening is no longer matched through is_compatible_with_parent_printer(), so a
+    // parent name is replaced by the imported printers built on it. Names Magpie cannot resolve are dropped.
+    auto rewrite_compatible = [&](OrderedJson &preset, const char *key, const std::string &kind) {
+        if (!preset.contains(key) || !preset[key].is_array())
+            return;
+        std::vector<std::string> rewritten;
+        for (const std::string &name : json_strings(preset, key)) {
+            if (magpie_has(kind, name) || final_names[kind].count(name))
+                append_unique(rewritten, name);
+            if (kind == PRESET_PRINTER_NAME)
+                if (auto it = printers_by_orca_name.find(name); it != printers_by_orca_name.end())
+                    for (const std::string &printer : it->second)
+                        append_unique(rewritten, printer);
+        }
+        preset[key] = rewritten;
+    };
+
+    for (const OrcaUserPreset &preset : presets) {
+        OrderedJson converted = preset.json;
+        converted.erase(BBL_JSON_KEY_IS_CUSTOM);
+        // How the parent was resolved; counted only once the preset is actually written.
+        enum class ParentFix { None, Reparented, Flattened, Detached } parent_fix = ParentFix::None;
+
+        const std::string parent      = json_string(converted, BBL_JSON_KEY_INHERITS);
+        const std::string kept_parent = installed_parent(magpie_system, imported_names, preset.kind, parent);
+        if (!parent.empty() && kept_parent != parent) {
+            OrderedJson flattened;
+            if (!kept_parent.empty()) {
+                converted[BBL_JSON_KEY_INHERITS] = kept_parent;
+                parent_fix = ParentFix::Reparented;
+            } else if (flatten_system_preset(orca_system, preset.kind, parent, flattened)) {
+                // Magpie does not ship this vendor: bake the parent values in and detach the preset.
+                OrderedJson standalone = OrderedJson::object();
+                for (auto item = flattened.begin(); item != flattened.end(); ++item)
+                    if (!is_system_metadata_key(item.key()) && is_loadable_key(item.key()))
+                        standalone[item.key()] = item.value();
+                // An empty compatibility list in the user preset is Orca's "same as parent"; keep the parent's.
+                for (auto item = converted.begin(); item != converted.end(); ++item)
+                    if (!(boost::starts_with(item.key(), "compatible_") && standalone.contains(item.key()) &&
+                          (item.value() == OrderedJson::array() || item.value() == "")))
+                        standalone[item.key()] = item.value();
+                standalone[BBL_JSON_KEY_INHERITS] = "";
+                standalone[BBL_JSON_KEY_FROM]     = "User";
+                if (preset.kind == PRESET_PRINTER_NAME) {
+                    // The vendor's printer model is not installed. (Its bed model and texture live in the
+                    // vendor's model list, not in the preset, so nothing else refers to the vendor.)
+                    if (standalone.contains("printer_model"))
+                        standalone["printer_model"] = "";
+                } else {
+                    // A condition was written against the vendor's printer model and notes; once the list
+                    // below is rewritten to real printers, the list alone decides.
+                    for (const char *key : { "compatible_printers_condition", "compatible_prints_condition" })
+                        if (standalone.contains(key))
+                            standalone[key] = "";
+                }
+                converted  = std::move(standalone);
+                parent_fix = ParentFix::Flattened;
+            } else {
+                // Neither slicer knows the parent any more. Keep the user's own values on Magpie defaults.
+                BOOST_LOG_TRIVIAL(warning) << "OrcaSlicer import: parent \"" << parent << "\" of " << preset.source
+                                           << " not found, importing detached";
+                converted[BBL_JSON_KEY_INHERITS] = "";
+                parent_fix = ParentFix::Detached;
+            }
+        }
+        if (preset.kind == PRESET_PRINTER_NAME && parent_fix == ParentFix::None && !parent.empty()) {
+            // Only a parent Magpie loads goes through update_diff_values_to_child_config(); a parent that is
+            // itself an imported user printer has no system chain to read here.
+            OrderedJson parent_effective;
+            if (flatten_system_preset(magpie_system, preset.kind, parent, parent_effective))
+                fill_printer_extruder_variants(converted, parent_effective);
+        }
+        if (preset.kind == PRESET_PRINT_NAME)
+            convert_feature_filament_keys(converted);
+        if (preset.kind != PRESET_PRINTER_NAME) {
+            rewrite_compatible(converted, "compatible_printers", PRESET_PRINTER_NAME);
+            if (preset.kind == PRESET_FILAMENT_NAME)
+                rewrite_compatible(converted, "compatible_prints", PRESET_PRINT_NAME);
+        }
+
+        const std::string orca_name   = path_utf8(preset.relative.filename());
+        const std::string written_key = preset.kind + "/" + orca_name;
+        set_preset_name(converted, orca_name);
+        // Account folders are compared before any renaming, so an identical copy is recognised.
+        const OrderedJson comparable  = converted;
+        std::string       name        = orca_name;
+        bool              account_copy = false;
+        bool              renamed     = false;
+        if (auto same = written.find(written_key); same != written.end()) {
+            if (same->second == comparable) {
+                ++result.skipped;
+                continue;
+            }
+            name         = orca_name + " (" + preset.account + ")";
+            account_copy = true;
+            renamed      = true;
+        }
+        // load_presets() refuses a user preset whose name (or a renamed_from alias) a system preset uses.
+        if (magpie_has(preset.kind, name)) {
+            name += " (OrcaSlicer)";
+            renamed = true;
+        }
+
+        // PresetCollection::load_presets() gives a user filament with no parent and no compatible printers
+        // only the printer named after its '@'. That is Orca's rule too, so it is kept for presets that were
+        // already detached in Orca; one detached here was shown on every printer, so list them explicitly.
+        if (preset.kind == PRESET_FILAMENT_NAME && parent_fix != ParentFix::None && parent_fix != ParentFix::Reparented &&
+            json_strings(converted, "compatible_printers").empty() && name.find('@') != std::string::npos) {
+            std::vector<std::string> every_printer(magpie_system.printers.begin(), magpie_system.printers.end());
+            for (const std::string &printer : final_names[PRESET_PRINTER_NAME])
+                append_unique(every_printer, printer);
+            if (!every_printer.empty())
+                converted["compatible_printers"] = every_printer;
+        }
+        set_preset_name(converted, name);
+
+        const fs::path    target_dir  = destination / preset.kind / preset.relative.parent_path();
+        const fs::path    target_json = target_dir / utf8_path(name + ".json");
+        const fs::path    target_info = target_dir / utf8_path(name + ".info");
+        const fs::path    source_info = fs::path(preset.source).replace_extension(".info");
+        const std::string text        = converted.dump(4);
+
+        try {
+            if (fs::exists(target_json)) {
+                // Local presets always win. The one exception is a byte-for-byte copy left by the old
+                // copy-only import, which may point at a parent Magpie cannot load.
+                std::string existing, original;
+                if (!read_text(target_json, existing) || !read_text(preset.source, original) || existing != original ||
+                    existing == text) {
+                    // The preset Magpie keeps under this name still answers compatibility lookups, and
+                    // an account copy is still compared against this Orca preset.
+                    final_names[preset.kind].insert(name);
+                    if (!account_copy)
+                        written.emplace(written_key, comparable);
+                    ++result.skipped;
+                    continue;
+                }
+            }
+            write_text(target_json, text);
+
+            std::string info;
+            read_text(source_info, info);
+            const bool        own_base     = parent_fix == ParentFix::None || parent_fix == ParentFix::Reparented;
+            const std::string sync_info    = info_value(info, "sync_info");
+            const std::string updated_time = info_value(info, "updated_time");
+            write_text(target_info, "sync_info = " + (sync_info.empty() ? std::string("create") : sync_info) + "\n" +
+                                    "user_id = \n" +
+                                    "setting_id = \n" +
+                                    "base_id = " + (own_base ? info_value(info, BBL_JSON_KEY_BASE_ID) : std::string()) + "\n" +
+                                    "updated_time = " + (updated_time.empty() ? std::string("0") : updated_time) + "\n");
+
+            final_names[preset.kind].insert(name);
+            if (preset.kind == PRESET_PRINTER_NAME) {
+                // Lists naming the Orca parent, or this printer under the Orca name a system preset now
+                // shadows, reach it here. An account copy is a different printer and is not aliased.
+                if (!parent.empty())
+                    append_unique(printers_by_orca_name[parent], name);
+                if (name != orca_name && !account_copy)
+                    append_unique(printers_by_orca_name[orca_name], name);
+            }
+            if (!account_copy)
+                written.emplace(written_key, comparable);
+            if (renamed)
+                ++result.renamed;
+            if (parent_fix == ParentFix::Reparented)
+                ++result.reparented;
+            else if (parent_fix == ParentFix::Flattened)
+                ++result.flattened;
+            else if (parent_fix == ParentFix::Detached)
+                ++result.detached;
+            ++result.copied;
+        } catch (const std::exception &error) {
+            ++result.failed;
+            BOOST_LOG_TRIVIAL(error) << "Failed to import user preset " << preset.source << ": " << error.what();
+        }
+    }
     return result;
 }
 

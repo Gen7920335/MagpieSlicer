@@ -515,6 +515,7 @@ public:
     void            check_update(bool show_tips, int by_user);
     void            check_new_version(bool show_tips = false, int by_user = 0);
     void            check_new_version_sf(bool show_tips = false, int by_user = 0);
+    void            install_vendors_for_orca_import(const std::string &source_data_dir);
     bool            process_network_msg(std::string dev_id, std::string msg);
     void            request_new_version(int by_user);
     void            enter_force_upgrade();
