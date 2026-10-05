@@ -442,6 +442,10 @@ public:
     // Set the filament preset name. As the name could come from the UI selection box,
     // an optional "(modified)" suffix will be removed from the filament name.
     void                        set_filament_preset(size_t idx, const std::string &name);
+    // Plater slot edited by the Toolhead / Material dialog. The sidebar edit button records its
+    // slot; any other way of opening the dialog uses the slot its preset combo shows (-1 means
+    // the first). Returns -1 when that slot does not exist.
+    static int                  filament_dialog_slot(int sidebar_editing_slot, int dialog_combo_slot, size_t slot_count);
 
     // Read out the number of extruders from an active printer preset,
     // update size and content of filament_presets.

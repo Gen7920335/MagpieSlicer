@@ -240,6 +240,8 @@ public:
     void                    update_ui_from_settings();
 	bool                    show_object_list(bool show) const;
     void                    finish_param_edit();
+    // A material picked in the Toolhead / Material dialog belongs to the slot that dialog edits.
+    void                    assign_dialog_filament_to_slot(int dialog_combo_slot);
 
     /**
      * @brief Automatically calculates flushing volumes

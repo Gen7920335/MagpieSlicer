@@ -931,3 +931,54 @@ TEST_CASE("Default bed type accepts plate names and legacy numbers", "[Preset][B
     CHECK(bed_type_for("Glass Plate") == btPEI);
     CHECK(bed_type_for(std::to_string(int(btCount))) == btPEI);
 }
+
+TEST_CASE("Toolhead / Material dialog edits the slot it shows", "[Preset][FilamentSelection][DialogSlot]")
+{
+    // Opened from a sidebar row: that row's slot wins.
+    CHECK(PresetBundle::filament_dialog_slot(2, 0, 4) == 2);
+    CHECK(PresetBundle::filament_dialog_slot(3, -1, 4) == 3);
+    // Opened any other way: the slot the dialog combo carries; -1 (never set) means the first.
+    CHECK(PresetBundle::filament_dialog_slot(-1, 1, 4) == 1);
+    CHECK(PresetBundle::filament_dialog_slot(-1, -1, 4) == 0);
+    // A slot that no longer exists is never written.
+    CHECK(PresetBundle::filament_dialog_slot(-1, 4, 4) == -1);
+    CHECK(PresetBundle::filament_dialog_slot(5, 0, 4) == -1);
+    CHECK(PresetBundle::filament_dialog_slot(-1, 0, 0) == -1);
+}
+
+TEST_CASE("Changing one toolhead's material changes only that slot of the slicing config",
+          "[Preset][Config][FilamentSelection][DialogSlot]")
+{
+    PresetBundle bundle;
+    const std::array<std::string, 4> names{"Slot PLA A", "Slot PLA B", "Slot PLA C", "Slot PLA D"};
+    const std::array<int, 4> temperatures{200, 205, 210, 215};
+    for (size_t i = 0; i < names.size(); ++i) {
+        Preset &preset = add_inmemory_preset(bundle.filaments, names[i]);
+        preset.config.option<ConfigOptionStrings>("filament_type")->values = {"PLA"};
+        preset.config.option<ConfigOptionInts>("nozzle_temperature")->values = {temperatures[i]};
+    }
+    Preset &petg = add_inmemory_preset(bundle.filaments, "Slot PETG");
+    petg.config.option<ConfigOptionStrings>("filament_type")->values = {"PETG"};
+    petg.config.option<ConfigOptionInts>("nozzle_temperature")->values = {245};
+    bundle.printers.get_edited_preset().config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4, 0.4, 0.4, 0.4}));
+    bundle.filament_presets.assign(names.begin(), names.end());
+
+    const DynamicPrintConfig before = bundle.full_config();
+    // What the dialog does after a material is picked with the combo on slot 3 (T3).
+    const int slot = PresetBundle::filament_dialog_slot(-1, 2, bundle.filament_presets.size());
+    REQUIRE(slot == 2);
+    bundle.set_filament_preset(size_t(slot), "Slot PETG");
+    const DynamicPrintConfig after = bundle.full_config();
+
+    const auto &ids = after.option<ConfigOptionStrings>("filament_settings_id")->values;
+    const auto &types = after.option<ConfigOptionStrings>("filament_type")->values;
+    const auto &temps = after.option<ConfigOptionInts>("nozzle_temperature")->values;
+    REQUIRE(ids.size() == 4);
+    CHECK(ids == std::vector<std::string>{"Slot PLA A", "Slot PLA B", "Slot PETG", "Slot PLA D"});
+    CHECK(types == std::vector<std::string>{"PLA", "PLA", "PETG", "PLA"});
+    CHECK(temps == std::vector<int>{200, 205, 245, 215});
+    CHECK(before.option<ConfigOptionInts>("nozzle_temperature")->values == std::vector<int>{200, 205, 210, 215});
+    // Nozzle sizes are owned by the printer preset and do not move with a material change.
+    CHECK(after.option<ConfigOptionFloats>("nozzle_diameter")->values ==
+          before.option<ConfigOptionFloats>("nozzle_diameter")->values);
+}

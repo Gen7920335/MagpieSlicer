@@ -509,7 +509,9 @@ void Tab::create_preset_tab()
                         m_presets_choice->GetString(selection).ToUTF8().data());
                     preset_name = m_preset_bundle->get_preset_name_by_alias(m_type, selected_label);
                 }
-                select_preset(preset_name);
+                const bool selected = select_preset(preset_name);
+                if (selected && m_type == Preset::TYPE_FILAMENT && wxGetApp().plater() != nullptr)
+                    wxGetApp().plater()->sidebar().assign_dialog_filament_to_slot(m_presets_choice->get_filament_idx());
             }
         });
     }

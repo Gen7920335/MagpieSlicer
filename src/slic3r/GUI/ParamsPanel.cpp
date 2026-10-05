@@ -620,6 +620,10 @@ void ParamsPanel::set_active_tab(wxPanel* tab)
     m_left_sizer->Layout();
     if (auto dialog = dynamic_cast<wxDialog*>(GetParent())) {
         wxString title = cur_tab->type() == Preset::TYPE_FILAMENT ? _L("Toolhead / Material settings") : _L("Printer settings");
+        // Name the plater slot the material combo edits, so a change is never applied to an unseen toolhead.
+        if (auto *tab = dynamic_cast<Tab *>(cur_tab); tab != nullptr && tab->type() == Preset::TYPE_FILAMENT &&
+            tab->get_combo_box() != nullptr && wxGetApp().preset_bundle->filament_presets.size() > 1)
+            title += wxString::Format(" - T%d", std::max(0, tab->get_combo_box()->get_filament_idx()) + 1);
         dialog->SetTitle(title);
     }
 

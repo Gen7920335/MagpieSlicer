@@ -4277,6 +4277,25 @@ bool Sidebar::show_object_list(bool show) const
 
 void Sidebar::finish_param_edit() { p->editing_filament = -1; }
 
+void Sidebar::assign_dialog_filament_to_slot(int dialog_combo_slot)
+{
+    // Slicing reads filament_presets[slot]. Only the sidebar edit-button path used to write it,
+    // so a material chosen after opening the dialog any other way changed the edited preset only.
+    PresetBundle &bundle = *wxGetApp().preset_bundle;
+    const int slot = PresetBundle::filament_dialog_slot(p->editing_filament, dialog_combo_slot, bundle.filament_presets.size());
+    if (slot < 0)
+        return;
+    const std::string name = Preset::remove_suffix_modified(bundle.filaments.get_selected_preset_name());
+    if (bundle.filament_presets[size_t(slot)] == name)
+        return;
+    bundle.set_filament_preset(size_t(slot), name);
+    wxGetApp().plater()->update_project_dirty_from_presets();
+    bundle.export_selections(*wxGetApp().app_config);
+    if (size_t(slot) < p->combos_filament.size())
+        p->combos_filament[size_t(slot)]->update();
+    wxGetApp().plater()->on_filament_change(size_t(slot));
+}
+
 std::vector<PlaterPresetComboBox*>& Sidebar::combos_filament()
 {
     return p->combos_filament;

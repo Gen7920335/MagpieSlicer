@@ -21,6 +21,9 @@
 #include <tuple>
 #include <fstream>
 #include <iterator>
+#include <cmath>
+#include <map>
+#include <sstream>
 
 using namespace Slic3r;
 using namespace Slic3r::Test;
@@ -1288,5 +1291,116 @@ TEST_CASE("Per-hotend toolhead width overrides are validated like the region wid
         Print print; Model model;
         make_print("toolhead_bridge_line_width", FloatOrPercent(0.7, false), print, model);
         CHECK(print.validate().string.empty());
+    }
+}
+
+namespace {
+struct PerToolOutput {
+    std::map<unsigned, std::set<int>> temperatures;  // M104/M109 targets, degC
+    std::map<unsigned, std::multiset<int>> widths_um; // every ;WIDTH: while the tool extrudes, micrometres
+    std::set<unsigned> tools;
+};
+
+PerToolOutput per_tool_output(const std::string &gcode)
+{
+    PerToolOutput out;
+    unsigned active = 0;
+    std::istringstream stream(gcode);
+    for (std::string line; std::getline(stream, line);) {
+        if (line.size() >= 2 && line[0] == 'T' && std::isdigit(static_cast<unsigned char>(line[1]))) {
+            active = unsigned(std::stoi(line.substr(1)));
+            out.tools.insert(active);
+        } else if (line.rfind("M104", 0) == 0 || line.rfind("M109", 0) == 0) {
+            const std::string code = line.substr(0, line.find(';'));
+            const auto s = code.find(" S");
+            if (s == std::string::npos)
+                continue;
+            unsigned tool = active;
+            if (const auto t = code.find(" T"); t != std::string::npos)
+                tool = unsigned(std::stoi(code.substr(t + 2)));
+            const int target = std::stoi(code.substr(s + 2));
+            if (target > 0)
+                out.temperatures[tool].insert(target);
+        } else if (line.rfind(";WIDTH:", 0) == 0) {
+            out.widths_um[active].insert(int(std::lround(std::stod(line.substr(7)) * 1000.)));
+        }
+    }
+    return out;
+}
+} // namespace
+
+TEST_CASE("Per-toolhead material and nozzle changes reach only that toolhead's G-code",
+          "[MultiFilament][FilamentSelection][ToolheadRouting]")
+{
+    // Four direct toolheads, each printing its own cube. A change made for one slot must move
+    // that toolhead's temperature or bead width and leave the other three exactly as they were.
+    // `edit_nozzle` replays the GUI nozzle edit (HotendConfigService, used by the sidebar nozzle
+    // combo and the Hotend page) on toolhead index 1; 0 leaves every toolhead at 0.4 mm.
+    auto make = [](const std::vector<int> &temperatures, double edit_nozzle) {
+        auto config = multifilament_config(4, {{"enable_support", false}, {"enable_prime_tower", false},
+            {"skirt_loops", 0}, {"brim_type", "no_brim"}, {"layer_height", 0.2},
+            {"initial_layer_print_height", 0.2}});
+        config.set_num_extruders(4);
+        config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(false));
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.4, 0.4, 0.4, 0.4});
+        HotendConfigService::normalize_printer_config(config);
+        if (edit_nozzle > 0.)
+            REQUIRE(HotendConfigService::edit_nozzle_diameter(config, 1, edit_nozzle, false));
+        config.set_key_value("nozzle_temperature", new ConfigOptionInts(temperatures));
+        config.set_key_value("nozzle_temperature_initial_layer", new ConfigOptionInts(temperatures));
+        config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+        config.set_key_value("filament_map", new ConfigOptionInts{1, 2, 3, 4});
+        config.set_key_value("flush_multiplier", new ConfigOptionFloats{1., 1., 1., 1.});
+        auto *flush = new ConfigOptionFloats;
+        flush->values.assign(4 * 4 * 4, 0.);
+        config.set_key_value("flush_volumes_matrix", flush);
+        std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides;
+        for (int filament = 1; filament <= 4; ++filament) {
+            overrides.push_back({{"extruder", filament}});
+            for (const char *key : {"outer_wall_filament_id", "inner_wall_filament_id", "sparse_infill_filament_id",
+                     "internal_solid_filament_id", "top_surface_filament_id", "bottom_surface_filament_id"})
+                overrides.back().push_back({key, filament});
+        }
+        Print print;
+        Model model;
+        init_print(std::vector<TriangleMesh>{cube(8), cube(8), cube(8), cube(8)}, print, model, config, &overrides);
+        print.process();
+        return per_tool_output(gcode(print));
+    };
+    const auto base = make({200, 205, 210, 215}, 0.);
+    REQUIRE(base.tools == std::set<unsigned>{0, 1, 2, 3});
+    for (unsigned tool = 0; tool < 4; ++tool) {
+        CAPTURE(tool);
+        CHECK(base.temperatures.at(tool).count(200 + 5 * int(tool)) == 1);
+    }
+
+    SECTION("material change on T3") {
+        const auto changed = make({200, 205, 245, 215}, 0.);
+        CHECK(changed.temperatures.at(2).count(245) == 1);
+        CHECK(changed.temperatures.at(2).count(210) == 0);
+        for (unsigned tool : {0u, 1u, 3u}) {
+            CAPTURE(tool);
+            CHECK(changed.temperatures.at(tool) == base.temperatures.at(tool));
+            CHECK(changed.widths_um.at(tool) == base.widths_um.at(tool));
+        }
+    }
+    SECTION("nozzle size change on T2") {
+        const auto changed = make({200, 205, 210, 215}, 0.6);
+        // The edited 0.6 mm toolhead now lays wider beads. Compare the most
+        // common bead width, micrometres, so a few clamped gap fills do not decide the outcome.
+        auto mode_um = [](const std::multiset<int> &widths) {
+            int best = 0;
+            size_t best_count = 0;
+            for (auto it = widths.begin(); it != widths.end(); it = widths.upper_bound(*it))
+                if (const size_t n = widths.count(*it); n > best_count) { best = *it; best_count = n; }
+            return best;
+        };
+        CAPTURE(mode_um(base.widths_um.at(1)), mode_um(changed.widths_um.at(1)));
+        CHECK(mode_um(changed.widths_um.at(1)) > mode_um(base.widths_um.at(1)));
+        for (unsigned tool : {0u, 2u, 3u}) {
+            CAPTURE(tool);
+            CHECK(changed.widths_um.at(tool) == base.widths_um.at(tool));
+            CHECK(changed.temperatures.at(tool) == base.temperatures.at(tool));
+        }
     }
 }

@@ -5618,6 +5618,12 @@ std::vector<std::string> PresetBundle::export_current_configs(const std::string 
 
 // Set the filament preset name. As the name could come from the UI selection box,
 // an optional "(modified)" suffix will be removed from the filament name.
+int PresetBundle::filament_dialog_slot(int sidebar_editing_slot, int dialog_combo_slot, size_t slot_count)
+{
+    const int slot = sidebar_editing_slot >= 0 ? sidebar_editing_slot : std::max(0, dialog_combo_slot);
+    return size_t(slot) < slot_count ? slot : -1;
+}
+
 void PresetBundle::set_filament_preset(size_t idx, const std::string &name)
 {
     if (idx >= filament_presets.size()) {
