@@ -5,10 +5,10 @@ option(MAGPIE_VULKAN_TEST_BRANDING "Use an isolated identity for Vulkan test bui
 option(MAGPIE_SLICING_PROFILER "Build the isolated Magpie slicing profiler development version" OFF)
 
 # Public Magpie releases append a two-field Magpie sequence to the Orca base
-# version. For Orca 2.5.0, Magpie line 0 revision 9 is therefore 2.5.0.0.9.
+# version. For Orca 2.5.0, Magpie line 1 revision 0 is therefore 2.5.0.1.0.
 set(MAGPIE_ORCA_BASE_VERSION "2.5.0")
-set(MAGPIE_RELEASE_LINE 0)
-set(MAGPIE_RELEASE_REVISION 9)
+set(MAGPIE_RELEASE_LINE 1)
+set(MAGPIE_RELEASE_REVISION 0)
 set(MAGPIE_RELEASE_VERSION
     "${MAGPIE_ORCA_BASE_VERSION}.${MAGPIE_RELEASE_LINE}.${MAGPIE_RELEASE_REVISION}")
 math(EXPR MAGPIE_WINDOWS_BUILD_VERSION
@@ -18,7 +18,7 @@ math(EXPR MAGPIE_WINDOWS_BUILD_VERSION
 # Betas of one release otherwise share every version field, so Add/Remove Programs,
 # file properties and the installer name could not tell them apart. The G-code
 # producer version and the OTA/update version keep the plain release number.
-set(MAGPIE_PRERELEASE_LABEL "beta.7")
+set(MAGPIE_PRERELEASE_LABEL "")
 if(MAGPIE_PRERELEASE_LABEL)
     set(MAGPIE_PACKAGE_VERSION "${MAGPIE_RELEASE_VERSION}-${MAGPIE_PRERELEASE_LABEL}")
 else()

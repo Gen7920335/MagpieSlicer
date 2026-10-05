@@ -16,14 +16,20 @@ An OrcaSlicer-based slicer that combines different nozzle sizes in one print and
 
 | Item | Details |
 | --- | --- |
-| Latest version | **2.5.0.0.9 Beta 7** ([v2.5.0.0.9-beta.7](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.0.9-beta.7)) |
+| Latest version | **2.5.0.1.0** ([v2.5.0.1.0](https://github.com/Gen7920335/MagpieSlicer/releases/tag/v2.5.0.1.0)) |
 | Platform | Windows x64 installer |
-| Status | Pre-release |
+| Status | Release |
 | Get it | [GitHub Releases](https://github.com/Gen7920335/MagpieSlicer/releases) |
 
 - Installs alongside OrcaSlicer without sharing its settings folder or file associations. `orcaslicer://` links are still handled for website integration.
 - The installer is not code-signed, so Windows SmartScreen may warn.
 - Runs without Vulkan or NVIDIA drivers; slicing then uses the CPU.
+
+## What's new in 2.5.0.1.0
+
+- **OrcaSlicer profile import:** OrcaSlicer user profiles are converted for Magpie on import. Presets built on vendors Magpie does not have installed (Voron, BBL, ...) load as standalone presets with the same values, and presets from Orca account folders are merged into the default folder. On a fresh install the printer profiles they need, such as Snapmaker and Voron, are installed first, so U1 presets keep their original parents. 62 real user presets were compared one by one with the values OrcaSlicer resolves; all matched.
+- **U1 per-toolhead values:** older U1 printer presets saved without a toolhead list keep z hop, retraction and other values for toolheads 2 to 4 instead of falling back to toolhead 1.
+- **Startup crash:** Magpie no longer quits at startup when a printer preset lists extruder variants without extruder ids.
 
 ## What's new in Beta 7
 
@@ -106,13 +112,13 @@ Geometry-sensitive stages are validated against or fall back to the CPU. Speedup
 - **Snapmaker U1:** the native device panel shows the camera, current layer, temperatures, fans, motion state, and common controls in one view. PA calibration, bed leveling, and timelapse default to off. Printer and default process values follow Snapmaker's official Orca.
 - **LESIC:** one bed-sized cylindrical model checks temperature and maximum volumetric flow together.
 
-## Verification (Beta 7)
+## Verification (2.5.0.1.0)
 
-- Tests: fff_print 167 (1 skipped), libslic3r 210, half-layer 69 passed
-- An Orca 2.3 project (mainbody.3mf) sliced with the installer build: the toolhead-1 TPU part prints on T0 and the toolhead-3 cubes on T2
-- 204 random setting combinations sliced and their G-code checked automatically (coordinates, temperatures, layer heights, extrusion)
+- Tests: fff_print 167 (1 skipped), libslic3r 223 (1 skipped), half-layer 69 passed
+- OrcaSlicer import: 62 real user presets imported and loaded, 55 compared value by value with 0 mismatches, re-import changes nothing
+- GUI started twice on an empty settings folder: Snapmaker and Voron installed and presets imported on the first start, 0 load errors and no file changes on the second
 
-A real administrator install and uninstall, the installed GUI, and physical prints were not checked for this beta. Review multi-tool output, machine-specific start G-code, and low-temperature interface behavior before sending a job.
+A real administrator install and uninstall, operating the installed GUI, and physical prints were not checked for this release. Review multi-tool output, machine-specific start G-code, and low-temperature interface behavior before sending a job.
 
 ## Building from source (Windows)
 
