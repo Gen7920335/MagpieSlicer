@@ -447,7 +447,7 @@ DesignPanel::DesignPanel(wxWindow* parent)
     m_toolbar->SetScrollRate(15, 0);
     m_toolbar->ShowScrollbars(wxSHOW_SB_DEFAULT, wxSHOW_SB_NEVER);
     // Theme-aware tool ribbon: dark uses Orca's elevated surface (#36363C / hover
-    // #4D4D54); light maps onto the app's light chrome so the strip follows the theme.
+    // #485362); light maps onto the app's light chrome so the strip follows the theme.
     m_toolbar->SetBackgroundColour(dp_ribbon_bg());
 
     auto icon_btn = [this](const char* icon, const wxString& tip) {

@@ -234,7 +234,7 @@ private:
         dc.SetBackground(wxBrush(GetParent() ? GetParent()->GetBackgroundColour() : *wxWHITE));
         dc.Clear();
  
-        wxColour textCol = StateColor::darkModeColorFor(m_hovered ? "#26A69A" : "#363636");
+        wxColour textCol = StateColor::darkModeColorFor(m_hovered ? "#5AA8FF" : "#363636");
  
         dc.SetTextForeground(textCol);
         dc.SetFont(m_font);
@@ -423,7 +423,7 @@ wxBoxSizer *PreferencesDialog::create_item_language_combobox(wxString title, wxS
         wxLANGUAGE_ROMANIAN
     };
 
-    auto translations = wxTranslations::Get()->GetAvailableTranslations(SLIC3R_APP_KEY);
+    auto translations = get_available_app_translations();
     std::vector<const wxLanguageInfo *> language_infos;
     language_infos.emplace_back(wxLocale::GetLanguageInfo(wxLANGUAGE_ENGLISH));
     for (size_t i = 0; i < translations.GetCount(); ++i) {
@@ -1436,7 +1436,7 @@ wxBoxSizer *PreferencesDialog::create_item_network_plugin_version(wxString title
 wxBoxSizer* PreferencesDialog::create_item_link_association( wxString url_prefix, wxString website_name)
 {
     wxString title = _L("Associate") + (boost::format(" %1%://") % url_prefix.c_str()).str();
-    wxString tooltip = _L("Associate") + " " + url_prefix + ":// " + _L("with OrcaSlicer so that Orca can open models from") + " " + website_name;
+    wxString tooltip = _L("Associate") + " " + url_prefix + ":// " + _L("with Magpie Slicer so that it can open models from") + " " + website_name;
 
     std::wstring registered_bin; // not used, just here to provide a ref to check fn
     bool reg_to_current_instance = wxGetApp().check_url_association(url_prefix.ToStdWstring(), registered_bin);
@@ -1686,12 +1686,12 @@ void PreferencesDialog::create_items()
     g_sizer->Add(item_darkmode);
 #endif
 
-    auto item_single_instance  = create_item_checkbox(_L("Allow only one OrcaSlicer instance"),
+    auto item_single_instance  = create_item_checkbox(_L("Allow only one Magpie Slicer instance"),
     #if __APPLE__
             _L("On OSX there is always only one instance of app running by default. However it is allowed to run multiple instances "
                 "of same app from the command line. In such case this settings will allow only one instance."),
     #else
-            _L("If this is enabled, when starting OrcaSlicer and another instance of the same OrcaSlicer is already running, that instance will be reactivated instead."),
+            _L("If this is enabled, when starting Magpie Slicer and another instance of the same Magpie Slicer is already running, that instance will be reactivated instead."),
     #endif
             "single_instance");
     g_sizer->Add(item_single_instance);
@@ -1867,14 +1867,14 @@ void PreferencesDialog::create_items()
 
     auto item_auto_reslice = create_item_auto_reslice(
         _L("Auto slice after changes"),
-        _L("If enabled, OrcaSlicer will re-slice automatically whenever slicing-related settings change."),
+        _L("If enabled, Magpie Slicer will re-slice automatically whenever slicing-related settings change."),
         _L("Delay in seconds before auto slicing starts, allowing multiple edits to be grouped. Use 0 to slice immediately."));
     g_sizer->Add(item_auto_reslice);
 
     auto item_mix_print_high_low_temperature = create_item_checkbox(_L("Remove mixed temperature restriction"), _L("With this option enabled, you can print materials with a large temperature difference together."), "enable_high_low_temp_mixed_printing");
     g_sizer->Add(item_mix_print_high_low_temperature);
 
-    auto item_remember_print_action = create_item_checkbox(_L("Remember last print action"), _L("If enabled, OrcaSlicer will remember the last selected option in the print button's dropdown (e.g. Print, Export plate sliced file, Export G-code file) and use it as the default on next startup."), "remember_print_action");
+    auto item_remember_print_action = create_item_checkbox(_L("Remember last print action"), _L("If enabled, Magpie Slicer will remember the last selected option in the print button's dropdown (e.g. Print, Export plate sliced file, Export G-code file) and use it as the default on next startup."), "remember_print_action");
     g_sizer->Add(item_remember_print_action);
 
     //// CONTROL > Camera
@@ -2242,7 +2242,7 @@ void PreferencesDialog::create_items()
         g_sizer = f_sizers.back();
         g_sizer->AddGrowableCol(0, 1);
 
-        g_sizer->Add(create_item_title(_L("Associate files to OrcaSlicer")), 1, wxEXPAND);
+        g_sizer->Add(create_item_title(_L("Associate files to Magpie Slicer")), 1, wxEXPAND);
 
         auto item_open_default_apps = create_item_button(
             _L("File associations for the Microsoft Store version are managed by Windows Settings."),
@@ -2259,22 +2259,22 @@ void PreferencesDialog::create_items()
     g_sizer->AddGrowableCol(0, 1);
 
     //// ASSOCIATE > Extensions
-    g_sizer->Add(create_item_title(_L("Associate files to OrcaSlicer")), 1, wxEXPAND);
+    g_sizer->Add(create_item_title(_L("Associate files to Magpie Slicer")), 1, wxEXPAND);
 
-    auto item_associate_3mf    = create_item_checkbox(_L("Associate 3MF files to OrcaSlicer"), _L("If enabled, this sets OrcaSlicer as the default application to open 3MF files.") , "associate_3mf");
+    auto item_associate_3mf    = create_item_checkbox(_L("Associate 3MF files to Magpie Slicer"), _L("If enabled, this sets Magpie Slicer as the default application to open 3MF files.") , "associate_3mf");
     g_sizer->Add(item_associate_3mf);
 
-    auto item_associate_drc = create_item_checkbox(_L("Associate DRC files to OrcaSlicer"), _L("If enabled, sets OrcaSlicer as default application to open DRC files."), "associate_drc");
+    auto item_associate_drc = create_item_checkbox(_L("Associate DRC files to Magpie Slicer"), _L("If enabled, sets Magpie Slicer as default application to open DRC files."), "associate_drc");
     g_sizer->Add(item_associate_drc);
 
-    auto item_associate_stl    = create_item_checkbox(_L("Associate STL files to OrcaSlicer"), _L("If enabled, this sets OrcaSlicer as the default application to open STL files.") , "associate_stl");
+    auto item_associate_stl    = create_item_checkbox(_L("Associate STL files to Magpie Slicer"), _L("If enabled, this sets Magpie Slicer as the default application to open STL files.") , "associate_stl");
     g_sizer->Add(item_associate_stl);
 
-    auto item_associate_step   = create_item_checkbox(_L("Associate STEP files to OrcaSlicer"), _L("If enabled, this sets OrcaSlicer as the default application to open STEP files."), "associate_step");
+    auto item_associate_step   = create_item_checkbox(_L("Associate STEP files to Magpie Slicer"), _L("If enabled, this sets Magpie Slicer as the default application to open STEP files."), "associate_step");
     g_sizer->Add(item_associate_step);
 
     //// ASSOCIATE > WebLinks
-    g_sizer->Add(create_item_title(_L("Associate web links to OrcaSlicer")), 1, wxEXPAND);
+    g_sizer->Add(create_item_title(_L("Associate web links to Magpie Slicer")), 1, wxEXPAND);
 
     auto associate_url_prusa   = create_item_link_association(L"prusaslicer", "Printables.com");
     g_sizer->Add(associate_url_prusa);

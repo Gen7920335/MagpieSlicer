@@ -423,7 +423,7 @@ SendToPrinterDialog::SendToPrinterDialog(Plater *plater)
 
     m_statictext_finish = new wxStaticText(m_panel_finish, wxID_ANY, _L("Send complete"), wxDefaultPosition, wxDefaultSize, 0);
     m_statictext_finish->Wrap(-1);
-    m_statictext_finish->SetForegroundColour(wxColour(0, 150, 136));
+    m_statictext_finish->SetForegroundColour(wxColour(57, 143, 244));
     m_sizer_finish_h->Add(m_statictext_finish, 0, wxALIGN_CENTER | wxALL, FromDIP(5));
 
     m_sizer_finish_v->Add(m_sizer_finish_h, 1, wxALIGN_CENTER, 0);
@@ -1512,7 +1512,7 @@ void SendToPrinterDialog::show_status(PrintDialogStatus status, std::vector<wxSt
 		Enable_Send_Button(false);
 		Enable_Refresh_Button(true);
     } else if (status == PrintDialogStatus::PrintStatusNotOnTheSameLAN) {
-        wxString msg_text = _L("The printer is required to be on the same LAN as Orca Slicer.");
+        wxString msg_text = _L("The printer is required to be on the same LAN as Magpie Slicer.");
         update_print_status_msg(msg_text, true, true);
         Enable_Send_Button(false);
         Enable_Refresh_Button(true);

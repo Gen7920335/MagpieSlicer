@@ -177,11 +177,11 @@ TroubleshootDialog::TroubleshootDialog()
     // LEFT SIZER //////////////////////
 
     // HEADER
-    m_logo            = ScalableBitmap(this, is_dark ? "OrcaSlicer_horizontal_dark" : "OrcaSlicer_horizontal_light", 64);
+    m_logo            = ScalableBitmap(this, is_dark ? "MagpieSlicer_horizontal_dark" : "MagpieSlicer_horizontal_light", 64);
     m_header_logo     = new wxStaticBitmap(this, wxID_ANY, m_logo.bmp());
     auto logo_line    = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(2)));
-    logo_line->SetBackgroundColour(StateColor::darkModeColorFor(wxColour("#009687")));
-    auto version      = new Label(this, wxString(SoftFever_VERSION), wxALIGN_CENTRE_HORIZONTAL);
+    logo_line->SetBackgroundColour(StateColor::darkModeColorFor(wxColour("#398ff4")));
+    auto version      = new Label(this, wxString(SLIC3R_DISPLAY_VERSION), wxALIGN_CENTRE_HORIZONTAL);
     wxFont version_font = GetFont();
     version_font = version_font.Scaled(1.65f); // SetPointSize(18) not works on macOS because it uses a 72 PPI reference
     version->SetFont(version_font);
@@ -358,7 +358,7 @@ TroubleshootDialog::TroubleshootDialog()
     auto log_pack_btn = create_btn(_L("Pack") + "...", "");
     log_pack_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
         auto data_dir   = boost::filesystem::path(Slic3r::data_dir());
-        ExportAsZip({wxString((data_dir / "log").string())}, "OrcaSlicer_Logs_" + GetTimestamp());
+        ExportAsZip({wxString((data_dir / "log").string())}, "MagpieSlicer_Logs_" + GetTimestamp());
     });
     log_pack_szr->Add(log_pack_btn, 0, wxALIGN_CENTER_VERTICAL);
 
@@ -435,7 +435,7 @@ wxString TroubleshootDialog::GetTimestamp()
 wxString TroubleshootDialog::GetSysInfoAll()
 {
     wxString info;
-    info += "Version   :  " + wxString(SoftFever_VERSION) + "\n"
+    info += "Version   :  " + wxString(SLIC3R_DISPLAY_VERSION) + "\n"
           + "Build     :  " + wxString(build_commit_label) + "\n"
           + "Package   :  " + GetPackageType() + "\n"
           + "Platform  :  " + GetOSinfo()      + "\n"
@@ -1011,7 +1011,7 @@ void TroubleshootDialog::PackAll()
         ).ShowModal();
     }
 
-    ExportAsZip(include_zip, "OrcaSlicer_PackedDebugInfo_" + GetTimestamp());
+    ExportAsZip(include_zip, "MagpieSlicer_PackedDebugInfo_" + GetTimestamp());
 }
 
 void TroubleshootDialog::RebuildSystemProfiles()
@@ -1034,7 +1034,7 @@ void TroubleshootDialog::RebuildSystemProfiles()
     
     MessageDialog msg(this,
         _L("Restart Required") + "\n" +
-        _L("Please make sure any instances of OrcaSlicer are not running") + "\n" +
+        _L("Please make sure any instances of Magpie Slicer are not running") + "\n" +
         _L("Do you want to continue?")
         , wxString(SLIC3R_APP_FULL_NAME), wxICON_QUESTION | wxOK | wxCANCEL
     );

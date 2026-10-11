@@ -251,7 +251,7 @@ void MsgDialog::apply_style(long style)
     logo->SetBitmap( create_scaled_bitmap(style & wxAPPLY        ? "completed" :
                                           style & wxICON_WARNING        ? "exclamation" : // ORCA "exclamation" used for dialogs "obj_warning" used for 16x16 areas
                                           style & wxICON_INFORMATION    ? "info"        :
-                                          style & wxICON_QUESTION       ? "question"    : "OrcaSlicer", this, 64, style & wxICON_ERROR));
+                                          style & wxICON_QUESTION       ? "question"    : "MagpieSlicer", this, 64, style & wxICON_ERROR));
 }
 
 void MsgDialog::finalize()
@@ -463,7 +463,7 @@ static void add_msg_content(wxWindow   *parent,
     }
 
     if (!link_text.IsEmpty() && link_callback) {
-        msg_escaped += "<span><a href=\"#\" style=\"color:rgb(0, 150, 136); text-decoration:underline;\">" + std::string(link_text.ToUTF8().data()) + "</a></span>";
+        msg_escaped += "<span><a href=\"#\" style=\"color:rgb(57, 143, 244); text-decoration:underline;\">" + std::string(link_text.ToUTF8().data()) + "</a></span>";
     }
 
     html->SetPage("<html><body bgcolor=\"" + bgr_clr_str + "\"><font color=\"" + text_clr_str + "\">" + wxString::FromUTF8(msg_escaped.data()) + "</font></body></html>");
@@ -486,7 +486,7 @@ ErrorDialog::ErrorDialog(wxWindow *parent, const wxString &temp_msg, bool has_co
     add_msg_content(this, content_sizer, msg, has_code_excerpts);
 
 	// Use a small bitmap for code excerpts, which cannot wrap and so need the width.
-	logo->SetBitmap(create_scaled_bitmap("OrcaSlicer_192px_grayscale.png", this, has_code_excerpts ? 48 : /*1*/64));
+	logo->SetBitmap(create_scaled_bitmap("MagpieSlicer_192px_grayscale.png", this, has_code_excerpts ? 48 : /*1*/64));
 
     SetMaxSize(MSG_DLG_MAX_SIZE);
 

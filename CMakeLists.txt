@@ -73,7 +73,7 @@ endif ()
 # project() reads this, so set it first.
 set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_CURRENT_LIST_DIR}/cmake/modules/ClangClShowIncludes.cmake")
 
-project(OrcaSlicer)
+project(MagpieSlicer)
 
 # Backward compatibility for old CMake versions
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_VERSION VERSION_LESS "3.25")
@@ -281,7 +281,7 @@ if (APPLE)
     if (CMAKE_MACOSX_BUNDLE)
         set(CMAKE_INSTALL_RPATH @executable_path/../Frameworks)
     endif()
-    SET(CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.orcaslicer.OrcaSlicer")
+    SET(CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${SLIC3R_APP_BUNDLE_ID}")
 
     # The macOS CI jobs build with Ninja (build_release_macos.sh -x), so the Xcode generator
     # is not covered. Xcode adds -Wshorten-64-to-32 by default ("Implicit Conversion to 32 Bit
@@ -331,7 +331,7 @@ endif ()
 
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     message(STATUS "Automatically setting CMAKE_INSTALL_PREFIX")
-    set_property(CACHE CMAKE_INSTALL_PREFIX PROPERTY VALUE "${CMAKE_BINARY_DIR}/OrcaSlicer")
+    set_property(CACHE CMAKE_INSTALL_PREFIX PROPERTY VALUE "${CMAKE_BINARY_DIR}/MagpieSlicer")
 endif()
 
 message(STATUS "CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
@@ -729,6 +729,16 @@ add_definitions(-DwxUSE_UNICODE -D_UNICODE -DUNICODE -DWXINTL_NO_GETTEXT_MACRO)
 
 # Disable unsafe implicit wxString to const char* / std::string and vice versa. This implicit conversion breaks the UTF-8 encoding quite often.
 add_definitions(-DwxNO_UNSAFE_WXSTRING_CONV)
+
+option(MAGPIE_SLICING_TIMING "Record slicing timings without changing application identity" OFF)
+if (MAGPIE_SLICING_TIMING OR MAGPIE_SLICING_PROFILER)
+    add_definitions(-DMAGPIE_SLICING_TIMING=1)
+endif ()
+
+if (MAGPIE_SLICING_PROFILER)
+    message(STATUS "Building isolated Magpie Slicer Profiler development version")
+    add_definitions(-DMAGPIE_SLICING_PROFILER=1)
+endif ()
 
 if (SLIC3R_PROFILE)
     message("OrcaSlicer will be built with a Shiny invasive profiler")
@@ -1296,7 +1306,6 @@ if(BUILD_TESTS)
 endif()
 
 if (NOT WIN32 AND NOT APPLE)
-    set(SLIC3R_APP_CMD "orca-slicer")
     configure_file(${LIBDIR}/dev-utils/platform/unix/build_appimage.sh.in ${CMAKE_CURRENT_BINARY_DIR}/build_appimage.sh USE_SOURCE_PERMISSIONS @ONLY)
 endif()
 
@@ -1326,10 +1335,10 @@ elseif (SLIC3R_FHS)
     if(ORCA_BUNDLED_UV_EXECUTABLE)
         install(PROGRAMS "${ORCA_BUNDLED_UV_EXECUTABLE}" DESTINATION "${SLIC3R_FHS_RESOURCES}/tools/uv" RENAME "${ORCA_BUNDLED_UV_FILENAME}")
     endif()
-    install(FILES src/dev-utils/platform/unix/com.orcaslicer.OrcaSlicer.desktop DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
+    install(FILES src/dev-utils/platform/unix/com.magpieslicer.MagpieSlicer.desktop DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
     foreach(SIZE 32 128 192)
-        install(FILES ${SLIC3R_RESOURCES_DIR}/images/OrcaSlicer_${SIZE}px.png
-            DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${SIZE}x${SIZE}/apps RENAME OrcaSlicer.png
+        install(FILES ${SLIC3R_RESOURCES_DIR}/images/MagpieSlicer_${SIZE}px.png
+            DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${SIZE}x${SIZE}/apps RENAME MagpieSlicer.png
         )
     endforeach()
 elseif (CMAKE_MACOSX_BUNDLE)
@@ -1338,7 +1347,7 @@ elseif (CMAKE_MACOSX_BUNDLE)
         install(PROGRAMS "${ORCA_BUNDLED_UV_EXECUTABLE}" DESTINATION "${CMAKE_INSTALL_PREFIX}/OrcaSlicer.app/Contents/Resources/tools/uv" RENAME "${ORCA_BUNDLED_UV_FILENAME}")
     endif()
 else ()
-    install(FILES src/dev-utils/platform/unix/com.orcaslicer.OrcaSlicer.desktop DESTINATION ${CMAKE_INSTALL_PREFIX}/resources/applications)
+    install(FILES src/dev-utils/platform/unix/com.magpieslicer.MagpieSlicer.desktop DESTINATION ${CMAKE_INSTALL_PREFIX}/resources/applications)
     install(DIRECTORY "${SLIC3R_RESOURCES_DIR}/" DESTINATION "${CMAKE_INSTALL_PREFIX}/resources")
     if(ORCA_BUNDLED_UV_EXECUTABLE)
         install(PROGRAMS "${ORCA_BUNDLED_UV_EXECUTABLE}" DESTINATION "${CMAKE_INSTALL_PREFIX}/resources/tools/uv" RENAME "${ORCA_BUNDLED_UV_FILENAME}")
@@ -1364,12 +1373,13 @@ endif ()
 install(FILES ${CMAKE_SOURCE_DIR}/LICENSE.txt DESTINATION ".")
 configure_file(${LIBDIR}/dev-utils/platform/unix/fhs.hpp.in ${LIBDIR_BIN}/dev-utils/platform/unix/fhs.hpp)
 
-set (CPACK_PACKAGE_NAME "OrcaSlicer")
-set (CPACK_PACKAGE_VENDOR "SoftFever")
+set (CPACK_PACKAGE_NAME "${SLIC3R_PACKAGE_NAME}")
+set (CPACK_PACKAGE_VENDOR "${SLIC3R_PACKAGE_VENDOR}")
 set (CPACK_PACKAGE_VERSION_MAJOR "${ORCA_VERSION_MAJOR}")
 set (CPACK_PACKAGE_VERSION_MINOR "${ORCA_VERSION_MINOR}")
 set (CPACK_PACKAGE_VERSION_PATCH "${ORCA_VERSION_PATCH}")
-set (CPACK_PACKAGE_FILE_NAME "OrcaSlicer_Windows_Installer_V${SoftFever_VERSION}")
+set (CPACK_PACKAGE_VERSION "${MAGPIE_PACKAGE_VERSION}")
+set (CPACK_PACKAGE_FILE_NAME "${SLIC3R_APP_KEY}_Windows_Installer_V${MAGPIE_PACKAGE_VERSION}")
 # Suffix the Windows installer with its target arch so the x64 and arm64 builds
 # produce distinct filenames (matches ARCH_SUFFIX in build_orca.yml). Same
 # CMAKE_SYSTEM_PROCESSOR mapping used by orcaslicer_copy_dlls() above.
@@ -1380,20 +1390,39 @@ if (WIN32)
         string (APPEND CPACK_PACKAGE_FILE_NAME "_x64")
     endif ()
 endif ()
-set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "Orca Slicer is an open source slicer for FDM printers")
-set (CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/OrcaSlicer/OrcaSlicer")
-set (CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
-set (CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/resources/images\\\\OrcaSlicer.ico")
+set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "Magpie Slicer is an open source slicer for FDM printers")
+set (CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/Gen7920335/MagpieSlicer")
+set (CPACK_PACKAGE_INSTALL_DIRECTORY "${SLIC3R_APP_NAME}")
+set (CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/resources/images\\\\MagpieSlicer.ico")
 set (CPACK_NSIS_MUI_ICON "${CPACK_PACKAGE_ICON}")
 set (CPACK_NSIS_MUI_UNIICON "${CPACK_PACKAGE_ICON}")
-set (CPACK_NSIS_INSTALLED_ICON_NAME  "$INSTDIR\\\\orca-slicer.exe")
+set (CPACK_NSIS_PACKAGE_NAME "${SLIC3R_PACKAGE_NAME}")
+set (CPACK_NSIS_DISPLAY_NAME "${SLIC3R_PACKAGE_NAME}")
+set (CPACK_NSIS_INSTALLED_ICON_NAME  "${SLIC3R_APP_CMD}.exe")
 set (CPACK_PACKAGE_CHECKSUM SHA256)
-set (CPACK_PACKAGE_INSTALL_REGISTRY_KEY "OrcaSlicer")
+set (CPACK_PACKAGE_INSTALL_REGISTRY_KEY "${SLIC3R_APP_KEY}")
 set (CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+# The app writes its HKCU file associations and the shared orcaslicer:// handler itself,
+# so the default uninstaller left them pointing at a deleted exe. Remove only entries that
+# still belong to this installation. Backslashes are doubled once more for CPackConfig.cmake.
+set (MAGPIE_NSIS_FILE_PROG_ID "${SLIC3R_APP_KEY}.File.1")
+set (CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "")
+foreach (MAGPIE_NSIS_EXTENSION 3mf stl step stp gcode)
+    string (APPEND CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
+        "ReadRegStr $0 HKCU 'Software\\\\Classes\\\\.${MAGPIE_NSIS_EXTENSION}' ''\n"
+        "StrCmp $0 '${MAGPIE_NSIS_FILE_PROG_ID}' 0 +2\n"
+        "DeleteRegValue HKCU 'Software\\\\Classes\\\\.${MAGPIE_NSIS_EXTENSION}' ''\n")
+endforeach ()
+string (APPEND CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
+    "DeleteRegKey HKCU 'Software\\\\Classes\\\\${MAGPIE_NSIS_FILE_PROG_ID}'\n"
+    "ReadRegStr $0 HKCU 'Software\\\\Classes\\\\orcaslicer\\\\shell\\\\open\\\\command' ''\n"
+    "StrCmp $0 `\\\"$INSTDIR\\\\${SLIC3R_APP_CMD}.exe\\\" \\\"%1\\\"` 0 +2\n"
+    "DeleteRegKey HKCU 'Software\\\\Classes\\\\orcaslicer'\n"
+    "System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'\n")
 set (CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
 # set (CPACK_NSIS_MODIFY_PATH "ON")
-set(CPACK_PACKAGE_EXECUTABLES "orca-slicer;OrcaSlicer")
-set(CPACK_CREATE_DESKTOP_LINKS "orca-slicer")
+set(CPACK_PACKAGE_EXECUTABLES "${SLIC3R_APP_CMD};${SLIC3R_APP_NAME}")
+set(CPACK_CREATE_DESKTOP_LINKS "${SLIC3R_APP_CMD}")
 set (CPACK_RESOURCE_FILE_LICENSE ${CMAKE_SOURCE_DIR}/LICENSE.txt) # must also include in install command
 
 set(CPACK_WIX_UPGRADE_GUID "058245e8-20e0-4a95-9ab7-1acfe17ad511")

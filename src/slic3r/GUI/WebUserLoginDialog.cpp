@@ -119,7 +119,7 @@ ZUserLogin::ZUserLogin(std::shared_ptr<ICloudServiceAgent> cloud_agent)
         m_sizer_main->Add(m_line_top, 0, wxEXPAND, 0);
 
         auto* m_message = new wxStaticText(this, wxID_ANY,
-                                          _L("Cloud agent is not available. Please restart OrcaSlicer and try again."),
+                                          _L("Cloud agent is not available. Please restart Magpie Slicer and try again."),
                                           wxDefaultPosition, wxDefaultSize, 0);
         m_message->SetForegroundColour(*wxBLACK);
         m_message->Wrap(FromDIP(360));

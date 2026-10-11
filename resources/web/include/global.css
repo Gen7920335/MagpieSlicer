@@ -12,17 +12,17 @@
 
 /*/// COLORS ///*/
 :root { 
-	--main-color			: #009688;
-	--main-color-hover		: #26A69A;
-	--main-color-fixed		: #009688;
+	--main-color			: #398FF4;
+	--main-color-hover		: #5AA8FF;
+	--main-color-fixed		: #398FF4;
 	--bg-color				: #FFFFFF;
 	--bg-color-secondary	: #F4F4F4;
 	--bg-color-alt			: #F0F0F0;
 	--fg-color-text			: #262E30;
 	--fg-color-label		: #363636;
 	--fg-color-disabled		: #ACACAC;
-	--focus-bg-item			: #BFE1DE;
-	--focus-bg-box			: #E5F0EE;
+	--focus-bg-item			: #D7E9FD;
+	--focus-bg-box			: #EBF4FE;
 	--border-color			: #DBDBDB;
 	--icon-color			: #7C8282;
 	--button-fg-light		: #FEFEFE;
@@ -36,24 +36,24 @@
   
 @media (prefers-color-scheme: dark) { 
 :root {
-	--main-color			: #00675B;
-	--main-color-hover		: #008172;
-	--main-color-fixed		: #009688;
-	--bg-color				: #2D2D31;
-	--bg-color-secondary	: #36363B;
-	--bg-color-alt			: #242428;
+	--main-color			: #2762A6;
+	--main-color-hover		: #3379C9;
+	--main-color-fixed		: #398FF4;
+	--bg-color				: #292E38;
+	--bg-color-secondary	: #343B47;
+	--bg-color-alt			: #222832;
 	--fg-color-text			: #EFEFF0;
 	--fg-color-label		: #B2B3B5;
 	--fg-color-disabled		: #65656A;
-	--focus-bg-item			: #223C3C;
-	--focus-bg-box			: #283232;
-	--border-color			: #4A4A51;
+	--focus-bg-item			: #24364A;
+	--focus-bg-box			: #283542;
+	--border-color			: #46515F;
 	--icon-color			: #949494;
 	--button-fg-light		: #FEFEFE;
 	--button-fg-text		: #EFEFF0;
 	--button-fg-disabled	: #818183;
-	--button-bg-normal		: #3E3E45;
-	--button-bg-hover		: #4D4D54;
+	--button-bg-normal		: #3A4351;
+	--button-bg-hover		: #485362;
 	--button-bg-disabled	: var(--button-bg-normal);
 	--button-bg-alert		: #E14747;
 }

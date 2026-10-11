@@ -607,8 +607,8 @@ bool take_config_snapshot_cancel_on_error(const AppConfig &app_config, Snapshot:
         return true;
     } catch (std::exception &err) {
         RichMessageDialog dlg(static_cast<wxWindow*>(wxGetApp().mainframe),
-            _L("OrcaSlicer has encountered an error while taking a configuration snapshot.") + "\n\n" + from_u8(err.what()) + "\n\n" + from_u8(message),
-            _L("OrcaSlicer error"),
+            _L("Magpie Slicer has encountered an error while taking a configuration snapshot.") + "\n\n" + from_u8(err.what()) + "\n\n" + from_u8(message),
+            _L("Magpie Slicer error"),
             wxYES_NO);
         dlg.SetYesNoLabels(_L("Continue"), _L("Abort"));
         return dlg.ShowModal() == wxID_YES;

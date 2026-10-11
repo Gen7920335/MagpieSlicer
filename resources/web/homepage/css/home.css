@@ -14,7 +14,7 @@ html, body {
     margin: 0px;
     padding: 0px;
 	line-height: 20px;
-    font-size: 16px;	
+    font-size: 16px;
 }
 
 .ZScrol::-webkit-scrollbar {/*滚动条整体样式*/
@@ -47,7 +47,7 @@ html, body {
 .LinkBtn
 {
 	font-size:12px;
-	color: #00ffea;	
+	color: #76B7FF;
 	cursor: pointer;
 }
 
@@ -468,13 +468,13 @@ body
 /*------------------*/
 #BtnArea
 {
-	
+
 }
 
 
 .BtnItem
 {
-    padding-left:40px;	
+    padding-left:40px;
 	height:50px;
 	line-height: 50px;
 	display: flex;
@@ -590,8 +590,8 @@ body
 
 .MenuItem:hover
 {
-	border-color: #009688;		/*ORCA color*/
-	background-color: #E5F0EE; /*ORCA color with %25 opacity*/
+	border-color: #398FF4;		/*ORCA color*/
+	background-color: #EBF4FE; /*ORCA color with %25 opacity*/
 }
 
 .MenuIcon
@@ -635,7 +635,7 @@ body
 {
 	display:flex;
 	align-items: center;
-	padding: 6px 0px;	
+	padding: 6px 0px;
 }
 
 #HotModel_RIGHT_Title
@@ -676,7 +676,7 @@ body
 
 #RecentTitle
 {
-	
+
 }
 
 #FileList
@@ -747,7 +747,7 @@ body
     white-space: nowrap;
     text-overflow: ellipsis;
     overflow: hidden;
-    word-break: break-all;	
+    word-break: break-all;
 }
 
 .FileNamePack
@@ -774,7 +774,7 @@ body
 	font-size: 10px;
 	font-weight: 600;
 	color: #FFFFFF;
-	background-color: #009688;
+	background-color: #398ff4;
 	border-radius: 2px;
 	white-space: nowrap;
 }
@@ -811,7 +811,7 @@ body
 .CT_Item:hover
 {
 	cursor: pointer;
-	background-color:#009688; /*ORCA color*/
+	background-color:#398FF4; /*ORCA color*/
 	border-radius: 4px;
 	color: #fff;
 }
@@ -821,35 +821,35 @@ body
 {
 	margin-right: 6px;
 	width: 16px;
-	height: 16px;	
+	height: 16px;
 }
 
 #CT_Delete_Bar:hover  .CT_Delete
 {
 	background: url("../img/remove2.svg");
 	background-repeat: no-repeat;
-	background-size: contain;	
+	background-size: contain;
 }
 
 .CT_Delete
 {
 	background: url("../img/remove.svg");
 	background-repeat: no-repeat;
-	background-size: contain;	
+	background-size: contain;
 }
 
 #CT_Folder_Bar:hover .CT_Explore
 {
 	background: url("../img/open_folder2.svg");
 	background-repeat: no-repeat;
-	background-size: contain;	
+	background-size: contain;
 }
 
 .CT_Explore
 {
 	background: url("../img/open_folder.svg");
 	background-repeat: no-repeat;
-	background-size: contain;		
+	background-size: contain;
 }
 
 
@@ -861,7 +861,7 @@ body
 .CT_Text
 {
 	line-height: 20px;
-	height: 20px;	
+	height: 20px;
 	display: block;
 }
 
@@ -944,7 +944,7 @@ body
 @media screen and ( min-width:1681px) and (max-width:2120px ) {
 .GuideBlock
 {
-    width: calc(25% - 20px);	
+    width: calc(25% - 20px);
 	margin: 0px 10px 40px 10px;
 	cursor: pointer;
 }
@@ -982,7 +982,7 @@ body
 
 .UG_IMG
 {
-	width: 100%;	
+	width: 100%;
 }
 
 .UG_IMG img
@@ -1025,7 +1025,7 @@ body
 	display:flex;
 	align-items: center;
 	height: 28px;
-	padding: 0px 8px;	
+	padding: 0px 8px;
 }
 
 .HotModel_Designer_Info img
@@ -1046,8 +1046,8 @@ body
 
 #HotModel_RIGHT_Title:hover
 {
-	cursor: pointer;	
-	color:#009688;	
+	cursor: pointer;
+	color:#398FF4;
 }
 
 .HotModelPiece

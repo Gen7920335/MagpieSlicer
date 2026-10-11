@@ -36,7 +36,7 @@
 namespace Slic3r {
 namespace GUI {
 
-static const wxColour TEXT_NORMAL_CLR = wxColour(0, 150, 136);
+static const wxColour TEXT_NORMAL_CLR = wxColour(57, 143, 244);
 static const wxColour TEXT_FAILED_CLR = wxColour(255, 111, 0);
 
 static const std::unordered_map<wxString, wxString> ACCESSORY_DISPLAY_STR = {
@@ -1753,7 +1753,7 @@ void UpgradePanel::update(MachineObject *obj)
                     }
                 });
             }
-            consistency_dlg->update_text(_L("The firmware version is abnormal. Repairing and updating are required before printing. Do you want to update now\? You can also update later on the printer or update next time you start Orca Slicer."));
+            consistency_dlg->update_text(_L("The firmware version is abnormal. Repairing and updating are required before printing. Do you want to update now\? You can also update later on the printer or update next time you start Magpie Slicer."));
             consistency_dlg->on_show();
         }
     }

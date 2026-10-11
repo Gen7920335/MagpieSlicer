@@ -35,6 +35,7 @@
 #include <vector>
 #include <utility>
 #include <wx/app.h>
+#include <wx/arrstr.h>
 #include <wx/colour.h>
 #include <wx/event.h>
 #include <wx/font.h>
@@ -87,6 +88,9 @@ class TaskManager;
 typedef std::function<bool()> WasCancelledFn;
 
 namespace GUI{
+
+// Installed translations of this application, including the OrcaSlicer catalog fallback.
+wxArrayString get_available_app_translations();
 
 class RemovableDriveManager;
 class OtherInstanceMessageHandler;

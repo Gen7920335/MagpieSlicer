@@ -386,12 +386,20 @@ std::string VersionInfo::convert_short_version(std::string full_version)
 }
 
 #ifdef _WIN32
+// File-type ProgID of this application key. Sharing upstream's " Orca.Slicer.1" let
+// OrcaSlicer and each Magpie build overwrite one another's open command. The
+// orcaslicer:// URL protocol stays shared: websites link to it.
+static std::wstring file_association_prog_id()
+{
+    return wxString(SLIC3R_APP_KEY ".File.1").ToStdWstring();
+}
+
 bool is_associate_files(std::wstring extend)
 {
     wchar_t app_path[MAX_PATH];
     ::GetModuleFileNameW(nullptr, app_path, sizeof(app_path));
 
-    std::wstring prog_id             = L" Orca.Slicer.1";
+    std::wstring prog_id             = file_association_prog_id();
     std::wstring reg_base            = L"Software\\Classes";
     std::wstring reg_extension       = reg_base + L"\\." + extend;
 
@@ -445,15 +453,22 @@ public:
 
         scale_font(m_font_version, 1.65f); // only scale this one since it hasnt a preloaded font like Label::Body_24;
 
-        m_bg_color = StateColor::darkModeColorFor(wxColour("#FFFFFF"));
-        m_fg_color = StateColor::darkModeColorFor(wxColour("#6B6A6A"));
-        m_progress_bg_color = StateColor::darkModeColorFor(wxColour("#DFDFDF"));
-        m_progress_fg_color = StateColor::darkModeColorFor(wxColour("#009688"));
+        // The branded splash uses a transparent PNG. Keep its backdrop light so
+        // the dark Magpie mark remains visible independently of the UI theme.
+        m_bg_color = wxColour("#FFFFFF");
+        m_fg_color = wxColour("#6B6A6A");
+        m_progress_bg_color = wxColour("#DFDFDF");
+        m_progress_fg_color = wxColour("#398FF4");
         m_progress_h = FromDIP(6);
-        bool dark_mode = m_fg_color != wxColour("#6B6A6A");
-        wxSize sz  = m_window->GetClientSize();
-        BitmapCache bmp_cache;
-        m_logo_bmp = *bmp_cache.load_svg(dark_mode ? "splash_logo_dark" : "splash_logo", sz.GetWidth(), sz.GetHeight());
+
+        const std::string logo_path = Slic3r::var("MagpieSlicer_192px_transparent.png");
+        wxImage logo_image(from_u8(logo_path), wxBITMAP_TYPE_PNG);
+        if (logo_image.IsOk()) {
+            const int logo_size = FromDIP(240);
+            m_logo_bmp = wxBitmap(logo_image.Scale(logo_size, logo_size, wxIMAGE_QUALITY_HIGH));
+        } else {
+            BOOST_LOG_TRIVIAL(error) << "Failed to load splash logo: " << logo_path;
+        }
 
         m_window->Bind(wxEVT_PAINT, &SplashScreen::OnPaint, this);
         m_window->Refresh();
@@ -467,8 +482,11 @@ public:
 
         dc.SetBackground(wxBrush(m_bg_color));
         dc.Clear();
-        if (m_logo_bmp.IsOk())
-            dc.DrawBitmap(m_logo_bmp, 0, 0, true);
+        if (m_logo_bmp.IsOk()) {
+            const int logo_x = (c_sz.GetWidth() - m_logo_bmp.GetWidth()) / 2;
+            const int logo_y = static_cast<int>(c_sz.GetHeight() * 0.08);
+            dc.DrawBitmap(m_logo_bmp, logo_x, logo_y, true);
+        }
 
         wxRect rc = wxRect(0, 0, c_sz.GetWidth(), 0);
         dc.SetTextForeground(m_fg_color);
@@ -852,7 +870,7 @@ static void generic_exception_handle()
         // and terminate the app so it is at least certain to happen now.
         BOOST_LOG_TRIVIAL(error) << boost::format("std::bad_alloc exception: %1%") % ex.what();
         flush_logs();
-        wxString errmsg = wxString::Format(_L("OrcaSlicer will terminate because of running out of memory. "
+        wxString errmsg = wxString::Format(_L("Magpie Slicer will terminate because of running out of memory. "
                                               "It may be a bug. It will be appreciated if you report the issue to our team."));
         wxMessageBox(errmsg + "\n\n" + wxString(ex.what()), _L("Fatal error"), wxOK | wxICON_ERROR);
 
@@ -861,7 +879,7 @@ static void generic_exception_handle()
      } catch (const boost::io::bad_format_string& ex) {
      	BOOST_LOG_TRIVIAL(error) << boost::format("Uncaught exception: %1%") % ex.what();
         	flush_logs();
-        wxString errmsg = _L("OrcaSlicer will terminate because of a localization error. "
+        wxString errmsg = _L("Magpie Slicer will terminate because of a localization error. "
                              "It will be appreciated if you report the specific scenario this issue happened.");
         wxMessageBox(errmsg + "\n\n" + wxString(ex.what()), _L("Critical error"), wxOK | wxICON_ERROR);
         std::terminate();
@@ -869,7 +887,7 @@ static void generic_exception_handle()
     } catch (const std::exception& ex) {
         BOOST_LOG_TRIVIAL(error) << boost::format("Uncaught exception: %1%") % ex.what();
         flush_logs();
-        wxLogError(format_wxstr(_L("OrcaSlicer got an unhandled exception: %1%"), ex.what()));
+        wxLogError(format_wxstr(_L("Magpie Slicer got an unhandled exception: %1%"), ex.what()));
         throw;
     }
 //#endif
@@ -1108,7 +1126,8 @@ void GUI_App::post_init()
                 this->preset_updater->sync(http_url, language, network_ver, sys_preset ? preset_bundle : nullptr);
             }
 
-            this->check_new_version_sf();
+            // Magpie releases do not follow the upstream Orca application feed, so the
+            // startup check that would offer an Orca download stays off.
             const auto cloud_provider = get_printer_cloud_provider();
             if (is_user_login(cloud_provider) && !app_config->get_stealth_mode()) {
               // this->check_privacy_version(0);
@@ -1124,7 +1143,7 @@ void GUI_App::post_init()
         CallAfter([] {
             const wxString wiki_url = "https://www.orcaslicer.com/wiki/user_profiles/user_profiles.html#profiles-missing-after-updating-from-bambu-cloud";
             MessageDialog dlg(nullptr,
-                _L("Since version 2.4.0, OrcaSlicer syncs user profiles through Orca Cloud instead of Bambu Cloud.\n\n"
+                _L("Since version 2.4.0, Magpie Slicer syncs user profiles through Orca Cloud instead of Bambu Cloud.\n\n"
                    "To migrate your existing profiles, log in to Orca Cloud and they will be transferred automatically. "
                    "To learn more about how OrcaSlicer stores and syncs your profiles, or to migrate your presets manually, check out our wiki.\n\n"
                    "If you did not use Bambu Cloud to sync profiles, this change does not affect you and you can safely ignore this message."),
@@ -2634,7 +2653,7 @@ void GUI_App::init_webview_runtime()
     }
 
     BOOST_LOG_TRIVIAL(warning) << "WebView2 runtime not found; prompting user to install.";
-    int nRet = wxMessageBox(_L("Orca Slicer requires the Microsoft WebView2 Runtime to operate certain features.\nClick Yes to install it now."),
+    int nRet = wxMessageBox(_L("Magpie Slicer requires the Microsoft WebView2 Runtime to operate certain features.\nClick Yes to install it now."),
                             _L("WebView2 Runtime"), wxYES_NO);
     if (nRet != wxYES) {
         BOOST_LOG_TRIVIAL(warning) << "User declined WebView2 runtime installation.";
@@ -2656,7 +2675,7 @@ void GUI_App::init_webview_runtime()
         BOOST_LOG_TRIVIAL(error) << "WebView2 runtime installation failed or still not detected.";
         wxMessageBox(_L("The Microsoft WebView2 Runtime could not be installed.\n"
                         "Some features, including the setup wizard, may appear blank until it is installed.\n"
-                        "Please install it manually from https://developer.microsoft.com/microsoft-edge/webview2/ and restart Orca Slicer."),
+                        "Please install it manually from https://developer.microsoft.com/microsoft-edge/webview2/ and restart Magpie Slicer."),
                      _L("WebView2 Runtime"), wxOK | wxICON_WARNING);
     }
 }
@@ -2668,7 +2687,7 @@ void GUI_App::init_app_config()
     SetAppName(SLIC3R_APP_KEY);
 //	SetAppName(SLIC3R_APP_KEY "-alpha");
 //  SetAppName(SLIC3R_APP_KEY "-beta");
-//	SetAppDisplayName(SLIC3R_APP_NAME);
+	SetAppDisplayName(SLIC3R_APP_NAME);
 
 	// Set the Slic3r data directory at the Slic3r XS module.
 	// Unix: ~/ .Slic3r
@@ -2738,7 +2757,7 @@ void GUI_App::init_app_config()
     set_log_path_and_level(log_filename, 3);
 #endif
 
-    BOOST_LOG_TRIVIAL(info) << boost::format("gui mode, Current OrcaSlicer Version %1% build %2%") % SoftFever_VERSION % build_commit_label;
+    BOOST_LOG_TRIVIAL(info) << boost::format("gui mode, Current " SLIC3R_APP_NAME " Version %1% build %2%") % SoftFever_VERSION % build_commit_label;
 
     //BBS: remove GCodeViewer as seperate APP logic
 	if (!app_config)
@@ -3349,7 +3368,7 @@ bool GUI_App::on_init_inner()
                /* wxString tips = wxString::Format(_L("Click to download new version in default browser: %s"), version_info.version_str);
                 DownloadDialog dialog(this->mainframe,
                     tips,
-                    _L("New version of Orca Slicer"),
+                    _L("New version of Magpie Slicer"),
                     false,
                     wxCENTER | wxICON_INFORMATION);
 
@@ -3400,7 +3419,7 @@ bool GUI_App::on_init_inner()
                 wxString tips = wxString::Format(_L("Click to download new version in default browser: %s"), version_str);
                 DownloadDialog dialog(this->mainframe,
                     tips,
-                    _L("OrcaSlicer needs an update"),
+                    _L("Magpie Slicer needs an update"),
                     false,
                     wxCENTER | wxICON_INFORMATION);
                 dialog.SetExtendedMessage(description_text);
@@ -4346,7 +4365,7 @@ bool GUI_App::dark_mode()
 
 const wxColour GUI_App::get_label_default_clr_system()
 {
-    return dark_mode() ? wxColour(115, 220, 103) : wxColour(26, 132, 57);
+    return dark_mode() ? wxColour(90, 168, 255) : wxColour(51, 121, 201);
 }
 
 const wxColour GUI_App::get_label_default_clr_modified()
@@ -4363,7 +4382,7 @@ void GUI_App::init_label_colours()
 #if defined(_WIN32) || defined(__linux__) || defined(__APPLE__)
     m_color_label_default           = is_dark_mode ? wxColour(250, 250, 250) : m_color_label_sys; // wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
     m_color_highlight_label_default = is_dark_mode ? wxColour(230, 230, 230): wxSystemSettings::GetColour(/*wxSYS_COLOUR_HIGHLIGHTTEXT*/wxSYS_COLOUR_WINDOWTEXT);
-    m_color_highlight_default       = is_dark_mode ? wxColour("#36363B") : wxColour("#F1F1F1"); // ORCA row highlighting
+    m_color_highlight_default       = is_dark_mode ? wxColour("#343B47") : wxColour("#F1F1F1"); // ORCA row highlighting
     m_color_hovered_btn_label       = is_dark_mode ? wxColour(255, 255, 254) : wxColour(0,0,0);
     m_color_default_btn_label       = is_dark_mode ? wxColour(255, 255, 254): wxColour(0,0,0);
     m_color_selected_btn_bg         = is_dark_mode ? wxColour(84, 84, 91)   : wxColour(206, 206, 206);
@@ -4479,7 +4498,7 @@ void GUI_App::UpdateDarkUI(wxWindow* window, bool highlited/* = false*/, bool ju
         auto orig_col = window->GetBackgroundColour();
         auto bg_col = StateColor::darkModeColorFor(orig_col);
         // there are cases where the background color of an item is bright, specifically:
-        // * the background color of a button: #009688  -- 73
+        // * the background color of a button: #398FF4  -- 73
         if (bg_col != orig_col) {
             window->SetBackgroundColour(bg_col);
         }
@@ -5672,7 +5691,7 @@ void GUI_App::on_http_error(wxCommandEvent &evt)
 
     // Version limit
     if (code == HttpErrorVersionLimited) {
-        MessageDialog msg_dlg(nullptr, _L("The version of Orca Slicer is too low and needs to be updated to the latest version before it can be used normally."), "", wxAPPLY | wxOK);
+        MessageDialog msg_dlg(nullptr, _L("The version of Magpie Slicer is too low and needs to be updated to the latest version before it can be used normally."), "", wxAPPLY | wxOK);
         if (msg_dlg.ShowModal() == wxOK) {
         }
     }
@@ -6422,7 +6441,7 @@ bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
         else if (msg == "update_studio") {
             BOOST_LOG_TRIVIAL(info) << "process_network_msg, update_studio";
             if (!m_show_error_msgdlg) {
-                MessageDialog msg_dlg(nullptr, _L("Please try updating OrcaSlicer and then try again."), "", wxAPPLY | wxOK);
+                MessageDialog msg_dlg(nullptr, _L("Please try updating Magpie Slicer and then try again."), "", wxAPPLY | wxOK);
                 m_show_error_msgdlg = true;
                 msg_dlg.ShowModal();
                 m_show_error_msgdlg = false;
@@ -6432,7 +6451,7 @@ bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
         else if (msg == "update_fixed_studio") {
             BOOST_LOG_TRIVIAL(info) << "process_network_msg, update_fixed_studio";
             if (!m_show_error_msgdlg) {
-                MessageDialog msg_dlg(nullptr, _L("Please try updating OrcaSlicer and then try again."), "", wxAPPLY | wxOK);
+                MessageDialog msg_dlg(nullptr, _L("Please try updating Magpie Slicer and then try again."), "", wxAPPLY | wxOK);
                 m_show_error_msgdlg = true;
                 msg_dlg.ShowModal();
                 m_show_error_msgdlg = false;
@@ -6442,7 +6461,7 @@ bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
         else if (msg == "cert_expired") {
             BOOST_LOG_TRIVIAL(info) << "process_network_msg, cert_expired";
             if (!m_show_error_msgdlg) {
-                MessageDialog msg_dlg(nullptr, _L("The certificate has expired. Please check the time settings or update OrcaSlicer and try again."), "", wxAPPLY | wxOK);
+                MessageDialog msg_dlg(nullptr, _L("The certificate has expired. Please check the time settings or update Magpie Slicer and try again."), "", wxAPPLY | wxOK);
                 m_show_error_msgdlg = true;
                 msg_dlg.ShowModal();
                 m_show_error_msgdlg = false;
@@ -6462,7 +6481,7 @@ bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
         else if (msg == "update_firmware_studio") {
             BOOST_LOG_TRIVIAL(info) << "process_network_msg, firmware internal error";
             if (!m_show_error_msgdlg) {
-                MessageDialog msg_dlg(nullptr, _L("Internal error. Please try upgrading the firmware and OrcaSlicer version. If the issue persists, contact support."), "", wxAPPLY | wxOK);
+                MessageDialog msg_dlg(nullptr, _L("Internal error. Please try upgrading the firmware and Magpie Slicer version. If the issue persists, contact support."), "", wxAPPLY | wxOK);
                 m_show_error_msgdlg = true;
                 msg_dlg.ShowModal();
                 m_show_error_msgdlg = false;
@@ -6477,12 +6496,12 @@ bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
                 m_unsigned_plugin_warning_shown = true;
                 MessageDialog
                     msg_dlg(nullptr,
-                            _L("To use OrcaSlicer with Bambu Lab printers, you need to enable LAN mode and Developer mode on your printer.\n\n"
+                            _L("To use Magpie Slicer with Bambu Lab printers, you need to enable LAN mode and Developer mode on your printer.\n\n"
                                "Please go to your printer's settings and:\n"
                                "1. Turn on LAN mode\n"
                                "2. Enable Developer mode\n\n"
                                "Developer mode allows the printer to work exclusively through local network access, "
-                               "enabling full functionality with OrcaSlicer."),
+                               "enabling full functionality with Magpie Slicer."),
                             _L("Network Plug-in Restriction"), wxAPPLY | wxOK);
                 m_show_error_msgdlg = true;
                 msg_dlg.ShowModal();
@@ -6666,7 +6685,7 @@ std::string GUI_App::format_display_version()
 {
     if (!version_display.empty()) return version_display;
 
-    version_display = SoftFever_VERSION;
+    version_display = SLIC3R_DISPLAY_VERSION;
     return version_display;
 }
 
@@ -8089,6 +8108,31 @@ int GUI_App::GetSingleChoiceIndex(const wxString& message,
 }
 
 
+// The gettext catalogs are built as OrcaSlicer.mo. Under another application key,
+// look the catalog up under that key first and fall back to the Orca catalog name.
+wxArrayString get_available_app_translations()
+{
+    wxArrayString translations = wxTranslations::Get()->GetAvailableTranslations(SLIC3R_APP_KEY);
+    if (translations.empty() && wxString(SLIC3R_APP_KEY) != "OrcaSlicer")
+        translations = wxTranslations::Get()->GetAvailableTranslations("OrcaSlicer");
+    return translations;
+}
+
+static wxString get_best_app_translation(wxLanguage fallback)
+{
+    wxString best_language = wxTranslations::Get()->GetBestTranslation(SLIC3R_APP_KEY, fallback);
+    if (best_language.empty() && wxString(SLIC3R_APP_KEY) != "OrcaSlicer")
+        best_language = wxTranslations::Get()->GetBestTranslation("OrcaSlicer", fallback);
+    return best_language;
+}
+
+static bool add_app_translation_catalog(wxLocale &locale)
+{
+    if (locale.AddCatalog(SLIC3R_APP_KEY))
+        return true;
+    return wxString(SLIC3R_APP_KEY) != "OrcaSlicer" && locale.AddCatalog("OrcaSlicer");
+}
+
 // Load gettext translation files and activate them at the start of the application,
 // based on the "language" key stored in the application config.
 bool GUI_App::load_language(wxString language, bool initial)
@@ -8100,7 +8144,7 @@ bool GUI_App::load_language(wxString language, bool initial)
     	// Get the active language from PrusaSlicer.ini, or empty string if the key does not exist.
         language = app_config->get("language");
         if (! language.empty())
-        	BOOST_LOG_TRIVIAL(info) << boost::format("language provided by OrcaSlicer.conf: %1%") % language;
+        BOOST_LOG_TRIVIAL(info) << boost::format("language provided by MagpieSlicer.conf: %1%") % language;
         else {
             // Get the system language.
             const wxLanguage lang_system = wxLanguage(wxLocale::GetSystemLanguage());
@@ -8129,7 +8173,7 @@ bool GUI_App::load_language(wxString language, bool initial)
                     // There seems to be a support for that on Windows and OSX, while on Linuxes the code just returns wxLocale::GetSystemLanguage().
                     // The last parameter gets added to the list of detected dictionaries. This is a workaround
                     // for not having the English dictionary. Let's hope wxWidgets of various versions process this call the same way.
-                    wxString best_language = wxTranslations::Get()->GetBestTranslation(SLIC3R_APP_KEY, wxLANGUAGE_ENGLISH);
+                    wxString best_language = get_best_app_translation(wxLANGUAGE_ENGLISH);
                     if (!best_language.IsEmpty()) {
                         m_language_info_best = wxLocale::FindLanguageInfo(best_language);
                         BOOST_LOG_TRIVIAL(info) << boost::format("Best translation language detected (may be different from user locales): %1%") %
@@ -8157,7 +8201,7 @@ bool GUI_App::load_language(wxString language, bool initial)
 	}
 
 	if (language_info != nullptr && language_info->LayoutDirection == wxLayout_RightToLeft) {
-    	BOOST_LOG_TRIVIAL(trace) << boost::format("The following language code requires right to left layout, which is not supported by OrcaSlicer: %1%") % language_info->CanonicalName.ToUTF8().data();
+        BOOST_LOG_TRIVIAL(trace) << boost::format("The following language code requires right to left layout, which is not supported by Magpie Slicer: %1%") % language_info->CanonicalName.ToUTF8().data();
 		language_info = nullptr;
 	}
 
@@ -8276,14 +8320,14 @@ bool GUI_App::load_language(wxString language, bool initial)
 
     if (!wxLocale::IsAvailable(locale_language_info->Language)) {
     	// Loading the language dictionary failed.
-	    wxString message = wxString::Format(_L("Switching Orca Slicer to language %s failed."), requested_language_code);
+	    wxString message = wxString::Format(_L("Switching Magpie Slicer to language %s failed."), requested_language_code);
 #if !defined(_WIN32) && !defined(__APPLE__)
         // likely some linux system
         message += _L("\nYou may need to reconfigure the missing locales, likely by running the \"locale-gen\" and \"dpkg-reconfigure locales\" commands.\n");
 #endif
         if (initial)
         	message += "\n\n" + _L("Application will close.");
-        wxMessageBox(message, _L("Orca Slicer - Switching language failed"), wxOK | wxICON_ERROR);
+        wxMessageBox(message, _L("Magpie Slicer - Switching language failed"), wxOK | wxICON_ERROR);
         if (initial)
 			std::exit(EXIT_FAILURE);
 		else
@@ -8298,7 +8342,7 @@ bool GUI_App::load_language(wxString language, bool initial)
     // Override language at the active wxTranslations class (which is stored in the active m_wxLocale)
     // to load possibly different dictionary, for example, load Czech dictionary for Slovak language.
     wxTranslations::Get()->SetLanguage(language_dict);
-    m_wxLocale->AddCatalog(SLIC3R_APP_KEY);
+    add_app_translation_catalog(*m_wxLocale);
     m_active_language_code = requested_language_code;
     m_imgui->set_language(into_u8(requested_language_code));
 
@@ -9950,8 +9994,8 @@ void GUI_App::associate_files(std::wstring extend)
     ::GetModuleFileNameW(nullptr, app_path, sizeof(app_path));
 
     std::wstring prog_path = L"\"" + std::wstring(app_path) + L"\"";
-    std::wstring prog_id = L" Orca.Slicer.1";
-    std::wstring prog_desc = L"OrcaSlicer";
+    std::wstring prog_id = file_association_prog_id();
+    std::wstring prog_desc = L"MagpieSlicer";
     std::wstring prog_command = prog_path + L" \"%1\"";
     std::wstring reg_base = L"Software\\Classes";
     std::wstring reg_extension = reg_base + L"\\." + extend;
@@ -9977,8 +10021,8 @@ void GUI_App::disassociate_files(std::wstring extend)
     ::GetModuleFileNameW(nullptr, app_path, sizeof(app_path));
 
     std::wstring prog_path = L"\"" + std::wstring(app_path) + L"\"";
-    std::wstring prog_id = L" Orca.Slicer.1";
-    std::wstring prog_desc = L"OrcaSlicer";
+    std::wstring prog_id = file_association_prog_id();
+    std::wstring prog_desc = L"MagpieSlicer";
     std::wstring prog_command = prog_path + L" \"%1\"";
     std::wstring reg_base = L"Software\\Classes";
     std::wstring reg_extension = reg_base + L"\\." + extend;

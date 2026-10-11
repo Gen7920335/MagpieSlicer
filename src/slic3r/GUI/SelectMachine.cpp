@@ -469,7 +469,7 @@ SelectMachineDialog::SelectMachineDialog(Plater *plater)
     m_sizer_autorefill = new wxBoxSizer(wxHORIZONTAL);
     m_ams_backup_tip = new Label(m_scroll_area, _L("Auto Refill"));
     m_ams_backup_tip->SetFont(::Label::Head_13);
-    m_ams_backup_tip->SetForegroundColour(wxColour("#009688"));
+    m_ams_backup_tip->SetForegroundColour(wxColour("#398FF4"));
     m_ams_backup_tip->SetBackgroundColour(*wxWHITE);
     img_ams_backup = new wxStaticBitmap(m_scroll_area, wxID_ANY, create_scaled_bitmap("automatic_material_renewal", this, 16), wxDefaultPosition, wxSize(FromDIP(16), FromDIP(16)), 0);
     img_ams_backup->SetBackgroundColour(*wxWHITE);
@@ -568,7 +568,7 @@ SelectMachineDialog::SelectMachineDialog(Plater *plater)
 
     m_link_edit_nozzle = new Label(m_scroll_area, wxEmptyString);
     m_link_edit_nozzle->SetFont(::Label::Body_13);
-    m_link_edit_nozzle->SetForegroundColour("#009688");
+    m_link_edit_nozzle->SetForegroundColour("#398FF4");
     m_link_edit_nozzle->SetBackgroundColour(*wxWHITE);
     m_link_edit_nozzle->Bind(wxEVT_ENTER_WINDOW, [this](auto &e) { SetCursor(wxCURSOR_HAND); });
     m_link_edit_nozzle->Bind(wxEVT_LEAVE_WINDOW, [this](auto &e) { SetCursor(wxCURSOR_ARROW); });
@@ -785,7 +785,7 @@ SelectMachineDialog::SelectMachineDialog(Plater *plater)
 
     m_statictext_finish = new wxStaticText(m_panel_finish, wxID_ANY, _L("Send complete"), wxDefaultPosition, wxDefaultSize, 0);
     m_statictext_finish->Wrap(-1);
-    m_statictext_finish->SetForegroundColour(wxColour(0, 150, 136));
+    m_statictext_finish->SetForegroundColour(wxColour(57, 143, 244));
     m_sizer_finish_h->Add(m_statictext_finish, 0, wxALIGN_CENTER | wxALL, FromDIP(5));
 
     m_sizer_finish_v->Add(m_sizer_finish_h, 1, wxALIGN_CENTER, 0);
@@ -3246,7 +3246,7 @@ void SelectMachineDialog::save_option_vals(MachineObject *obj) {
 void SelectMachineDialog::Enable_Auto_Refill(bool enable)
 {
     if (enable) {
-        m_ams_backup_tip->SetForegroundColour(StateColor::darkModeColorFor("#009688"));
+        m_ams_backup_tip->SetForegroundColour(StateColor::darkModeColorFor("#398ff4"));
     }
     else {
         m_ams_backup_tip->SetForegroundColour(wxColour(0x90, 0x90, 0x90));
@@ -3272,7 +3272,7 @@ void SelectMachineDialog::show_timelapse_folder_popup()
     }
 
     // build popup with rounded corners + themed border
-    const wxColour popup_bg     = wxGetApp().dark_mode() ? wxColour("#333337") : wxColour(0xF0, 0xF0, 0xF0);
+    const wxColour popup_bg     = wxGetApp().dark_mode() ? wxColour("#303844") : wxColour(0xF0, 0xF0, 0xF0);
     const wxColour popup_border = StateColor::darkModeColorFor(wxColour(0xCE, 0xCE, 0xCE));
     m_timelapse_storage_popup = new PopupWindow(this, wxBORDER_NONE);
     m_timelapse_storage_popup->SetBackgroundColour(popup_bg);
@@ -3495,7 +3495,7 @@ void SelectMachineDialog::show_timelapse_storage_dialog(MachineObject* obj)
     if (show_confirm_btn) {
         auto* btn_confirm = new Button(&dlg, _L("Confirm & Print"));
         // Orca: use the accent green rather than the reference's hard-coded confirm colour.
-        StateColor confirm_bg(std::pair<wxColour, int>(wxColour(0, 150, 136), StateColor::Normal));
+        StateColor confirm_bg(std::pair<wxColour, int>(wxColour(57, 143, 244), StateColor::Normal));
         btn_confirm->SetBackgroundColor(confirm_bg);
         btn_confirm->SetTextColor(StateColor(std::pair<wxColour, int>(*wxWHITE, StateColor::Normal)));
         btn_confirm->Bind(wxEVT_BUTTON, [&dlg](wxCommandEvent&) { dlg.EndModal(wxID_OK); });
@@ -3505,7 +3505,7 @@ void SelectMachineDialog::show_timelapse_storage_dialog(MachineObject* obj)
     auto* btn_cancel_tl = new Button(&dlg, _L("Cancel Timelapse & Print"));
     if (!show_confirm_btn) {
         // Orca: use the accent green rather than the reference's hard-coded confirm colour.
-        StateColor cancel_bg(std::pair<wxColour, int>(wxColour(0, 150, 136), StateColor::Normal));
+        StateColor cancel_bg(std::pair<wxColour, int>(wxColour(57, 143, 244), StateColor::Normal));
         btn_cancel_tl->SetBackgroundColor(cancel_bg);
         btn_cancel_tl->SetTextColor(StateColor(std::pair<wxColour, int>(*wxWHITE, StateColor::Normal)));
     }
@@ -6845,7 +6845,7 @@ void PrintOptionItem::doRender(wxDC& dc)
 
         if (text_key == selected_key)
         {
-            const wxColour& clr = m_enable ? StateColor::darkModeColorFor("#009688") : StateColor::darkModeColorFor(wxColour(144, 144, 144));
+            const wxColour& clr = m_enable ? StateColor::darkModeColorFor("#398FF4") : StateColor::darkModeColorFor(wxColour(144, 144, 144));
             dc.SetPen(wxPen(clr));
             dc.SetTextForeground(clr);
 
@@ -6948,7 +6948,7 @@ void SendModeSwitchButton::doRender(wxDC &dc)
     if (is_selected) {
         dc.DrawBitmap(m_img_selected.bmp(), wxPoint(0, 0));
         dc.DrawBitmap(m_img_selected_tag.bmp(), wxPoint(left, (size.y - m_img_selected_tag.GetBmpSize().y) / 2));
-        dc.SetTextForeground("#009688");
+        dc.SetTextForeground("#398FF4");
     }else {
         dc.DrawBitmap(m_img_unselected.bmp(), wxPoint(0, 0));
         dc.DrawBitmap(m_img_unselected_tag.bmp(), wxPoint(left, (size.y - m_img_selected_tag.GetBmpSize().y) / 2));

@@ -107,7 +107,7 @@ wxBoxSizer* NetworkTestDialog::create_info_sizer(wxWindow* parent)
 	sizer->Add(text_basic_info, 0, wxALL, 5);
 
 	wxBoxSizer* version_sizer = new wxBoxSizer(wxHORIZONTAL);
-	text_version_title = new wxStaticText(this, wxID_ANY, _L("OrcaSlicer Version:"), wxDefaultPosition, wxDefaultSize, 0);
+	text_version_title = new wxStaticText(this, wxID_ANY, _L("Magpie Slicer Version:"), wxDefaultPosition, wxDefaultSize, 0);
 	text_version_title->Wrap(-1);
 	version_sizer->Add(text_version_title, 0, wxALL, 5);
 
@@ -349,7 +349,7 @@ void NetworkTestDialog::on_close(wxCloseEvent& event)
 
 wxString NetworkTestDialog::get_studio_version()
 {
-	return wxString(SoftFever_VERSION);
+	return wxString(SLIC3R_DISPLAY_VERSION);
 }
 
 void NetworkTestDialog::set_default()

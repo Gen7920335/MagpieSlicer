@@ -474,7 +474,7 @@ std::string SceneBenchmarkDialog::report() const
 
     std::ostringstream out;
     out << SLIC3R_APP_NAME << " 3D scene benchmark\n"
-        << "Version:    " << SoftFever_VERSION << " (" << build_commit_label << ")\n"
+        << "Version:    " << SLIC3R_DISPLAY_VERSION << " (" << build_commit_label << ")\n"
         << "GPU:        " << gl.get_renderer() << '\n'
         << "OpenGL:     " << gl.get_version() << '\n'
         << "Viewport:   " << m_viewport_width << " x " << m_viewport_height << " px, " << m_camera_type << " camera\n"

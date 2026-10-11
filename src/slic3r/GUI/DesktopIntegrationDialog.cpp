@@ -312,7 +312,7 @@ void DesktopIntegrationDialog::perform_desktop_integration()
         // Copy icon OrcaSlicer.png from resources_dir()/icons to target_dir_icons/icons/
         if (contains_path_dir(target_candidates[i], "images")) {
             target_dir_icons = target_candidates[i];
-            std::string icon_path = GUI::format("%1%/images/OrcaSlicer.png",resources_dir());
+            std::string icon_path = GUI::format("%1%/images/MagpieSlicer.png",resources_dir());
             std::string dest_path = GUI::format("%1%/images/%2%OrcaSlicer%3%.png", target_dir_icons, icon_theme_path, version_suffix);
             if (copy_icon(icon_path, dest_path))
                 break; // success
@@ -324,7 +324,7 @@ void DesktopIntegrationDialog::perform_desktop_integration()
                 create_path(into_u8(wxFileName::GetHomeDir()), ".local/share/icons" + icon_theme_dirs);
                 // copy icon
                 target_dir_icons = GUI::format("%1%/.local/share",wxFileName::GetHomeDir());
-                std::string icon_path = GUI::format("%1%/images/OrcaSlicer.png",resources_dir());
+                std::string icon_path = GUI::format("%1%/images/MagpieSlicer.png",resources_dir());
                 std::string dest_path = GUI::format("%1%/images/%2%OrcaSlicer%3%.png", target_dir_icons, icon_theme_path, version_suffix);
                 if (!contains_path_dir(target_dir_icons, "images") 
                     || !copy_icon(icon_path, dest_path)) {
@@ -335,7 +335,7 @@ void DesktopIntegrationDialog::perform_desktop_integration()
         }
     }
     if(target_dir_icons.empty()) {
-        BOOST_LOG_TRIVIAL(error) << "Copying OrcaSlicer icon to icons directory failed.";
+        BOOST_LOG_TRIVIAL(error) << "Copying MagpieSlicer icon to icons directory failed.";
     } else 
     	// save path to icon
         app_config->set("desktop_integration_icon_slicer_path", GUI::format("%1%/images/%2%OrcaSlicer%3%.png", target_dir_icons, icon_theme_path, version_suffix));
@@ -365,11 +365,11 @@ void DesktopIntegrationDialog::perform_desktop_integration()
 
             std::string path = GUI::format("%1%/applications/com.orcaslicer.OrcaSlicer%2%.desktop", target_dir_desktop, version_suffix);
             if (create_desktop_file(path, desktop_file)){
-                BOOST_LOG_TRIVIAL(debug) << "com.orcaslicer.OrcaSlicer.desktop file installation success.";
+                BOOST_LOG_TRIVIAL(debug) << "com.magpieslicer.MagpieSlicer.desktop file installation success.";
                 break;
             } else {
             	// write failed - try another path
-                BOOST_LOG_TRIVIAL(debug) << "Attempt to com.orcaslicer.OrcaSlicer.desktop file installation failed. failed path: " << target_candidates[i];
+                BOOST_LOG_TRIVIAL(debug) << "Attempt to com.magpieslicer.MagpieSlicer.desktop file installation failed. failed path: " << target_candidates[i];
                 target_dir_desktop.clear(); 
             }
             // if all failed - try creating default home folder
@@ -439,7 +439,7 @@ void DesktopIntegrationDialog::perform_desktop_integration()
             app_config->set("desktop_integration_app_viewer_path", desktop_path);
         else {
             BOOST_LOG_TRIVIAL(error) << "Performing desktop integration failed - could not create Gcodeviewer desktop file";
-            show_error(nullptr, _L("Performing desktop integration failed - could not create Gcodeviewer desktop file. OrcaSlicer desktop file was probably created successfully."));
+            show_error(nullptr, _L("Performing desktop integration failed - could not create Gcodeviewer desktop file. Magpie Slicer desktop file was probably created successfully."));
         }
     }
     
@@ -572,12 +572,12 @@ void DesktopIntegrationDialog::perform_downloader_desktop_integration(std::strin
             if (create_desktop_file(path, desktop_file_downloader)) {
                 app_config->set("desktop_integration_URL_path", path);
                 candidate_found = true;
-                BOOST_LOG_TRIVIAL(debug) << "OrcaSlicerURLProtocol.desktop file installation success.";
+                BOOST_LOG_TRIVIAL(debug) << "MagpieSlicerURLProtocol.desktop file installation success.";
                 break;
             }
             else {
                 // write failed - try another path
-                BOOST_LOG_TRIVIAL(debug) << "Attempt to OrcaSlicerURLProtocol.desktop file installation failed. failed path: " << target_candidates[i];
+                BOOST_LOG_TRIVIAL(debug) << "Attempt to MagpieSlicerURLProtocol.desktop file installation failed. failed path: " << target_candidates[i];
                 target_dir_desktop.clear();
             }
         }
