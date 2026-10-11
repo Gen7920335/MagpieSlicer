@@ -1,0 +1,7 @@
+{
+    "type": "filament",
+    "name": "Magpie Golden U1 PLA",
+    "inherits": "Snapmaker PLA @U1",
+    "from": "User",
+    "instantiation": "true"
+}

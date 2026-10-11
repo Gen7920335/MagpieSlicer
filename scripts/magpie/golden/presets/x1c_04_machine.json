@@ -1,0 +1,7 @@
+{
+    "type": "machine",
+    "name": "Magpie Golden X1C 0.4",
+    "inherits": "Bambu Lab X1 Carbon 0.4 nozzle",
+    "from": "User",
+    "instantiation": "true"
+}

@@ -1,0 +1,37 @@
+{
+    "description": "Feature-off golden corpus. Every case is sliced by a vanilla OrcaSlicer CLI and by the Magpie CLI built from the same upstream commit; normalized G-code must match byte for byte.",
+    "printers": {
+        "u1": { "machine": "presets/u1_04_machine.json", "process": "presets/u1_04_process.json", "filaments": ["presets/u1_pla.json"] },
+        "x1c": { "machine": "presets/x1c_04_machine.json", "process": "presets/x1c_04_process.json", "filaments": ["presets/x1c_pla.json"] }
+    },
+    "cases": [
+        { "name": "cube_default", "printer": "u1", "model": "tests/data/20mm_cube.obj" },
+        { "name": "cube_default_x1c", "printer": "x1c", "model": "tests/data/20mm_cube.obj" },
+        { "name": "overhang_support_normal", "printer": "u1", "model": "tests/data/overhang.obj",
+          "process": { "enable_support": "1", "support_type": "normal(auto)" } },
+        { "name": "overhang_support_tree", "printer": "u1", "model": "tests/data/overhang.obj",
+          "process": { "enable_support": "1", "support_type": "tree(auto)" } },
+        { "name": "overhang_support_tree_x1c", "printer": "x1c", "model": "tests/data/overhang.obj",
+          "process": { "enable_support": "1", "support_type": "tree(auto)" } },
+        { "name": "bridge_classic_walls", "printer": "u1", "model": "tests/data/bridge.obj",
+          "process": { "wall_generator": "classic" } },
+        { "name": "bridge_arachne_walls", "printer": "u1", "model": "tests/data/bridge.obj",
+          "process": { "wall_generator": "arachne" } },
+        { "name": "idler_gyroid", "printer": "u1", "model": "tests/data/extruder_idler.obj",
+          "process": { "sparse_infill_pattern": "gyroid", "sparse_infill_density": "25%" } },
+        { "name": "idler_lightning", "printer": "u1", "model": "tests/data/extruder_idler.obj",
+          "process": { "sparse_infill_pattern": "lightning", "sparse_infill_density": "15%" } },
+        { "name": "frog_legs_supports_ironing", "printer": "u1", "model": "tests/data/frog_legs.obj",
+          "process": { "enable_support": "1", "support_type": "normal(auto)", "ironing_type": "top" } },
+        { "name": "sloping_hole_fine_layers", "printer": "u1", "model": "tests/data/sloping_hole.obj",
+          "process": { "layer_height": "0.08" } },
+        { "name": "ipadstand_seam_aligned", "printer": "u1", "model": "tests/data/ipadstand.obj",
+          "process": { "seam_position": "aligned" } },
+        { "name": "two_hollow_squares_vase", "printer": "u1", "model": "tests/data/two_hollow_squares.obj",
+          "process": { "spiral_mode": "1" } },
+        { "name": "magpie_multinozzle_matrix", "printer": "u1", "model": "tests/data/multinozzle_feature_matrix.obj" },
+        { "name": "magpie_small_nozzle_probe", "printer": "u1", "model": "tests/data/small_nozzle_geometry_probe.stl" },
+        { "name": "bunny_support_tree", "printer": "u1", "model": "external:stanford_bunny.stl", "optional": true,
+          "process": { "enable_support": "1", "support_type": "tree(auto)", "support_threshold_angle": "60" } }
+    ]
+}

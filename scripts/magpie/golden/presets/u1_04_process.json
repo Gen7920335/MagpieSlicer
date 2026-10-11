@@ -1,0 +1,7 @@
+{
+    "type": "process",
+    "name": "Magpie Golden U1 0.20 Standard",
+    "inherits": "0.20 Standard @Snapmaker U1 (0.4 nozzle)",
+    "from": "User",
+    "instantiation": "true"
+}

@@ -1,0 +1,7 @@
+{
+    "type": "machine",
+    "name": "Magpie Golden U1 0.4",
+    "inherits": "Snapmaker U1 (0.4 nozzle)",
+    "from": "User",
+    "instantiation": "true"
+}

@@ -1,0 +1,7 @@
+{
+    "type": "filament",
+    "name": "Magpie Golden X1C PLA",
+    "inherits": "Bambu PLA Basic @BBL X1C",
+    "from": "User",
+    "instantiation": "true"
+}

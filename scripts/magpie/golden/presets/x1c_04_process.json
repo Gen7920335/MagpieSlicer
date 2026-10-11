@@ -1,0 +1,7 @@
+{
+    "type": "process",
+    "name": "Magpie Golden X1C 0.20 Standard",
+    "inherits": "0.20mm Standard @BBL X1C",
+    "from": "User",
+    "instantiation": "true"
+}
