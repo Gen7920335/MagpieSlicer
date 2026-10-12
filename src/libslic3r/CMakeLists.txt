@@ -113,6 +113,8 @@ set(lisbslic3r_sources
     Config.cpp
     Config.hpp
     GCodeCompatibility.hpp
+    ModHost/ParamGraph.cpp
+    ModHost/ParamGraph.hpp
     ConnectedBodies.cpp
     ConnectedBodies.hpp
     ContourZ.cpp
