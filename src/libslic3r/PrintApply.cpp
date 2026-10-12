@@ -7,6 +7,7 @@
 #include "Point.hpp"
 #include "Polygon.hpp"
 #include "Print.hpp"
+#include "ModHost/ModSet.hpp"
 #include "BeltTransform.hpp"
 #include "FilamentMixer.hpp"
 #include "Slicing.hpp"
@@ -1269,6 +1270,12 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 	new_full_config.option("print_settings_id",            true);
 	new_full_config.option("filament_settings_id",         true);
 	new_full_config.option("printer_settings_id",          true);
+
+    // MAGPIE: mod rules set values in the mod-rule layer before anything reads the config. With no
+    // mod loaded this does nothing, which keeps the output equal to vanilla Orca.
+    m_mod_rule_errors.clear();
+    if (std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods(); mods && !mods->empty())
+        m_mod_rule_errors = mods->resolve(new_full_config);
 
     // BBS
     std::vector <unsigned int> used_filaments = this->extruders(true);

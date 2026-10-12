@@ -1850,6 +1850,9 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         add_warning(std::move(w));
     };
 
+    if (!m_mod_rule_errors.empty())
+        return { m_mod_rule_errors.front() };
+
     std::vector<unsigned int> extruders = this->extruders();
     unsigned int nozzles = m_config.nozzle_diameter.size();
 

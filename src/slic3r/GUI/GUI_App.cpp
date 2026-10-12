@@ -242,6 +242,7 @@
 #include "TerminalDialog.hpp"
 #include "libslic3r/Format/STEP.hpp"
 #include "libslic3r/Semver.hpp"
+#include "libslic3r/ModHost/ModSet.hpp"
 #include "slic3r/GUI/ActionRegistry.hpp"
 #include "slic3r/GUI/Camera.hpp"
 #include "slic3r/GUI/ConfigWizard.hpp"
@@ -3575,6 +3576,8 @@ bool GUI_App::on_init_inner()
             // installation of a compatible system preset, thus nullifying the system preset substitutions.
             if (scrn) { scrn->SetText(_L("Loading printer & filament profiles") + dots, 30); wxYield(); }
             init_params->preset_substitutions = preset_bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSystemSilent);
+            // MAGPIE: the mods in <data_dir>/mods join slicing from here on.
+            ModHost::load_active_mods_from_data_dir();
         }
         catch (const std::exception& ex) {
             show_error(nullptr, ex.what());

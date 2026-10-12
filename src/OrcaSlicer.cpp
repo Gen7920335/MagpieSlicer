@@ -147,6 +147,7 @@
 #include "libslic3r/ObjectID.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/ProjectTask.hpp"
+#include "libslic3r/ModHost/ModSet.hpp"
 #include "slic3r/GUI/GUI_ObjectList.hpp"
 #include "slic3r/GUI/I18N.hpp"
 #include "slic3r/GUI/Jobs/SendJob.hpp"
@@ -8084,6 +8085,8 @@ bool CLI::setup(int argc, char **argv)
         boost::nowide::cerr << "Could not create data directory: " << data_dir() << std::endl;
         return false;
     }
+    // MAGPIE: mods under <datadir>/mods take part in CLI slicing the same way as in the GUI.
+    ModHost::load_active_mods_from_data_dir();
 
     //FIXME Validating at this stage most likely does not make sense, as the config is not fully initialized yet.
     if (!validity.empty()) {

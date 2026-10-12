@@ -1448,6 +1448,10 @@ protected:
     bool                invalidate_step(PrintStep step);
 
 private:
+    // MAGPIE: errors of mod rules that could not be evaluated by the last apply(); validate()
+    // reports the first, so nothing is sliced with a rule silently left out.
+    std::vector<std::string> m_mod_rule_errors;
+
     //BBS
     static StringObjectException check_multi_filament_valid(const Print &print);
 
