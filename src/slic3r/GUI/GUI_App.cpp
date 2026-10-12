@@ -9995,7 +9995,7 @@ void GUI_App::associate_files(std::wstring extend)
 
     std::wstring prog_path = L"\"" + std::wstring(app_path) + L"\"";
     std::wstring prog_id = file_association_prog_id();
-    std::wstring prog_desc = L"MagpieSlicer";
+    std::wstring prog_desc = wxString(SLIC3R_APP_KEY).ToStdWstring();
     std::wstring prog_command = prog_path + L" \"%1\"";
     std::wstring reg_base = L"Software\\Classes";
     std::wstring reg_extension = reg_base + L"\\." + extend;
@@ -10022,7 +10022,7 @@ void GUI_App::disassociate_files(std::wstring extend)
 
     std::wstring prog_path = L"\"" + std::wstring(app_path) + L"\"";
     std::wstring prog_id = file_association_prog_id();
-    std::wstring prog_desc = L"MagpieSlicer";
+    std::wstring prog_desc = wxString(SLIC3R_APP_KEY).ToStdWstring();
     std::wstring prog_command = prog_path + L" \"%1\"";
     std::wstring reg_base = L"Software\\Classes";
     std::wstring reg_extension = reg_base + L"\\." + extend;

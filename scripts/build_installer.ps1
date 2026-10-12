@@ -72,9 +72,9 @@ if ($resolvedStageRoot.Length -gt 80) {
     throw "NSIS staging root is too long ($($resolvedStageRoot.Length) characters). Use a short path such as C:\MagpiePkg."
 }
 
-$appKey = if ($DevelopmentProfiler) { "MagpieSlicerProfiler" } else { "MagpieSlicer" }
-$appName = if ($DevelopmentProfiler) { "Magpie Slicer Profiler" } else { "Magpie Slicer" }
-$appCommand = if ($DevelopmentProfiler) { "magpie-slicer-profiler" } else { "magpie-slicer" }
+$appKey = if ($DevelopmentProfiler) { "MagpieSlicerNextProfiler" } else { "MagpieSlicerNext" }
+$appName = if ($DevelopmentProfiler) { "Magpie Slicer Next Profiler" } else { "Magpie Slicer Next" }
+$appCommand = if ($DevelopmentProfiler) { "magpie-slicer-next-profiler" } else { "magpie-slicer-next" }
 $releaseExe = Join-Path $buildDir "src\Release\$appCommand.exe"
 $lockingProcesses = @(
     Get-CimInstance Win32_Process -Filter "Name = '$appCommand.exe'" -ErrorAction SilentlyContinue |

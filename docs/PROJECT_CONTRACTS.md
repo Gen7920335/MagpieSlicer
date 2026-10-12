@@ -221,6 +221,7 @@ Run `git diff --check` before reporting completion when verification is authoriz
 # 14. Line 2 (`magpie-next`) Base and Identity Layer
 
 - Line 2 is OrcaSlicer nightly plus a thin Magpie identity layer. Magpie features return as modules on the module host, not as patches spread through Orca sources.
+- Line 2 installs beside line 1. It keeps the display name "Magpie Slicer" but uses its own app key `MagpieSlicerNext`, command `magpie-slicer-next` and package name "Magpie Slicer Next" (`version.inc`), so its data folder, file-association ProgID, install folder and uninstall key never collide with line 1's `MagpieSlicer`.
 - The identity layer is: application name, key, command and bundle id (`version.inc`), version scheme (`docs/MAGPIE_VERSIONING.md`), installer and file association identity, logos, the blue theme, and the translation-catalog fallback to `OrcaSlicer.mo`. Nothing in it may change slicing.
 - Feature-off contract for line 2: with every Magpie module off, normalized G-code must equal a vanilla OrcaSlicer CLI built from the same upstream commit, case for case, over `scripts/magpie/golden/corpus.json`. Normalization covers only the producer/timestamp line, per-process object ids, and config keys passed with `--ignore-key`; widening it needs a recorded reason.
 - Before using a golden comparison as a gate, run `golden.py determinism` on the same binary. A case that differs between two runs of one binary gates nothing until the cause is known.

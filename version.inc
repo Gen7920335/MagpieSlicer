@@ -8,6 +8,8 @@ option(MAGPIE_SLICING_PROFILER "Build the isolated Magpie slicing profiler devel
 # version: <Orca major>.<minor>.<patch>.<Magpie line>.<Magpie revision>.
 # Line 1 is the 2.5.0 fork (Gen7920335/MagpieSlicer beta/2.5.0.0.9 and v2.5.0.1.0).
 # Line 2 is the rebuild on Orca nightly with the module host (branch magpie-next).
+# Line 2 keeps the "Magpie Slicer" display name but has its own app key, command and package
+# name, so its data folder, file associations and install folder never touch line 1's.
 set(MAGPIE_ORCA_BASE_VERSION "2.5.0")
 set(MAGPIE_RELEASE_LINE 2)
 set(MAGPIE_RELEASE_REVISION 0)
@@ -29,22 +31,22 @@ endif()
 
 if(MAGPIE_SLICING_PROFILER)
     set(SLIC3R_APP_NAME "Magpie Slicer Profiler" CACHE STRING "Application display name" FORCE)
-    set(SLIC3R_APP_KEY "MagpieSlicerProfiler" CACHE STRING "Application key for config/data isolation" FORCE)
-    set(SLIC3R_APP_CMD "magpie-slicer-profiler" CACHE STRING "Application command/executable name" FORCE)
-    set(SLIC3R_APP_BUNDLE_ID "com.magpieslicer.MagpieSlicerProfiler" CACHE STRING "Application bundle identifier" FORCE)
-    set(SLIC3R_PACKAGE_NAME "Magpie Slicer Profiler" CACHE STRING "Installed package display name" FORCE)
+    set(SLIC3R_APP_KEY "MagpieSlicerNextProfiler" CACHE STRING "Application key for config/data isolation" FORCE)
+    set(SLIC3R_APP_CMD "magpie-slicer-next-profiler" CACHE STRING "Application command/executable name" FORCE)
+    set(SLIC3R_APP_BUNDLE_ID "com.magpieslicer.MagpieSlicerNextProfiler" CACHE STRING "Application bundle identifier" FORCE)
+    set(SLIC3R_PACKAGE_NAME "Magpie Slicer Next Profiler" CACHE STRING "Installed package display name" FORCE)
 elseif(MAGPIE_VULKAN_TEST_BRANDING)
     set(SLIC3R_APP_NAME "Magpie Slicer Vulkan Test" CACHE STRING "Application display name" FORCE)
-    set(SLIC3R_APP_KEY "MagpieSlicerVulkanTest" CACHE STRING "Application key for config/data isolation" FORCE)
-    set(SLIC3R_APP_CMD "magpie-slicer-vulkan-test" CACHE STRING "Application command/executable name" FORCE)
-    set(SLIC3R_APP_BUNDLE_ID "com.magpieslicer.MagpieSlicerVulkanTest" CACHE STRING "Application bundle identifier" FORCE)
-    set(SLIC3R_PACKAGE_NAME "Magpie Slicer Vulkan Test" CACHE STRING "Installed package display name" FORCE)
+    set(SLIC3R_APP_KEY "MagpieSlicerNextVulkanTest" CACHE STRING "Application key for config/data isolation" FORCE)
+    set(SLIC3R_APP_CMD "magpie-slicer-next-vulkan-test" CACHE STRING "Application command/executable name" FORCE)
+    set(SLIC3R_APP_BUNDLE_ID "com.magpieslicer.MagpieSlicerNextVulkanTest" CACHE STRING "Application bundle identifier" FORCE)
+    set(SLIC3R_PACKAGE_NAME "Magpie Slicer Next Vulkan Test" CACHE STRING "Installed package display name" FORCE)
 else()
     set(SLIC3R_APP_NAME "Magpie Slicer" CACHE STRING "Application display name" FORCE)
-    set(SLIC3R_APP_KEY "MagpieSlicer" CACHE STRING "Application key for config/data isolation" FORCE)
-    set(SLIC3R_APP_CMD "magpie-slicer" CACHE STRING "Application command/executable name" FORCE)
-    set(SLIC3R_APP_BUNDLE_ID "com.magpieslicer.MagpieSlicer" CACHE STRING "Application bundle identifier" FORCE)
-    set(SLIC3R_PACKAGE_NAME "Magpie Slicer" CACHE STRING "Installed package display name" FORCE)
+    set(SLIC3R_APP_KEY "MagpieSlicerNext" CACHE STRING "Application key for config/data isolation" FORCE)
+    set(SLIC3R_APP_CMD "magpie-slicer-next" CACHE STRING "Application command/executable name" FORCE)
+    set(SLIC3R_APP_BUNDLE_ID "com.magpieslicer.MagpieSlicerNext" CACHE STRING "Application bundle identifier" FORCE)
+    set(SLIC3R_PACKAGE_NAME "Magpie Slicer Next" CACHE STRING "Installed package display name" FORCE)
 endif()
 
 # Printers and host software recognize Orca output by this producer name, so G-code
