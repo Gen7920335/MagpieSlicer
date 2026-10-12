@@ -4,6 +4,7 @@
 #include "bambu_networking.hpp"
 #include "libslic3r/Utils.hpp"
 #include "GUI.hpp"
+#include "libslic3r_version.h"
 #include "GUI_App.hpp"
 #include "GUI_Utils.hpp"
 #include "GUI_Preview.hpp"
@@ -542,7 +543,7 @@ void UpdateVersionDialog::update_version_info(wxString release_note, wxString ve
     //m_simplebook_release_note->SetMaxSize(wxSize(FromDIP(560), FromDIP(430)));
     m_simplebook_release_note->SetSelection(1);
     if (is_running_in_msix())
-        m_text_up_info->SetLabel(wxString::Format(_L("New version available: %s. Please update OrcaSlicer from the Microsoft Store."), version));
+        m_text_up_info->SetLabel(wxString::Format(I18N::rebrand(_L("New version available: %s. Please update OrcaSlicer from the Microsoft Store."), SLIC3R_APP_NAME), version));
     else
         m_text_up_info->SetLabel(wxString::Format(_L("Click to download new version in default browser: %s"), version));
     auto data_buf_in = release_note.utf8_str();

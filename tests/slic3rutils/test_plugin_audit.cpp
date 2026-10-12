@@ -1,5 +1,6 @@
 #include <boost/filesystem/path.hpp>
 #include <boost/filesystem/operations.hpp>
+#include <boost/algorithm/string/case_conv.hpp>
 #include <catch2/catch_all.hpp>
 
 #include <libslic3r/Utils.hpp>
@@ -75,8 +76,8 @@ TEST_CASE("Plugin audit denies app config and token filenames anywhere", "[audit
 
     SECTION("matching is case-insensitive on every platform")
     {
-        CHECK(mgr.is_denied_filename(fs::path("orcaslicer.conf")));
-        CHECK(mgr.is_denied_filename(fs::path("ORCASLICER.CONF")));
+        CHECK(mgr.is_denied_filename(fs::path(boost::algorithm::to_lower_copy(std::string(SLIC3R_APP_KEY ".conf")))));
+        CHECK(mgr.is_denied_filename(fs::path(boost::algorithm::to_upper_copy(std::string(SLIC3R_APP_KEY ".conf")))));
         CHECK(mgr.is_denied_filename(fs::path("ORCA_REFRESH_TOKEN.SEC")));
     }
 

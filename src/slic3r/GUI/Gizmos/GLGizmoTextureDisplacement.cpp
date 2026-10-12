@@ -20,6 +20,8 @@
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/GLToolbar.hpp" // GLToolbar::Default_Icons_Size, to match the toolbar's icon size
 #include "slic3r/GUI/GUI.hpp"
+#include "slic3r/GUI/I18N.hpp"
+#include "libslic3r_version.h"
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/GUI_ObjectList.hpp"
 #include "slic3r/GUI/GuiColor.hpp"
@@ -3943,9 +3945,9 @@ void GLGizmoTextureDisplacement::render_texture_library_popup(const ImVec2 &pane
         if (ImGui::Button("+##import_texture", ImVec2(tile, tile)))
             import_clicked = true;
         if (ImGui::IsItemHovered())
-            m_imgui->tooltip(_u8L("Import your own image as a height map. It is converted to the format the slicer "
+            m_imgui->tooltip(into_u8(I18N::rebrand(_L("Import your own image as a height map. It is converted to the format the slicer "
                                   "bakes from and saved to your personal texture folder, kept separate from the "
-                                  "textures shipped with OrcaSlicer."),
+                                  "textures shipped with OrcaSlicer."), SLIC3R_APP_NAME)),
                              m_imgui->scaled(20.f));
         end_grid(origin, count + 1);
     }

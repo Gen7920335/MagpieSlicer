@@ -56,6 +56,16 @@ namespace I18N {
 	inline wxString translate(const std::wstring &s, const std::wstring &plural, unsigned int n) { return wxGetTranslation(s.c_str(), plural.c_str(), n); }
 	inline wxString translate(const wxString     &s, const wxString     &plural, unsigned int n) { return wxGetTranslation(s, plural, n); }
 
+	// MAGPIE: a message that names the running application keeps Orca's msgid, so the
+	// OrcaSlicer catalog still translates it, and has the name swapped after translation.
+	// Catalogs write the name as either "OrcaSlicer" or "Orca Slicer".
+	inline wxString rebrand(wxString s, const wxString &app_name)
+	{
+		s.Replace("Orca Slicer", app_name);
+		s.Replace("OrcaSlicer", app_name);
+		return s;
+	}
+
 	inline std::string translate_utf8(const char         *s) { return wxGetTranslation(wxString(s, wxConvUTF8)).ToUTF8().data(); }
 	inline std::string translate_utf8(const wchar_t      *s) { return wxGetTranslation(s).ToUTF8().data(); }
 	inline std::string translate_utf8(const std::string  &s) { return wxGetTranslation(wxString(s.c_str(), wxConvUTF8)).ToUTF8().data(); }

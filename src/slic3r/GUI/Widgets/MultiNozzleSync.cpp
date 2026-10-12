@@ -579,7 +579,7 @@ std::vector<int> HotEndTable::FilterHotEnds(const NozzleOption& option)
 void HotEndTable::MarkRelatedItems(const NozzleOption& option)
 {
     const static StateColor bg_green(
-        std::pair<wxColour, int>(wxColour("#E5F0EE"), StateColor::Normal)
+        std::pair<wxColour, int>(wxColour("#EBF4FE"), StateColor::Normal)
     );
 
     const static StateColor bd_green(
@@ -594,7 +594,7 @@ void HotEndTable::MarkRelatedItems(const NozzleOption& option)
         item->SetBackgroundColor(bg_green);
         item->SetBorderColor(bd_green);
         for (auto child : item->GetChildren()) {
-            child->SetBackgroundColour("#E5F0EE");
+            child->SetBackgroundColour("#EBF4FE");
         }
     }
     wxGetApp().UpdateDarkUIWin(this);

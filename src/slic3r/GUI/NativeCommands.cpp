@@ -10,6 +10,7 @@
 #include "GUI_Factories.hpp"
 #include "GUI_ObjectList.hpp"
 #include "I18N.hpp"
+#include "libslic3r_version.h"
 #include "Shortcuts.hpp"
 #include "IMSlider.hpp"
 #include "MainFrame.hpp"
@@ -609,7 +610,7 @@ std::vector<NativeCommand> build_command_catalog()
         wxGetApp().check_new_version_sf(true, 1);
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
-    add_with_icon("help_about", _u8L("About OrcaSlicer"), _u8L("Help"), "MagpieSlicer_gradient_circle", [](const std::string&) {
+    add_with_icon("help_about", into_u8(I18N::rebrand(_L("About OrcaSlicer"), SLIC3R_APP_NAME)), _u8L("Help"), "MagpieSlicer_gradient_circle", [](const std::string&) {
         Slic3r::GUI::about();
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });

@@ -1771,7 +1771,8 @@ function TranslatePage() {
 
     let tid = $(OneNode).attr("tid");
     if (LangText[strLang].hasOwnProperty(tid)) {
-      $(OneNode).html(LangText[strLang][tid]);
+      // MAGPIE: the catalogs name the app "Orca Slicer" or "OrcaSlicer"; show the Magpie name.
+      $(OneNode).html(LangText[strLang][tid].replace(/Orca ?Slicer/g, "Magpie Slicer"));
     }
   }
 }

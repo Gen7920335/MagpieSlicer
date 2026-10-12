@@ -11,6 +11,8 @@
 #include "CloudProvider.hpp"
 #include "GUI_App.hpp"
 #include "I18N.hpp"
+#include "GUI.hpp"
+#include "libslic3r_version.h"
 #include "slic3r/Utils/Http.hpp"
 #include "slic3r/Utils/NetworkAgent.hpp"
 #include "slic3r/Utils/BBLNetworkPlugin.hpp"
@@ -251,8 +253,8 @@ std::shared_ptr<HttpServer::Response> HttpServer::auth_handle_request(const std:
 
         const std::string title = login_ok ? _u8L("Authentication complete") : _u8L("Authentication failed");
         const std::string message = login_ok
-            ? _u8L("You can return to OrcaSlicer. This window will close automatically.")
-            : _u8L("Something went wrong. Please return to OrcaSlicer and try again.");
+            ? into_u8(I18N::rebrand(_L("You can return to OrcaSlicer. This window will close automatically."), SLIC3R_APP_NAME))
+            : into_u8(I18N::rebrand(_L("Something went wrong. Please return to OrcaSlicer and try again."), SLIC3R_APP_NAME));
         const std::string html =
             "<html><head><meta charset=\"utf-8\">"
             "<style>body{font-family:Arial,sans-serif;background:#f7f7f7;color:#222;margin:32px;}"
@@ -436,7 +438,7 @@ void HttpServer::ResponseRedirect::write_response(std::stringstream& ssOut)
         "a.button{display:inline-block;padding:10px 16px;margin-top:12px;background:#0f8bff;color:#fff;text-decoration:none;border-radius:6px;}"
         "</style></head><body><div class=\"container\">"
         "<h2>" + _u8L("Authentication complete") + "</h2>"
-        "<p>" + _u8L("You can return to OrcaSlicer. If your browser does not redirect automatically, use the button below.") + "</p>"
+        "<p>" + into_u8(I18N::rebrand(_L("You can return to OrcaSlicer. If your browser does not redirect automatically, use the button below."), SLIC3R_APP_NAME)) + "</p>"
         "<a class=\"button\" href=\"" + location_str + "\">" + _u8L("Continue") + "</a>"
         "<script>setTimeout(function(){try{window.close();}catch(e){}},1500);</script>"
         "</div></body></html>";

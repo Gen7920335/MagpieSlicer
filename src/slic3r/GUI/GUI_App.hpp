@@ -419,7 +419,7 @@ public:
     int  FilterEvent(wxEvent& event) override;
     // The Preferences "Default page" choice, stored as its index: 0 Home, 1 Prepare.
     bool starts_on_prepare() const;
-    std::string logo_name() const { return is_editor() ? "OrcaSlicer" : "OrcaSlicer-gcodeviewer"; }
+    std::string logo_name() const { return is_editor() ? "MagpieSlicer" : "OrcaSlicer-gcodeviewer"; }
 
     bool is_closing() const { return m_is_closing.load(std::memory_order_acquire); }
     void set_closing(bool closing) { m_is_closing.store(closing, std::memory_order_release); }

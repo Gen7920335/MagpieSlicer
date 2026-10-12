@@ -68,7 +68,7 @@ ComboBox::ComboBox(wxWindow *parent,
             std::make_pair(0x398FF4, (int) StateColor::Hovered),
             std::make_pair(0xDBDBDB, (int) StateColor::Normal)));
         TextInput::SetBackgroundColor(StateColor(std::make_pair(0xF0F0F1, (int) StateColor::Disabled),
-            std::make_pair(0xE5F0EE, (int) StateColor::Focused), // ORCA updated background color for focused item
+            std::make_pair(0xEBF4FE, (int) StateColor::Focused), // ORCA updated background color for focused item
             std::make_pair(*wxWHITE, (int) StateColor::Normal)));
         TextInput::SetLabelColor(StateColor(
             std::make_pair(0x6B6B6B, (int) StateColor::Disabled), // ORCA: Use same color for disabled text on combo boxes

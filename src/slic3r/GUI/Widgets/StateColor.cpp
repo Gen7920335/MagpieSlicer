@@ -36,7 +36,7 @@ static std::map<wxColour, wxColour> gDarkColors{
     {"#000000", "#FFFFFE"}, // rgb(0, 0, 0)        Mostly Text color wxBlack
     {"#F4F4F4", "#343B49"}, // rgb(244, 244, 244)  ???
     {"#DBDBDB", "#4A4A51"}, // rgb(219, 219, 219)  Input/Combo Box Border Color
-    {"#EDFAF2", "#283542"}, // rgb(229, 240, 238)  Not Used anymore // Was used for BBS Combo / Dropdown focused background color
+    {"#EDFAF2", "#283542"}, // rgb(235, 244, 254)  Not Used anymore // Was used for BBS Combo / Dropdown focused background color
     {"#323A3C", "#E5E5E6"}, // rgb(50, 58, 60)     Text color used on search list | 
     {"#303A3C", "#E5E5E5"}, // rgb(48, 58, 60)     Object Table > Column header text color | StaticBox Border Color
     {"#FEFFFF", "#222832"}, // rgb(254, 255, 255)  Side Tabbar bg |
@@ -49,11 +49,10 @@ static std::map<wxColour, wxColour> gDarkColors{
     {"#ABABAB", "#ABABAB"},
     {"#D9D9D9", "#252B34"}, // rgb(217, 217, 217)  Sidebar > Toggle button track color
     {"#FFFEFE", "#D9D9D9"}, // rgb(255, 254, 254)  Sidebar > Toggle button thumb color
-    {"#EBF4FE", "#293F34"},
     //{"#F0F0F0", "#4C4C54"},
     // ORCA
-    {"#D7E9FD", "#24364A"}, // rgb(191, 225, 222)  Dropdown checked item background color > ORCA color with %25 opacity
-    {"#EBF4FE", "#283542"}, // rgb(229, 240, 238)  Combo / Dropdown focused background color > ORCA color with %10 opacity
+    {"#D7E9FD", "#24364A"}, // rgb(215, 233, 253)  Dropdown checked item background color > ORCA color with %25 opacity
+    {"#EBF4FE", "#283542"}, // rgb(235, 244, 254)  Combo / Dropdown focused background color > ORCA color with %10 opacity
 };
 
 std::tuple<double, double, double> StateColor::GetLAB(const wxColour& color) {
