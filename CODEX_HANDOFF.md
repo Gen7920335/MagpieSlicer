@@ -10,7 +10,7 @@
 - **Known failures / DO NOT REPEAT:** Do not copy line-1 feature code into Orca files; features return as modules (plan P1-P5). The hunk-filter port missed binary assets and non-rename code changes; compare against line 1 by blob for assets (see history 2026-10-12). Launching the GUI from a build tree re-registers .3mf/.stl/.step and `orcaslicer://` to that exe (startup association code); test with `--datadir` and expect to restore associations afterwards. The nightly CLI needs `--datadir` with `system/` vendor profiles, and resolves a `"from": "User"` preset only from `<datadir>/user/default/<kind>/` with a `version` key; `golden.py --datadir` handles this.
 - **Not yet ported from line 1 (deliberately):** every Magpie slicing feature; slicing timing/profiler (`MAGPIE_SLICING_TIMING` option exists, no instrumentation); automatic OrcaSlicer user-preset import and the "Converted for Magpie" menu; `MAGPIE_GUI_TEST_*` environment hooks; Korean strings for Magpie features; README/branding text in docs and flatpak/msix manifests.
 - **Unresolved decisions:** see the plan's decision list (script language, native module process model, repository/distribution naming, mod tag, upstream PR timing). Decided 2026-10-12: line 2 has its own app key `MagpieSlicerNext`, command `magpie-slicer-next`, package/install name "Magpie Slicer Next"; the display name stays "Magpie Slicer". `orcaslicer://` stays shared with Orca and line 1.
-- **Next verified step:** start P1 (parameter graph). Settle the plan decisions it depends on first.
+- **Next verified step:** P1 engine and storage are done and runtime-verified; the Mods settings page is built but not yet seen on screen (Gen to open it). Then close P1 against the plan's exit criteria and plan P2 (module runtime: script language, C++ module process model).
 
 ## History
 
@@ -27,3 +27,12 @@
 - Upstream moved web page text into the .po catalogs (`resources/web/data/text.js` removed; pages read `window.ORCA_UI_STRINGS`). The Magpie name swap moved with it into `WebViewHostDialog::localized_strings_script`, the one injection point. Native command titles are now translated in `CommandAction`, so the swap happens there.
 - Upstream deleted `SysInfoDialog.cpp` and the old guide pages 3, 6 and 31; the deletions were taken.
 - Verified after the merge: unit tests 2121/2121 on vanilla and this branch, `golden.py determinism` 15/15 on each, `golden.py compare` 15/15 identical. Deps unchanged.
+
+### 2026-10-13 P1 parameter graph (steps 1-3)
+
+- `src/libslic3r/ModHost/`: `ParamGraph` (every print_config_def option as a core node), `Expr` (pure expression evaluator, Orca placeholder-style syntax), `ModSet` (JSON mods with comments from `<data_dir>/mods`, load-time checks, rule ordering, resolution). Decided by Gen: JSON, not YAML.
+- Layering as implemented: rules sit above the printer/filament/process presets and below any key listed in `different_settings_to_system` (a value the user changed). Same setting + same priority is a load error; higher priority applies later and wins; a rule that reads another rule's setting runs after it; cycles are load errors.
+- `Print::apply` resolves rules before normalization; a rule that fails to evaluate is left out and `Print::validate` reports it (no silent fallback; the GUI does not catch exceptions from apply, so resolve never throws).
+- Mod parameter values live in `mod_settings` / `printer_mod_settings` / `filament_mod_settings` (JSON objects keyed `<mod>.<name>`), added to the preset option lists and to the G-code dump's banned keys.
+- Mod changes invalidate through the resolved core settings only; per-parameter `invalidates` is parsed but not used yet (a parameter read only by rules needs nothing more).
+- Verified: unit tests 2147/2147; golden 15/15 identical with no mods; CLI demo mod gives walls 3+2=5 (stored value 4 gives 7), a user-set preset value wins, a broken mod file is skipped with a logged reason, a 3MF carries `mod_settings` and slices back to the same result.
