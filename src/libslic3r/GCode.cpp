@@ -8128,6 +8128,11 @@ void GCode::append_full_config(const Print &print, std::string &str)
         // loaded presets, never consumed by slicing or firmware. Keep it out of the G-code config block so
         // the config key stays inert to g-code (byte-identical output).
         "filament_extruder_compatibility"sv,
+        // MAGPIE: mod parameter values. They act through the settings the mod's rules change, which
+        // the dump already shows, and leaving them out keeps the mod-free output byte-identical.
+        "filament_mod_settings"sv,
+        "mod_settings"sv,
+        "printer_mod_settings"sv,
         // The fast-purge / prime-volume-mode keys are new static-member registrations. Excluding them from
         // the config block keeps registration byte-identical for the shipping fleet (default
         // prime_volume_mode==Default leaves the slicing body unchanged; only the config-dump would otherwise

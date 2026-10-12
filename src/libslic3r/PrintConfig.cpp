@@ -2193,6 +2193,21 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionStrings());
     def->cli = ConfigOptionDef::nocli;
 
+    // MAGPIE: values of mod parameters, stored with the preset they belong to as a JSON object keyed
+    // "<mod id>.<name>". A value of a mod that is not installed stays in the string, so a preset or
+    // project opened without the mod and saved again keeps it.
+    def = this->add("mod_settings", coString);
+    def->set_default_value(new ConfigOptionString());
+    def->cli = ConfigOptionDef::nocli;
+
+    def = this->add("filament_mod_settings", coStrings);
+    def->set_default_value(new ConfigOptionStrings{ "" });
+    def->cli = ConfigOptionDef::nocli;
+
+    def = this->add("printer_mod_settings", coString);
+    def->set_default_value(new ConfigOptionString());
+    def->cli = ConfigOptionDef::nocli;
+
     def = this->add("print_compatible_printers", coStrings);
     def->set_default_value(new ConfigOptionStrings());
     def->cli = ConfigOptionDef::nocli;

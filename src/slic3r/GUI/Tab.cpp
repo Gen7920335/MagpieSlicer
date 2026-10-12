@@ -1,5 +1,7 @@
 //#include "slic3r/Utils/Serial.hpp"
 #include "Tab.hpp"
+#include "ModParamsPanel.hpp"
+#include "libslic3r/ModHost/ModSet.hpp"
 #include "PresetHints.hpp"
 #include "libslic3r/IMEXHelpers.hpp"
 #include "libslic3r/PresetBundle.hpp"
@@ -1649,6 +1651,8 @@ void Tab::reload_config()
 {
     if (m_active_page)
         m_active_page->reload_config();
+    if (m_mod_params_panel && m_config)
+        m_mod_params_panel->load_from_config(*m_config);
     if (m_type == Preset::TYPE_PRINT && m_config != nullptr)
         m_last_sparse_infill_rotate_template_value = m_config->opt_string("sparse_infill_rotate_template");
 }
@@ -3307,6 +3311,8 @@ void TabPrint::build()
         option.opt.height = 25;//250;
         optgroup->append_single_option_line(option, "others_settings_notes");
 
+    add_mods_page("process");
+
     // Orca: hide the dependencies tab for process for now. The UI is not ready yet.
     // page = add_options_page(L("Dependencies"), "param_profile_dependencies"); // icons ready
     //     optgroup = page->new_optgroup(L("Profile dependencies"), "param_profile_dependencies"); // icons ready
@@ -4877,6 +4883,8 @@ void TabFilament::build()
         option.opt.height = notes_field_height;// 250;
         optgroup->append_single_option_line(option);
 
+    add_mods_page("filament");
+
         //build_preset_description_line(optgroup.get());
 }
 
@@ -5535,6 +5543,8 @@ void TabPrinter::build_fff()
         option.opt.full_width = true;
         option.opt.height = notes_field_height;//250;
         optgroup->append_single_option_line(option);
+
+    add_mods_page("printer");
 #if 0
     //page = add_options_page(L("Dependencies"), "advanced");
     //    optgroup = page->new_optgroup(L("Profile dependencies"));
@@ -7636,12 +7646,41 @@ void Tab::clear_pages()
     // nulling pointers
     m_parent_preset_description_line = nullptr;
     m_detach_preset_btn = nullptr;
+    m_mod_params_panel = nullptr;
 
     m_compatible_printers.checkbox  = nullptr;
     m_compatible_printers.btn       = nullptr;
 
     m_compatible_prints.checkbox    = nullptr;
     m_compatible_prints.btn         = nullptr;
+}
+
+void Tab::add_mods_page(const std::string& scope)
+{
+    std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
+    if (!ModParamsPanel::has_params(mods.get(), scope))
+        return;
+    PageShp page = add_options_page(L("Mods"), "custom-gcode_other");
+    ConfigOptionsGroupShp optgroup = page->new_optgroup(L("Mod parameters"), L"param_special", 0);
+    Line line{ "", "" };
+    line.full_width = 1;
+    line.widget = [this, mods, scope](wxWindow* parent) -> wxSizer* {
+        m_mod_params_panel = new ModParamsPanel(parent, mods, scope);
+        m_mod_params_panel->load_from_config(*m_config);
+        m_mod_params_panel->on_change = [this, scope](const std::string& text) {
+            const char* key = ModParamsPanel::config_key(scope);
+            if (scope == "filament")
+                m_config->set_key_value(key, new ConfigOptionStrings({ text }));
+            else
+                m_config->set_key_value(key, new ConfigOptionString(text));
+            update_dirty();
+            on_value_change(key, text);
+        };
+        auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+        sizer->Add(m_mod_params_panel, 1, wxEXPAND);
+        return sizer;
+    };
+    optgroup->append_line(line);
 }
 
 //BBS: GUI refactor: unselect current item

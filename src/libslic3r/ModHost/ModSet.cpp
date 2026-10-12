@@ -288,6 +288,10 @@ Mod ModSet::parse_mod(const std::string &json_text)
             if (p.type != "float" && p.type != "int" && p.type != "bool" && p.type != "string")
                 throw ModError(where + ": type must be float, int, bool or string");
             p.default_value = param_default(def, p.type, where);
+            if (std::string scope = optional_string(def, "scope"); !scope.empty())
+                p.scope = scope;
+            if (p.scope != "process" && p.scope != "printer" && p.scope != "filament")
+                throw ModError(where + ": scope must be process, printer or filament");
             p.label         = optional_string(def, "label");
             p.unit          = optional_string(def, "unit");
             p.page          = optional_string(def, "page");
@@ -460,13 +464,60 @@ std::vector<std::string> ModSet::resolve(DynamicPrintConfig &config, const std::
         return errors;
     const std::set<std::string> user_changed = user_changed_keys(config);
 
+    // Stored parameter values: one object for the process, one for the printer, one per filament.
+    auto parse_values = [&errors](const std::string &key, const std::string &text) {
+        json values = json::object();
+        if (text.empty())
+            return values;
+        try {
+            values = json::parse(text);
+        } catch (const json::parse_error &e) {
+            errors.push_back(key + " is not valid JSON: " + e.what());
+            return json(json::object());
+        }
+        if (!values.is_object()) {
+            errors.push_back(key + " must be a JSON object");
+            return json(json::object());
+        }
+        return values;
+    };
+    auto string_of = [&config](const char *key) {
+        const auto *opt = config.option<ConfigOptionString>(key);
+        return opt ? opt->value : std::string();
+    };
+    const json process_values = parse_values("mod_settings", string_of("mod_settings"));
+    const json printer_values = parse_values("printer_mod_settings", string_of("printer_mod_settings"));
+    std::vector<json> filament_values;
+    if (const auto *opt = config.option<ConfigOptionStrings>("filament_mod_settings"))
+        for (const std::string &text : opt->values)
+            filament_values.push_back(parse_values("filament_mod_settings", text));
+
+    // A stored value of the wrong type is an error, never silently replaced by the default.
+    auto stored_value = [&errors](const ModParam &p, const std::string &name, const json &values) -> std::optional<ExprValue> {
+        auto it = values.find(name);
+        if (it == values.end())
+            return p.default_value;
+        if ((p.type == "float" && it->is_number()) || (p.type == "int" && it->is_number_integer()))
+            return it->get<double>();
+        if (p.type == "bool" && it->is_boolean())
+            return it->get<bool>();
+        if (p.type == "string" && it->is_string())
+            return it->get<std::string>();
+        errors.push_back("stored value of mod parameter " + name + " is not a " + p.type);
+        return std::nullopt;
+    };
+
     const ExprLookup lookup = [&](const std::string &name, std::optional<size_t> index) -> std::optional<ExprValue> {
         if (auto p = m_params.find(name); p != m_params.end()) {
-            if (index)
+            const ModParam &param = m_mods[p->second.first].params[p->second.second];
+            // A filament parameter is read per filament, with an index; the others without.
+            if ((param.scope == "filament") != index.has_value())
                 return std::nullopt;
             if (auto v = param_values.find(name); v != param_values.end())
                 return v->second;
-            return m_mods[p->second.first].params[p->second.second].default_value;
+            if (param.scope == "filament")
+                return *index < filament_values.size() ? stored_value(param, name, filament_values[*index]) : std::nullopt;
+            return stored_value(param, name, param.scope == "printer" ? printer_values : process_values);
         }
         const ConfigOptionDef *def = print_config_def.get(name);
         return def ? read_option(config.option(name), def->type, index) : std::nullopt;

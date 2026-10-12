@@ -287,6 +287,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/IMEXFilamentPickerPopover.hpp
     GUI/IMEXModesCtrl.cpp
     GUI/IMEXModesCtrl.hpp
+    GUI/ModParamsPanel.cpp
+    GUI/ModParamsPanel.hpp
     GUI/IdleScheduler.cpp
     GUI/IdleScheduler.hpp
     GUI/ImageGrid.cpp

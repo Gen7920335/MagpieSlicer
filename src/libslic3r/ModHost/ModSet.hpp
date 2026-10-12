@@ -29,6 +29,9 @@ struct ModParam
 {
     std::string              name;
     std::string              type; // "float", "int", "bool" or "string"
+    // The preset that stores the value: "process" (mod_settings), "printer" (printer_mod_settings)
+    // or "filament" (filament_mod_settings, one value per filament, read as "<mod id>.<name>[i]").
+    std::string              scope = "process";
     ExprValue                default_value;
     std::string              label;
     std::string              unit;
@@ -74,8 +77,9 @@ public:
     bool empty() const { return m_order.empty(); }
     const std::vector<Mod> &mods() const { return m_mods; }
 
-    // Applies the rules to a full print config. `param_values` overrides parameter defaults,
-    // keyed "<mod id>.<name>". A setting listed in the config's different_settings_to_system
+    // Applies the rules to a full print config. Parameter values come from the config's
+    // mod_settings, printer_mod_settings and filament_mod_settings, else from the defaults;
+    // `param_values` overrides both, keyed "<mod id>.<name>". A setting listed in the config's different_settings_to_system
     // (a value the user changed in a preset) is left as the user set it. A rule whose expression
     // cannot be evaluated (division by zero, an index past the end) is not applied and its error
     // is returned; the caller must not slice while any are returned.

@@ -267,3 +267,52 @@ TEST_CASE("A rule that cannot be evaluated is reported and not applied", "[ModHo
     CHECK_THAT(errors.front(), ContainsSubstring("division by zero"));
     CHECK(config.opt_int("wall_loops") == 2);
 }
+
+TEST_CASE("Parameter values stored in the presets replace the defaults", "[ModHost]")
+{
+    DynamicPrintConfig config = full_config();
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"demo.walls": 4, "other.kept": 1})"));
+    config.set_key_value("printer_mod_settings", new ConfigOptionString(R"({"demo.shells": 6})"));
+    config.set_key_value("filament_mod_settings", new ConfigOptionStrings({R"({"demo.flow": 90})", ""}));
+    const ModSet mods = build_one(R"({"id": "demo", "version": "1",
+        "params": {"walls": {"type": "int", "default": 2},
+                   "shells": {"type": "int", "default": 3, "scope": "printer"},
+                   "flow": {"type": "float", "default": 100, "scope": "filament"}},
+        "rules": [{"target": "wall_loops", "value": "demo.walls"},
+                  {"target": "top_shell_layers", "value": "demo.shells"},
+                  {"target": "filament_flow_ratio", "value": "demo.flow[0] / 100", "index": 0}]})");
+    config.set_key_value("filament_flow_ratio", new ConfigOptionFloats({0.98, 0.98}));
+
+    REQUIRE(mods.resolve(config).empty());
+    CHECK(config.opt_int("wall_loops") == 4);
+    CHECK(config.opt_int("top_shell_layers") == 6);
+    CHECK_THAT(config.option<ConfigOptionFloats>("filament_flow_ratio")->values[0], WithinAbs(0.9, 1e-12));
+    // A value of a mod that is not loaded stays where it was stored.
+    CHECK(config.opt_string("mod_settings") == R"({"demo.walls": 4, "other.kept": 1})");
+}
+
+TEST_CASE("A filament parameter takes the default for a filament with no stored value", "[ModHost]")
+{
+    DynamicPrintConfig config = full_config();
+    config.set_key_value("filament_mod_settings", new ConfigOptionStrings({R"({"demo.flow": 90})", ""}));
+    config.set_key_value("filament_flow_ratio", new ConfigOptionFloats({0.98, 0.98}));
+    const ModSet mods = build_one(R"({"id": "demo", "version": "1",
+        "params": {"flow": {"type": "float", "default": 100, "scope": "filament"}},
+        "rules": [{"target": "filament_flow_ratio", "value": "demo.flow[1] / 100", "index": 1}]})");
+    REQUIRE(mods.resolve(config).empty());
+    CHECK_THAT(config.option<ConfigOptionFloats>("filament_flow_ratio")->values[1], WithinAbs(1.0, 1e-12));
+}
+
+TEST_CASE("A stored parameter value of the wrong type is reported", "[ModHost]")
+{
+    DynamicPrintConfig config = full_config();
+    config.set_key_value("wall_loops", new ConfigOptionInt(2));
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"demo.walls": "many"})"));
+    const ModSet mods = build_one(R"({"id": "demo", "version": "1",
+        "params": {"walls": {"type": "int", "default": 2}},
+        "rules": [{"target": "wall_loops", "value": "demo.walls"}]})");
+    const std::vector<std::string> errors = mods.resolve(config);
+    REQUIRE_FALSE(errors.empty());
+    CHECK_THAT(errors.front(), ContainsSubstring("demo.walls"));
+    CHECK(config.opt_int("wall_loops") == 2);
+}

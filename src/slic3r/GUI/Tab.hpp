@@ -148,6 +148,8 @@ protected:
 
 
 using PageShp = std::shared_ptr<Page>;
+class ModParamsPanel;
+
 class Tab: public wxPanel
 {
 	//BBS: GUI refactor
@@ -503,6 +505,11 @@ public:
     NozzleVolumeType       get_actual_nozzle_volume_type(int extruder_id);
 
 protected:
+	// MAGPIE: a "Mods" page with the parameters the loaded mods store in this tab's preset; no page
+	// when no mod has one. `scope` is "process", "printer" or "filament".
+	void			add_mods_page(const std::string& scope);
+	ModParamsPanel* m_mod_params_panel { nullptr };
+
 	void			create_line_with_widget(ConfigOptionsGroup* optgroup, const std::string& opt_key, const std::string& path, widget_t widget);
 	wxSizer*		compatible_widget_create(wxWindow* parent, PresetDependencies &deps);
 	void 			compatible_widget_reload(PresetDependencies &deps);
