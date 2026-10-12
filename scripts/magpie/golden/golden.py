@@ -19,7 +19,7 @@ before trusting a comparison: a case that differs between two runs of the same
 binary cannot gate anything until the nondeterministic lines are understood.
 
 On Windows pass the console binary that accepts CLI arguments (for example
-build/src/Release/magpie-slicer.exe, or orca-slicer.exe for the vanilla build).
+build/src/Release/magpie-slicer-next.exe, or orca-slicer.exe for the vanilla build).
 """
 import argparse
 import hashlib
@@ -61,10 +61,18 @@ def normalize(lines, ignore_keys):
     return out
 
 
-def write_preset(src, overrides, dst):
+def write_preset(src, overrides, dst, user_dir=None, kind=None):
     with open(os.path.join(HERE, src), encoding='utf-8') as f:
         preset = json.load(f)
     preset.update(overrides or {})
+    if user_dir:
+        # The nightly CLI resolves a "from": "User" preset only when the file is one the
+        # preset bundle loaded from <datadir>/user/default/<kind>/, and the bundle skips a
+        # user preset without a "version" key.
+        preset.setdefault('version', '2.4.0.0')
+        kind_dir = os.path.join(user_dir, kind)
+        os.makedirs(kind_dir, exist_ok=True)
+        dst = os.path.join(kind_dir, preset['name'] + '.json')
     with open(dst, 'w', encoding='utf-8') as f:
         json.dump(preset, f, indent=4)
     return dst
@@ -80,7 +88,7 @@ def resolve_model(model, external_dir):
     return path if os.path.isfile(path) else None
 
 
-def slice_corpus(cli, out, corpus_path, external_dir, only, ignore_keys, timeout_s):
+def slice_corpus(cli, out, corpus_path, external_dir, only, ignore_keys, timeout_s, datadir=None):
     corpus = load_corpus(corpus_path)
     os.makedirs(out, exist_ok=True)
     manifest = {'cli': os.path.abspath(cli), 'corpus': os.path.relpath(corpus_path, ROOT), 'cases': {}}
@@ -100,19 +108,32 @@ def slice_corpus(cli, out, corpus_path, external_dir, only, ignore_keys, timeout
         shutil.rmtree(case_dir, ignore_errors=True)
         os.makedirs(case_dir)
         printer = corpus['printers'][case['printer']]
-        machine = write_preset(printer['machine'], case.get('machine'), os.path.join(case_dir, 'machine.json'))
-        process = write_preset(printer['process'], case.get('process'), os.path.join(case_dir, 'process.json'))
-        filaments = [write_preset(f, case.get('filament'), os.path.join(case_dir, f'filament_{i}.json'))
+        user_dir = os.path.join(datadir, 'user', 'default') if datadir else None
+        machine = write_preset(printer['machine'], case.get('machine'), os.path.join(case_dir, 'machine.json'),
+                               user_dir, 'machine')
+        process = write_preset(printer['process'], case.get('process'), os.path.join(case_dir, 'process.json'),
+                               user_dir, 'process')
+        filaments = [write_preset(f, case.get('filament'), os.path.join(case_dir, f'filament_{i}.json'),
+                                  user_dir, 'filament')
                      for i, f in enumerate(printer['filaments'])]
+        if user_dir:
+            for i, src in enumerate([machine, process] + filaments):
+                shutil.copyfile(src, os.path.join(case_dir, os.path.basename(src)))
         gcode_dir = os.path.join(case_dir, 'out')
         os.makedirs(gcode_dir)
-        cmd = [cli, '--slice', '0',
+        cmd = [cli]
+        if datadir:
+            cmd += ['--datadir', datadir]
+        if printer.get('bed_type'):
+            cmd += ['--curr-bed-type', printer['bed_type']]
+        cmd += ['--slice', '0',
                '--load-settings', f'{machine};{process}',
                '--load-filaments', ';'.join(filaments),
                '--outputdir', gcode_dir, model]
         started = time.monotonic()
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+            proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                                  timeout=timeout_s)
             code = proc.returncode
             with open(os.path.join(case_dir, 'cli.log'), 'w', encoding='utf-8') as f:
                 f.write(' '.join(cmd) + '\n\n' + proc.stdout + '\n' + proc.stderr)
@@ -190,6 +211,8 @@ def main():
         p.add_argument('--ignore-key', action='append', default=[],
                        help='drop the "; <key> = ..." config line, for keys only one build writes')
         p.add_argument('--timeout', type=int, default=1800, help='per-case slicing timeout in seconds')
+        p.add_argument('--datadir', help='CLI data directory; its system/ must hold the vendor profiles the presets '
+                                         'inherit from. User presets are written to <datadir>/user/default/')
     c = sub.add_parser('compare')
     c.add_argument('a')
     c.add_argument('b')
@@ -198,11 +221,13 @@ def main():
         return compare(args.a, args.b)
     only = set(args.cases.split(',')) if args.cases else None
     if args.cmd == 'slice':
-        return slice_corpus(args.cli, args.out, args.corpus, args.external_models, only, args.ignore_key, args.timeout)
+        return slice_corpus(args.cli, args.out, args.corpus, args.external_models, only, args.ignore_key, args.timeout,
+                            os.path.abspath(args.datadir) if args.datadir else None)
     rc = 0
     for run in ('run1', 'run2'):
         rc |= slice_corpus(args.cli, os.path.join(args.out, run), args.corpus, args.external_models,
-                           only, args.ignore_key, args.timeout)
+                           only, args.ignore_key, args.timeout,
+                           os.path.abspath(args.datadir) if args.datadir else None)
     return compare(os.path.join(args.out, 'run1'), os.path.join(args.out, 'run2')) or rc
 
 

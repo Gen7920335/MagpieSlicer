@@ -1,8 +1,8 @@
 {
     "description": "Feature-off golden corpus. Every case is sliced by a vanilla OrcaSlicer CLI and by the Magpie CLI built from the same upstream commit; normalized G-code must match byte for byte.",
     "printers": {
-        "u1": { "machine": "presets/u1_04_machine.json", "process": "presets/u1_04_process.json", "filaments": ["presets/u1_pla.json"] },
-        "x1c": { "machine": "presets/x1c_04_machine.json", "process": "presets/x1c_04_process.json", "filaments": ["presets/x1c_pla.json"] }
+        "u1": { "machine": "presets/u1_04_machine.json", "process": "presets/u1_04_process.json", "filaments": ["presets/u1_pla.json"], "bed_type": "High Temp Plate" },
+        "x1c": { "machine": "presets/x1c_04_machine.json", "process": "presets/x1c_04_process.json", "filaments": ["presets/x1c_pla.json"], "bed_type": "Textured PEI Plate" }
     },
     "cases": [
         { "name": "cube_default", "printer": "u1", "model": "tests/data/20mm_cube.obj" },
