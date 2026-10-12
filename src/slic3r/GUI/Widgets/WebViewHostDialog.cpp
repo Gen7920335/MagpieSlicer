@@ -3,6 +3,8 @@
 #include "WebView.hpp"
 #include "slic3r/GUI/GUI.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
+#include "slic3r/GUI/I18N.hpp"
+#include "libslic3r_version.h"
 #include "slic3r/GUI/Widgets/StateColor.hpp"
 #include "libslic3r/Utils.hpp"
 #include <exception>
@@ -155,7 +157,13 @@ std::string WebViewHostDialog::document_start_injector(const std::string& markup
 
 std::string WebViewHostDialog::localized_strings_script(const nlohmann::json& strings)
 {
-    return "window.ORCA_UI_STRINGS = " + strings.dump(-1, ' ', false, nlohmann::json::error_handler_t::ignore) + ";";
+    // MAGPIE: the catalogs name the application "OrcaSlicer" or "Orca Slicer"; show the Magpie name.
+    nlohmann::json branded = strings;
+    if (branded.is_object())
+        for (auto& value : branded)
+            if (value.is_string())
+                value = into_u8(I18N::rebrand(wxString::FromUTF8(value.get<std::string>()), SLIC3R_APP_NAME));
+    return "window.ORCA_UI_STRINGS = " + branded.dump(-1, ' ', false, nlohmann::json::error_handler_t::ignore) + ";";
 }
 
 WebViewHostDialog::WebViewHostDialog(wxWindow* parent,
