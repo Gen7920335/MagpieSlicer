@@ -3165,7 +3165,8 @@ TEST_CASE("Temperature drop tower honors every activation guard",
     dedicated_interface.interface_filament = 1;
     const std::string dedicated = temperature_drop_tower_gcode(dedicated_interface);
     CHECK(dedicated.find("temperature drop tower layer") != std::string::npos);
-    CHECK(dedicated.find("M109 S170") != std::string::npos);
+    CHECK(dedicated.find("; low-temperature support interface begin") != std::string::npos);
+    CHECK(dedicated.find("; low-temperature support interface end") != std::string::npos);
 
     TemperatureDropTowerSettings wiper_fallback;
     wiper_fallback.configured_wiper = true;
