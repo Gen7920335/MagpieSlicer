@@ -2197,14 +2197,17 @@ void PrintConfigDef::init_fff_params()
     // "<mod id>.<name>". A value of a mod that is not installed stays in the string, so a preset or
     // project opened without the mod and saved again keeps it.
     def = this->add("mod_settings", coString);
+    def->label = L("Mod values");
     def->set_default_value(new ConfigOptionString());
     def->cli = ConfigOptionDef::nocli;
 
     def = this->add("filament_mod_settings", coStrings);
+    def->label = L("Mod values");
     def->set_default_value(new ConfigOptionStrings{ "" });
     def->cli = ConfigOptionDef::nocli;
 
     def = this->add("printer_mod_settings", coString);
+    def->label = L("Mod values");
     def->set_default_value(new ConfigOptionString());
     def->cli = ConfigOptionDef::nocli;
 

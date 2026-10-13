@@ -7657,11 +7657,16 @@ void Tab::clear_pages()
 
 void Tab::add_mods_page(const std::string& scope)
 {
+    // Mod parameters are per preset; the per-object tabs have no Mods page yet.
+    if (dynamic_cast<TabPrintModel*>(this) != nullptr)
+        return;
     std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
     if (!ModParamsPanel::has_params(mods.get(), scope))
         return;
     PageShp page = add_options_page(L("Mods"), "custom-gcode_other");
-    ConfigOptionsGroupShp optgroup = page->new_optgroup(L("Mod parameters"), L"param_special", 0);
+    ConfigOptionsGroupShp optgroup = page->new_optgroup(L("Mod parameters"), L"param_special");
+    // A full-width widget line, like the IDEX/IQEX modes table: the panel lays out its own label
+    // and value columns, one row per parameter.
     Line line{ "", "" };
     line.full_width = 1;
     line.widget = [this, mods, scope](wxWindow* parent) -> wxSizer* {
