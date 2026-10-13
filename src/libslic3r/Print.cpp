@@ -1489,13 +1489,16 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
     // stalls on the firmware cold-extrusion guard or overheats the support filament.
     for (const PrintObject *object : m_objects) {
         const PrintObjectConfig &oc = object->config();
-        if (!object->has_support_material() || !oc.single_nozzle_low_temperature_interface.value ||
-            oc.support_interface_filament.value != 0)
+        if (!object->has_support_material() || !oc.single_nozzle_low_temperature_interface.value)
             continue;
         // Marlin EXTRUDE_MINTEMP and Klipper min_extrude_temp both default to 170 degC.
         constexpr int firmware_min_extrude_temperature_c = 170;
-        const std::vector<unsigned int> support_filaments = oc.support_filament.value > 0 ?
-            std::vector<unsigned int>{unsigned(oc.support_filament.value - 1)} : object->object_extruders();
+        // The interface is printed by the interface filament when one is chosen,
+        // otherwise by the support filament (or the object's own filaments).
+        const int interface_filament = oc.support_interface_filament.value > 0 ?
+            oc.support_interface_filament.value : oc.support_filament.value;
+        const std::vector<unsigned int> support_filaments = interface_filament > 0 ?
+            std::vector<unsigned int>{unsigned(interface_filament - 1)} : object->object_extruders();
         const std::pair<const char *, int> targets[] = {
             {"support_interface_temperature", oc.support_interface_temperature.value},
             // 0 disables the separate sublayer target.

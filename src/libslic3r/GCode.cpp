@@ -7632,8 +7632,7 @@ LayerResult GCode::process_layer(
                 const bool has_instance_support = instance_to_print.object_by_extruder.support != nullptr;
                 const bool defer_support_for_low_temperature_interface =
                     has_instance_support &&
-                    m_config.single_nozzle_low_temperature_interface.value &&
-                    m_config.support_interface_filament.value == 0;
+                    m_config.single_nozzle_low_temperature_interface.value;
                 const auto extrude_instance_support = [&]() {
                     if (!has_instance_support)
                         return;
@@ -8517,8 +8516,7 @@ std::string GCode::extrude_support_entities(const ExtrusionEntitiesPtr &support_
     ScopeGuard support_context_guard([this]() { --m_support_extrusion_context_depth; });
 
     if (support_extrusion_role == erMixed &&
-        m_config.single_nozzle_low_temperature_interface.value &&
-        m_config.support_interface_filament.value == 0) {
+        m_config.single_nozzle_low_temperature_interface.value) {
         std::string gcode;
         gcode += extrude_support_entities(support_entities, erSupportMaterial, preserve_order);
         gcode += extrude_support_entities(support_entities, erSupportTransition, preserve_order);
@@ -8571,8 +8569,7 @@ std::string GCode::extrude_support_entities(const ExtrusionEntitiesPtr &support_
 
         const int sublayer_temperature = m_config.support_interface_sublayer_temperature.value;
         const bool low_temperature_controls_interface =
-            m_config.single_nozzle_low_temperature_interface.value &&
-            m_config.support_interface_filament.value == 0;
+            m_config.single_nozzle_low_temperature_interface.value;
         const auto normal_temperature_for_current_extruder = [this]() {
             if (m_writer.filament() == nullptr)
                 return 0;
@@ -8915,7 +8912,6 @@ bool GCode::temperature_drop_tower_enabled() const
 {
     if (!m_config.support_interface_temperature_drop_tower.value ||
         !m_config.single_nozzle_low_temperature_interface.value ||
-        m_config.support_interface_filament.value != 0 ||
         m_config.print_sequence.value != PrintSequence::ByLayer ||
         this->has_configured_low_temperature_nozzle_wiper())
         return false;
@@ -9434,7 +9430,6 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
     const bool use_low_temperature_interface =
         m_config.single_nozzle_low_temperature_interface.value &&
-        m_config.support_interface_filament.value == 0 &&
         m_writer.filament() != nullptr;
     const bool low_temperature_interface_role =
         path.role() == erSupportMaterialInterface ||
