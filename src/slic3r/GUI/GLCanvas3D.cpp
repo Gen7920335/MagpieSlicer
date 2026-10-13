@@ -2969,8 +2969,6 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
             m_config->option<ConfigOptionInts>("nozzle_temperature");
         const auto *initial_temperatures =
             m_config->option<ConfigOptionInts>("nozzle_temperature_initial_layer");
-        const auto *interface_filament =
-            m_config->option<ConfigOptionInt>("support_interface_filament");
         const auto *print_sequence =
             m_config->option<ConfigOptionEnum<PrintSequence>>("print_sequence");
         const auto *nozzle_wiping =
@@ -2979,7 +2977,6 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
             temperature_tower_enabled != nullptr && temperature_tower_enabled->value &&
             low_temperature_interface_enabled != nullptr && low_temperature_interface_enabled->value &&
             interface_temperature > 0 &&
-            (interface_filament == nullptr || interface_filament->value == 0) &&
             (print_sequence == nullptr || print_sequence->value == PrintSequence::ByLayer) &&
             (nozzle_wiping == nullptr || !nozzle_wiping->value) &&
             nozzle_diameters != nullptr && !nozzle_diameters->values.empty() &&

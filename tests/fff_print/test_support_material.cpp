@@ -3140,9 +3140,6 @@ TEST_CASE("Temperature drop tower honors every activation guard",
     settings.low_temperature_interface_enabled = false;
     disabled_cases.emplace_back("low-temperature mode off", settings);
     settings = {};
-    settings.interface_filament = 1;
-    disabled_cases.emplace_back("dedicated interface filament", settings);
-    settings = {};
     settings.print_sequence = PrintSequence::ByObject;
     disabled_cases.emplace_back("print by object", settings);
     settings = {};
@@ -3161,6 +3158,14 @@ TEST_CASE("Temperature drop tower honors every activation guard",
         CHECK(output.find("temperature drop tower layer") == std::string::npos);
         CHECK(output.find("temperature drop tower cooling pass") == std::string::npos);
     }
+
+    // An explicitly chosen interface filament does not switch the feature off:
+    // the low-temperature interface and its tower follow their own toggles.
+    TemperatureDropTowerSettings dedicated_interface;
+    dedicated_interface.interface_filament = 1;
+    const std::string dedicated = temperature_drop_tower_gcode(dedicated_interface);
+    CHECK(dedicated.find("temperature drop tower layer") != std::string::npos);
+    CHECK(dedicated.find("M109 S170") != std::string::npos);
 
     TemperatureDropTowerSettings wiper_fallback;
     wiper_fallback.configured_wiper = true;
@@ -3678,12 +3683,12 @@ TEST_CASE("Bunny60 temperature tower adapts to physical nozzle changes",
 
 TEST_CASE("Low-temperature interface targets stay within extrudable filament limits", "[SupportMaterial][LowTemperatureInterface]")
 {
-    auto validate = [](bool enabled, int interface_c, int sublayer_c) {
+    auto validate = [](bool enabled, int interface_c, int sublayer_c, int interface_filament = 0) {
         DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
         config.set_deserialize_strict({
             {"enable_support", true},
             {"single_nozzle_low_temperature_interface", enabled},
-            {"support_interface_filament", 0},
+            {"support_interface_filament", interface_filament},
             {"support_interface_temperature", interface_c},
             {"support_interface_sublayer_temperature", sublayer_c},
             // Relative E needs the per-layer reset; keep that unrelated preflight error out.
@@ -3706,6 +3711,10 @@ TEST_CASE("Low-temperature interface targets stay within extrudable filament lim
     CHECK(validate(true, 200, 169).opt_key == "support_interface_sublayer_temperature");
     CHECK(validate(true, 200, 241).opt_key == "support_interface_sublayer_temperature");
     CHECK(validate(true, 200, 190).string == "");
+    // An explicit interface filament is judged against its own limits too.
+    CHECK(validate(true, 169, 0, 1).opt_key == "support_interface_temperature");
+    CHECK(validate(true, 241, 0, 1).opt_key == "support_interface_temperature");
+    CHECK(validate(true, 200, 0, 1).string == "");
     // Feature off: the interface targets are never emitted, so they are not judged.
     CHECK(validate(false, 1, 300).string == "");
 }

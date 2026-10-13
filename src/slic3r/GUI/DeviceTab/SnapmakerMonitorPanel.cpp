@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -1737,25 +1738,41 @@ void SnapmakerMonitorPanel::request_camera()
                 return;
             }
 
-            wxMemoryInputStream stream(body.data(), body.size());
-            wxImage image;
-            if (image.LoadFile(stream, wxBITMAP_TYPE_JPEG) && image.IsOk()) {
-                const double scale = std::min(
-                    static_cast<double>(target_width) / image.GetWidth(),
-                    static_cast<double>(target_height) / image.GetHeight());
-                const int width = std::max(1, static_cast<int>(std::lround(image.GetWidth() * scale)));
-                const int height = std::max(1, static_cast<int>(std::lround(image.GetHeight() * scale)));
-                if (width != image.GetWidth() || height != image.GetHeight())
-                    image.Rescale(width, height, wxIMAGE_QUALITY_HIGH);
+            // wxImage shares pixel data through a non-atomic reference count, so no
+            // wxImage may be alive on this worker while the UI thread holds a copy.
+            // Decode here, hand over plain RGB bytes, and build the image on the UI thread.
+            int frame_width = 0;
+            int frame_height = 0;
+            std::vector<unsigned char> frame_rgb;
+            {
+                wxMemoryInputStream stream(body.data(), body.size());
+                wxImage image;
+                if (image.LoadFile(stream, wxBITMAP_TYPE_JPEG) && image.IsOk()) {
+                    const double scale = std::min(
+                        static_cast<double>(target_width) / image.GetWidth(),
+                        static_cast<double>(target_height) / image.GetHeight());
+                    const int width = std::max(1, static_cast<int>(std::lround(image.GetWidth() * scale)));
+                    const int height = std::max(1, static_cast<int>(std::lround(image.GetHeight() * scale)));
+                    if (width != image.GetWidth() || height != image.GetHeight())
+                        image.Rescale(width, height, wxIMAGE_QUALITY_HIGH);
+                    frame_width = image.GetWidth();
+                    frame_height = image.GetHeight();
+                    const unsigned char *rgb = image.GetData();
+                    frame_rgb.assign(rgb, rgb + size_t(frame_width) * size_t(frame_height) * 3);
+                }
             }
-            wxTheApp->CallAfter([this, lifetime, generation, image = std::move(image), hash, elapsed]() mutable {
+            wxTheApp->CallAfter([this, lifetime, generation, frame_width, frame_height,
+                                 frame_rgb = std::move(frame_rgb), hash, elapsed]() {
                 if (lifetime.expired() || generation != m_server_generation)
                     return;
                 m_camera_in_flight = false;
-                if (image.IsOk())
-                    apply_camera(std::move(image), hash, static_cast<long>(elapsed));
-                else
+                if (frame_rgb.empty()) {
                     camera_request_failed(0); // HTTP succeeded, but the payload was not a valid JPEG.
+                    return;
+                }
+                wxImage image(frame_width, frame_height, false);
+                std::copy(frame_rgb.begin(), frame_rgb.end(), image.GetData());
+                apply_camera(std::move(image), hash, static_cast<long>(elapsed));
             });
         })
         .on_error([this, lifetime, generation](std::string, std::string, unsigned status) {
