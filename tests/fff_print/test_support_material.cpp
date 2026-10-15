@@ -6,6 +6,8 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include "libslic3r/ClipperUtils.hpp"
+#include "libslic3r/ExPolygon.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Layer.hpp"
 
@@ -527,3 +529,47 @@ TEST_CASE("Bottom-only support interface keeps the dense interface density", "[S
     REQUIRE(sp.bottom_interface_density > sp.support_density);
 }
 
+
+// A 10 mm square stem carrying a 30 x 10 mm bar: two 10 x 10 mm overhangs, one on each side of the stem.
+static TriangleMesh support_tee()
+{
+    TriangleMesh model = make_cube(10, 10, 10); model.translate(10, 0, 0);   // stem [10,20]x[0,10]x[0,10]
+    TriangleMesh bar   = make_cube(30, 10, 2);  bar.translate(0, 0, 10);     // bar  [0,30]x[0,10]x[10,12]
+    model.merge(bar);
+    return model;
+}
+
+TEST_CASE("The Cura support generator fills the overhangs of a tee and keeps clear of the stem", "[SupportMaterial]")
+{
+    Slic3r::Print print;
+    Slic3r::Test::init_and_process_print({ support_tee() }, print, {
+        { "enable_support", 1 }, { "support_type", "normal(auto)" }, { "support_generator", "cura" },
+        { "layer_height", 0.2 }, { "first_layer_height", 0.2 },
+        { "support_top_z_distance", 0.2 }, { "support_object_xy_distance", 0.35 }, { "support_expansion", 0 },
+        { "support_interface_top_layers", 3 }, { "support_interface_bottom_layers", 0 } });
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(!object.support_layers().empty());
+
+    // Scaled area to mm2.
+    const double mm2 = SCALING_FACTOR * SCALING_FACTOR;
+    size_t       mid_layers = 0;
+    for (const SupportLayer *layer : object.support_layers()) {
+        CAPTURE(layer->print_z);
+        // Support must stay below the bar: its top is at 10 mm less the 0.2 mm top Z distance (mm).
+        CHECK(layer->print_z < 10. - 0.2 + EPSILON);
+        const Layer *object_layer = object.get_layer_at_printz(layer->print_z, EPSILON);
+        if (object_layer == nullptr)
+            continue;
+        // Support never overlaps the stem's slice on the same layer (overlap measured in mm2).
+        CHECK(area(intersection_ex(layer->support_islands, object_layer->lslices)) * mm2 < 0.01);
+        if (layer->print_z > 2. && layer->print_z < 8.) {
+            // Two 10 x 10 mm overhangs less the 0.35 mm X/Y gap along the stem: about 193 mm2. Outside
+            // the first layer Orca adds no expansion, so the islands must cover most of that and no more.
+            const double island_mm2 = area(layer->support_islands) * mm2;
+            CHECK(island_mm2 > 170.);
+            CHECK(island_mm2 < 205.);
+            ++mid_layers;
+        }
+    }
+    CHECK(mid_layers > 20);
+}
