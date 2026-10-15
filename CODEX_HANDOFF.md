@@ -36,3 +36,8 @@
 - Mod parameter values live in `mod_settings` / `printer_mod_settings` / `filament_mod_settings` (JSON objects keyed `<mod>.<name>`), added to the preset option lists and to the G-code dump's banned keys.
 - Mod changes invalidate through the resolved core settings only; per-parameter `invalidates` is parsed but not used yet (a parameter read only by rules needs nothing more).
 - Verified: unit tests 2147/2147; golden 15/15 identical with no mods; CLI demo mod gives walls 3+2=5 (stored value 4 gives 7), a user-set preset value wins, a broken mod file is skipped with a logged reason, a 3MF carries `mod_settings` and slices back to the same result.
+
+### 2026-10-16 Mods-on equivalence (Gen's rule)
+
+- `golden.py mods --cli <magpie> --vanilla-cli <orca> --datadir <mod-free datadir> --out <dir>`.
+- Measured: no-op mod 15/15 identical to vanilla (including a rule that writes `layer_height * 1.5 / 1.5`); value-setting mod 15/15 identical to vanilla with the same values in the preset once `different_settings_to_system` is dropped. Without dropping it, each case differs in that one comment line only (vanilla lists the overridden keys; Magpie does not, since the rule is not a user change). In the vase case spiral mode marks wall_loops/top_shell_layers as changed, so the rule leaves them, and the output still matches.

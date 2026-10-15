@@ -1,0 +1,11 @@
+{
+    // Mod that is on but leaves every setting as it was.
+    "id": "noop", "version": "1.0.0",
+    "params": { "unused": { "type": "float", "default": 1.5 }, "flag": { "type": "bool", "default": false } },
+    "rules": [
+        { "target": "wall_loops", "value": "wall_loops" },
+        { "target": "sparse_infill_density", "value": "if(noop.flag, \"80%\", sparse_infill_density)" },
+        { "target": "top_shell_layers", "value": "99", "when": "noop.flag" },
+        { "target": "layer_height", "value": "layer_height * noop.unused / 1.5" }
+    ]
+}

@@ -1,0 +1,10 @@
+{
+    // Mod that changes values; vanilla gets the same values set directly in the process preset.
+    "id": "setv", "version": "1.0.0",
+    "params": { "walls": { "type": "int", "default": 4 } },
+    "rules": [
+        { "target": "wall_loops", "value": "setv.walls" },
+        { "target": "top_shell_layers", "value": "wall_loops + 2" },
+        { "target": "bottom_shell_layers", "value": "max(4, wall_loops)" }
+    ]
+}

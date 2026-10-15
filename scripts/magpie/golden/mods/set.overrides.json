@@ -1,0 +1,4 @@
+{
+    "description": "The values mods/set.json resolves to with its defaults, set directly in each case's process preset for the vanilla run.",
+    "process": { "wall_loops": "4", "top_shell_layers": "6", "bottom_shell_layers": "4" }
+}

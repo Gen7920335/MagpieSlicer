@@ -10,6 +10,7 @@ object ids, optionally named config keys), and records a SHA-256 per case.
     golden.py slice --cli <orca-or-magpie-cli> --out <dir> [--external-models <dir>]
     golden.py compare <dir-a> <dir-b>
     golden.py determinism --cli <cli> --out <dir>
+    golden.py mods --cli <magpie-cli> --vanilla-cli <orca-cli> --datadir <dir> --out <dir>
 
 `slice` writes <dir>/manifest.json and <dir>/<case>/normalized.gcode.
 `compare` exits 1 when any case differs or is missing on one side, and prints the
@@ -17,6 +18,11 @@ first differing normalized line of each such case.
 `determinism` slices twice into <dir>/run1 and <dir>/run2 and compares them. Run it
 before trusting a comparison: a case that differs between two runs of the same
 binary cannot gate anything until the nondeterministic lines are understood.
+`mods` checks that a mod which is on but resolves to the same settings changes nothing:
+mods/noop.json (on, every setting unchanged) against vanilla, and mods/set.json (rules
+that change values) against vanilla with the same values set in the process preset
+(mods/set.overrides.json). The second comparison drops different_settings_to_system,
+the list of keys the user changed, which a mod rule rightly does not add to.
 
 On Windows pass the console binary that accepts CLI arguments (for example
 build/src/Release/magpie-slicer-next.exe, or orca-slicer.exe for the vanilla build).
@@ -198,6 +204,48 @@ def compare(dir_a, dir_b):
     return 1 if bad else 0
 
 
+def mods_equivalence(args):
+    """Mods on, settings equal: Magpie must match vanilla. Returns the number of failed comparisons."""
+    out = os.path.abspath(args.out)
+    datadir = os.path.abspath(args.datadir)
+    failed = 0
+    with open(os.path.join(HERE, 'mods', 'set.overrides.json'), encoding='utf-8') as f:
+        overrides = json.load(f)['process']
+    corpus = load_corpus(args.corpus)
+    for case in corpus['cases']:
+        clash = set(overrides) & set(case.get('process', {}))
+        if clash:
+            raise SystemExit(f'case {case["name"]} already sets {sorted(clash)}; pick other keys in mods/set.overrides.json')
+        case.setdefault('process', {}).update(overrides)
+    set_corpus = os.path.join(out, 'corpus_set.json')
+    os.makedirs(out, exist_ok=True)
+    with open(set_corpus, 'w', encoding='utf-8') as f:
+        json.dump(corpus, f, indent=2)
+
+    def datadir_with(mod):
+        # A copy of the data directory with one mod, so the vanilla data directory stays mod-free.
+        dst = os.path.join(out, 'datadir_' + mod)
+        shutil.rmtree(dst, ignore_errors=True)
+        shutil.copytree(datadir, dst, ignore=shutil.ignore_patterns('log', 'mods'))
+        os.makedirs(os.path.join(dst, 'mods'))
+        shutil.copyfile(os.path.join(HERE, 'mods', mod + '.json'), os.path.join(dst, 'mods', mod + '.json'))
+        return dst
+
+    only = set(args.cases.split(',')) if args.cases else None
+    run = lambda cli, name, corpus_path, dd, ignore: slice_corpus(cli, os.path.join(out, name), corpus_path, args.external_models,
+                                                                   only, ignore, args.timeout, dd)
+    print('== noop mod against vanilla')
+    run(args.vanilla_cli, 'vanilla', args.corpus, datadir, [])
+    run(args.cli, 'magpie_noop', args.corpus, datadir_with('noop'), [])
+    failed += compare(os.path.join(out, 'vanilla'), os.path.join(out, 'magpie_noop'))
+    print('== value-setting mod against vanilla with the same values')
+    ignore = ['different_settings_to_system']
+    run(args.vanilla_cli, 'vanilla_set', set_corpus, datadir, ignore)
+    run(args.cli, 'magpie_set', args.corpus, datadir_with('set'), ignore)
+    failed += compare(os.path.join(out, 'vanilla_set'), os.path.join(out, 'magpie_set'))
+    return 1 if failed else 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -213,12 +261,23 @@ def main():
         p.add_argument('--timeout', type=int, default=1800, help='per-case slicing timeout in seconds')
         p.add_argument('--datadir', help='CLI data directory; its system/ must hold the vendor profiles the presets '
                                          'inherit from. User presets are written to <datadir>/user/default/')
+    m = sub.add_parser('mods')
+    m.add_argument('--cli', required=True, help='the Magpie CLI')
+    m.add_argument('--vanilla-cli', required=True, help='a vanilla OrcaSlicer CLI built from the same upstream commit')
+    m.add_argument('--out', required=True)
+    m.add_argument('--datadir', required=True, help='a mod-free data directory, as for slice')
+    m.add_argument('--corpus', default=os.path.join(HERE, 'corpus.json'))
+    m.add_argument('--external-models')
+    m.add_argument('--cases')
+    m.add_argument('--timeout', type=int, default=1800)
     c = sub.add_parser('compare')
     c.add_argument('a')
     c.add_argument('b')
     args = ap.parse_args()
     if args.cmd == 'compare':
         return compare(args.a, args.b)
+    if args.cmd == 'mods':
+        return mods_equivalence(args)
     only = set(args.cases.split(',')) if args.cases else None
     if args.cmd == 'slice':
         return slice_corpus(args.cli, args.out, args.corpus, args.external_models, only, args.ignore_key, args.timeout,
