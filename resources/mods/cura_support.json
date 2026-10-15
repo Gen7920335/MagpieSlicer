@@ -1,0 +1,34 @@
+{
+    // Cura support: CuraEngine's normal support areas (ported from CuraEngine 47b0388), printed with
+    // Orca's support toolpaths by the built-in "cura" support generator. Orca's own support settings
+    // (type, Z/XY distances, interface layers, expansion, build plate only, threshold angle) still
+    // apply; the parameters below are the CuraEngine settings Orca has no setting for.
+    "id": "cura_support",
+    "name": "Cura support",
+    "version": "1.0.0",
+    "params": {
+        "enable":                       { "type": "bool",  "default": false, "label": "Use Cura support" },
+        "join_distance":                { "type": "float", "default": 2.0,   "unit": "mm",  "label": "Support join distance" },
+        "min_feature_width":            { "type": "float", "default": 0.0,   "unit": "mm",  "label": "Minimum feature width (0 = 85% of the support line width)" },
+        "z_overrides_xy":               { "type": "bool",  "default": true,  "label": "Z distance overrides X/Y distance" },
+        "xy_distance_overhang":         { "type": "float", "default": 0.2,   "unit": "mm",  "label": "Minimum X/Y distance at overhangs" },
+        "stair_step_height":            { "type": "float", "default": 0.3,   "unit": "mm",  "label": "Stair step height" },
+        "stair_step_width":             { "type": "float", "default": 5.0,   "unit": "mm",  "label": "Stair step maximum width" },
+        "stair_step_min_slope":         { "type": "float", "default": 10.0,  "unit": "deg", "label": "Stair step minimum slope angle" },
+        "minimum_support_area":         { "type": "float", "default": 0.0,   "unit": "mm2", "label": "Minimum support area" },
+        "minimum_roof_area":            { "type": "float", "default": 1.0,   "unit": "mm2", "label": "Minimum roof area" },
+        "minimum_bottom_area":          { "type": "float", "default": 1.0,   "unit": "mm2", "label": "Minimum floor area" },
+        "roof_offset":                  { "type": "float", "default": 0.0,   "unit": "mm",  "label": "Roof horizontal expansion" },
+        "bottom_offset":                { "type": "float", "default": 0.0,   "unit": "mm",  "label": "Floor horizontal expansion" },
+        "use_towers":                   { "type": "bool",  "default": false, "label": "Use towers" },
+        "tower_diameter":               { "type": "float", "default": 3.0,   "unit": "mm",  "label": "Tower diameter" },
+        "tower_max_supported_diameter": { "type": "float", "default": 3.0,   "unit": "mm",  "label": "Maximum tower-supported diameter" },
+        "tower_roof_angle":             { "type": "float", "default": 65.0,  "unit": "deg", "label": "Tower roof angle" },
+        "conical_enabled":              { "type": "bool",  "default": false, "label": "Conical support" },
+        "conical_angle":                { "type": "float", "default": 30.0,  "unit": "deg", "label": "Conical support angle" },
+        "conical_min_width":            { "type": "float", "default": 5.0,   "unit": "mm",  "label": "Conical support minimum width" }
+    },
+    "rules": [
+        { "target": "support_generator", "value": "\"cura\"", "when": "cura_support.enable" }
+    ]
+}

@@ -113,6 +113,8 @@ set(lisbslic3r_sources
     Config.cpp
     Config.hpp
     GCodeCompatibility.hpp
+    ModHost/Builtin/CuraSupport.cpp
+    ModHost/Builtin/CuraSupport.hpp
     ModHost/Expr.cpp
     ModHost/Expr.hpp
     ModHost/ModSet.cpp

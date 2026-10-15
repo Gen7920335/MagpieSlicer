@@ -428,30 +428,36 @@ ModSet ModSet::build(std::vector<Mod> mods)
 
 ModSet ModSet::load_dir(const boost::filesystem::path &dir, std::vector<std::string> &errors)
 {
-    namespace fs = boost::filesystem;
-    std::vector<fs::path> files;
-    boost::system::error_code ec;
-    if (!fs::is_directory(dir, ec))
-        return {};
-    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
-        if (fs::is_regular_file(it->status()) && boost::iequals(it->path().extension().string(), ".json"))
-            files.push_back(it->path());
-    std::sort(files.begin(), files.end());
+    return load_dirs({dir}, errors);
+}
 
+ModSet ModSet::load_dirs(const std::vector<boost::filesystem::path> &dirs, std::vector<std::string> &errors)
+{
+    namespace fs = boost::filesystem;
     std::vector<Mod> mods;
-    for (const fs::path &file : files) {
-        try {
-            boost::nowide::ifstream in(file.string());
-            std::stringstream       ss;
-            ss << in.rdbuf();
-            Mod mod = parse_mod(ss.str());
-            // Check each mod against those already accepted, so one bad mod does not drop the rest.
-            std::vector<Mod> trial = mods;
-            trial.push_back(mod);
-            build(std::move(trial));
-            mods.push_back(std::move(mod));
-        } catch (const std::exception &e) {
-            errors.push_back(file.filename().string() + ": " + e.what());
+    for (const fs::path &dir : dirs) {
+        std::vector<fs::path>     files;
+        boost::system::error_code ec;
+        if (!fs::is_directory(dir, ec))
+            continue;
+        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+            if (fs::is_regular_file(it->status()) && boost::iequals(it->path().extension().string(), ".json"))
+                files.push_back(it->path());
+        std::sort(files.begin(), files.end());
+        for (const fs::path &file : files) {
+            try {
+                boost::nowide::ifstream in(file.string());
+                std::stringstream       ss;
+                ss << in.rdbuf();
+                Mod mod = parse_mod(ss.str());
+                // Check each mod against those already accepted, so one bad mod does not drop the rest.
+                std::vector<Mod> trial = mods;
+                trial.push_back(mod);
+                build(std::move(trial));
+                mods.push_back(std::move(mod));
+            } catch (const std::exception &e) {
+                errors.push_back(file.filename().string() + ": " + e.what());
+            }
         }
     }
     return build(std::move(mods));
@@ -556,17 +562,55 @@ void set_active_mods(std::shared_ptr<const ModSet> mods)
     g_active = std::move(mods);
 }
 
+std::optional<ExprValue> param_value(const DynamicPrintConfig &config, const std::string &key)
+{
+    std::shared_ptr<const ModSet> mods = active_mods();
+    if (!mods)
+        return std::nullopt;
+    const size_t dot = key.find('.');
+    if (dot == std::string::npos)
+        return std::nullopt;
+    for (const Mod &mod : mods->mods()) {
+        if (mod.id != key.substr(0, dot))
+            continue;
+        for (const ModParam &p : mod.params) {
+            if (p.name != key.substr(dot + 1) || p.scope == "filament")
+                continue;
+            const auto *opt = config.option<ConfigOptionString>(p.scope == "printer" ? "printer_mod_settings" : "mod_settings");
+            json stored;
+            try {
+                stored = opt && !opt->value.empty() ? json::parse(opt->value) : json::object();
+            } catch (const json::parse_error &) {
+                return std::nullopt;
+            }
+            auto it = stored.is_object() ? stored.find(key) : stored.end();
+            if (!stored.is_object() || it == stored.end())
+                return p.default_value;
+            if ((p.type == "float" && it->is_number()) || (p.type == "int" && it->is_number_integer()))
+                return it->get<double>();
+            if (p.type == "bool" && it->is_boolean())
+                return it->get<bool>();
+            if (p.type == "string" && it->is_string())
+                return it->get<std::string>();
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
 void load_active_mods_from_data_dir()
 {
-    if (data_dir().empty())
-        return;
-    const boost::filesystem::path dir = boost::filesystem::path(data_dir()) / "mods";
-    std::vector<std::string>      errors;
-    auto                          mods = std::make_shared<const ModSet>(ModSet::load_dir(dir, errors));
+    std::vector<boost::filesystem::path> dirs;
+    if (!resources_dir().empty())
+        dirs.push_back(boost::filesystem::path(resources_dir()) / "mods");
+    if (!data_dir().empty())
+        dirs.push_back(boost::filesystem::path(data_dir()) / "mods");
+    std::vector<std::string> errors;
+    auto                     mods = std::make_shared<const ModSet>(ModSet::load_dirs(dirs, errors));
     for (const std::string &e : errors)
         BOOST_LOG_TRIVIAL(error) << "Mod not loaded: " << e;
     if (!mods->mods().empty())
-        BOOST_LOG_TRIVIAL(info) << "Loaded " << mods->mods().size() << " mod(s) from " << dir.string();
+        BOOST_LOG_TRIVIAL(info) << "Loaded " << mods->mods().size() << " mod(s)";
     set_active_mods(std::move(mods));
 }
 

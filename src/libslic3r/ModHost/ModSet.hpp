@@ -73,6 +73,8 @@ public:
     // Every *.json directly in `dir`, in file-name order. A file that fails to parse or check is
     // skipped and its error appended to `errors`; a missing directory gives an empty set.
     static ModSet load_dir(const boost::filesystem::path &dir, std::vector<std::string> &errors);
+    // Every *.json in each directory in turn (file-name order within a directory), checked as one set.
+    static ModSet load_dirs(const std::vector<boost::filesystem::path> &dirs, std::vector<std::string> &errors);
 
     bool empty() const { return m_order.empty(); }
     const std::vector<Mod> &mods() const { return m_mods; }
@@ -97,9 +99,14 @@ private:
 // which case Print::apply leaves the config exactly as it came.
 std::shared_ptr<const ModSet> active_mods();
 void set_active_mods(std::shared_ptr<const ModSet> mods);
-// Loads <data_dir>/mods and makes it the active set; a mod that fails to load is logged and
-// left out. Does nothing when no data directory is set.
+// Loads the mods bundled in <resources>/mods, then <data_dir>/mods, and makes them the active set;
+// a mod that fails to load is logged and left out.
 void load_active_mods_from_data_dir();
+
+// The value of a process- or printer-scope parameter of an active mod: the one stored in `config`
+// (mod_settings / printer_mod_settings), else the parameter's default. Nothing when no active mod
+// declares the parameter or the stored value has the wrong type.
+std::optional<ExprValue> param_value(const DynamicPrintConfig &config, const std::string &key);
 
 } // namespace ModHost
 } // namespace Slic3r

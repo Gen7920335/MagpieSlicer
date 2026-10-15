@@ -1,6 +1,7 @@
 #include "SlotRegistry.hpp"
 
 #include "libslic3r/Print.hpp"
+#include "Builtin/CuraSupport.hpp"
 
 #include <map>
 #include <mutex>
@@ -22,6 +23,9 @@ void register_builtin_modules(Registry &registry)
     // Orca's own normal and tree generators behind the slot. It produces exactly what an empty
     // support_generator does, which is how the slot itself is checked against vanilla output.
     registry.support_generators["orca"] = {"orca", "Orca", [](PrintObject &object) { object.generate_orca_support_material(); }};
+    // CuraEngine's normal support areas, printed with Orca's toolpaths. Its settings are the
+    // parameters of the bundled cura_support mod (resources/mods/cura_support.json).
+    registry.support_generators["cura"] = {"cura", "Cura", [](PrintObject &object) { CuraSupport::generate(object); }};
 }
 
 Registry &registry()
