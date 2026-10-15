@@ -7244,6 +7244,16 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("This enables support generation.");
     def->set_default_value(new ConfigOptionBool(false));
 
+    // MAGPIE: a support generator module that replaces Orca's own for this object; empty keeps
+    // Orca's normal/tree generators. Modules register under ModHost::register_support_generator.
+    def = this->add("support_generator", coString);
+    def->label = L("Support generator module");
+    def->category = L("Support");
+    def->tooltip = L("Name of a support generator module that replaces the built-in generator. "
+                     "Leave empty to use the support type above.");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionString(""));
+
     def = this->add("support_type", coEnum);
     def->label = L("Type");
     def->category = L("Support");

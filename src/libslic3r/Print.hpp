@@ -367,6 +367,9 @@ private: // Prevents erroneous use by other classes.
     typedef PrintObjectBaseWithState<Print, PrintObjectStep, posCount> Inherited;
 
 public:
+    // MAGPIE: Orca's own normal/tree support generation, which _generate_support_material() runs
+    // unless support_generator names a module; the built-in "orca" module calls it as well.
+    void generate_orca_support_material();
     // Size of an object: XYZ in scaled coordinates. The size might not be quite snug in XY plane.
     const Vec3crd&               size() const			{ return m_size; }
     const PrintObjectConfig&     config() const         { return m_config; }

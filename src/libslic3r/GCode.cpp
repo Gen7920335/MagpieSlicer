@@ -8133,6 +8133,7 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "filament_mod_settings"sv,
         "mod_settings"sv,
         "printer_mod_settings"sv,
+        "support_generator"sv,
         // The fast-purge / prime-volume-mode keys are new static-member registrations. Excluding them from
         // the config block keeps registration byte-identical for the shipping fleet (default
         // prime_volume_mode==Default leaves the slicing body unchanged; only the config-dump would otherwise

@@ -4,6 +4,7 @@
 
 #include <libslic3r/ModHost/Expr.hpp>
 #include <libslic3r/ModHost/ModSet.hpp>
+#include <libslic3r/ModHost/SlotRegistry.hpp>
 #include <libslic3r/PrintConfig.hpp>
 
 #include <map>
@@ -315,4 +316,27 @@ TEST_CASE("A stored parameter value of the wrong type is reported", "[ModHost]")
     REQUIRE_FALSE(errors.empty());
     CHECK_THAT(errors.front(), ContainsSubstring("demo.walls"));
     CHECK(config.opt_int("wall_loops") == 2);
+}
+
+TEST_CASE("The built-in orca support generator is registered", "[ModHost]")
+{
+    const SupportGenerator *orca = find_support_generator("orca");
+    REQUIRE(orca != nullptr);
+    CHECK(orca->name == "orca");
+    CHECK(find_support_generator("") == nullptr);
+    CHECK(find_support_generator("no_such_generator") == nullptr);
+}
+
+TEST_CASE("A registered support generator replaces one of the same name", "[ModHost]")
+{
+    int calls = 0;
+    register_support_generator({"test_gen", "Test", [&calls](PrintObject &) { ++calls; }});
+    register_support_generator({"test_gen", "Test 2", [&calls](PrintObject &) { calls += 10; }});
+    const SupportGenerator *g = find_support_generator("test_gen");
+    REQUIRE(g != nullptr);
+    CHECK(g->label == "Test 2");
+    bool listed = false;
+    for (const SupportGenerator *s : support_generators())
+        listed |= s->name == "test_gen";
+    CHECK(listed);
 }

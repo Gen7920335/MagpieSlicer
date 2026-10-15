@@ -118,6 +118,8 @@ set(lisbslic3r_sources
     ModHost/ModSet.cpp
     ModHost/ModSet.hpp
     ModHost/ParamGraph.cpp
+    ModHost/SlotRegistry.cpp
+    ModHost/SlotRegistry.hpp
     ModHost/ParamGraph.hpp
     ConnectedBodies.cpp
     ConnectedBodies.hpp

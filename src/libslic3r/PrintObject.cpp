@@ -34,6 +34,7 @@
 #include "Fill/FillLightning.hpp"
 #include "Fill/FillTpmsAdaptive.hpp"
 #include "format.hpp"
+#include "ModHost/SlotRegistry.hpp"
 #include "AABBTreeIndirect.hpp"
 #include "AABBTreeLines.hpp"
 #include "libslic3r.h"
@@ -1567,6 +1568,7 @@ bool PrintObject::invalidate_state_by_config_options(
 	        }
         } else if (
         	   opt_key == "support_type"
+            || opt_key == "support_generator"
             || opt_key == "support_angle"
             || opt_key == "support_on_build_plate_only"
             || opt_key == "support_critical_regions_only"
@@ -4845,6 +4847,19 @@ void PrintObject::combine_infill()
 }
 
 void PrintObject::_generate_support_material()
+{
+    // MAGPIE: support.generator slot. An empty support_generator runs Orca's generators unchanged.
+    if (const std::string &name = m_config.support_generator.value; !name.empty()) {
+        const ModHost::SupportGenerator *generator = ModHost::find_support_generator(name);
+        if (generator == nullptr)
+            throw Slic3r::SlicingError(Slic3r::format(_u8L("Support generator \"%1%\" is not installed."), name));
+        generator->generate(*this);
+        return;
+    }
+    generate_orca_support_material();
+}
+
+void PrintObject::generate_orca_support_material()
 {
     if (is_tree(m_config.support_type.value)) {
         TreeSupport tree_support(*this, m_slicing_params);
