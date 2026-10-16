@@ -134,6 +134,28 @@ TEST_CASE("Mixed support selective merge gives the reachable part to normal supp
     }
 }
 
+TEST_CASE("Mixed support painting overrides the automatic choice", "[MixedSupport]")
+{
+    std::vector<Polygons> demand(2), shadow(2), painted_normal(2), painted_tree(2);
+    demand[1]         = rectangle(0., 0., 10., 10.);
+    shadow[1]         = rectangle(0., 0., 4., 10.); // x < 4 mm cannot reach the bed
+    painted_normal[1] = rectangle(0., 0., 8., 10.);
+    painted_tree[1]   = rectangle(7., 0., 10., 10.); // overlaps the normal painting at 7..8 mm
+
+    const Mixed::Plan p = Mixed::plan(demand, shadow, 100., false, &painted_normal, &painted_tree);
+    // Normal where painted normal, reachable and not painted tree.
+    CHECK(same_area(p.normal_mask[1], rectangle(4., 0., 7., 10.)));
+    // Tree where painted tree, plus normal painting that cannot reach the bed.
+    Polygons expected_tree = rectangle(0., 0., 4., 10.);
+    append(expected_tree, rectangle(7., 0., 10., 10.));
+    CHECK(same_area(p.tree_mask[1], expected_tree));
+    CHECK(same_area(p.normal_paint_fallback[1], rectangle(0., 0., 4., 10.)));
+    CHECK(intersection_ex(p.normal_mask[1], p.tree_mask[1]).empty());
+    Polygons all = p.normal_mask[1];
+    append(all, p.tree_mask[1]);
+    CHECK(same_area(union_(all), demand[1]));
+}
+
 TEST_CASE("Mixed support prints normal and tree support in one object", "[MixedSupport]")
 {
     BundledMods mods;

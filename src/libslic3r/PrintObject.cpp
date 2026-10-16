@@ -5271,6 +5271,25 @@ static void project_triangles_to_slabs(ConstLayerPtrsAdaptor layers, const index
     }
 }
 
+void PrintObject::project_and_append_support_channel_facets(EnforcerBlockerType type, std::vector<Polygons> &out) const
+{
+    const Transform3d object_trafo = this->trafo_sliced();
+    for (const ModelVolume *mv : this->model_object()->volumes)
+        if (mv->is_model_part()) {
+            const indexed_triangle_set facets = mv->support_channel_facets.get_facets_strict(*mv, type);
+            if (facets.indices.empty())
+                continue;
+            std::vector<Polygons> projected;
+            slice_mesh_slabs(facets, zs_from_layers(this->layers()), object_trafo * mv->get_matrix(), nullptr, &projected, nullptr, [](){});
+            assert(out.empty() || out.size() == projected.size());
+            if (out.empty())
+                out = std::move(projected);
+            else
+                for (size_t i = 0; i < out.size(); ++ i)
+                    append(out[i], std::move(projected[i]));
+        }
+}
+
 void PrintObject::project_and_append_custom_facets(
         bool seam, EnforcerBlockerType type, std::vector<Polygons>& out, std::vector<std::pair<Vec3f, Vec3f>>* vertical_points) const
 {

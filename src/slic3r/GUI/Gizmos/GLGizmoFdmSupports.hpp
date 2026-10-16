@@ -87,6 +87,16 @@ private:
     bool m_cancel = false;
     size_t m_object_id;
     std::vector<ObjectBase::Timestamp> m_volume_timestamps;
+
+    // MAGPIE: with the mixed_support mod on, the left button paints a support channel as well:
+    // normal or tree support. The painting keeps the states below in one selector and splits them
+    // into supported_facets and support_channel_facets when it is stored.
+    EnforcerBlockerType get_left_button_state_type() const override;
+    bool                is_mixed_mode() const;
+    static constexpr EnforcerBlockerType MixedNormalState = EnforcerBlockerType::Extruder3;
+    static constexpr EnforcerBlockerType MixedTreeState   = EnforcerBlockerType::Extruder4;
+    EnforcerBlockerType                  m_mixed_paint_state = MixedNormalState;
+    std::vector<ObjectBase::Timestamp>   m_channel_timestamps;
     PrintInstance m_print_instance;
     mutable EditState m_edit_state;
     //thread

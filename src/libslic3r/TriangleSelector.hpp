@@ -401,6 +401,11 @@ public:
     // Orca: remap the state of triangles according to the state_map
     void remap_triangle_state(const EnforcerBlockerStateMap& state_map);
 
+    // MAGPIE: paints this selector's leaf triangles with the non-NONE states of painting made for the
+    // same mesh with the same splits (two annotations split out of one painting session), after
+    // mapping them through state_map. Returns false and changes nothing when the splits differ.
+    bool overlay_painting(const TriangleSplittingData &painting, const EnforcerBlockerStateMap &state_map);
+
 
     // Store the division trees in compact form (a long stream of bits for each triangle of the original mesh).
     // First vector contains pairs of (triangle index, first bit in the second vector).
@@ -433,6 +438,7 @@ public:
         TriangleSplittingData seam;
         TriangleSplittingData mmu;
         TriangleSplittingData fuzzy;
+        TriangleSplittingData support_channel; // MAGPIE
     };
 
     // Remap painting data from source mesh to target mesh using spatial mapping.

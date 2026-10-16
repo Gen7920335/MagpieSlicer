@@ -189,12 +189,13 @@ ModSettings read_settings(const PrintObject &object)
 }
 
 Plan plan(const std::vector<Polygons> &demand, const std::vector<Polygons> &buildplate_shadow, double coverage_threshold_percent,
-          bool selective_merge)
+          bool selective_merge, const std::vector<Polygons> *painted_normal, const std::vector<Polygons> *painted_tree)
 {
     Plan         out;
     const size_t layer_count = std::max(demand.size(), buildplate_shadow.size());
     out.normal_mask.resize(layer_count);
     out.tree_mask.resize(layer_count);
+    out.normal_paint_fallback.resize(layer_count);
     const double threshold = std::clamp(coverage_threshold_percent, 0., 100.); // percent
 
     for (size_t layer_id = 0; layer_id < demand.size(); ++layer_id) {
@@ -241,6 +242,33 @@ Plan plan(const std::vector<Polygons> &demand, const std::vector<Polygons> &buil
             }
         }
     }
+    const bool painted = painted_normal != nullptr || painted_tree != nullptr;
+    for (size_t layer_id = 0; painted && layer_id < demand.size(); ++layer_id) {
+        if (demand[layer_id].empty())
+            continue;
+        const Polygons  empty;
+        const Polygons  layer_demand = union_(demand[layer_id]);
+        const Polygons &pn           = painted_normal != nullptr && layer_id < painted_normal->size() ? (*painted_normal)[layer_id] : empty;
+        const Polygons &pt           = painted_tree != nullptr && layer_id < painted_tree->size() ? (*painted_tree)[layer_id] : empty;
+        const Polygons  normal_paint = intersection(layer_demand, pn);
+        const Polygons  tree_paint   = intersection(layer_demand, pt);
+        // Projections of facets painted for different channels can overlap; tree painting wins there,
+        // so a tree request is never silently replaced by normal support.
+        const Polygons normal_only = tree_paint.empty() ? normal_paint : diff(normal_paint, tree_paint);
+        Polygons       all_paint   = normal_only;
+        append(all_paint, tree_paint);
+        if (!all_paint.empty()) {
+            all_paint                 = union_(all_paint);
+            out.normal_mask[layer_id] = diff(out.normal_mask[layer_id], all_paint);
+            out.tree_mask[layer_id]   = diff(out.tree_mask[layer_id], all_paint);
+        }
+        const Polygons &shadow           = layer_id < buildplate_shadow.size() ? buildplate_shadow[layer_id] : empty;
+        const Polygons  reachable_normal = shadow.empty() ? normal_only : diff(normal_only, shadow);
+        out.normal_paint_fallback[layer_id] = normal_only.empty() ? Polygons{} : diff(normal_only, reachable_normal);
+        append(out.normal_mask[layer_id], reachable_normal);
+        append(out.tree_mask[layer_id], tree_paint);
+        append(out.tree_mask[layer_id], out.normal_paint_fallback[layer_id]);
+    }
     for (size_t layer_id = 0; layer_id < layer_count; ++layer_id) {
         if (!out.normal_mask[layer_id].empty())
             out.normal_mask[layer_id] = union_(out.normal_mask[layer_id]);
@@ -248,6 +276,27 @@ Plan plan(const std::vector<Polygons> &demand, const std::vector<Polygons> &buil
             out.tree_mask[layer_id] = union_(out.tree_mask[layer_id]);
     }
     return out;
+}
+
+void painted_channels(const PrintObject &object, std::vector<Polygons> &normal, std::vector<Polygons> &tree)
+{
+    normal.clear();
+    tree.clear();
+    const auto &volumes = object.model_object()->volumes;
+    if (std::none_of(volumes.begin(), volumes.end(), [](const ModelVolume *v) { return v->is_model_part() && !v->support_channel_facets.empty(); }))
+        return;
+    normal.resize(object.layer_count());
+    tree.resize(object.layer_count());
+    std::vector<Polygons> enforced(object.layer_count());
+    object.project_and_append_support_channel_facets(EnforcerBlockerType::ENFORCER, normal);
+    object.project_and_append_support_channel_facets(EnforcerBlockerType::BLOCKER, tree);
+    object.project_and_append_custom_facets(false, EnforcerBlockerType::ENFORCER, enforced);
+    for (size_t i = 0; i < object.layer_count(); ++i) {
+        // A channel means something only where the surface is still painted as a support enforcer, so
+        // stale channel painting (old or hand-edited files) does nothing.
+        normal[i] = i < enforced.size() ? intersection(normal[i], enforced[i]) : Polygons{};
+        tree[i]   = i < enforced.size() ? intersection(tree[i], enforced[i]) : Polygons{};
+    }
 }
 
 std::vector<Polygons> detect_demand(const PrintObject &object, const ModSettings &s)
@@ -293,7 +342,14 @@ void generate(PrintObject &object)
         const std::vector<Polygons> demand = detect_demand(object, s);
         cancel_check(object);
         object.print()->set_status(52, _u8L("Mixed support: classifying normal and tree regions"));
-        const Plan p = plan(demand, buildplate_covered_by_object(object), s.coverage_threshold, s.selective_merge);
+        std::vector<Polygons> painted_normal, painted_tree;
+        painted_channels(object, painted_normal, painted_tree);
+        const bool painted = !painted_normal.empty();
+        const Plan p       = plan(demand, buildplate_covered_by_object(object), s.coverage_threshold, s.selective_merge,
+                                  painted ? &painted_normal : nullptr, painted ? &painted_tree : nullptr);
+        if (any_polygons(p.normal_paint_fallback))
+            object.add_module_warning(PrintStateBase::WarningLevel::NON_CRITICAL,
+                                      _u8L("Some areas painted for normal support are not reachable from the build plate and were assigned to tree support."));
         cancel_check(object);
 
         auto run_normal = [&object, &s](const std::vector<Polygons> &mask) {

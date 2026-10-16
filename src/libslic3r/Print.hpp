@@ -536,6 +536,9 @@ public:
 
     // Helpers to project custom facets on slices
     void project_and_append_custom_facets(bool seam, EnforcerBlockerType type, std::vector<Polygons>& expolys, std::vector<std::pair<Vec3f,Vec3f>>* vertical_points=nullptr) const;
+    // MAGPIE: the support channel painting (ModelVolume::support_channel_facets) of the given state,
+    // projected onto the object layers like project_and_append_custom_facets() does for support.
+    void project_and_append_support_channel_facets(EnforcerBlockerType type, std::vector<Polygons> &out) const;
 
     //BBS
     BoundingBox get_first_layer_bbox(float& area, float& layer_height, std::string& name);

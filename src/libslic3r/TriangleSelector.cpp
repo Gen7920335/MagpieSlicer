@@ -1325,6 +1325,30 @@ void TriangleSelector::garbage_collect()
     m_free_vertices_head = -1;
 }
 
+bool TriangleSelector::overlay_painting(const TriangleSplittingData &painting, const EnforcerBlockerStateMap &state_map)
+{
+    if (painting.bitstream.empty())
+        return true;
+    TriangleSelector source(m_mesh, m_edge_limit);
+    source.deserialize(painting, false);
+    if (source.m_vertices.size() != m_vertices.size() || source.m_triangles.size() != m_triangles.size())
+        return false;
+    for (size_t i = 0; i < m_vertices.size(); ++i)
+        if (!source.m_vertices[i].v.isApprox(m_vertices[i].v))
+            return false;
+    for (size_t i = 0; i < m_triangles.size(); ++i) {
+        const Triangle &a = m_triangles[i], &b = source.m_triangles[i];
+        if (a.valid() != b.valid() || a.is_split() != b.is_split() || a.source_triangle != b.source_triangle || a.verts_idxs != b.verts_idxs)
+            return false;
+    }
+    for (size_t i = 0; i < m_triangles.size(); ++i) {
+        const Triangle &b = source.m_triangles[i];
+        if (b.valid() && !b.is_split() && b.get_state() != EnforcerBlockerType::NONE)
+            m_triangles[i].set_state(state_map[size_t(b.get_state())]);
+    }
+    return true;
+}
+
 void TriangleSelector::remap_triangle_state(const EnforcerBlockerStateMap& state_map)
 {
     if (m_triangles.empty())

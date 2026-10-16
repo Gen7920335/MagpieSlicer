@@ -1,6 +1,7 @@
 #include "GLGizmoFdmSupports.hpp"
 
 #include "libslic3r/Model.hpp"
+#include "libslic3r/ModHost/ModSet.hpp"
 //BBS
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/Thread.hpp"
@@ -465,6 +466,25 @@ void GLGizmoFdmSupports::on_render_input_window(float x, float y, float bottom_l
 
     ImGui::Separator();
 
+    if (is_mixed_mode()) {
+        ImGui::AlignTextToFramePadding();
+        m_imgui->text(_L("Paint support as"));
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.95f, 0.45f, 1.f));
+        if (m_imgui->radio_button(_L("Normal"), m_mixed_paint_state == MixedNormalState))
+            m_mixed_paint_state = MixedNormalState;
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.65f, 1.f, 1.f));
+        if (m_imgui->radio_button(_L("Tree"), m_mixed_paint_state == MixedTreeState))
+            m_mixed_paint_state = MixedTreeState;
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered())
+            m_imgui->tooltip(_L("Left-click paints the selected Mixed support channel. Right-click blocks support. Shift+left-click returns the area to automatic assignment."),
+                             m_imgui->scaled(20.f));
+        ImGui::Separator();
+    }
+
     render_tooltip_button(x, y);
 
     ImGui::SameLine();
@@ -478,6 +498,7 @@ void GLGizmoFdmSupports::on_render_input_window(float x, float y, float bottom_l
                 ++idx;
                 m_triangle_selectors[idx]->reset();
                 m_triangle_selectors[idx]->request_update_render_data(true);
+                mv->support_channel_facets.reset();
             }
 
         update_model_object();
@@ -525,7 +546,26 @@ void GLGizmoFdmSupports::render_tooltip_button(float x, float y) {
         }
     };
     
-    GLGizmoUtils::render_tooltip_button(m_imgui, m_parent, get_shortcuts(), x, y);
+    auto shortcuts = get_shortcuts();
+    if (is_mixed_mode() && !shortcuts.empty() && m_current_tool != ImGui::GapFillIcon)
+        shortcuts.front().second = m_mixed_paint_state == MixedNormalState ? _L("Paint normal support") : _L("Paint tree support");
+    GLGizmoUtils::render_tooltip_button(m_imgui, m_parent, shortcuts, x, y);
+}
+
+bool GLGizmoFdmSupports::is_mixed_mode() const
+{
+    const auto *sel_info = m_c->selection_info();
+    if (sel_info == nullptr || sel_info->model_object() == nullptr)
+        return false;
+    DynamicPrintConfig config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
+    config.apply(sel_info->model_object()->config.get());
+    const auto enabled = ModHost::param_value(config, "mixed_support.enable");
+    return enabled && std::holds_alternative<bool>(*enabled) && std::get<bool>(*enabled);
+}
+
+EnforcerBlockerType GLGizmoFdmSupports::get_left_button_state_type() const
+{
+    return is_mixed_mode() ? m_mixed_paint_state : EnforcerBlockerType::ENFORCER;
 }
 
 // BBS
@@ -582,7 +622,7 @@ void GLGizmoFdmSupports::select_facets_by_angle(float threshold_deg, bool block)
         const indexed_triangle_set &its = mv->mesh().its;
         for (const stl_triangle_vertex_indices &face : its.indices) {
             if (its_face_normal(its, face).dot(down) > dot_limit) {
-                m_triangle_selectors[mesh_id]->set_facet(idx, block ? EnforcerBlockerType::BLOCKER : EnforcerBlockerType::ENFORCER);
+                m_triangle_selectors[mesh_id]->set_facet(idx, block ? EnforcerBlockerType::BLOCKER : get_left_button_state_type());
                 m_triangle_selectors.back()->request_update_render_data();
             }
             ++ idx;
@@ -605,7 +645,32 @@ void GLGizmoFdmSupports::update_model_object()
         if (! mv->is_model_part())
             continue;
         ++idx;
-        updated |= mv->supported_facets.set(*m_triangle_selectors[idx].get());
+        if (is_mixed_mode()) {
+            // One painting session, two annotations: where support is enforced or blocked, and which
+            // generator takes each enforced area.
+            const TriangleSelector::TriangleSplittingData combined = m_triangle_selectors[idx]->serialize();
+            EnforcerBlockerStateMap supported_map;
+            supported_map.fill(EnforcerBlockerType::NONE);
+            supported_map[size_t(EnforcerBlockerType::ENFORCER)] = EnforcerBlockerType::ENFORCER;
+            supported_map[size_t(EnforcerBlockerType::BLOCKER)]  = EnforcerBlockerType::BLOCKER;
+            supported_map[size_t(MixedNormalState)]              = EnforcerBlockerType::ENFORCER;
+            supported_map[size_t(MixedTreeState)]                = EnforcerBlockerType::ENFORCER;
+            TriangleSelector supported(mv->mesh());
+            supported.deserialize(combined, false);
+            supported.remap_triangle_state(supported_map);
+            updated |= mv->supported_facets.set(supported);
+
+            EnforcerBlockerStateMap channel_map;
+            channel_map.fill(EnforcerBlockerType::NONE);
+            channel_map[size_t(MixedNormalState)] = EnforcerBlockerType::ENFORCER;
+            channel_map[size_t(MixedTreeState)]   = EnforcerBlockerType::BLOCKER;
+            TriangleSelector channel(mv->mesh());
+            channel.deserialize(combined, false);
+            channel.remap_triangle_state(channel_map);
+            updated |= mv->support_channel_facets.set(channel);
+        } else {
+            updated |= mv->supported_facets.set(*m_triangle_selectors[idx].get());
+        }
     }
 
     if (updated) {
@@ -628,12 +693,19 @@ void GLGizmoFdmSupports::update_from_model_object(bool first_update)
     m_triangle_selectors.clear();
     //BBS: add timestamp logic
     m_volume_timestamps.clear();
+    m_channel_timestamps.clear();
 
     int volume_id = -1;
+    const bool mixed_mode = is_mixed_mode();
     std::vector<ColorRGBA> ebt_colors;
     ebt_colors.push_back(GLVolume::NEUTRAL_COLOR);
-    ebt_colors.push_back(TriangleSelectorGUI::enforcers_color);
+    // With Mixed support, plain enforcers (automatic channel) show yellow, normal green, tree blue.
+    ebt_colors.push_back(mixed_mode ? ColorRGBA{1.f, 0.8f, 0.25f, 1.f} : TriangleSelectorGUI::enforcers_color);
     ebt_colors.push_back(TriangleSelectorGUI::blockers_color);
+    if (mixed_mode) {
+        ebt_colors.emplace_back(0.35f, 0.95f, 0.45f, 1.f);
+        ebt_colors.emplace_back(0.35f, 0.65f, 1.f, 1.f);
+    }
     for (const ModelVolume* mv : mo->volumes) {
         if (! mv->is_model_part())
             continue;
@@ -645,10 +717,21 @@ void GLGizmoFdmSupports::update_from_model_object(bool first_update)
         m_triangle_selectors.emplace_back(std::make_unique<TriangleSelectorPatch>(*mesh, ebt_colors));
         // Reset of TriangleSelector is done inside TriangleSelectorGUI's constructor, so we don't need it to perform it again in deserialize().
         m_triangle_selectors.back()->deserialize(mv->supported_facets.get_data(), false);
+        if (mixed_mode) {
+            EnforcerBlockerStateMap channel_map;
+            channel_map.fill(EnforcerBlockerType::NONE);
+            channel_map[size_t(EnforcerBlockerType::ENFORCER)] = MixedNormalState;
+            channel_map[size_t(EnforcerBlockerType::BLOCKER)]  = MixedTreeState;
+            if (!m_triangle_selectors.back()->overlay_painting(mv->support_channel_facets.get_data(), channel_map))
+                // The support painting was changed without Mixed support after the channels were
+                // painted; the channels no longer fit it and are shown as automatic.
+                BOOST_LOG_TRIVIAL(warning) << "Support channel painting does not match the support painting of volume " << volume_id;
+        }
         m_triangle_selectors.back()->request_update_render_data();
 
         //BBS: add timestamp logic
         m_volume_timestamps.emplace_back(mv->supported_facets.timestamp());
+        m_channel_timestamps.emplace_back(mv->support_channel_facets.timestamp());
     }
 
     //BBS: invalid volume_support status
@@ -668,7 +751,8 @@ wxString GLGizmoFdmSupports::handle_snapshot_action_name(bool shift_down, GLGizm
         action_name = ("Unselect all");
     else {
         if (button_down == Button::Left)
-            action_name = ("Enforce supports");
+            action_name = is_mixed_mode() ? (m_mixed_paint_state == MixedNormalState ? "Paint normal support" : "Paint tree support") :
+                                            "Enforce supports";
         else
             action_name = ("Block supports");
     }
@@ -781,7 +865,8 @@ bool GLGizmoFdmSupports::need_regenerate_support_volumes()
         ++volume_id;
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ",volume_id "<<volume_id<<", record_timestamp "<< m_volume_timestamps[volume_id]
                 <<", current_timestamp "<<mv->supported_facets.timestamp();
-        if (m_volume_timestamps[volume_id] != mv->supported_facets.timestamp())
+        if (m_volume_timestamps[volume_id] != mv->supported_facets.timestamp() ||
+            (volume_id < m_channel_timestamps.size() && m_channel_timestamps[volume_id] != mv->support_channel_facets.timestamp()))
         {
             return true;
         }
@@ -869,6 +954,8 @@ void GLGizmoFdmSupports::run_thread()
 
                 ++volume_id;
                 m_volume_timestamps[volume_id] = mv->supported_facets.timestamp();
+                if (volume_id < m_channel_timestamps.size())
+                    m_channel_timestamps[volume_id] = mv->support_channel_facets.timestamp();
             }
         };
 
