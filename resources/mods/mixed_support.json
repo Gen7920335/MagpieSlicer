@@ -1,0 +1,22 @@
+{
+    // Mixed support: normal support where it can stand on the build plate, tree support where it
+    // cannot, in one object. Each support island goes to normal support when at least
+    // coverage_threshold percent of it reaches the plate straight down; otherwise to tree support.
+    // With selective merge the reachable part of an island goes to normal support and the rest to
+    // tree support. Orca's support settings apply to both kinds of support.
+    "id": "mixed_support",
+    "name": "Mixed support",
+    "version": "1.0.0",
+    "params": {
+        "enable":             { "type": "bool",   "default": false,     "label": "Use mixed support" },
+        "normal_generator":   { "type": "string", "default": "orca",    "label": "Normal support generator (orca or cura)" },
+        "tree_style":         { "type": "string", "default": "organic", "label": "Tree style (organic, tree_slim, tree_strong or tree_hybrid)" },
+        "coverage_threshold": { "type": "float",  "default": 100,       "unit": "%", "label": "Normal support coverage threshold" },
+        "selective_merge":    { "type": "bool",   "default": false,     "label": "Selective merge" }
+    },
+    "rules": [
+        // Priority 2 puts this rule above cura_support (0) and resin_support (1): with mixed support
+        // on, it is used. Its normal support can still be Cura's (normal_generator).
+        { "target": "support_generator", "value": "\"mixed\"", "when": "mixed_support.enable", "priority": 2 }
+    ]
+}

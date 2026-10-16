@@ -3513,6 +3513,8 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
         // add vertical enforcer points
         std::vector<float> zs = zs_from_layers(print_object.layers());
         Polygon            base_circle = make_circle(scale_(0.5), SUPPORT_TREE_CIRCLE_RESOLUTION);
+        // MAGPIE: a module's demand stands for all of it, vertical enforcer points included.
+        if (tree_support->overrides().demand_mask == nullptr)
         for (auto &pt_and_normal :tree_support->m_vertical_enforcer_points) {
             auto pt     = pt_and_normal.first;
             auto normal = pt_and_normal.second; // normal seems useless

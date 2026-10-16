@@ -23,22 +23,6 @@ using namespace Slic3r::Test;
 
 namespace {
 
-// Makes the bundled mods (resources/mods) the active mods for one test and restores the previous
-// set afterwards.
-struct BundledMods
-{
-    std::shared_ptr<const ModHost::ModSet> previous = ModHost::active_mods();
-    std::vector<std::string>               errors;
-
-    BundledMods()
-    {
-        auto mods = std::make_shared<const ModHost::ModSet>(
-            ModHost::ModSet::load_dir(boost::filesystem::path(PROFILES_DIR) / ".." / "mods", errors));
-        ModHost::set_active_mods(std::move(mods));
-    }
-    ~BundledMods() { ModHost::set_active_mods(previous); }
-};
-
 // An 8 x 8 mm column under a 24 x 16 mm ceiling plate: the ceiling overhangs on every side.
 TriangleMesh column_under_ceiling(double column_height_mm)
 {

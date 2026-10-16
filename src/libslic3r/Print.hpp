@@ -482,6 +482,13 @@ public:
 
     size_t          support_layer_count() const { return m_support_layers.size(); }
     void            clear_support_layers();
+    // MAGPIE: for support modules that run several generators and merge their layers. The caller
+    // owns the taken layers until it puts them back into support_layers() or deletes them here.
+    SupportLayerPtrs take_support_layers() { return std::exchange(m_support_layers, {}); }
+    static void     delete_support_layer(SupportLayer *layer);
+    // MAGPIE: lets a support module warn on the step it runs in.
+    void            add_module_warning(PrintStateBase::WarningLevel level, const std::string &message)
+        { this->active_step_add_warning(level, message); }
     SupportLayer*   get_support_layer(int idx) { return idx<m_support_layers.size()? m_support_layers[idx]:nullptr; }
     const SupportLayer* get_support_layer_at_printz(coordf_t print_z, coordf_t epsilon) const;
     SupportLayer*   get_support_layer_at_printz(coordf_t print_z, coordf_t epsilon);

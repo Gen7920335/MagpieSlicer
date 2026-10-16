@@ -429,7 +429,42 @@ ModSettings read_settings(const PrintObject &object)
     return s;
 }
 
-Areas compute_areas(const PrintObject &object, const ModSettings &s)
+namespace {
+
+// Basic and full overhang per layer (AreaSupport::generateOverhangAreasForMesh), clipped to mask.
+void detect_overhangs(const PrintObject &object, const Inputs &in, const std::vector<Polygons> *mask, std::vector<Polygons> &overhang,
+                      std::vector<Polygons> &full_overhang)
+{
+    const size_t layer_count     = in.outlines.size();
+    const double layer_height_mm = object.config().layer_height.value;
+    overhang.assign(layer_count, Polygons{});
+    full_overhang.assign(layer_count, Polygons{});
+    parallel_layers(1, layer_count, object, [&](size_t i) {
+        auto [basic, full] = basic_and_full_overhang(in, i, layer_height_mm);
+        if (mask != nullptr) {
+            const Polygons &allowed = i < mask->size() ? (*mask)[i] : Polygons{};
+            basic = intersection(basic, allowed);
+            full  = intersection(full, allowed);
+        }
+        overhang[i]      = std::move(basic);
+        full_overhang[i] = std::move(full);
+    });
+}
+
+} // namespace
+
+std::vector<Polygons> overhang_demand(const PrintObject &object, const ModSettings &s)
+{
+    const Inputs          in = gather_inputs(object, s);
+    std::vector<Polygons> overhang, full_overhang;
+    if (in.outlines.size() >= 2)
+        detect_overhangs(object, in, nullptr, overhang, full_overhang);
+    else
+        full_overhang.assign(in.outlines.size(), Polygons{});
+    return full_overhang;
+}
+
+Areas compute_areas(const PrintObject &object, const ModSettings &s, const std::vector<Polygons> *mask)
 {
     const Inputs in          = gather_inputs(object, s);
     const size_t layer_count = in.outlines.size();
@@ -440,18 +475,13 @@ Areas compute_areas(const PrintObject &object, const ModSettings &s)
     if (layer_count < 2)
         return out;
 
-    const double  layer_height_mm      = object.config().layer_height.value;
     const size_t  layer_z_distance_top = size_t(in.z_distance_top / in.layer_thickness) + 1;
     if (layer_z_distance_top + 1 > layer_count)
         return out;
 
     // Overhangs (AreaSupport::generateOverhangAreasForMesh).
-    std::vector<Polygons> overhang(layer_count), full_overhang(layer_count);
-    parallel_layers(1, layer_count, object, [&](size_t i) {
-        auto [basic, full] = basic_and_full_overhang(in, i, layer_height_mm);
-        overhang[i]        = std::move(basic);
-        full_overhang[i]   = std::move(full);
-    });
+    std::vector<Polygons> overhang, full_overhang;
+    detect_overhangs(object, in, mask, overhang, full_overhang);
     if (std::all_of(full_overhang.begin(), full_overhang.end(), [](const Polygons &p) { return p.empty(); }))
         return out;
 
@@ -468,6 +498,8 @@ Areas compute_areas(const PrintObject &object, const ModSettings &s)
                 if (!intersection(in.outlines[i - 1], to_polygons(part)).empty())
                     continue;
                 Polygons point = diff(to_polygons(part), in.blockers[i]);
+                if (mask != nullptr)
+                    point = intersection(point, i < mask->size() ? (*mask)[i] : Polygons{});
                 if (!point.empty())
                     overhang_points[i].push_back(std::move(point));
             }
@@ -611,7 +643,7 @@ Areas compute_areas(const PrintObject &object, const ModSettings &s)
     return out;
 }
 
-void generate(PrintObject &object)
+void generate(PrintObject &object, const std::vector<Polygons> *mask)
 {
     if (object.layer_count() == 0)
         return;
@@ -619,7 +651,7 @@ void generate(PrintObject &object)
         throw Slic3r::SlicingError("Cura support does not support belt printers yet.");
 
     const ModSettings s     = read_settings(object);
-    Areas             areas = compute_areas(object, s);
+    Areas             areas = compute_areas(object, s, mask);
 
     SupportParameters            support_params(object);
     SupportGeneratorLayerStorage storage;

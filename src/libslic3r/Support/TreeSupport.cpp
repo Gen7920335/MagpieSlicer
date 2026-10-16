@@ -676,12 +676,18 @@ static Point bounding_box_middle(const BoundingBox &bbox)
     return (bbox.max + bbox.min) / 2;
 }
 
-TreeSupport::TreeSupport(PrintObject& object, const SlicingParameters &slicing_params)
-    : m_object(&object), m_slicing_params(slicing_params), m_support_params(object), m_object_config(&object.config())
+TreeSupport::TreeSupport(PrintObject& object, const SlicingParameters &slicing_params, TreeSupportOverrides overrides)
+    : m_object(&object), m_slicing_params(slicing_params), m_support_params(object), m_object_config(&object.config()),
+      m_overrides(overrides)
 {
     m_print_config = &m_object->print()->config();
     m_raft_layers = slicing_params.base_raft_layers + slicing_params.interface_raft_layers;
     support_type = m_object_config->support_type;
+    // MAGPIE: a module's demand is tree support, whatever support_type says.
+    if (m_overrides.demand_mask != nullptr && ! is_tree(support_type))
+        support_type = stTreeAuto;
+    if (m_overrides.style != smsDefault)
+        m_support_params.support_style = m_overrides.style;
 
     SupportMaterialPattern support_pattern  = m_object_config->support_base_pattern;
     if (m_support_params.support_style == smsTreeHybrid && support_pattern == smpDefault)
@@ -738,7 +744,8 @@ bool TreeSupport::belt_polygon_landed(const ExPolygon &poly, double print_z) con
 #define SUPPORT_SURFACES_OFFSET_PARAMETERS jtSquare, 0.
 void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
 {
-    bool tree_support_enable = m_object_config->enable_support.value && is_tree(m_object_config->support_type.value);
+    bool tree_support_enable = m_object_config->enable_support.value &&
+                               (is_tree(m_object_config->support_type.value) || m_overrides.demand_mask != nullptr);
     if (!tree_support_enable && !check_support_necessity) {
         BOOST_LOG_TRIVIAL(info) << "Tree support is disabled.";
         return;
@@ -1255,6 +1262,13 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
 
         // add sharp tail overhangs
         append(layer->loverhangs, sharp_tail_overhangs);
+
+        if (const std::vector<Polygons> *mask = m_overrides.demand_mask) {
+            // MAGPIE: the module's demand replaces what was detected above.
+            layer->loverhangs = size_t(layer_nr) < mask->size() && ! (*mask)[layer_nr].empty() ? union_ex((*mask)[layer_nr]) : ExPolygons();
+            nDetected = int(layer->loverhangs.size());
+            nEnforced = nDetected;
+        }
 
         // fill overhang_types
         for (size_t i = 0; i < layer->loverhangs.size(); i++)
@@ -1870,7 +1884,7 @@ void TreeSupport::move_bounds_to_contact_nodes(std::vector<TreeSupport3D::Suppor
 
 void TreeSupport::generate()
 {
-    if (!is_tree(m_object_config->support_type.value)) return;
+    if (!is_tree(m_object_config->support_type.value) && m_overrides.demand_mask == nullptr) return;
 
     if (m_support_params.support_style == smsTreeOrganic) {
         generate_tree_support_3D(*m_object, this, this->throw_on_cancel);
@@ -1887,6 +1901,8 @@ void TreeSupport::generate()
 
     create_tree_support_layers();
     m_ts_data = m_object->alloc_tree_support_preview_cache();
+    if (m_overrides.extra_obstacles != nullptr)
+        m_ts_data->m_extra_obstacles = *m_overrides.extra_obstacles;
     m_ts_data->is_slim = is_slim;
     // // get the ring of outside plate
     // auto tmp= diff_ex(offset_ex(m_machine_border, scale_(100)), m_machine_border);
@@ -4004,6 +4020,11 @@ const ExPolygons& TreeSupportData::calculate_collision(const RadiusLayerPair& ke
     assert(key.layer_nr < m_layer_outlines.size());
 
     ExPolygons collision_areas = offset_ex(m_layer_outlines[key.layer_nr], scale_(key.radius+m_xy_distance));
+    if (key.layer_nr < m_extra_obstacles.size() && ! m_extra_obstacles[key.layer_nr].empty()) {
+        // MAGPIE: a branch of this radius keeps its edge clear of the module's obstacles.
+        append(collision_areas, offset_ex(union_ex(m_extra_obstacles[key.layer_nr]), scale_(key.radius) + SCALED_EPSILON));
+        collision_areas = union_ex(collision_areas);
+    }
     collision_areas = expolygons_simplify(collision_areas, scale_(m_radius_sample_resolution));
     // collision_areas.emplace_back(m_machine_border);
     const auto ret = m_collision_cache.insert({ key, std::move(collision_areas) });

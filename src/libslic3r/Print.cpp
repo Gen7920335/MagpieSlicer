@@ -4224,9 +4224,9 @@ Polygons Print::first_layer_islands() const
         for (ExPolygon &expoly : object->m_layers.front()->lslices)
             object_islands.push_back(expoly.contour);
         if (!object->support_layers().empty()) {
-            if (object->support_layers().front()->support_type==stInnerNormal)
+            if (has_normal_channel(object->support_layers().front()->support_type))
                 object->support_layers().front()->support_fills.polygons_covered_by_spacing(object_islands, float(SCALED_EPSILON));
-            else if(object->support_layers().front()->support_type==stInnerTree) {
+            if (has_tree_channel(object->support_layers().front()->support_type)) {
                 ExPolygons &expolys_first_layer = object->m_support_layers.front()->lslices;
                 for (ExPolygon &expoly : expolys_first_layer) { object_islands.push_back(expoly.contour); }
             }

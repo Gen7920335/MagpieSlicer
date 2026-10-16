@@ -115,6 +115,8 @@ set(lisbslic3r_sources
     GCodeCompatibility.hpp
     ModHost/Builtin/CuraSupport.cpp
     ModHost/Builtin/CuraSupport.hpp
+    ModHost/Builtin/MixedSupport.cpp
+    ModHost/Builtin/MixedSupport.hpp
     ModHost/Builtin/ResinSupport.cpp
     ModHost/Builtin/ResinSupport.hpp
     ModHost/Expr.cpp

@@ -316,6 +316,7 @@ void generate(PrintObject &object)
     overrides.contact_demand = &contact_demand;
     overrides.body_at_z      = [&tree_output](coordf_t z) { return sla::slice_support_tree_at_height(tree_output, float(z)); };
     overrides.keep_narrow_islands = true;
+    overrides.ignore_support_type = true;
     PrintObjectSupportMaterial support(&object, slicing_params, overrides);
     support.generate(object);
 

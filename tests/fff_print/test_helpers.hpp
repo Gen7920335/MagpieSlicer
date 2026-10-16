@@ -3,6 +3,7 @@
 
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Geometry.hpp"
+#include "libslic3r/ModHost/ModSet.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/Print.hpp"
@@ -12,6 +13,7 @@
 #include <cstddef>
 #include "libslic3r/PrintConfig.hpp"
 #include <initializer_list>
+#include <memory>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -135,6 +137,16 @@ int role_passes(const std::string &gcode, const std::string &role);
 
 // The `roles` in the order their extrusion blocks first appear, consecutive repeats collapsed.
 std::vector<std::string> role_sequence(const std::string &gcode, const std::vector<std::string> &roles);
+
+// Makes the bundled mods (resources/mods) the active mods while it lives, and restores the
+// previous set afterwards. errors lists the mods that failed to load.
+struct BundledMods
+{
+    std::shared_ptr<const ModHost::ModSet> previous;
+    std::vector<std::string>               errors;
+    BundledMods();
+    ~BundledMods();
+};
 
 } } // namespace Slic3r::Test
 

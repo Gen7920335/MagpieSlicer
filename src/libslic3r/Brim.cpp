@@ -611,13 +611,13 @@ static ExPolygons outer_inner_brim_area(const Print& print,
                     support_material_extruder = printExtruders.front() + 1;
             }
             if (support_material_extruder == extruderNo && brimToWrite.at(object->id()).sup) {
-                if (!object->support_layers().empty() && object->support_layers().front()->support_type==stInnerNormal) {
+                if (!object->support_layers().empty() && has_normal_channel(object->support_layers().front()->support_type)) {
                     for (const Polygon& support_contour : object->support_layers().front()->support_fills.polygons_covered_by_spacing()) {
                         no_brim_area_support.emplace_back(support_contour);
                     }
                 }
                 // BBS
-                if (!object->support_layers().empty() && object->support_layers().front()->support_type == stInnerTree) {
+                if (!object->support_layers().empty() && has_tree_channel(object->support_layers().front()->support_type)) {
                     for (const ExPolygon &ex_poly : object->support_layers().front()->lslices) {
                         if (!has_outer_brim)
                             append(no_brim_area_support, diff_ex(offset(ex_poly.contour, no_brim_offset), ex_poly.holes));

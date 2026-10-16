@@ -1322,6 +1322,11 @@ SupportLayer* PrintObject::get_support_layer_at_printz(coordf_t print_z, coordf_
     return const_cast<SupportLayer*>(std::as_const(*this).get_support_layer_at_printz(print_z, epsilon));
 }
 
+void PrintObject::delete_support_layer(SupportLayer *layer)
+{
+    delete layer;
+}
+
 void PrintObject::clear_support_layers()
 {
     if (!m_shared_object) {

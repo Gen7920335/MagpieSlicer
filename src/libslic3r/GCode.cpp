@@ -8687,7 +8687,10 @@ std::string GCode::extrude_path(const ExtrusionPath& path, const std::string& de
     if (m_wipe.enable && FILAMENT_CONFIG(wipe)) {
         m_wipe.reset_path();
         m_wipe.path = path.polyline.to_polyline();
-        if (is_tree(this->config().support_type) && is_support(path.role())) {
+        // MAGPIE: a mixed support layer prints tree branches whatever support_type says.
+        const auto *active_support_layer = dynamic_cast<const SupportLayer *>(m_layer);
+        if ((is_tree(this->config().support_type) || (active_support_layer != nullptr && active_support_layer->support_type == stInnerMixed)) &&
+            is_support(path.role())) {
             if ((m_wipe.path.first_point() - m_wipe.path.last_point()).cast<double>().norm() > scale_(0.2)) {
                 double min_dist = scale_(0.2);
                 int    i        = 0;
@@ -10379,7 +10382,7 @@ bool GCode::needs_retraction(const Polyline &travel, ExtrusionRole role, LiftTyp
                 if (support_island.contains(travel))
                     return false;
         //reduce the retractions in lightning infills for tree support
-        if (support_layer != NULL && support_layer->support_type==stInnerTree)
+        if (support_layer != NULL && has_tree_channel(support_layer->support_type))
             for (auto &area : support_layer->base_areas)
                 if (area.contains(travel))
                     return false;

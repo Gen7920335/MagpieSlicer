@@ -2,6 +2,7 @@
 
 #include "libslic3r/Print.hpp"
 #include "Builtin/CuraSupport.hpp"
+#include "Builtin/MixedSupport.hpp"
 #include "Builtin/ResinSupport.hpp"
 
 #include <map>
@@ -30,6 +31,8 @@ void register_builtin_modules(Registry &registry)
     // PrusaSlicer's SLA support points and trees, printed through Orca's normal-support pipeline. Its
     // settings are the parameters of the bundled resin_support mod (resources/mods/resin_support.json).
     registry.support_generators["resin"] = {"resin", "Resin", [](PrintObject &object) { ResinSupport::generate(object); }};
+    // Normal and tree support in one object (resources/mods/mixed_support.json).
+    registry.support_generators["mixed"] = {"mixed", "Mixed", [](PrintObject &object) { MixedSupport::generate(object); }};
 }
 
 Registry &registry()

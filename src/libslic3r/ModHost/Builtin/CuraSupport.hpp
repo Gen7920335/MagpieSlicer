@@ -47,11 +47,16 @@ struct Areas
     std::vector<Polygons> bottoms;
 };
 
-Areas compute_areas(const PrintObject &object, const ModSettings &settings);
+// mask: when set, per object layer, the only places overhangs may be supported (Mixed support).
+Areas compute_areas(const PrintObject &object, const ModSettings &settings, const std::vector<Polygons> *mask = nullptr);
+
+// Cura's overhang per object layer (AreaSupport's full overhang area): what Cura support would
+// support at that layer.
+std::vector<Polygons> overhang_demand(const PrintObject &object, const ModSettings &settings);
 
 // The support.generator module "cura": CuraEngine's normal support areas, printed with Orca's
-// support toolpaths.
-void generate(PrintObject &object);
+// support toolpaths. mask as for compute_areas.
+void generate(PrintObject &object, const std::vector<Polygons> *mask = nullptr);
 
 // Reads the cura_support mod parameters from the object's full print config.
 ModSettings read_settings(const PrintObject &object);

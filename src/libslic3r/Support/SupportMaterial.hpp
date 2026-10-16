@@ -2,10 +2,10 @@
 #define slic3r_SupportMaterial_hpp_
 
 #include "libslic3r/Polygon.hpp"
-#include "PrintConfig.hpp"
-#include "Slicing.hpp"
-#include "SupportLayer.hpp"
-#include "SupportParameters.hpp"
+#include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/Slicing.hpp"
+#include "libslic3r/Support/SupportLayer.hpp"
+#include "libslic3r/Support/SupportParameters.hpp"
 #include <functional>
 #include <vector>
 #include "libslic3r/ExPolygon.hpp"
@@ -26,12 +26,18 @@ struct SupportMaterialOverrides
     // Orca's contact margin, and a demand on the first object layer of an object lifted off the bed
     // or raft is supported too. Layers past the end of the vector get no contacts.
     const std::vector<Polygons>         *contact_demand = nullptr;
+    // Per object layer, where contacts may go. When set (and contact_demand is not), Orca detects
+    // overhangs as usual and keeps only the parts inside the mask; layers past the end get none.
+    const std::vector<Polygons>         *contact_mask = nullptr;
     // The module's support body cut at a print Z (mm). When set, it replaces Orca's propagation of
     // the contacts down to the bed; the cross-sections are then trimmed by the object as usual.
     std::function<ExPolygons(coordf_t)>  body_at_z;
     // Print every support island, even one narrower than the fill pattern's line spacing, as the
     // body of a support tree is made of such pillars.
     bool                                 keep_narrow_islands = false;
+    // Run even when a tree support type is selected: the module, not support_type, decides that
+    // this generator is used.
+    bool                                 ignore_support_type = false;
 };
 
 // This class manages raft and supports for a single PrintObject.
@@ -57,6 +63,11 @@ public:
 	// New support layers will be added to the object,
 	// with extrusion paths and islands filled in for each support layer.
 	void 		generate(PrintObject &object);
+
+	// MAGPIE: the top contact layers generate() would start from, without "on build plate only".
+	// Support modules read them as Orca's support demand.
+	SupportGeneratorLayersPtr detect_top_contact_layers(const PrintObject &object, SupportGeneratorLayerStorage &layer_storage) const
+		{ return this->top_contact_layers(object, {}, layer_storage); }
 
 private:
 	std::vector<Polygons> buildplate_covered(const PrintObject &object) const;
@@ -117,6 +128,10 @@ private:
 	SupportParameters   	 m_support_params;
 	SupportMaterialOverrides m_overrides;
 };
+
+// Per object layer, the union of every object layer below it: what "on build plate only" keeps
+// support away from.
+std::vector<Polygons> buildplate_covered_by_object(const PrintObject &object);
 
 } // namespace Slic3r
 

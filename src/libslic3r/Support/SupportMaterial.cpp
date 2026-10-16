@@ -1390,21 +1390,27 @@ std::vector<Polygons> PrintObjectSupportMaterial::buildplate_covered(const Print
     std::vector<Polygons> buildplate_covered;
     if (buildplate_only) {
         BOOST_LOG_TRIVIAL(debug) << "PrintObjectSupportMaterial::buildplate_covered() - start";
-        buildplate_covered.assign(object.layers().size(), Polygons());
-        //FIXME prefix sum algorithm, parallelize it! Parallelization will also likely be more numerically stable.
-        for (size_t layer_id = 1; layer_id < object.layers().size(); ++ layer_id) {
-            const Layer &lower_layer = *object.layers()[layer_id-1];
-            // Merge the new slices with the preceding slices.
-            // Apply the safety offset to the newly added polygons, so they will connect
-            // with the polygons collected before,
-            // but don't apply the safety offset during the union operation as it would
-            // inflate the polygons over and over.
-            Polygons &covered = buildplate_covered[layer_id];
-            covered = buildplate_covered[layer_id - 1];
-            polygons_append(covered, offset(lower_layer.lslices, scale_(0.01)));
-            covered = union_(covered);
-        }
+        buildplate_covered = buildplate_covered_by_object(object);
         BOOST_LOG_TRIVIAL(debug) << "PrintObjectSupportMaterial::buildplate_covered() - end";
+    }
+    return buildplate_covered;
+}
+
+std::vector<Polygons> buildplate_covered_by_object(const PrintObject &object)
+{
+    std::vector<Polygons> buildplate_covered(object.layers().size(), Polygons());
+    //FIXME prefix sum algorithm, parallelize it! Parallelization will also likely be more numerically stable.
+    for (size_t layer_id = 1; layer_id < object.layers().size(); ++ layer_id) {
+        const Layer &lower_layer = *object.layers()[layer_id-1];
+        // Merge the new slices with the preceding slices.
+        // Apply the safety offset to the newly added polygons, so they will connect
+        // with the polygons collected before,
+        // but don't apply the safety offset during the union operation as it would
+        // inflate the polygons over and over.
+        Polygons &covered = buildplate_covered[layer_id];
+        covered = buildplate_covered[layer_id - 1];
+        polygons_append(covered, offset(lower_layer.lslices, scale_(0.01)));
+        covered = union_(covered);
     }
     return buildplate_covered;
 }
@@ -2221,8 +2227,8 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
 
     // BBS: tree support is selected so normal supports need not be generated.
     // Note we still need to go through the following steps if support is disabled but raft is enabled.
-    // MAGPIE: a module that brings its own contact demand runs whatever support type is selected.
-    if (m_object_config->enable_support.value && ! m_overrides.contact_demand && (m_object_config->support_type.value != stNormalAuto && m_object_config->support_type.value != stNormal)) {
+    // MAGPIE: a support module runs this generator whatever support type is selected.
+    if (m_object_config->enable_support.value && ! m_overrides.ignore_support_type && (m_object_config->support_type.value != stNormalAuto && m_object_config->support_type.value != stNormal)) {
         return SupportGeneratorLayersPtr();
     }
 
@@ -2440,6 +2446,11 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
         for (size_t layer_id = layer_id_start; layer_id < num_layers; ++ layer_id)
             overhangs_per_layers[layer_id] = layer_id < demand->size() && ! (*demand)[layer_id].empty() ?
                 intersection_ex((*demand)[layer_id], object.layers()[layer_id]->lslices) : ExPolygons();
+    } else if (const std::vector<Polygons> *mask = m_overrides.contact_mask) {
+        // MAGPIE: a module keeps only the overhangs inside its mask.
+        for (size_t layer_id = layer_id_start; layer_id < num_layers; ++ layer_id)
+            overhangs_per_layers[layer_id] = layer_id < mask->size() && ! (*mask)[layer_id].empty() ?
+                intersection_ex(overhangs_per_layers[layer_id], (*mask)[layer_id]) : ExPolygons();
     }
 
     for (size_t layer_id = layer_id_start; layer_id < num_layers; layer_id++) {

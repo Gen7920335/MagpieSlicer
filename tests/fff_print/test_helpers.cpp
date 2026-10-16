@@ -501,6 +501,14 @@ std::vector<std::string> role_sequence(const std::string &gcode, const std::vect
     return seq;
 }
 
+BundledMods::BundledMods() : previous(ModHost::active_mods())
+{
+    ModHost::set_active_mods(std::make_shared<const ModHost::ModSet>(
+        ModHost::ModSet::load_dir(boost::filesystem::path(PROFILES_DIR) / ".." / "mods", errors)));
+}
+
+BundledMods::~BundledMods() { ModHost::set_active_mods(previous); }
+
 } } // namespace Slic3r::Test
 
 #include <catch2/catch_all.hpp>

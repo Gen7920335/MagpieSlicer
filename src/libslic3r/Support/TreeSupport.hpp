@@ -311,6 +311,8 @@ private:
     tbb::spin_mutex  m_mutex;
 
 public:
+    // MAGPIE: per object layer, extra areas the branches avoid (see TreeSupportOverrides).
+    std::vector<Polygons> m_extra_obstacles;
     bool is_slim = false;
     /*!
      * \brief The required clearance between the model and the tree branches
@@ -366,6 +368,20 @@ struct LineHash {
 /*!
  * \brief Generates a tree structure to support your models.
  */
+// MAGPIE: lets a support generator module run the tree generator on its own demand (support.generator
+// slot). A default-constructed value changes nothing.
+struct TreeSupportOverrides
+{
+    // Per object layer, the areas to support. When set, they replace the tree's overhang detection,
+    // and the generator runs whatever support type is selected. Layers past the end get none.
+    const std::vector<Polygons> *demand_mask = nullptr;
+    // The tree style to use instead of support_style; smsDefault keeps support_style.
+    SupportMaterialStyle         style = smsDefault;
+    // Per object layer, plastic the branches must keep clear of (other support), like the object.
+    // Used by the slim, strong and hybrid trees; organic trees ignore it.
+    const std::vector<Polygons> *extra_obstacles = nullptr;
+};
+
 class TreeSupport
 {
 public:
@@ -374,7 +390,7 @@ public:
      *
      * \param storage The data storage to get global settings from.
      */
-    TreeSupport(PrintObject& object, const SlicingParameters &slicing_params);
+    TreeSupport(PrintObject& object, const SlicingParameters &slicing_params, TreeSupportOverrides overrides = {});
 
     void move_bounds_to_contact_nodes(std::vector<TreeSupport3D::SupportElements> &move_bounds,
                                       PrintObject                                 &print_object,
@@ -426,6 +442,7 @@ public:
     enum OverhangType { Detected = 0, Enforced, SharpTail };
     std::map<const ExPolygon*, OverhangType> overhang_types;
     std::vector<std::pair<Vec3f, Vec3f>>      m_vertical_enforcer_points;
+    const TreeSupportOverrides               &overrides() const { return m_overrides; }
 
 private:
     /*!
@@ -459,6 +476,7 @@ private:
     bool  is_strong = false;
     bool  is_slim                            = false;
     bool  with_infill                        = false;
+    TreeSupportOverrides m_overrides;
 
     // Belt printer: compute the belt floor print_z at a given XY position (in slicing coords).
     // Returns -infinity if belt floor is not active.
