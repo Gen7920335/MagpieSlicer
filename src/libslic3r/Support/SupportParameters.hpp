@@ -295,6 +295,11 @@ struct SupportParameters {
     // MAGPIE: print every support island, even one the fill pattern misses (a thin pillar of a
     // support module). Off for Orca's own generators.
     bool                    keep_narrow_islands { false };
+    // MAGPIE: print the first support layer with the base pattern, spacing and angle, so its lines
+    // sit under the lines above (Cura support); only the flow is the first layer's. Off for Orca.
+    bool                    aligned_first_layer { false };
+    // MAGPIE: density of the first-layer flange, 0..1; negative uses raft_first_layer_density.
+    float                   first_layer_density { -1.f };
     // Branches of organic supports with area larger than this threshold will be extruded with double lines.
     double                  tree_branch_diameter_double_wall_area_scaled = 0.25 * sqr(scaled<double>(5.0)) * M_PI;;
 

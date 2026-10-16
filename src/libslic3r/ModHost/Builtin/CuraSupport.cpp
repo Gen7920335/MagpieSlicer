@@ -426,6 +426,7 @@ ModSettings read_settings(const PrintObject &object)
     flag("conical_enabled", s.conical_enabled);
     num("conical_angle", s.conical_angle_deg);
     num("conical_min_width", s.conical_min_width_mm);
+    flag("solid_first_layer", s.solid_first_layer);
     return s;
 }
 
@@ -654,6 +655,12 @@ void generate(PrintObject &object, const std::vector<Polygons> *mask)
     Areas             areas = compute_areas(object, s, mask);
 
     SupportParameters            support_params(object);
+    // Cura prints the first support layer with the same lines as the rest (support_initial_layer_line_distance
+    // defaults to the support line distance) and without widening it, unless asked for a solid first layer.
+    if (s.solid_first_layer)
+        support_params.first_layer_density = 1.f;
+    else
+        support_params.aligned_first_layer = true;
     SupportGeneratorLayerStorage storage;
     SupportGeneratorLayersPtr    base_layers, interface_layers, empty;
     auto make_layer = [&](size_t idx, SupporLayerType type, Polygons &&polygons) {

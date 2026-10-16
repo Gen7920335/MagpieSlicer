@@ -573,3 +573,41 @@ TEST_CASE("The Cura support generator fills the overhangs of a tee and keeps cle
     }
     CHECK(mid_layers > 20);
 }
+
+TEST_CASE("The Cura support generator prints its first layer with the same lines as the layers above", "[SupportMaterial]")
+{
+    // Cura prints the bed layer of its support at the support line distance and does not widen it
+    // (support_initial_layer_line_distance defaults to the support line distance). Orca's own
+    // generator instead lays a dense, widened flange there.
+    Slic3r::Print print;
+    Slic3r::Test::init_and_process_print({ support_tee() }, print, {
+        { "enable_support", 1 }, { "support_type", "normal(auto)" }, { "support_generator", "cura" },
+        { "layer_height", 0.2 }, { "first_layer_height", 0.2 }, { "raft_first_layer_density", 90 },
+        { "raft_first_layer_expansion", 2 } });
+    const auto layers = print.objects().front()->support_layers();
+    REQUIRE(layers.size() > 3);
+    // Total centreline length of a layer's support paths, in mm.
+    const auto path_length_mm = [](const SupportLayer *layer) {
+        double length = 0.;
+        for (const Polyline &polyline : layer->support_fills.as_polylines())
+            length += unscale<double>(polyline.length());
+        return length;
+    };
+    const double first  = path_length_mm(layers[0]);
+    const double second = path_length_mm(layers[1]);
+    CAPTURE(first, second);
+    // Measured: equal lengths. A 90 % flange widened by 2 mm is several times longer.
+    CHECK(first < 1.1 * second);
+
+    // The cura_support mod's solid_first_layer asks for the dense flange instead.
+    Slic3r::Test::BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    Slic3r::Print solid;
+    Slic3r::Test::init_and_process_print({ support_tee() }, solid, {
+        { "enable_support", 1 }, { "support_type", "normal(auto)" }, { "support_generator", "cura" },
+        { "layer_height", 0.2 }, { "first_layer_height", 0.2 }, { "raft_first_layer_expansion", 2 },
+        { "mod_settings", R"({"cura_support.solid_first_layer": true})" } });
+    const auto solid_layers = solid.objects().front()->support_layers();
+    REQUIRE(solid_layers.size() > 3);
+    CHECK(path_length_mm(solid_layers[0]) > 1.5 * path_length_mm(solid_layers[1]));
+}

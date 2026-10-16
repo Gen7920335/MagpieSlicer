@@ -325,7 +325,10 @@ SupportGeneratorLayersPtr generate_raft_base(
     // puts lines in the air ahead of the belt crossing (and into the belt behind
     // it).  The belt brim takes the adhesion role instead.
     const bool  belt_floor_active        = std::abs(slicing_params.belt_floor_shear_factor) > EPSILON;
-    const float inflate_factor_1st_layer = belt_floor_active ? 0.f :
+    // MAGPIE: an aligned first layer (Cura support) keeps each column's outline down to the bed;
+    // widening only the first layer would print a second, wider outline under it.
+    const bool  aligned_to_bed           = support_params.aligned_first_layer && slicing_params.raft_layers() <= 1;
+    const float inflate_factor_1st_layer = belt_floor_active || aligned_to_bed ? 0.f :
         std::max(0.f, float(scale_(object.config().raft_first_layer_expansion)) - inflate_factor_fine);
     SupportGeneratorLayer       *contacts         = top_contacts         .empty() ? nullptr : top_contacts         .front();
     SupportGeneratorLayer       *interfaces       = interface_layers     .empty() ? nullptr : interface_layers     .front();
@@ -1831,11 +1834,15 @@ void generate_support_toolpaths(
                 // For every other printer type, support z is never negative, so this
                 // matches the original "first layer at z=0" behaviour unchanged.
                 const bool is_belt_printer = std::abs(slicing_params.belt_floor_shear_factor) > EPSILON;
-                if (! is_belt_printer && base_layer.layer->bottom_z < EPSILON) {
+                if (! is_belt_printer && base_layer.layer->bottom_z < EPSILON && support_params.aligned_first_layer) {
+                    // MAGPIE: the base lines continue down to the bed, printed with the first layer's flow.
+                    flow = support_params.first_layer_flow;
+                } else if (! is_belt_printer && base_layer.layer->bottom_z < EPSILON) {
                     // Base flange (the 1st layer).
                     filler = filler_first_layer;
                     filler->angle = Geometry::deg2rad(float(config.support_angle.value + 90.));
-                    density = float(config.raft_first_layer_density.value * 0.01);
+                    density = support_params.first_layer_density >= 0.f ? support_params.first_layer_density :
+                                                                           float(config.raft_first_layer_density.value * 0.01);
                     flow = support_params.first_layer_flow;
                     // use the proper spacing for first layer as we don't need to align
                     // its pattern to the other layers

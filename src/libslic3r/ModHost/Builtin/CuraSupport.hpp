@@ -36,6 +36,7 @@ struct ModSettings
     bool   conical_enabled          = false; // support_conical_enabled
     double conical_angle_deg        = 30.;  // support_conical_angle
     double conical_min_width_mm     = 5.0;  // support_conical_min_width
+    bool   solid_first_layer        = false; // Magpie line 1's cura_solid_support_raft
 };
 
 // Cura's support areas for one object, one entry per object layer, before they become Orca
