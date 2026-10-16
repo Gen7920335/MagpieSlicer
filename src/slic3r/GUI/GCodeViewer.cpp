@@ -191,6 +191,39 @@ static const std::vector<std::pair<std::string, libvgcode::EViewType>>& view_typ
     return map;
 }
 
+// MAGPIE: colours for the Tool view. Toolheads loaded with filaments of the same colour (multi-nozzle walls put
+// one material on a small and a large nozzle) cannot be told apart by filament colour, so then each toolhead
+// gets its own colour from a golden-ratio hue walk (Magpie line 1's "Nozzle used" palette); distinct filament
+// colours are kept as Orca shows them.
+static std::vector<std::string> tool_view_colors(const std::vector<std::string> &filament_colors)
+{
+    const std::set<std::string> distinct(filament_colors.begin(), filament_colors.end());
+    if (distinct.size() == filament_colors.size())
+        return filament_colors;
+    std::vector<std::string> palette;
+    palette.reserve(filament_colors.size());
+    for (size_t i = 0; i < filament_colors.size(); ++i) {
+        const float h = std::fmod(0.58f + 0.61803398875f * float(i), 1.0f);
+        const float s = 0.78f;
+        const float v = 1.0f;
+        const float c = v * s;
+        const float x = c * (1.0f - std::fabs(std::fmod(h * 6.0f, 2.0f) - 1.0f));
+        const float m = v - c;
+        float r = 0.0f, g = 0.0f, b = 0.0f;
+        if (h < 1.0f / 6.0f)      { r = c; g = x; }
+        else if (h < 2.0f / 6.0f) { r = x; g = c; }
+        else if (h < 3.0f / 6.0f) { g = c; b = x; }
+        else if (h < 4.0f / 6.0f) { g = x; b = c; }
+        else if (h < 5.0f / 6.0f) { r = x; b = c; }
+        else                      { r = c; b = x; }
+        char color[8];
+        std::snprintf(color, sizeof(color), "#%02X%02X%02X", int((r + m) * 255.0f + 0.5f), int((g + m) * 255.0f + 0.5f),
+                      int((b + m) * 255.0f + 0.5f));
+        palette.emplace_back(color);
+    }
+    return palette;
+}
+
 // Find an index of a value in a sorted vector, which is in <z-eps, z+eps>.
 // Returns -1 if there is no such member.
 static int find_close_layer_idx(const std::vector<double> &zs, double &z, double eps)
@@ -1418,7 +1451,7 @@ void GCodeViewer::load_as_gcode(const GCodeProcessorResult& gcode_result, const 
         // collect tool colors
         libvgcode::Palette tools_colors;
         tools_colors.reserve(str_tool_colors.size());
-        for (const std::string& color : str_tool_colors) {
+        for (const std::string& color : tool_view_colors(str_tool_colors)) {
             tools_colors.emplace_back(libvgcode::convert(color));
         }
         m_viewer.set_tool_colors(tools_colors);
@@ -1560,7 +1593,10 @@ void GCodeViewer::load_as_gcode(const GCodeProcessorResult& gcode_result, const 
             belt_inv = Transform3d(Eigen::Translation3d(d)) * belt_inv;
         }
     }
-    libvgcode::GCodeInputData data = libvgcode::convert(gcode_result, str_tool_colors, str_color_print_colors, m_viewer,
+    // MAGPIE: the Filament view keeps the filament colours (convert() falls back to the tool colours for it
+    // when there are no colour print colours), the Tool view takes tool_view_colors().
+    libvgcode::GCodeInputData data = libvgcode::convert(gcode_result, tool_view_colors(str_tool_colors),
+        str_color_print_colors.empty() ? str_tool_colors : str_color_print_colors, m_viewer,
         apply_belt ? &belt_inv : nullptr);
 
 //#define ENABLE_DATA_EXPORT 1

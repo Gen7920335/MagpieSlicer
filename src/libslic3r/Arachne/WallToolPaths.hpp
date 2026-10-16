@@ -36,6 +36,10 @@ public:
     float   wall_transition_filter_deviation = 0.f;
     int     wall_distribution_count          = 1;
     bool    is_top_or_bottom_layer           = false;
+    // MAGPIE (wall.plan slot): outer walls printed at the outer bead width, and the overlap (scaled)
+    // between the innermost of them and the walls inside it. 1 and 0 are Orca's beading.
+    size_t  fixed_outer_wall_count           = 1;
+    coord_t fixed_outer_wall_boundary_overlap = 0;
 
     coord_t wall_maximum_resolution = meshfix_maximum_resolution();
     coord_t wall_maximum_deviation  = meshfix_maximum_deviation();

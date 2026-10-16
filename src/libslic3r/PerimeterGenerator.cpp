@@ -1,4 +1,5 @@
 #include "PerimeterGenerator.hpp"
+#include "ModHost/SlotRegistry.hpp"
 #include "Arachne/utils/ExtrusionLine.hpp"
 #include "Arachne/utils/ExtrusionJunction.hpp"
 #include "BridgeDetector.hpp"
@@ -119,6 +120,25 @@ static bool detect_steep_overhang(const PrintRegionConfig *config,
     return false;
 }
 
+coord_t WallPlan::center_distance(int current_depth) const
+{
+    assert(active && current_depth > 0);
+    const bool previous_is_detail = depth_uses_detail(current_depth - 1);
+    const bool current_is_detail  = depth_uses_detail(current_depth);
+    if (previous_is_detail && current_is_detail)
+        return detail_spacing;
+    if (!previous_is_detail && !current_is_detail)
+        return large_spacing;
+    // The detail/large boundary: the mean spacing less the configured overlap.
+    return std::max<coord_t>(SCALED_EPSILON, coord_t(0.5 * double(detail_spacing + large_spacing)) - boundary_overlap());
+}
+
+coord_t WallPlan::minimum_spacing(int current_depth) const
+{
+    assert(active && current_depth > 0);
+    return coord_t((depth_uses_detail(current_depth) ? detail_width : large_spacing) * (1 - INSET_OVERLAP_TOLERANCE));
+}
+
 static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perimeter_generator, const PerimeterGeneratorLoops &loops, ThickPolylines &thin_walls,
     bool &steep_overhang_contour, bool &steep_overhang_hole)
 {
@@ -133,6 +153,8 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
     for (const PerimeterGeneratorLoop &loop : loops) {
         bool is_external = loop.is_external();
         bool is_small_width = loop.is_smaller_width_perimeter;
+        // MAGPIE: a wall of the wall plan's detail nozzle (wall.plan slot).
+        const bool use_detail_wall_flow = loop.depth < perimeter_generator.detail_wall_count;
 
         ExtrusionRole role;
         ExtrusionLoopRole loop_role;
@@ -151,7 +173,12 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
         double extrusion_mm3_per_mm;
         double extrusion_width;
         if (is_external) {
-            if (is_small_width) {
+            if (use_detail_wall_flow) {
+                // MAGPIE: the detail nozzle's outer wall; overhangs measured like any outer wall.
+                lower_polygons_series = &perimeter_generator.m_external_lower_polygons_series;
+                extrusion_mm3_per_mm = perimeter_generator.smaller_width_ext_mm3_per_mm();
+                extrusion_width = perimeter_generator.smaller_ext_perimeter_flow.width();
+            } else if (is_small_width) {
                 //BBS: smaller width external perimeter
                 lower_polygons_series = &perimeter_generator.m_smaller_external_lower_polygons_series;
                 extrusion_mm3_per_mm = perimeter_generator.smaller_width_ext_mm3_per_mm();
@@ -246,7 +273,10 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
             paths.emplace_back(std::move(path));
         }
 
-        coll.append(ExtrusionLoop(std::move(paths), loop_role));
+        ExtrusionLoop extrusion_loop(std::move(paths), loop_role);
+        if (perimeter_generator.detail_wall_routing)
+            extrusion_loop.tool_hint = use_detail_wall_flow ? ExtrusionToolHint::DetailWall : ExtrusionToolHint::LargeWall;
+        coll.append(std::move(extrusion_loop));
     }
 
     // Append thin walls to the nearest-neighbor search (only for first iteration)
@@ -267,7 +297,14 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
             thin_wall = Arachne::to_thick_polyline(el);
         }
 
-        variable_width(thin_walls, erExternalPerimeter, perimeter_generator.ext_perimeter_flow, coll.entities);
+        // MAGPIE: thin walls belong to the outer wall, so to the detail nozzle when there is one.
+        const size_t first_thin_wall = coll.entities.size();
+        const bool   detail_thin     = perimeter_generator.detail_wall_count > 0;
+        variable_width(thin_walls, erExternalPerimeter,
+                       detail_thin ? perimeter_generator.smaller_ext_perimeter_flow : perimeter_generator.ext_perimeter_flow, coll.entities);
+        if (perimeter_generator.detail_wall_routing)
+            for (size_t idx = first_thin_wall; idx < coll.entities.size(); ++idx)
+                coll.entities[idx]->tool_hint = detail_thin ? ExtrusionToolHint::DetailWall : ExtrusionToolHint::LargeWall;
         thin_walls.clear();
     }
 
@@ -412,6 +449,12 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
 
         const bool    is_external = extrusion->inset_idx == 0;
         ExtrusionRole role = is_external ? erExternalPerimeter : erPerimeter;
+        // MAGPIE: walls of the wall plan's detail nozzle (wall.plan slot).
+        const bool    use_detail_wall_flow = int(extrusion->inset_idx) < perimeter_generator.detail_wall_count;
+        const Flow   &path_flow = use_detail_wall_flow ? perimeter_generator.smaller_ext_perimeter_flow :
+                                  is_external          ? perimeter_generator.ext_perimeter_flow : perimeter_generator.perimeter_flow;
+        const ExtrusionToolHint wall_tool_hint = !perimeter_generator.detail_wall_routing ? ExtrusionToolHint::Auto :
+                                                 use_detail_wall_flow ? ExtrusionToolHint::DetailWall : ExtrusionToolHint::LargeWall;
 
         const bool  is_contour = !extrusion->is_closed || pg_extrusion.is_contour;
         apply_fuzzy_skin(extrusion, perimeter_generator, is_contour, extrusion->is_closed);
@@ -447,7 +490,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
 
             // get non-overhang paths by intersecting this loop with the grown lower slices
             extrusion_paths_append(paths, clip_extrusion(extrusion_path, lower_slices_paths, ctIntersection), role,
-                                   is_external ? perimeter_generator.ext_perimeter_flow : perimeter_generator.perimeter_flow);
+                                   path_flow);
 
             // Always reverse extrusion if use fuzzy skin: https://github.com/OrcaSlicer/OrcaSlicer/pull/2413#issuecomment-1769735357
             if (overhangs_reverse && perimeter_generator.has_fuzzy_skin) {
@@ -549,13 +592,14 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
                 steep_overhang_hole    = true;
             }
 
-            extrusion_paths_append(paths, *extrusion, role, is_external ? perimeter_generator.ext_perimeter_flow : perimeter_generator.perimeter_flow);
+            extrusion_paths_append(paths, *extrusion, role, path_flow);
         }
 
         // Append paths to collection.
         if (!paths.empty()) {
             if (extrusion->is_closed) {
                 ExtrusionLoop extrusion_loop(std::move(paths), pg_extrusion.is_contour ? elrDefault : elrHole);
+                extrusion_loop.tool_hint = wall_tool_hint;
                 extrusion_loop.inset_idx = extrusion->inset_idx;
                 if ((perimeter_generator.config->wall_direction == WallDirection::CounterClockwise) ==
                     (pg_extrusion.is_contour || pg_extrusions.size() == 2))
@@ -584,12 +628,14 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
                     assert(std::prev(it)->polyline.last_point() == it->polyline.first_point());
                 }
                 ExtrusionMultiPath multi_path;
+                multi_path.tool_hint = wall_tool_hint;
                 multi_path.paths.emplace_back(std::move(paths.front()));
 
                 for (auto it_path = std::next(paths.begin()); it_path != paths.end(); ++it_path) {
                     if (multi_path.paths.back().last_point() != it_path->first_point()) {
                         extrusion_coll.append(ExtrusionMultiPath(std::move(multi_path)));
                         multi_path = ExtrusionMultiPath();
+                        multi_path.tool_hint = wall_tool_hint;
                     }
                     multi_path.paths.emplace_back(std::move(*it_path));
                 }
@@ -1503,6 +1549,12 @@ void PerimeterGenerator::process_classic()
     // BBS: to be checked
     this->smaller_ext_perimeter_flow = this->smaller_ext_perimeter_flow.with_width(SCALING_FACTOR *
         (ext_perimeter_width - 0.5 * SMALLER_EXT_INSET_OVERLAP_TOLERANCE * ext_perimeter_spacing));
+    // MAGPIE: a wall planner's detail nozzle replaces the narrow-loop width (wall.plan slot).
+    std::optional<Flow> planner_detail_flow;
+    if (this->wall_planner != nullptr && this->wall_planner->detail_flow)
+        planner_detail_flow = this->wall_planner->detail_flow(*this);
+    if (planner_detail_flow)
+        this->smaller_ext_perimeter_flow = *planner_detail_flow;
     m_ext_mm3_per_mm_smaller_width = this->smaller_ext_perimeter_flow.mm3_per_mm();
 
     // prepare grown lower layer slices for overhang detection
@@ -1542,6 +1594,13 @@ void PerimeterGenerator::process_classic()
         // Set the topmost layer to be one wall
         if (loop_number > 0 && only_one_wall_top && this->upper_slices == nullptr)
             loop_number = 0;
+        // MAGPIE: the wall planner's split of this island's walls between two nozzles.
+        const WallPlan wall_plan = planner_detail_flow && this->wall_planner->plan ?
+            this->wall_planner->plan(*this, surface.expolygon, loop_number) : WallPlan{};
+        if (wall_plan.active)
+            loop_number = wall_plan.total_walls - 1;
+        this->detail_wall_count   = wall_plan.active ? wall_plan.detail_walls : 0;
+        this->detail_wall_routing = wall_plan.route;
 
         ExPolygons last        = union_ex(surface.expolygon.simplify_p(surface_simplify_resolution));
         ExPolygons gaps;
@@ -1565,8 +1624,12 @@ void PerimeterGenerator::process_classic()
                 ExPolygons offsets;
                 ExPolygons offsets_with_smaller_width;
                 if (i == 0) {
+                    if (wall_plan.active && wall_plan.detail_walls > 0) {
+                        // MAGPIE: the detail nozzle's outer wall: half its width in from the outline.
+                        for (const ExPolygon &expolygon : last)
+                            append(offsets, offset_ex(expolygon, -float(wall_plan.detail_width / 2)));
                     // look for thin walls
-                    if (this->config->detect_thin_wall) {
+                    } else if (this->config->detect_thin_wall) {
                         // the minimum thickness of a single loop is:
                         // ext_width/2 + ext_spacing/2 + spacing/2 + width/2
                         offsets = offset2_ex(last,
@@ -1618,7 +1681,7 @@ void PerimeterGenerator::process_classic()
                 } else {
                     //FIXME Is this offset correct if the line width of the inner perimeters differs
                     // from the line width of the infill?
-                    coord_t distance = (i == 1) ? ext_perimeter_spacing2 : perimeter_spacing;
+                    coord_t distance = wall_plan.active ? wall_plan.center_distance(i) : (i == 1) ? ext_perimeter_spacing2 : perimeter_spacing;
                     //BBS
                     //offsets = this->config->thin_walls ?
                         // This path will ensure, that the perimeters do not overfill, as in
@@ -1637,9 +1700,10 @@ void PerimeterGenerator::process_classic()
                     //BBS: For internal perimeter, we should "enable" thin wall strategy in which offset2 is used to
                     // remove too closed line, so that gap fill can be used for such internal narrow area in following
                     // handling.
+                    const coord_t current_min_spacing = wall_plan.active ? wall_plan.minimum_spacing(i) : min_spacing;
                     offsets = offset2_ex(last,
-                        -float(distance + min_spacing / 2. - 1.),
-                        float(min_spacing / 2. - 1.));
+                        -float(distance + current_min_spacing / 2. - 1.),
+                        float(current_min_spacing / 2. - 1.));
                     // look for gaps
                     if (has_gap_fill)
                         // not using safety offset here would "detect" very narrow gaps
@@ -2034,8 +2098,12 @@ void PerimeterGenerator::process_classic()
             inset -= infill_peri_overlap;
         }
         // simplify infill contours according to resolution
+        // MAGPIE: a layer printing fewer detail walls than asked keeps the infill boundary of the full count.
+        ExPolygons infill_boundary;
+        if (wall_plan.active && wall_plan.infill_compensation > 0)
+            infill_boundary = intersection_ex(offset_ex(last, double(wall_plan.infill_compensation)), ExPolygons{ surface.expolygon });
         Polygons pp;
-        for (ExPolygon &ex : last)
+        for (ExPolygon &ex : (wall_plan.active && wall_plan.infill_compensation > 0) ? infill_boundary : last)
             ex.simplify_p(m_scaled_resolution, &pp);
         ExPolygons not_filled_exp = union_ex(pp);
         // collapse too narrow infill areas
@@ -2531,6 +2599,15 @@ void PerimeterGenerator::process_arachne()
     // solid infill
     coord_t solid_infill_spacing = this->solid_infill_flow.scaled_spacing();
 
+    // MAGPIE: the wall planner's detail nozzle (wall.plan slot).
+    std::optional<Flow> planner_detail_flow;
+    if (this->wall_planner != nullptr && this->wall_planner->detail_flow)
+        planner_detail_flow = this->wall_planner->detail_flow(*this);
+    if (planner_detail_flow) {
+        this->smaller_ext_perimeter_flow = *planner_detail_flow;
+        m_ext_mm3_per_mm_smaller_width   = this->smaller_ext_perimeter_flow.mm3_per_mm();
+    }
+
     // prepare grown lower layer slices for overhang detection
     if (this->lower_slices != nullptr && this->config->detect_overhang_wall) {
         // We consider overhang any part where the entire nozzle diameter is not supported by the
@@ -2587,16 +2664,39 @@ void PerimeterGenerator::process_arachne()
         //PS: One wall top surface for Arachne
         ExPolygons top_expolygons;
         // Calculate how many inner loops remain when TopSurfaces is selected.
-        const int inner_loop_number = (only_one_wall_top && upper_slices != nullptr) ? loop_number - 1 : -1;
+        int inner_loop_number = (only_one_wall_top && upper_slices != nullptr) ? loop_number - 1 : -1;
+        // MAGPIE: the wall planner plans from the island's full wall count, before the single wall pass takes it.
+        const int full_loop_number = loop_number;
 
         // Set one perimeter when TopSurfaces is selected.
         if (only_one_wall_top && loop_number > 0)
             loop_number = 0;
 
         Arachne::WallToolPathsParams input_params_tmp = input_params;
+        // MAGPIE: the wall planner's split of this island's walls between two nozzles. With the single wall pass,
+        // the detail walls take the place of the single outer wall and the large walls follow as the inner walls.
+        const WallPlan wall_plan = planner_detail_flow && this->wall_planner->plan ?
+            this->wall_planner->plan(*this, surface.expolygon, inner_loop_number >= 0 ? full_loop_number : loop_number) : WallPlan{};
+        // Walls in front of the inner walls of the single wall pass, and the wall count of the full pass.
+        int single_pass_walls = 1;
+        int full_pass_walls   = inner_loop_number + 2;
+        if (wall_plan.active) {
+            input_params_tmp.fixed_outer_wall_count            = size_t(std::max(1, wall_plan.detail_walls));
+            input_params_tmp.fixed_outer_wall_boundary_overlap = wall_plan.boundary_overlap();
+            if (inner_loop_number >= 0) {
+                single_pass_walls = std::max(1, wall_plan.detail_walls);
+                full_pass_walls   = wall_plan.total_walls;
+                loop_number       = single_pass_walls - 1;
+                inner_loop_number = wall_plan.total_walls - single_pass_walls - 1;
+            } else
+                loop_number = wall_plan.total_walls - 1;
+        }
+        this->detail_wall_count   = wall_plan.active ? wall_plan.detail_walls : 0;
+        this->detail_wall_routing = wall_plan.route;
+        const coord_t arachne_outer_spacing = wall_plan.active ? wall_plan.detail_spacing : bead_width_0;
         
         Polygons   last_p = to_polygons(last);
-        Arachne::WallToolPaths wallToolPaths(last_p, bead_width_0, perimeter_spacing, coord_t(loop_number + 1),
+        Arachne::WallToolPaths wallToolPaths(last_p, arachne_outer_spacing, perimeter_spacing, coord_t(loop_number + 1),
                                                wall_0_inset, layer_height, input_params_tmp);
         std::vector<Arachne::VariableWidthLines>   perimeters = wallToolPaths.getToolPaths();
         ExPolygons  infill_contour = union_ex(wallToolPaths.getInnerContour());
@@ -2657,7 +2757,7 @@ void PerimeterGenerator::process_arachne()
             auto generate_full_perimeters = [&]() {
                 if (full_perimeters_generated)
                     return;
-                Arachne::WallToolPaths full_tool_paths(last_p, bead_width_0, perimeter_spacing, coord_t(inner_loop_number + 2), wall_0_inset, layer_height, input_params_tmp);
+                Arachne::WallToolPaths full_tool_paths(last_p, arachne_outer_spacing, perimeter_spacing, coord_t(full_pass_walls), wall_0_inset, layer_height, input_params_tmp);
                 full_perimeters           = full_tool_paths.getToolPaths();
                 full_inner_contour        = full_tool_paths.getInnerContour();
                 full_perimeters_generated = true;
@@ -2669,10 +2769,13 @@ void PerimeterGenerator::process_arachne()
             // the full pass's outside the top surface, take the full pass's outer walls and the area inside them instead.
             // Walls closer than outer_wall_tolerance count as the same wall: a widened bead's centerline moves by half
             // the width added, and only beads widened by more than twice the tolerance are looked for.
-            const coord_t outer_wall_tolerance = bead_width_0 / 10;
-            if (widest_bead(perimeters) > bead_width_0 + 2 * outer_wall_tolerance) {
+            // MAGPIE: with a wall plan the single wall pass is the plan's detail walls, single_pass_walls beads of
+            // arachne_outer_spacing each.
+            const coord_t single_pass_bead     = wall_plan.active ? arachne_outer_spacing : bead_width_0;
+            const coord_t outer_wall_tolerance = single_pass_bead / 10;
+            if (widest_bead(perimeters) > single_pass_bead + 2 * outer_wall_tolerance) {
                 // The single wall pass's inner contour where it widens no bead: inside nominal width outer walls.
-                const ExPolygons nominal_infill_contour = offset_ex(last, -float(bead_width_0 + wall_0_inset));
+                const ExPolygons nominal_infill_contour = offset_ex(last, -float(single_pass_bead * single_pass_walls + wall_0_inset));
                 bool             nominal_uncovered      = false;
                 // Grown by an outer wall width to take in the outer walls bordering the top surface.
                 const ExPolygons top_zone = offset_ex(get_top_expolygons(nominal_infill_contour, nominal_uncovered), float(bead_width_0));
@@ -2680,8 +2783,11 @@ void PerimeterGenerator::process_arachne()
                     generate_full_perimeters();
                     if (! full_perimeters.empty() && ! full_perimeters.front().empty() &&
                         length_off_reference(perimeters, full_perimeters.front(), top_zone, outer_wall_tolerance) > double(perimeter_width)) {
-                        perimeters     = { full_perimeters.front() };
-                        infill_contour = diff_ex(nominal_infill_contour, walls_footprint(full_perimeters.front()), ApplySafetyOffset::Yes);
+                        // MAGPIE: the single wall pass holds single_pass_walls walls (1 without a wall plan).
+                        perimeters.assign(full_perimeters.begin(), full_perimeters.begin() + std::min<size_t>(full_perimeters.size(), size_t(single_pass_walls)));
+                        infill_contour = nominal_infill_contour;
+                        for (const Arachne::VariableWidthLines &wall : perimeters)
+                            infill_contour = diff_ex(infill_contour, walls_footprint(wall), ApplySafetyOffset::Yes);
                     }
                 }
             }
@@ -2709,11 +2815,12 @@ void PerimeterGenerator::process_arachne()
                         top_expolygons = diff_ex(top_expolygons, kept_over_top);
                 }
 
-                // Recalculate indexes of inner perimeters before merging them: they come after the single outer wall.
+                // Recalculate indexes of inner perimeters before merging them: they come after the single outer wall
+                // (MAGPIE: after the wall plan's detail walls).
                 if (!perimeters.empty())
                     for (Arachne::VariableWidthLines &inner_perimeter : inner_perimeters)
                         for (Arachne::ExtrusionLine &el : inner_perimeter)
-                            ++el.inset_idx;
+                            el.inset_idx += size_t(single_pass_walls);
 
                 perimeters.insert(perimeters.end(), inner_perimeters.begin(), inner_perimeters.end());
                 infill_contour = union_ex(top_expolygons, inner_wall_tool_paths.getInnerContour());
@@ -2726,6 +2833,10 @@ void PerimeterGenerator::process_arachne()
             }
         }
         //PS
+
+        // MAGPIE: a layer printing fewer detail walls than asked keeps the infill boundary of the full count.
+        if (wall_plan.active && wall_plan.infill_compensation > 0)
+            infill_contour = intersection_ex(offset_ex(infill_contour, double(wall_plan.infill_compensation)), ExPolygons{ surface.expolygon });
 
         loop_number = int(perimeters.size()) - 1;
 

@@ -1538,6 +1538,15 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatsNullable, inner_wall_speed))
     // Total number of perimeters.
     ((ConfigOptionInt, wall_loops))
+    // MAGPIE: wall.plan slot and multi-nozzle walls (see PrintConfig.cpp).
+    ((ConfigOptionString, wall_planner))
+    ((ConfigOptionBool, use_smaller_nozzles_in_crisp_corners))
+    ((ConfigOptionInt, crisp_corner_detail_toolhead))
+    ((ConfigOptionInt, crisp_corner_small_nozzle_wall_count))
+    ((ConfigOptionPercent, crisp_corner_nozzle_wall_overlap))
+    ((ConfigOptionBool, crisp_corner_interlace_small_nozzle_walls))
+    ((ConfigOptionStrings, crisp_corner_large_nozzle_override_regions))
+    ((ConfigOptionFloatOrPercent, crisp_corner_small_nozzle_wall_speed))
     ((ConfigOptionBool, alternate_extra_wall))
     ((ConfigOptionFloat, minimum_sparse_infill_area))
     ((ConfigOptionInt, internal_solid_filament_id))

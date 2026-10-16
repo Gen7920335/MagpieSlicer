@@ -1484,6 +1484,14 @@ bool PrintObject::invalidate_state_by_config_options(
             }
         } else if (
                opt_key == "wall_loops"
+            || opt_key == "wall_planner"
+            || opt_key == "use_smaller_nozzles_in_crisp_corners"
+            || opt_key == "crisp_corner_detail_toolhead"
+            || opt_key == "crisp_corner_small_nozzle_wall_count"
+            || opt_key == "crisp_corner_nozzle_wall_overlap"
+            || opt_key == "crisp_corner_interlace_small_nozzle_walls"
+            || opt_key == "crisp_corner_large_nozzle_override_regions"
+            || opt_key == "crisp_corner_small_nozzle_wall_speed"
             || opt_key == "alternate_extra_wall"
             || opt_key == "top_one_wall_type"
             || opt_key == "min_width_top_surface"

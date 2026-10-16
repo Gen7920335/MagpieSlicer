@@ -1,3 +1,4 @@
+#include "ModHost/SlotRegistry.hpp"
 #include "ArcFitter.hpp"
 #include "BoundingBox.hpp"
 #include "Circle.hpp"
@@ -152,6 +153,18 @@ using namespace std::literals::string_view_literals;
 namespace fs = boost::filesystem;
 
 namespace Slic3r {
+
+// MAGPIE: whether a wall collection holds walls a wall planner sent to its detail nozzle (wall.plan slot).
+static bool has_detail_wall(const ExtrusionEntity &entity)
+{
+    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+        for (const ExtrusionEntity *child : collection->entities)
+            if (child != nullptr && has_detail_wall(*child))
+                return true;
+        return false;
+    }
+    return entity.tool_hint == ExtrusionToolHint::DetailWall;
+}
 
     //! macro used to mark string used at localization,
     //! return same string
@@ -6987,9 +7000,10 @@ LayerResult GCode::process_layer(
 
                         auto process_extrusions = [&](const ExtrusionEntityCollection *current_extrusions,
                                                        const ExtrusionEntityCollection *overrides_key,
-                                                       bool                             use_overrides) {
+                                                       bool                             use_overrides,
+                                                       int                              forced_extruder_id = -1) {
                             // This extrusion is part of certain Region, which tells us which extruder should be used for it.
-                            int correct_extruder_id = layer_tools.extruder(*current_extrusions, region);
+                            int correct_extruder_id = forced_extruder_id >= 0 ? forced_extruder_id : layer_tools.extruder(*current_extrusions, region);
 
                             const WipingExtrusions::ExtruderPerCopy *entity_overrides = nullptr;
                             if (! layer_tools.has_extruder(correct_extruder_id)) {
@@ -7042,6 +7056,61 @@ LayerResult GCode::process_layer(
                                 }
                             }
                         };
+
+                        // MAGPIE: gap fill between walls goes with the detail walls when the wall planner gave this
+                        // region's walls on this layer a detail nozzle (as Magpie line 1 prints it).
+                        if (entity_type == ObjectByExtruder::Island::Region::INFILL && extrusions->role() == erGapFill &&
+                            ! region.config().wall_planner.value.empty()) {
+                            if (const ModHost::WallPlanner *planner = ModHost::find_wall_planner(region.config().wall_planner.value);
+                                planner != nullptr && planner->wall_filament && has_detail_wall(layerm->perimeters)) {
+                                const unsigned int base = unsigned(std::max(1, region.config().outer_wall_filament_id.value));
+                                if (const unsigned int f = planner->wall_filament(print.config(), region.config(), layer.id(), ExtrusionToolHint::DetailWall, base)) {
+                                    process_extrusions(extrusions, nullptr, false, int(f) - 1);
+                                    continue;
+                                }
+                            }
+                        }
+
+                        // MAGPIE: walls a wall planner assigned to other nozzles (wall.plan slot) go to those
+                        // filaments; the rest keep Orca's routing below.
+                        if (entity_type == ObjectByExtruder::Island::Region::PERIMETERS && ! region.config().wall_planner.value.empty()) {
+                            if (const ModHost::WallPlanner *planner = ModHost::find_wall_planner(region.config().wall_planner.value);
+                                planner != nullptr && planner->wall_filament) {
+                                const unsigned int base = unsigned(std::max(1, region.config().outer_wall_filament_id.value));
+                                auto hint_of = [](const ExtrusionEntity *entity) {
+                                    if (const auto *c = dynamic_cast<const ExtrusionEntityCollection *>(entity)) {
+                                        for (const ExtrusionEntity *child : c->entities)
+                                            if (child != nullptr && child->tool_hint != ExtrusionToolHint::Auto)
+                                                return child->tool_hint;
+                                        return ExtrusionToolHint::Auto;
+                                    }
+                                    return entity->tool_hint;
+                                };
+                                std::map<unsigned int, std::unique_ptr<ExtrusionEntityCollection>> by_filament;
+                                auto rest = std::make_unique<ExtrusionEntityCollection>();
+                                for (const ExtrusionEntity *entity : extrusions->entities) {
+                                    if (const unsigned int f = planner->wall_filament(print.config(), region.config(), layer.id(), hint_of(entity), base)) {
+                                        auto &group = by_filament[f];
+                                        if (! group)
+                                            group = std::make_unique<ExtrusionEntityCollection>();
+                                        group->append(*entity);
+                                    } else
+                                        rest->append(*entity);
+                                }
+                                if (! by_filament.empty()) {
+                                    for (auto &[f, group] : by_filament) {
+                                        group->no_sort = extrusions->no_sort;
+                                        split_perimeter_storage.emplace_back(std::move(group));
+                                        process_extrusions(split_perimeter_storage.back().get(), nullptr, false, int(f) - 1);
+                                    }
+                                    if (rest->entities.empty())
+                                        continue;
+                                    rest->no_sort = extrusions->no_sort;
+                                    split_perimeter_storage.emplace_back(std::move(rest));
+                                    extrusions = split_perimeter_storage.back().get();
+                                }
+                            }
+                        }
 
                         bool split_mixed_perimeters =
                             entity_type == ObjectByExtruder::Island::Region::PERIMETERS &&
@@ -8133,6 +8202,14 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "filament_mod_settings"sv,
         "mod_settings"sv,
         "object_elevation"sv,
+        "wall_planner"sv,
+        "use_smaller_nozzles_in_crisp_corners"sv,
+        "crisp_corner_detail_toolhead"sv,
+        "crisp_corner_small_nozzle_wall_count"sv,
+        "crisp_corner_nozzle_wall_overlap"sv,
+        "crisp_corner_interlace_small_nozzle_walls"sv,
+        "crisp_corner_large_nozzle_override_regions"sv,
+        "crisp_corner_small_nozzle_wall_speed"sv,
         "support_interface_pattern_override"sv,
         "support_interface_sublayer_start"sv,
         "support_interface_sublayer_end"sv,
@@ -8323,6 +8400,9 @@ std::string GCode::extrude_loop(const ExtrusionLoop&                       loop_
     // get a copy; don't modify the orientation of the original loop object otherwise
     // next copies (if any) would not detect the correct orientation
     ExtrusionLoop loop = loop_ref;
+    const ExtrusionToolHint previous_wall_tool_hint = m_wall_tool_hint;
+    m_wall_tool_hint = loop_ref.tool_hint;
+    ScopeGuard restore_wall_tool_hint([this, previous_wall_tool_hint]() { m_wall_tool_hint = previous_wall_tool_hint; });
 
     bool is_hole = (loop.loop_role() & elrHole) == elrHole;
 
@@ -8634,6 +8714,9 @@ std::string GCode::extrude_multi_path(const ExtrusionMultiPath& multipath, const
 {
     // extrude along the path
     std::string gcode;
+    const ExtrusionToolHint previous_wall_tool_hint = m_wall_tool_hint;
+    m_wall_tool_hint = multipath.tool_hint;
+    ScopeGuard restore_wall_tool_hint([this, previous_wall_tool_hint]() { m_wall_tool_hint = previous_wall_tool_hint; });
 
     //Orca: calculate multipath average mm3_per_mm value over the length of the path.
     //This is used for adaptive PA
@@ -9249,6 +9332,14 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
             speed = NOZZLE_CONFIG(support_interface_speed);
         } else {
             throw Slic3r::InvalidArgument("Invalid speed");
+        }
+        // MAGPIE: walls of a wall planner's detail nozzle at their own speed (mm/s, or % of the outer wall speed).
+        if ((path.role() == erPerimeter || path.role() == erExternalPerimeter) &&
+            (m_wall_tool_hint == ExtrusionToolHint::DetailWall || path.tool_hint == ExtrusionToolHint::DetailWall) &&
+            m_config.crisp_corner_small_nozzle_wall_speed.value > 0.) {
+            speed = m_config.crisp_corner_small_nozzle_wall_speed.get_abs_value(NOZZLE_CONFIG(outer_wall_speed));
+            if (sloped)
+                speed = std::min(speed, m_config.scarf_joint_speed.get_abs_value(speed));
         }
     }
     //BBS: if not set the speed, then use the filament_max_volumetric_speed directly

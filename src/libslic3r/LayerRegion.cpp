@@ -1,3 +1,4 @@
+#include "ModHost/SlotRegistry.hpp"
 #include "Flow.hpp"
 #include "Config.hpp"
 #include "ExPolygon.hpp"
@@ -126,13 +127,30 @@ void LayerRegion::make_perimeters(const SurfaceCollection &slices, const LayerRe
         model_rotation_rad = std::atan2((double)m(1, 0), (double)m(0, 0));
     }
 
+    // MAGPIE: a wall planner that moves this layer's walls to another nozzle (wall.plan slot) has their widths
+    // resolved on that nozzle, the way PrintRegion::flow() resolves them on the region's own.
+    const ModHost::WallPlanner *wall_planner = region_config.wall_planner.value.empty() ? nullptr :
+                                               ModHost::find_wall_planner(region_config.wall_planner.value);
+    const double layer_wall_nozzle = wall_planner != nullptr && wall_planner->layer_wall_nozzle ?
+        wall_planner->layer_wall_nozzle(print_config, region_config, this->layer()->id()) : 0.;
+    auto wall_flow = [&](FlowRole role) {
+        if (layer_wall_nozzle <= 0.)
+            return this->flow(role);
+        ConfigOptionFloatOrPercent width = this->layer()->id() == 0 && print_config.initial_layer_line_width.value > 0 ?
+            print_config.initial_layer_line_width :
+            (role == frExternalPerimeter ? region_config.outer_wall_line_width : region_config.inner_wall_line_width);
+        if (width.value == 0)
+            width = object_config.line_width;
+        return Flow::new_from_config_width(role, width, float(layer_wall_nozzle), float(this->layer()->height));
+    };
+
     PerimeterGenerator g(
         // input:
         &slices,
         &compatible_regions,
         this->layer()->height,
         this->layer()->slice_z,
-        this->flow(frPerimeter),
+        wall_flow(frPerimeter),
         &region_config,
         &this->layer()->object()->config(),
         &print_config,
@@ -155,7 +173,9 @@ void LayerRegion::make_perimeters(const SurfaceCollection &slices, const LayerRe
         g.upper_slices_same_region = &this->layer()->upper_layer->get_region(region_id)->slices;
 
     g.layer_id              = (int)this->layer()->id();
-    g.ext_perimeter_flow    = this->flow(frExternalPerimeter);
+    // MAGPIE: wall.plan slot.
+    g.wall_planner          = wall_planner;
+    g.ext_perimeter_flow    = wall_flow(frExternalPerimeter);
     g.overhang_flow         = this->bridging_flow(frPerimeter, object_config.thick_bridges);
     g.solid_infill_flow     = this->flow(frSolidInfill);
 

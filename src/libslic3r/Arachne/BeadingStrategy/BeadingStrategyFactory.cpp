@@ -29,7 +29,9 @@ BeadingStrategyPtr BeadingStrategyFactory::makeStrategy(const coord_t preferred_
                                                         const coord_t max_bead_count,
                                                         const coord_t outer_wall_offset,
                                                         const int     inward_distributed_center_wall_count,
-                                                        const double  minimum_variable_line_ratio)
+                                                        const double  minimum_variable_line_ratio,
+                                                        const size_t  fixed_outer_wall_count,
+                                                        const coord_t fixed_outer_wall_boundary_overlap)
 {
     // Handle a special case when there is just one external perimeter.
     // Because big differences in bead width for inner and other perimeters cause issues with current beading strategies.
@@ -39,7 +41,11 @@ BeadingStrategyPtr BeadingStrategyFactory::makeStrategy(const coord_t preferred_
                                                                           inward_distributed_center_wall_count);
 
     BOOST_LOG_TRIVIAL(trace) << "Applying the Redistribute meta-strategy with outer-wall width = " << preferred_bead_width_outer << ", inner-wall width = " << preferred_bead_width_inner << ".";
-    ret = std::make_unique<RedistributeBeadingStrategy>(preferred_bead_width_outer, minimum_variable_line_ratio, std::move(ret));
+    // MAGPIE: one Redistribute shell per fixed outer wall; the innermost carries the boundary overlap.
+    const size_t outer_shell_count = std::max<size_t>(1, fixed_outer_wall_count);
+    for (size_t shell = 0; shell < outer_shell_count; ++shell)
+        ret = std::make_unique<RedistributeBeadingStrategy>(preferred_bead_width_outer, minimum_variable_line_ratio, std::move(ret),
+                                                            shell == 0 ? fixed_outer_wall_boundary_overlap : 0);
 
     if (print_thin_walls) {
         BOOST_LOG_TRIVIAL(trace) << "Applying the Widening Beading meta-strategy with minimum input width " << min_feature_size << " and minimum output width " << min_bead_width << ".";

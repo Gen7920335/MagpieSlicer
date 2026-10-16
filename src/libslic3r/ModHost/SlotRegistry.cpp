@@ -3,6 +3,7 @@
 #include "libslic3r/Print.hpp"
 #include "Builtin/CuraSupport.hpp"
 #include "Builtin/MixedSupport.hpp"
+#include "Builtin/MultiNozzleWalls.hpp"
 #include "Builtin/ResinSupport.hpp"
 
 #include <map>
@@ -18,6 +19,7 @@ struct Registry
 {
     std::mutex                              mutex;
     std::map<std::string, SupportGenerator> support_generators;
+    std::map<std::string, WallPlanner>      wall_planners;
 };
 
 void register_builtin_modules(Registry &registry)
@@ -33,6 +35,8 @@ void register_builtin_modules(Registry &registry)
     registry.support_generators["resin"] = {"resin", "Resin", [](PrintObject &object) { ResinSupport::generate(object); }};
     // Normal and tree support in one object (resources/mods/mixed_support.json).
     registry.support_generators["mixed"] = {"mixed", "Mixed", [](PrintObject &object) { MixedSupport::generate(object); }};
+    // Multi-nozzle walls (resources/mods/multi_nozzle_walls.json).
+    registry.wall_planners["multi_nozzle"] = MultiNozzleWalls::make_planner();
 }
 
 Registry &registry()
@@ -64,6 +68,22 @@ std::vector<const SupportGenerator *> support_generators()
     for (const auto &[name, generator] : r.support_generators)
         out.push_back(&generator);
     return out;
+}
+
+const WallPlanner *find_wall_planner(const std::string &name)
+{
+    Registry                   &r = registry();
+    std::lock_guard<std::mutex> lock(r.mutex);
+    auto                        it = r.wall_planners.find(name);
+    return it == r.wall_planners.end() ? nullptr : &it->second;
+}
+
+void register_wall_planner(WallPlanner planner)
+{
+    Registry                   &r = registry();
+    std::lock_guard<std::mutex> lock(r.mutex);
+    std::string                 name = planner.name;
+    r.wall_planners[name]            = std::move(planner);
 }
 
 void register_support_generator(SupportGenerator generator)

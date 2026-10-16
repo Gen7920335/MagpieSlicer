@@ -1,0 +1,28 @@
+{
+    // Multi-nozzle walls (Magpie line 1 "crisp corners"): on a tool changer with nozzles of different
+    // sizes, islands with sharp detail get their outer walls from a smaller nozzle loaded with the same
+    // material and colour; the rest of the walls stay on the island's own nozzle. Also prints chosen
+    // layer ranges' walls with one toolhead (large nozzle override).
+    "id": "multi_nozzle_walls",
+    "name": "Multi-nozzle walls",
+    "version": "1.0.0",
+    "params": {
+        "enable":            { "type": "bool",   "default": false, "label": "Use smaller nozzles in crisp corners" },
+        "small_wall_count":  { "type": "int",    "default": 1,     "label": "Small nozzle wall count" },
+        "wall_overlap":      { "type": "float",  "default": 15,    "unit": "%",    "label": "Small/large nozzle wall overlap" },
+        "interlock":         { "type": "bool",   "default": false, "label": "Multi-nozzle interlocking layers" },
+        "detail_toolhead":   { "type": "int",    "default": 0,     "label": "Crisp corner toolhead (0 = auto)" },
+        "small_wall_speed":  { "type": "float",  "default": 0,     "unit": "mm/s", "label": "Small nozzle wall speed (0 = wall speed)" },
+        "override_regions":  { "type": "string", "default": "",    "label": "Large nozzle override: first:last:toolhead, separated by ;" }
+    },
+    "rules": [
+        { "target": "wall_planner", "value": "\"multi_nozzle\"", "when": "multi_nozzle_walls.enable or multi_nozzle_walls.override_regions != \"\"" },
+        { "target": "use_smaller_nozzles_in_crisp_corners",       "value": "multi_nozzle_walls.enable" },
+        { "target": "crisp_corner_small_nozzle_wall_count",       "value": "multi_nozzle_walls.small_wall_count" },
+        { "target": "crisp_corner_nozzle_wall_overlap",           "value": "multi_nozzle_walls.wall_overlap" },
+        { "target": "crisp_corner_interlace_small_nozzle_walls",  "value": "multi_nozzle_walls.interlock" },
+        { "target": "crisp_corner_detail_toolhead",               "value": "multi_nozzle_walls.detail_toolhead" },
+        { "target": "crisp_corner_small_nozzle_wall_speed",       "value": "multi_nozzle_walls.small_wall_speed" },
+        { "target": "crisp_corner_large_nozzle_override_regions", "value": "multi_nozzle_walls.override_regions" }
+    ]
+}

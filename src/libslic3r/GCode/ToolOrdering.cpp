@@ -8,6 +8,7 @@
 #include "ToolOrdering.hpp"
 #include "Layer.hpp"
 #include "ClipperUtils.hpp"
+#include "libslic3r/ModHost/SlotRegistry.hpp"
 #include "ParameterUtils.hpp"
 #include "GCode/ToolOrderUtils.hpp"
 #include "FilamentGroupUtils.hpp"
@@ -778,6 +779,34 @@ void ToolOrdering::initialize_layers(std::vector<coordf_t> &zs)
 }
 
 // Collect extruders reuqired to print layers.
+// MAGPIE: whether a wall collection holds walls tagged for a wall planner's nozzles (wall.plan slot).
+static bool has_wall_tool_hint(const ExtrusionEntity &entity)
+{
+    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+        for (const ExtrusionEntity *child : collection->entities)
+            if (child != nullptr && has_wall_tool_hint(*child))
+                return true;
+        return false;
+    }
+    return entity.tool_hint != ExtrusionToolHint::Auto;
+}
+
+// MAGPIE: the filaments a wall planner sends this region's walls on layer layer_id to, besides Orca's.
+static void append_planner_wall_filaments(const PrintConfig &config, const PrintRegion &region, size_t layer_id,
+                                          const ExtrusionEntityCollection &perimeters, std::vector<unsigned int> &out)
+{
+    const ModHost::WallPlanner *planner = region.config().wall_planner.value.empty() ? nullptr :
+                                          ModHost::find_wall_planner(region.config().wall_planner.value);
+    if (planner == nullptr || !planner->wall_filament)
+        return;
+    const unsigned int base = unsigned(std::max(1, region.config().outer_wall_filament_id.value));
+    if (const unsigned int f = planner->wall_filament(config, region.config(), layer_id, ExtrusionToolHint::Auto, base))
+        out.emplace_back(f);
+    if (has_wall_tool_hint(perimeters))
+        if (const unsigned int f = planner->wall_filament(config, region.config(), layer_id, ExtrusionToolHint::DetailWall, base))
+            out.emplace_back(f);
+}
+
 void ToolOrdering::collect_extruders(const PrintObject &object, const std::vector<std::pair<double, unsigned int>> &per_layer_extruder_switches)
 {
     // Extruder overrides are ordered by print_z.
@@ -857,6 +886,8 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                		layer_tools.extruders.emplace_back((extruder_override == 0) ? region.config().outer_wall_filament_id.value : extruder_override);
                     if (extruder_override == 0 && region.config().wall_loops.value > 1)
                         layer_tools.extruders.emplace_back(region.config().inner_wall_filament_id.value);
+                    if (extruder_override == 0)
+                        append_planner_wall_filaments(object.print()->config(), region, layer->id(), layerm->perimeters, layer_tools.extruders);
                     if (layerCount == 0) {
                         firstLayerExtruders.emplace_back((extruder_override == 0) ? region.config().outer_wall_filament_id.value : extruder_override);
                     }
@@ -3389,6 +3420,11 @@ int WipingExtrusions::last_nonsoluble_extruder_on_layer(const PrintConfig& print
 // Decides whether this entity could be overridden
 bool WipingExtrusions::is_overriddable(const ExtrusionEntityCollection& eec, const PrintConfig& print_config, const PrintObject& object, const PrintRegion& region) const
 {
+    // MAGPIE: walls a wall planner assigned to a nozzle keep it, and so does the gap fill that follows them;
+    // flushing into them would change it.
+    if (has_wall_tool_hint(eec) || (! region.config().wall_planner.value.empty() && eec.role() == erGapFill))
+        return false;
+
     if (print_config.filament_soluble.get_at(m_layer_tools->extruder(eec, region)))
         return false;
 

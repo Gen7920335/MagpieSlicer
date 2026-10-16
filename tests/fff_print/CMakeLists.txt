@@ -27,6 +27,7 @@ add_executable(${_TEST_NAME}_tests
 	test_skirt_brim.cpp
 	test_slicing_pipeline_hook.cpp
 	test_mixed_support.cpp
+	test_multi_nozzle_walls.cpp
 	test_resin_support.cpp
 	test_support_material.cpp
 	test_texture_displacement.cpp

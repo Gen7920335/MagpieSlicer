@@ -18,6 +18,7 @@
 #include "ExPolygon.hpp"
 
 namespace Slic3r { class ExtrusionEntityCollection; }
+namespace Slic3r { namespace ModHost { struct WallPlanner; } }
 namespace Slic3r { class SurfaceCollection; }
 
 namespace Slic3r {
@@ -81,6 +82,31 @@ template<> struct hash<Slic3r::FuzzySkinConfig>
 
 namespace Slic3r {
 
+// MAGPIE: wall.plan slot. A wall planner module splits an island's walls between two nozzles: the
+// outer detail_walls walls are printed with a second, detail nozzle (detail flow), the rest with the
+// island's own nozzle. Orca's Classic and Arachne generators consume the plan; without a planner, or
+// with an inactive plan, they run unchanged. Distances are scaled (1 unit = SCALING_FACTOR mm).
+struct WallPlan
+{
+    bool    active { false };
+    int     detail_walls { 0 };          // walls 0 .. detail_walls-1 use the detail flow
+    int     requested_detail_walls { 0 }; // what the planner asked for before the layer's adjustment
+    int     total_walls { 0 };           // all walls of the island
+    coord_t detail_spacing { 0 };
+    coord_t large_spacing { 0 };
+    coord_t detail_width { 0 };
+    double  overlap_ratio { 0. };         // detail/large boundary overlap, fraction of the narrower spacing
+    coord_t infill_compensation { 0 };    // grows the infill boundary when a layer prints fewer detail walls
+    bool    route { false };              // tag walls DetailWall / LargeWall for tool routing
+
+    bool    depth_uses_detail(int depth) const { return active && depth >= 0 && depth < detail_walls; }
+    // Centre distance between wall current_depth-1 and wall current_depth.
+    coord_t center_distance(int current_depth) const;
+    // Narrowest offset kept for wall current_depth.
+    coord_t minimum_spacing(int current_depth) const;
+    coord_t boundary_overlap() const { return active ? coord_t(std::min(detail_spacing, large_spacing) * overlap_ratio) : 0; }
+};
+
 class PerimeterGenerator {
 public:
     // Inputs:
@@ -108,6 +134,11 @@ public:
 
     //BBS
     Flow                        smaller_ext_perimeter_flow;
+    // MAGPIE: the wall planner of this region (wall.plan slot), or nullptr; and the current island's
+    // number of detail walls and whether its walls are tagged for routing.
+    const ModHost::WallPlanner *wall_planner { nullptr };
+    int                         detail_wall_count { 0 };
+    bool                        detail_wall_routing { false };
     std::vector<Polygons>       m_lower_polygons_series;
     std::vector<Polygons>       m_external_lower_polygons_series;
     std::vector<Polygons>       m_smaller_external_lower_polygons_series;

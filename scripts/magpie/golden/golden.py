@@ -135,7 +135,9 @@ def slice_corpus(cli, out, corpus_path, external_dir, only, ignore_keys, timeout
         cmd += ['--slice', '0',
                '--load-settings', f'{machine};{process}',
                '--load-filaments', ';'.join(filaments),
-               '--outputdir', gcode_dir, model]
+               '--outputdir', gcode_dir]
+        # Extra CLI options for the case, such as --filament_colour for multi-filament cases.
+        cmd += case.get('cli_args', []) + [model]
         started = time.monotonic()
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',

@@ -718,6 +718,8 @@ protected:
        methods. */
     Vec2d                               m_origin;
     FullPrintConfig                     m_config;
+    // MAGPIE: the wall planner nozzle of the loop or multi-path being extruded (wall.plan slot).
+    ExtrusionToolHint                   m_wall_tool_hint { ExtrusionToolHint::Auto };
     DynamicConfig                       m_calib_config;
     // scaled G-code resolution
     double                              m_scaled_resolution;

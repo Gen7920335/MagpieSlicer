@@ -35,7 +35,10 @@ namespace Slic3r::Arachne
          *                                    average of the outer and inner walls at that bead count.
          * /param minimum_variable_line_ratio Minimum factor that the variable line might deviate from the optimal width.
          */
-        RedistributeBeadingStrategy(coord_t optimal_width_outer, double minimum_variable_line_ratio, BeadingStrategyPtr parent);
+        // outer_inner_overlap (MAGPIE): how far the outer bead overlaps the beads inside it, scaled;
+        // 0 is Orca's beading.
+        RedistributeBeadingStrategy(coord_t optimal_width_outer, double minimum_variable_line_ratio, BeadingStrategyPtr parent,
+                                    coord_t outer_inner_overlap = 0);
 
         ~RedistributeBeadingStrategy() override = default;
 
@@ -53,6 +56,7 @@ namespace Slic3r::Arachne
         BeadingStrategyPtr parent;
         coord_t optimal_width_outer;
         double minimum_variable_line_ratio;
+        coord_t outer_inner_overlap;
     };
 
 } // namespace Slic3r::Arachne
