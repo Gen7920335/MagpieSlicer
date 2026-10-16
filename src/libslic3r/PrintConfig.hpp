@@ -1302,6 +1302,13 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,               support_interface_sublayer_angle))
     ((ConfigOptionInt,                 support_wall_loops))
     ((ConfigOptionInt,                 tree_support_wall_loops))
+    // MAGPIE: low temperature support interface (resources/mods/low_temp_interface.json).
+    ((ConfigOptionBool,                single_nozzle_low_temperature_interface))
+    ((ConfigOptionInt,                 support_interface_temperature))
+    ((ConfigOptionFloat,               support_interface_heating_time))
+    ((ConfigOptionBool,                support_interface_auxiliary_fan_cooling_on_temperature_change))
+    ((ConfigOptionInt,                 support_interface_auxiliary_fan_speed))
+    ((ConfigOptionBool,                support_interface_nozzle_wiping_on_temperature_change))
     // Direction of the support pattern (in XY plane).`
     ((ConfigOptionFloat,               support_angle))
     ((ConfigOptionBool,                support_on_build_plate_only))
@@ -1845,6 +1852,12 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionEnumsGenericNullable,nozzle_type))
     ((ConfigOptionInt,                 nozzle_hrc))
     ((ConfigOptionBool,                auxiliary_fan))
+    // MAGPIE: printer positions for the low temperature support interface's nozzle cooling and brushing.
+    ((ConfigOptionPoint,               support_interface_cooling_position))
+    ((ConfigOptionPoint,               support_interface_brush_start))
+    ((ConfigOptionPoint,               support_interface_brush_end))
+    ((ConfigOptionInt,                 support_interface_brush_repetitions))
+    ((ConfigOptionFloat,               support_interface_brush_speed))
     ((ConfigOptionEnum<FanDirection>,  fan_direction))
     ((ConfigOptionBool,                support_air_filtration))
     ((ConfigOptionBool,                support_cooling_filter))

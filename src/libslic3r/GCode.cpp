@@ -7559,6 +7559,10 @@ LayerResult GCode::process_layer(
                 m_last_obj_copy = this_object_copy;
                 this->set_origin(unscale(offset));
                 this->on_set_origin(&instance_to_print.print_object, offset);
+                // MAGPIE: with a low temperature support interface the support prints after the object, so the
+                // interface is the last extrusion of the object on this layer and the temperature drops once.
+                const bool defer_support_for_low_temperature_interface = this->low_temperature_interface_enabled();
+                auto extrude_instance_support = [&]() {
                 if (visit.first_visit && instance_to_print.object_by_extruder.support != nullptr) {
                     m_layer = layers[instance_to_print.layer_id].support_layer;
                     m_object_layer_over_raft = false;
@@ -7589,11 +7593,16 @@ LayerResult GCode::process_layer(
                         if (support_extrusion_role == erMixed || support_extrusion_role == erSupportMaterialInterface) {
                             gcode += this->extrude_support(*instance_to_print.object_by_extruder.support, erIroning);
                         }
+                        if (defer_support_for_low_temperature_interface)
+                            gcode += this->finish_low_temperature_interface();
                     }
 
                     m_layer = layer_to_print.layer();
                     m_object_layer_over_raft = object_layer_over_raft;
                 }
+                };
+                if (! defer_support_for_low_temperature_interface)
+                    extrude_instance_support();
                 // Sequential tool path ordering of multiple parts within the same object, aka. perimeter tracking (#5511)
                 // Island print order. Use the islands the tour assigned to this visit; if none,
                 // chain all islands nearest-neighbor from the current nozzle position (last_pos(),
@@ -7674,6 +7683,8 @@ LayerResult GCode::process_layer(
                     // ironing
                     gcode += this->extrude_infill(print,by_region_specific, true);
                 }
+                if (defer_support_for_low_temperature_interface)
+                    extrude_instance_support();
 
                 if (this->config().gcode_label_objects) {
                     gcode += std::string("; stop printing object ") +
@@ -8217,6 +8228,17 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "support_interface_sublayer_angle"sv,
         "support_wall_loops"sv,
         "tree_support_wall_loops"sv,
+        "single_nozzle_low_temperature_interface"sv,
+        "support_interface_temperature"sv,
+        "support_interface_heating_time"sv,
+        "support_interface_auxiliary_fan_cooling_on_temperature_change"sv,
+        "support_interface_auxiliary_fan_speed"sv,
+        "support_interface_nozzle_wiping_on_temperature_change"sv,
+        "support_interface_cooling_position"sv,
+        "support_interface_brush_start"sv,
+        "support_interface_brush_end"sv,
+        "support_interface_brush_repetitions"sv,
+        "support_interface_brush_speed"sv,
         "printer_mod_settings"sv,
         "support_generator"sv,
         // The fast-purge / prime-volume-mode keys are new static-member registrations. Excluding them from
@@ -8885,6 +8907,19 @@ std::string GCode::extrude_infill(const Print &print, const std::vector<ObjectBy
 
 std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fills, const ExtrusionRole support_extrusion_role)
 {
+    // MAGPIE: with a low temperature interface, mixed support prints by role so the interface comes last and the
+    // temperature changes once per layer and object (Magpie line 1). Support ironing follows from the caller.
+    if (support_extrusion_role == erMixed && ! m_support_role_pass && this->low_temperature_interface_enabled()) {
+        m_support_role_pass = true;
+        ScopeGuard end_role_pass([this]() { m_support_role_pass = false; });
+        std::string gcode;
+        for (const ExtrusionRole role : { erSupportMaterial, erSupportTransition, erSupportMaterialInterface })
+            gcode += this->extrude_support(support_fills, role);
+        return gcode;
+    }
+    ++m_support_extrusion_context_depth;
+    ScopeGuard support_context_guard([this]() { --m_support_extrusion_context_depth; });
+
     static constexpr const char* support_label            = "support material";
     static constexpr const char* support_interface_label  = "support material interface";
     static constexpr const char* support_transition_label = "support transition";
@@ -8915,7 +8950,9 @@ std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fill
         extrusions.reserve(support_fills.entities.size());
         for (const ExtrusionEntity* ee : support_fills.entities) {
             const auto role = ee->role();
-            if ((role == support_extrusion_role) || (support_extrusion_role == erMixed && role != erIroning)) {
+            if ((role == support_extrusion_role) || (support_extrusion_role == erMixed && role != erIroning) ||
+                // MAGPIE: a role pass enters mixed sub-collections to take that role's paths from them.
+                (m_support_role_pass && role == erMixed && dynamic_cast<const ExtrusionEntityCollection*>(ee) != nullptr)) {
                 extrusions.emplace_back(ee);
             }
         }
@@ -9092,9 +9129,113 @@ static bool overhang_fan_active(float overlap, int overhang_fan_threshold, Extru
     return overlap_threshold >= 0.f && overlap <= overlap_threshold;
 }
 
+// MAGPIE: low temperature support interface (Magpie line 1), for a support interface printed with the support's
+// own filament.
+bool GCode::low_temperature_interface_enabled() const
+{
+    return m_config.single_nozzle_low_temperature_interface.value && m_config.support_interface_filament.value == 0 &&
+           m_writer.filament() != nullptr;
+}
+
+std::string GCode::start_low_temperature_interface()
+{
+    if (m_low_temperature_interface_active || m_writer.filament() == nullptr)
+        return {};
+    const unsigned int      filament_id = m_writer.filament()->id();
+    const ConfigOptionInts &normal      = this->on_first_layer() ? m_config.nozzle_temperature_initial_layer : m_config.nozzle_temperature;
+    if (normal.values.empty())
+        return {};
+    const int normal_temperature    = normal.get_at(filament_id);                    // degC
+    const int interface_temperature = m_config.support_interface_temperature.value; // degC
+
+    std::string gcode;
+    if (interface_temperature > 0 && interface_temperature != normal_temperature) {
+        gcode += "; low-temperature support interface begin\n";
+        // Cooling the nozzle down with the auxiliary fan, at the cooling position (rear left of the bed by default).
+        bool auxiliary_fan_started = false;
+        if (m_config.support_interface_auxiliary_fan_cooling_on_temperature_change.value && m_config.auxiliary_fan.value &&
+            m_config.support_interface_auxiliary_fan_speed.value > 0 && ! m_config.additional_cooling_fan_speed.values.empty() &&
+            normal_temperature > interface_temperature && m_last_pos_defined) {
+            Vec2d position = m_config.support_interface_cooling_position.value;
+            bool  valid    = position.x() >= 0. && position.y() >= 0. && std::isfinite(position.x()) && std::isfinite(position.y());
+            if (! valid && ! m_config.printable_area.values.empty()) {
+                position = m_config.printable_area.values.front();
+                for (const Vec2d &p : m_config.printable_area.values) {
+                    position.x() = std::min(position.x(), p.x());
+                    position.y() = std::max(position.y(), p.y());
+                }
+                valid = std::isfinite(position.x()) && std::isfinite(position.y());
+            }
+            if (valid) {
+                gcode += this->travel_to(this->gcode_to_point(position), erSupportMaterialInterface,
+                                         "move to low-temperature interface cooling position");
+                gcode += "; low-temperature support interface auxiliary cooling\n";
+                gcode += m_writer.set_additional_fan(m_config.support_interface_auxiliary_fan_speed.value);
+                auxiliary_fan_started = true;
+            }
+        }
+        gcode += m_writer.set_temperature(interface_temperature, true, filament_id);
+        if (auxiliary_fan_started)
+            gcode += m_writer.set_additional_fan(m_config.additional_cooling_fan_speed.get_at(filament_id));
+
+        const Vec2d brush_start = m_config.support_interface_brush_start.value;
+        const Vec2d brush_end   = m_config.support_interface_brush_end.value;
+        const int   repetitions = m_config.support_interface_brush_repetitions.value;
+        if (m_config.support_interface_nozzle_wiping_on_temperature_change.value && repetitions > 0 &&
+            brush_start.x() >= 0. && brush_start.y() >= 0. && brush_end.x() >= 0. && brush_end.y() >= 0. && m_last_pos_defined) {
+            gcode += "; low-temperature support interface nozzle brushing\n";
+            gcode += m_writer.travel_to_xy(brush_start, "move to nozzle brush");
+            gcode += m_writer.set_speed(m_config.support_interface_brush_speed.value * 60., "set nozzle brush speed");
+            for (int i = 0; i < repetitions; ++i) {
+                gcode += m_writer.extrude_to_xy(brush_end, 0., "brush nozzle", true);
+                gcode += m_writer.extrude_to_xy(brush_start, 0., "brush nozzle", true);
+            }
+            this->set_last_pos(this->gcode_to_point(brush_start));
+            m_wipe.reset_path();
+        }
+    }
+    m_low_temperature_interface_active       = true;
+    m_low_temperature_interface_target       = interface_temperature;
+    m_low_temperature_interface_filament     = filament_id;
+    m_low_temperature_interface_normal       = normal_temperature;
+    m_low_temperature_interface_heating_time = m_config.support_interface_heating_time.value;
+    return gcode;
+}
+
+std::string GCode::finish_low_temperature_interface()
+{
+    if (! m_low_temperature_interface_active)
+        return {};
+    std::string gcode;
+    if (m_low_temperature_interface_normal > 0 && m_low_temperature_interface_normal != m_low_temperature_interface_target) {
+        gcode += "; low-temperature support interface end\n";
+        // Heat toward the filament temperature without waiting for it, then dwell for the heating time.
+        gcode += m_writer.set_temperature(m_low_temperature_interface_normal, false, m_low_temperature_interface_filament);
+        if (m_low_temperature_interface_heating_time > 0.)
+            gcode += "G4 S" + std::to_string(m_low_temperature_interface_heating_time) + " ; heat before next layer\n";
+    }
+    m_low_temperature_interface_active       = false;
+    m_low_temperature_interface_target       = 0;
+    m_low_temperature_interface_filament     = unsigned(-1);
+    m_low_temperature_interface_normal       = 0;
+    m_low_temperature_interface_heating_time = 0.;
+    return gcode;
+}
+
 std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_description, double speed)
 {
     std::string gcode;
+
+    // MAGPIE: low temperature support interface. Interface paths (and support ironing) print at the interface
+    // temperature; the first other extrusion restores the filament temperature.
+    if (m_low_temperature_interface_active || m_config.single_nozzle_low_temperature_interface.value) {
+        const bool interface_role = path.role() == erSupportMaterialInterface ||
+                                    (path.role() == erIroning && m_support_extrusion_context_depth > 0);
+        if (interface_role && this->low_temperature_interface_enabled())
+            gcode += this->start_low_temperature_interface();
+        else if (m_low_temperature_interface_active)
+            gcode += this->finish_low_temperature_interface();
+    }
 
     const std::string  bridge_description = is_bridge(path.role()) ? path_description + " (bridge)" : std::string();
     const std::string &description        = bridge_description.empty() ? path_description : bridge_description;

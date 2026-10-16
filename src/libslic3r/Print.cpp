@@ -182,6 +182,11 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "belt_printer_infinite_y",
         //BBS
         "additional_cooling_fan_speed",
+        "support_interface_cooling_position",
+        "support_interface_brush_start",
+        "support_interface_brush_end",
+        "support_interface_brush_repetitions",
+        "support_interface_brush_speed",
         "reduce_crossing_wall",
         "max_travel_detour_distance",
         "printable_area",
@@ -2079,6 +2084,28 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                 add_warning(ret);
             }else
                 return ret;
+        }
+    }
+
+    // MAGPIE: the low temperature support interface waits on its target with M109, so a typo either stalls on the
+    // firmware cold-extrusion guard or overheats the support filament (Magpie line 1).
+    for (const PrintObject *object : m_objects) {
+        const PrintObjectConfig &oc = object->config();
+        if (!object->has_support_material() || !oc.single_nozzle_low_temperature_interface.value || oc.support_interface_filament.value != 0)
+            continue;
+        // Marlin EXTRUDE_MINTEMP and Klipper min_extrude_temp both default to 170 degC.
+        constexpr int firmware_min_extrude_temperature_c = 170;
+        const int     temperature_c                      = oc.support_interface_temperature.value;
+        if (temperature_c < firmware_min_extrude_temperature_c)
+            return {Slic3r::format(_u8L("Support interface temperature %1% °C is below the firmware cold-extrusion limit of %2% °C."),
+                                   temperature_c, firmware_min_extrude_temperature_c), object, "support_interface_temperature"};
+        const std::vector<unsigned int> support_filaments = oc.support_filament.value > 0 ?
+            std::vector<unsigned int>{ unsigned(oc.support_filament.value - 1) } : object->object_extruders();
+        for (const unsigned int filament : support_filaments) {
+            const int max_temperature_c = m_config.nozzle_temperature_range_high.get_at(filament);
+            if (max_temperature_c > 0 && temperature_c > max_temperature_c)
+                return {Slic3r::format(_u8L("Support interface temperature %1% °C exceeds the maximum nozzle temperature %2% °C of filament %3%."),
+                                       temperature_c, max_temperature_c, filament + 1), object, "support_interface_temperature"};
         }
     }
 

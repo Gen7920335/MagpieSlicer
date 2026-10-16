@@ -644,6 +644,10 @@ protected:
     std::string     extrude_perimeters(const Print& print, const std::vector<ObjectByExtruder::Island::Region>& by_region, bool is_first_layer, bool is_infill_first, bool unsupported_loops_only = false);
     std::string     extrude_infill(const Print& print, const std::vector<ObjectByExtruder::Island::Region>& by_region, bool ironing);
     std::string     extrude_support(const ExtrusionEntityCollection& support_fills, const ExtrusionRole support_extrusion_role);
+    // MAGPIE: low temperature support interface.
+    bool            low_temperature_interface_enabled() const;
+    std::string     start_low_temperature_interface();
+    std::string     finish_low_temperature_interface();
 
     // Farthest-point timelapse: find the extrusion point farthest from camera (0,0)
     void compute_farthest_point(const std::vector<LayerToPrint> &layers, int most_used_extruder,
@@ -720,6 +724,17 @@ protected:
     FullPrintConfig                     m_config;
     // MAGPIE: the wall planner nozzle of the loop or multi-path being extruded (wall.plan slot).
     ExtrusionToolHint                   m_wall_tool_hint { ExtrusionToolHint::Auto };
+    // MAGPIE: low temperature support interface. Active from the first interface path until the next non-interface
+    // extrusion, which restores the filament's own temperature.
+    bool                                m_low_temperature_interface_active { false };
+    int                                 m_low_temperature_interface_target { 0 };      // degC
+    unsigned int                        m_low_temperature_interface_filament { unsigned(-1) };
+    int                                 m_low_temperature_interface_normal { 0 };      // degC
+    double                              m_low_temperature_interface_heating_time { 0. }; // s
+    // Depth of extrude_support() calls, so support ironing counts as interface.
+    int                                 m_support_extrusion_context_depth { 0 };
+    // Set while extrude_support() prints one role of mixed support, so mixed sub-collections are entered.
+    bool                                m_support_role_pass { false };
     DynamicConfig                       m_calib_config;
     // scaled G-code resolution
     double                              m_scaled_resolution;

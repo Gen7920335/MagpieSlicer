@@ -1,0 +1,59 @@
+{
+ "description": "Low temperature support interface (resources/mods/low_temp_interface.json) on the U1: compared by hand with Magpie line 1 (Beta 7) per layer (temperature commands, role order).",
+ "printers": {
+  "u1": {
+   "machine": "presets/u1_04_machine.json",
+   "process": "presets/u1_04_process.json",
+   "filaments": [
+    "presets/u1_pla.json"
+   ],
+   "bed_type": "High Temp Plate"
+  },
+  "x1c": {
+   "machine": "presets/x1c_04_machine.json",
+   "process": "presets/x1c_04_process.json",
+   "filaments": [
+    "presets/x1c_pla.json"
+   ],
+   "bed_type": "Textured PEI Plate"
+  }
+ },
+ "cases": [
+  {
+   "name": "overhang_ltc",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "3",
+    "support_interface_bottom_layers": "0",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.temperature\": 170, \"low_temp_interface.heating_time\": 5}"
+   }
+  },
+  {
+   "name": "tee_ltc",
+   "printer": "u1",
+   "model": "external:tee.stl",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "3",
+    "support_interface_bottom_layers": "0",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.temperature\": 170, \"low_temp_interface.heating_time\": 5}"
+   }
+  },
+  {
+   "name": "overhang_ltc_tree",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "tree(auto)",
+    "support_interface_top_layers": "3",
+    "support_interface_bottom_layers": "0",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.temperature\": 170, \"low_temp_interface.heating_time\": 5}"
+   }
+  }
+ ]
+}
