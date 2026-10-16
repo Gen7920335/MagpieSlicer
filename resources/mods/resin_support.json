@@ -1,0 +1,59 @@
+{
+    // Resin support: PrusaSlicer 2.9.6's SLA support points and support trees (Default and Branching),
+    // printed with Orca's support toolpaths by the built-in "resin" support generator. Orca's own
+    // support settings (Z/X/Y distances, interface layers and pattern, raft, threshold angle,
+    // enforcers and blockers) still apply. The parameters below are PrusaSlicer's SLA support
+    // settings, one set per tree strategy. Head and pillar sizes thinner than one support line are
+    // widened to it.
+    "id": "resin_support",
+    "name": "Resin support",
+    "version": "1.0.0",
+    "params": {
+        "enable":                                  { "type": "bool",   "default": false,     "label": "Use resin support" },
+        "tree_type":                               { "type": "string", "default": "default", "label": "Tree type (default or branching)" },
+        "points_density":                          { "type": "int",    "default": 100,       "unit": "%",   "label": "Support points density" },
+        "enforcers_only":                          { "type": "bool",   "default": false,     "label": "Support only in enforced regions" },
+
+        "default_head_front_diameter":             { "type": "float",  "default": 0.4,       "unit": "mm",  "label": "Default: pinhead front diameter" },
+        "default_head_width":                      { "type": "float",  "default": 1.0,       "unit": "mm",  "label": "Default: pinhead width" },
+        "default_pillar_diameter":                 { "type": "float",  "default": 1.0,       "unit": "mm",  "label": "Default: pillar diameter" },
+        "default_small_pillar_diameter_percent":   { "type": "float",  "default": 50,        "unit": "%",   "label": "Default: small pillar diameter" },
+        "default_max_bridges_on_pillar":           { "type": "int",    "default": 3,                        "label": "Default: max bridges on a pillar" },
+        "default_max_weight_on_model":             { "type": "float",  "default": 10.0,                     "label": "Default: max weight on model" },
+        "default_pillar_connection_mode":          { "type": "string", "default": "dynamic",                "label": "Default: pillar connection mode (dynamic, zigzag or cross)" },
+        "default_buildplate_only":                 { "type": "bool",   "default": false,                    "label": "Default: support on build plate only" },
+        "default_pillar_widening_factor":          { "type": "float",  "default": 0.5,                      "label": "Default: pillar widening factor" },
+        "default_base_diameter":                   { "type": "float",  "default": 4.0,       "unit": "mm",  "label": "Default: support base diameter" },
+        "default_base_height":                     { "type": "float",  "default": 1.0,       "unit": "mm",  "label": "Default: support base height" },
+        "default_base_safety_distance":            { "type": "float",  "default": 1.0,       "unit": "mm",  "label": "Default: support base safety distance" },
+        "default_critical_angle":                  { "type": "float",  "default": 45,        "unit": "deg", "label": "Default: critical angle" },
+        "default_max_bridge_length":               { "type": "float",  "default": 15.0,      "unit": "mm",  "label": "Default: max bridge length" },
+        "default_max_pillar_link_distance":        { "type": "float",  "default": 10.0,      "unit": "mm",  "label": "Default: max pillar linking distance" },
+        "default_object_elevation":                { "type": "float",  "default": 5.0,       "unit": "mm",  "label": "Default: object elevation" },
+
+        "branching_head_front_diameter":           { "type": "float",  "default": 0.4,       "unit": "mm",  "label": "Branching: pinhead front diameter" },
+        "branching_head_width":                    { "type": "float",  "default": 1.0,       "unit": "mm",  "label": "Branching: pinhead width" },
+        "branching_pillar_diameter":               { "type": "float",  "default": 1.0,       "unit": "mm",  "label": "Branching: pillar diameter" },
+        "branching_small_pillar_diameter_percent": { "type": "float",  "default": 50,        "unit": "%",   "label": "Branching: small pillar diameter" },
+        "branching_max_bridges_on_pillar":         { "type": "int",    "default": 2,                        "label": "Branching: max bridges on a pillar" },
+        "branching_max_weight_on_model":           { "type": "float",  "default": 10.0,                     "label": "Branching: max weight on model" },
+        "branching_pillar_connection_mode":        { "type": "string", "default": "dynamic",                "label": "Branching: pillar connection mode (dynamic, zigzag or cross)" },
+        "branching_buildplate_only":               { "type": "bool",   "default": false,                    "label": "Branching: support on build plate only" },
+        "branching_pillar_widening_factor":        { "type": "float",  "default": 0.5,                      "label": "Branching: pillar widening factor" },
+        "branching_base_diameter":                 { "type": "float",  "default": 4.0,       "unit": "mm",  "label": "Branching: support base diameter" },
+        "branching_base_height":                   { "type": "float",  "default": 1.0,       "unit": "mm",  "label": "Branching: support base height" },
+        "branching_base_safety_distance":          { "type": "float",  "default": 1.0,       "unit": "mm",  "label": "Branching: support base safety distance" },
+        "branching_critical_angle":                { "type": "float",  "default": 45,        "unit": "deg", "label": "Branching: critical angle" },
+        "branching_max_bridge_length":             { "type": "float",  "default": 5.0,       "unit": "mm",  "label": "Branching: max bridge length" },
+        "branching_max_pillar_link_distance":      { "type": "float",  "default": 10.0,      "unit": "mm",  "label": "Branching: max pillar linking distance" },
+        "branching_object_elevation":              { "type": "float",  "default": 5.0,       "unit": "mm",  "label": "Branching: object elevation" }
+    },
+    "rules": [
+        // Priority 1 puts this rule above cura_support's: with both mods on, resin support is used.
+        { "target": "support_generator", "value": "\"resin\"", "when": "resin_support.enable", "priority": 1 },
+        // The object is lifted only while support is on, so it never prints in the air.
+        { "target": "object_elevation",
+          "value": "if(resin_support.tree_type == \"branching\", resin_support.branching_object_elevation, resin_support.default_object_elevation)",
+          "when": "resin_support.enable and enable_support" }
+    ]
+}

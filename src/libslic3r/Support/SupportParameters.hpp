@@ -292,6 +292,9 @@ struct SupportParameters {
     InfillPattern 			contact_fill_pattern;
     // Shall the sparse (base) layers be printed with a single perimeter line (sheath) for robustness?
     bool                    with_sheath;
+    // MAGPIE: print every support island, even one the fill pattern misses (a thin pillar of a
+    // support module). Off for Orca's own generators.
+    bool                    keep_narrow_islands { false };
     // Branches of organic supports with area larger than this threshold will be extruded with double lines.
     double                  tree_branch_diameter_double_wall_area_scaled = 0.25 * sqr(scaled<double>(5.0)) * M_PI;;
 

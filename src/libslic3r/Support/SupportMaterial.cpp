@@ -361,12 +361,15 @@ static Polygons contours_simplified(const Vec2i32 &grid_size, const double pixel
 }
 #endif // SUPPORT_USE_AGG_RASTERIZER
 
-PrintObjectSupportMaterial::PrintObjectSupportMaterial(const PrintObject *object, const SlicingParameters &slicing_params) :
+PrintObjectSupportMaterial::PrintObjectSupportMaterial(const PrintObject *object, const SlicingParameters &slicing_params,
+                                                       SupportMaterialOverrides overrides) :
     m_print_config          (&object->print()->config()),
     m_object_config         (&object->config()),
     m_slicing_params        (slicing_params),
-    m_support_params        (*object)
+    m_support_params        (*object),
+    m_overrides             (std::move(overrides))
 {
+    m_support_params.keep_narrow_islands = m_overrides.keep_narrow_islands;
 }
 
 // Using the std::deque as an allocator.
@@ -497,7 +500,16 @@ void PrintObjectSupportMaterial::generate(PrintObject &object)
     BOOST_LOG_TRIVIAL(info) << "Support generator - Creating base layers";
 
     // Fill in intermediate layers between the top / bottom support contact layers, trim them by the object.
-    this->generate_base_layers(object, bottom_contacts, top_contacts, intermediate_layers, layer_support_areas);
+    if (! m_overrides.body_at_z) {
+        this->generate_base_layers(object, bottom_contacts, top_contacts, intermediate_layers, layer_support_areas);
+    } else {
+        // MAGPIE: the module's support body replaces the propagated base layers. Its cross-sections
+        // are trimmed by the object with the same gaps as Orca's own base layers.
+        for (SupportGeneratorLayer *layer : intermediate_layers)
+            layer->polygons = to_polygons(union_ex(m_overrides.body_at_z(layer->print_z)));
+        this->trim_support_layers_by_object(object, intermediate_layers, m_slicing_params.gap_support_object,
+                                            m_slicing_params.gap_object_support, m_support_params.gap_xy);
+    }
 
 #ifdef SLIC3R_DEBUG
     for (SupportGeneratorLayersPtr::const_iterator it = intermediate_layers.begin(); it != intermediate_layers.end(); ++ it)
@@ -1820,13 +1832,18 @@ static inline std::pair<SupportGeneratorLayer*, SupportGeneratorLayer*> new_cont
     assert(layer.id() >= slicing_params.raft_layers());
     size_t layer_id = layer.id() - slicing_params.raft_layers();
 
-    if (layer_id == 0) {
+    // MAGPIE: the first layer of an object lifted above the raft contact (object_elevation). Its
+    // contact sits under the object like any other, not on the bed or the raft. Without a lift the
+    // first layer's bottom is exactly raft_contact_top_z + gap_raft_object, so this stays false.
+    const bool elevated_first_layer = layer_id == 0 &&
+        layer.bottom_z() > slicing_params.raft_contact_top_z + slicing_params.gap_raft_object + EPSILON;
+    if (layer_id == 0 && slicing_params.has_raft() && ! elevated_first_layer) {
         // This is a raft contact layer sitting directly on the print bed.
         assert(slicing_params.has_raft());
         print_z  = slicing_params.raft_contact_top_z;
         bottom_z = slicing_params.raft_interface_top_z;
         height   = slicing_params.contact_raft_layer_height;
-    } else if (slicing_params.zero_gap_interface_top) {
+    } else if (slicing_params.zero_gap_interface_top && layer.lower_layer != nullptr) {
         // Align the contact surface height with a layer immediately below the supported layer.
         // Interface layer will be synchronized with the object.
         print_z  = layer.bottom_z();
@@ -1838,6 +1855,11 @@ static inline std::pair<SupportGeneratorLayer*, SupportGeneratorLayer*> new_cont
         if (print_config.independent_support_layer_height) {
             print_z = layer.bottom_z() - slicing_params.gap_support_object;
             height = 0;
+        }
+        else if (layer.lower_layer == nullptr) {
+            // MAGPIE: a lifted first layer has no object layer below to synchronize with.
+            print_z = layer.bottom_z() - slicing_params.gap_support_object;
+            height  = std::min(layer.height, slicing_params.max_suport_layer_height);
         }
         else {
             Layer* synced_layer = sync_gap_with_object_layer(layer, slicing_params.gap_support_object, true);
@@ -1922,13 +1944,22 @@ static inline void fill_contact_layer(
     const Polygons          &enforcer_polygons, 
     const Polygons          &lower_layer_polygons,
     const Flow              &support_material_flow,
-    float                    no_interface_offset
+    float                    no_interface_offset,
+    bool                     contact_demand
 #ifdef SLIC3R_DEBUG
     , size_t                 iRun,
     const Layer             &layer
 #endif // SLIC3R_DEBUG
     )
 {
+    if (contact_demand && layer_id == 0 && new_layer.print_z > slicing_params.raft_contact_top_z + EPSILON) {
+        // MAGPIE: the first layer of an object lifted off the bed or raft. A module's demand here is
+        // a contact like any other, not the footprint of a raft, so it is kept as it is.
+        new_layer.polygons          = overhang_polygons;
+        new_layer.contact_polygons  = std::make_unique<Polygons>(overhang_polygons);
+        new_layer.overhang_polygons = std::make_unique<Polygons>(overhang_polygons);
+        return;
+    }
     const SupportGridParams grid_params(object_config, support_material_flow);
 
     Polygons lower_layer_polygons_for_dense_interface_cache;
@@ -2190,7 +2221,8 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
 
     // BBS: tree support is selected so normal supports need not be generated.
     // Note we still need to go through the following steps if support is disabled but raft is enabled.
-    if (m_object_config->enable_support.value && (m_object_config->support_type.value != stNormalAuto && m_object_config->support_type.value != stNormal)) {
+    // MAGPIE: a module that brings its own contact demand runs whatever support type is selected.
+    if (m_object_config->enable_support.value && ! m_overrides.contact_demand && (m_object_config->support_type.value != stNormalAuto && m_object_config->support_type.value != stNormal)) {
         return SupportGeneratorLayersPtr();
     }
 
@@ -2212,7 +2244,9 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
     contact_out.assign(num_layers * 2, nullptr);
 
     std::vector<ExPolygons> overhangs_per_layers(num_layers);
-    size_t layer_id_start = this->has_raft() ? 0 : 1;
+    // MAGPIE: with a module's contact demand the first object layer can need contacts too: the
+    // object may be lifted off the bed.
+    size_t layer_id_start = (this->has_raft() || m_overrides.contact_demand) ? 0 : 1;
      // main part of overhang detection can be parallel
     tbb::parallel_for(tbb::blocked_range<size_t>(layer_id_start, num_layers),
         [&](const tbb::blocked_range<size_t>& range) {
@@ -2401,18 +2435,35 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
     if (object.print()->canceled())
         return SupportGeneratorLayersPtr();
 
+    if (const std::vector<Polygons> *demand = m_overrides.contact_demand) {
+        // MAGPIE: the module's demand decides where contacts go; Orca's overhang detection does not.
+        for (size_t layer_id = layer_id_start; layer_id < num_layers; ++ layer_id)
+            overhangs_per_layers[layer_id] = layer_id < demand->size() && ! (*demand)[layer_id].empty() ?
+                intersection_ex((*demand)[layer_id], object.layers()[layer_id]->lslices) : ExPolygons();
+    }
+
     for (size_t layer_id = layer_id_start; layer_id < num_layers; layer_id++) {
         const Layer& layer = *object.layers()[layer_id];
         Polygons            overhang_polygons = to_polygons(overhangs_per_layers[layer_id]);
         Polygons            lower_layer_polygons = (layer_id == 0) ? Polygons() : to_polygons(object.layers()[layer_id - 1]->lslices);
         SlicesMarginCache   slices_margin;
 
-        auto [contact_polygons, enforcer_polygons, no_interface_offset] =
-            detect_contacts(layer, layer_id, overhang_polygons, lower_layer_polygons, *m_print_config, *m_object_config, annotations, slices_margin, m_support_params.gap_xy
+        Polygons contact_polygons, enforcer_polygons;
+        double   no_interface_offset = 0.;
+        if (m_overrides.contact_demand && layer_id > 0) {
+            // MAGPIE: a module's demand is already the contact; Orca's margin and trimming by the
+            // layer below do not apply.
+            contact_polygons    = overhang_polygons;
+            no_interface_offset = std::accumulate(layer.regions().begin(), layer.regions().end(), FLT_MAX,
+                [](float acc, const LayerRegion *layerm) { return std::min(acc, float(layerm->flow(frExternalPerimeter).scaled_width())); });
+        } else {
+            std::tie(contact_polygons, enforcer_polygons, no_interface_offset) =
+                detect_contacts(layer, layer_id, overhang_polygons, lower_layer_polygons, *m_print_config, *m_object_config, annotations, slices_margin, m_support_params.gap_xy
 #ifdef SLIC3R_DEBUG
-                , iRun
+                    , iRun
 #endif // SLIC3R_DEBUG
-            );
+                );
+        }
 
         // Now apply the contact areas to the layer where they need to be made.
         if (!contact_polygons.empty() || !overhang_polygons.empty()) {
@@ -2422,7 +2473,7 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
                 // Fill the non-bridging layer with polygons.
                 fill_contact_layer(*new_layer, layer_id, m_slicing_params,
                     *m_object_config, slices_margin, overhang_polygons, contact_polygons, enforcer_polygons, lower_layer_polygons,
-                    m_support_params.support_material_flow, no_interface_offset
+                    m_support_params.support_material_flow, no_interface_offset, m_overrides.contact_demand != nullptr
 #ifdef SLIC3R_DEBUG
                     , iRun, layer
 #endif // SLIC3R_DEBUG
@@ -3058,7 +3109,22 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::raft_and_intermediate_supp
             // Find the first object layer, which has its print_z in this support Z range.
             while (idx_layer_object < object.layers().size() && object.layers()[idx_layer_object]->print_z < extr1z + EPSILON)
                 ++ idx_layer_object;
-            if (idx_layer_object == 0 && extr1z == m_slicing_params.raft_interface_top_z) {
+            const coordf_t model_bottom = object.layers().front()->bottom_z();
+            if (m_overrides.contact_demand && extr1z < model_bottom - EPSILON) {
+                // MAGPIE: the object starts above where support starts (it is lifted). Fill only that
+                // interval, with support layers no thicker than the first object layer and the maximum
+                // support layer height; one layer as thick as the lift would not print.
+                const coordf_t top      = std::min(extr2z, model_bottom);
+                const coordf_t max_step = std::min(object.layers().front()->height, m_slicing_params.max_suport_layer_height);
+                const size_t   count    = size_t(std::ceil((top - extr1z - EPSILON) / max_step));
+                for (size_t i = 0; i < count; ++ i) {
+                    SupportGeneratorLayer &layer_new = layer_storage.allocate(SupporLayerType::Intermediate);
+                    layer_new.bottom_z = extr1z + (top - extr1z) * coordf_t(i) / coordf_t(count);
+                    layer_new.print_z  = extr1z + (top - extr1z) * coordf_t(i + 1) / coordf_t(count);
+                    layer_new.height   = layer_new.print_z - layer_new.bottom_z;
+                    intermediate_layers.push_back(&layer_new);
+                }
+            } else if (idx_layer_object == 0 && extr1z == m_slicing_params.raft_interface_top_z) {
                 // Insert one base support layer below the object.
                 SupportGeneratorLayer &layer_new = layer_storage.allocate(SupporLayerType::Intermediate);
                 layer_new.print_z  = m_slicing_params.object_print_z_min;

@@ -143,6 +143,10 @@ def slice_corpus(cli, out, corpus_path, external_dir, only, ignore_keys, timeout
             code = proc.returncode
             with open(os.path.join(case_dir, 'cli.log'), 'w', encoding='utf-8') as f:
                 f.write(' '.join(cmd) + '\n\n' + proc.stdout + '\n' + proc.stderr)
+            # A mod that fails to load is only logged, and the slice then runs without it. A
+            # comparison that silently lost its mod would pass for the wrong reason.
+            if code == 0 and 'Mod not loaded' in proc.stdout + proc.stderr:
+                code = 'mod-not-loaded'
         except subprocess.TimeoutExpired:
             code = 'timeout'
         seconds = round(time.monotonic() - started, 2)

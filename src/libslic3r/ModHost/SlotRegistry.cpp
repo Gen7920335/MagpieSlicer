@@ -2,6 +2,7 @@
 
 #include "libslic3r/Print.hpp"
 #include "Builtin/CuraSupport.hpp"
+#include "Builtin/ResinSupport.hpp"
 
 #include <map>
 #include <mutex>
@@ -26,6 +27,9 @@ void register_builtin_modules(Registry &registry)
     // CuraEngine's normal support areas, printed with Orca's toolpaths. Its settings are the
     // parameters of the bundled cura_support mod (resources/mods/cura_support.json).
     registry.support_generators["cura"] = {"cura", "Cura", [](PrintObject &object) { CuraSupport::generate(object); }};
+    // PrusaSlicer's SLA support points and trees, printed through Orca's normal-support pipeline. Its
+    // settings are the parameters of the bundled resin_support mod (resources/mods/resin_support.json).
+    registry.support_generators["resin"] = {"resin", "Resin", [](PrintObject &object) { ResinSupport::generate(object); }};
 }
 
 Registry &registry()

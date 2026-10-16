@@ -1294,6 +1294,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     // Automatic supports (generated based on support_threshold_angle).
     ((ConfigOptionEnum<SupportType>,   support_type))
     ((ConfigOptionString,              support_generator))
+    ((ConfigOptionFloat,               object_elevation))
     // Direction of the support pattern (in XY plane).`
     ((ConfigOptionFloat,               support_angle))
     ((ConfigOptionBool,                support_on_build_plate_only))

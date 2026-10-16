@@ -234,6 +234,13 @@ SlicingParameters SlicingParameters::create_from_config(
         params.object_print_z_uncompensated_max += print_z;
     }
 
+    // MAGPIE: a support module may lift the object; with the default 0 nothing moves.
+    if (const coordf_t elevation = object_config.object_elevation.value; elevation > 0.) {
+        params.object_print_z_min += elevation;
+        params.object_print_z_max += elevation;
+        params.object_print_z_uncompensated_max += elevation;
+    }
+
     params.valid = true;
     return params;
 }

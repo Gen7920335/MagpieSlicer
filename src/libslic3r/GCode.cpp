@@ -8132,6 +8132,7 @@ void GCode::append_full_config(const Print &print, std::string &str)
         // the dump already shows, and leaving them out keeps the mod-free output byte-identical.
         "filament_mod_settings"sv,
         "mod_settings"sv,
+        "object_elevation"sv,
         "printer_mod_settings"sv,
         "support_generator"sv,
         // The fast-purge / prime-volume-mode keys are new static-member registrations. Excluding them from

@@ -1,3 +1,7 @@
+///|/ Copyright (c) Prusa Research 2020 - 2022 Tomáš Mészáros @tamasmeszaros
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #include "SpatIndex.hpp"
 #include "libslic3r/BoundingBox.hpp"
 
@@ -10,6 +14,9 @@
 #include <libslic3r/SLA/BoostAdapter.hpp>
 #include <utility>
 #include <vector>
+#include <libslic3r/BoostAdapter.hpp> // IWYU pragma: keep
+#include <boost/geometry.hpp>
+#include <boost/geometry/index/rtree.hpp>
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -17,7 +24,7 @@
 #pragma warning(disable: 4267)
 #endif
 
-#include "boost/geometry/index/rtree.hpp"
+#include "libslic3r/BoundingBox.hpp"
 
 #ifdef _MSC_VER
 #pragma warning(pop)

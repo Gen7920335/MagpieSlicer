@@ -6,7 +6,9 @@
 #include "Slicing.hpp"
 #include "SupportLayer.hpp"
 #include "SupportParameters.hpp"
+#include <functional>
 #include <vector>
+#include "libslic3r/ExPolygon.hpp"
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Config.hpp"
 namespace Slic3r {
@@ -15,6 +17,23 @@ class PrintObject;
 class PrintConfig;
 class PrintObjectConfig;
 
+// MAGPIE: lets a support generator module run this generator with its own contact demand and support
+// body (resources/mods, support.generator slot). A default-constructed value changes nothing.
+struct SupportMaterialOverrides
+{
+    // Per object layer, the areas the module wants supported. When set, they replace Orca's overhang
+    // detection: a layer's contacts are its demand clipped to the layer's slices, kept without
+    // Orca's contact margin, and a demand on the first object layer of an object lifted off the bed
+    // or raft is supported too. Layers past the end of the vector get no contacts.
+    const std::vector<Polygons>         *contact_demand = nullptr;
+    // The module's support body cut at a print Z (mm). When set, it replaces Orca's propagation of
+    // the contacts down to the bed; the cross-sections are then trimmed by the object as usual.
+    std::function<ExPolygons(coordf_t)>  body_at_z;
+    // Print every support island, even one narrower than the fill pattern's line spacing, as the
+    // body of a support tree is made of such pillars.
+    bool                                 keep_narrow_islands = false;
+};
+
 // This class manages raft and supports for a single PrintObject.
 // Instantiated by Slic3r::Print::Object->_support_material()
 // This class is instantiated before the slicing starts as Object.pm will query
@@ -22,7 +41,8 @@ class PrintObjectConfig;
 class PrintObjectSupportMaterial
 {
 public:
-	PrintObjectSupportMaterial(const PrintObject *object, const SlicingParameters &slicing_params);
+	PrintObjectSupportMaterial(const PrintObject *object, const SlicingParameters &slicing_params,
+							   SupportMaterialOverrides overrides = {});
 
 	// Is raft enabled?
 	bool 		has_raft() 					const { return m_slicing_params.has_raft(); }
@@ -95,6 +115,7 @@ private:
 	SlicingParameters	     m_slicing_params;
 	// Various precomputed support parameters to be shared with external functions.
 	SupportParameters   	 m_support_params;
+	SupportMaterialOverrides m_overrides;
 };
 
 } // namespace Slic3r

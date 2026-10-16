@@ -7254,6 +7254,18 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionString(""));
 
+    // MAGPIE: lifts the object off the bed (or raft) by this much, for support modules whose
+    // support also grows under the object's bottom (resin-style support). Set by mod rules.
+    def = this->add("object_elevation", coFloat);
+    def->label = L("Object elevation");
+    def->category = L("Support");
+    def->tooltip = L("Lifts the object above the build plate or raft so that support can grow under it.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 150;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(0.));
+
     def = this->add("support_type", coEnum);
     def->label = L("Type");
     def->category = L("Support");

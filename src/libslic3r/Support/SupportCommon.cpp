@@ -417,7 +417,10 @@ SupportGeneratorLayersPtr generate_raft_base(
             Polygons  trimming;
             // BBS: if first layer of support is intersected with object island, it must have the same function as brim unless in nobrim mode.
             // brim_object_gap is changed to 0 by default, it's no longer appropriate to use it to determine the gap of first layer support.
-            trimming = offset(object.layers().front()->lslices, (float) scale_(support_params.gap_xy_first_layer), SUPPORT_SURFACES_OFFSET_PARAMETERS);
+            // MAGPIE: a lifted object (object_elevation) does not stand on its footprint, so the first
+            // support layer keeps the feet under it.
+            if (object.config().object_elevation.value <= 0.)
+                trimming = offset(object.layers().front()->lslices, (float) scale_(support_params.gap_xy_first_layer), SUPPORT_SURFACES_OFFSET_PARAMETERS);
             if (inflate_factor_1st_layer > SCALED_EPSILON) {
                 // Inflate in multiple steps to avoid leaking of the support 1st layer through object walls.
                 auto  nsteps = std::max(5, int(ceil(inflate_factor_1st_layer / support_params.first_layer_flow.scaled_width())));
@@ -444,6 +447,8 @@ SupportGeneratorLayersPtr generate_raft_base(
     return raft_layers;
 }
 
+static Polylines draw_perimeters(const ExPolygon &expoly, double clip_length);
+
 static inline void fill_expolygon_generate_paths(
     ExtrusionEntitiesPtr    &dst,
     ExPolygon              &&expolygon,
@@ -451,7 +456,8 @@ static inline void fill_expolygon_generate_paths(
     const FillParams        &fill_params,
     float                    density,
     ExtrusionRole            role,
-    const Flow              &flow)
+    const Flow              &flow,
+    bool                     keep_narrow_island = false)
 {
     Surface surface(stInternal, std::move(expolygon));
     Polylines polylines;
@@ -459,6 +465,18 @@ static inline void fill_expolygon_generate_paths(
         assert(!fill_params.use_arachne);
         polylines = filler->fill_surface(&surface, fill_params);
     } catch (InfillFailedException &) {
+    }
+    if (keep_narrow_island && density > 0.f && polylines.empty()) {
+        // MAGPIE: the fill missed this island (a pillar narrower than the line spacing). Print an
+        // inset loop with a bead no wider than half the island and no thinner than the layer, so the
+        // island is neither lost nor enlarged.
+        const auto   size           = get_extents(surface.expolygon).size();
+        const double island_width   = unscale<double>(std::min(size.x(), size.y())); // mm
+        const double bead_width     = std::max(double(flow.height()), std::min(double(flow.width()), 0.5 * island_width)); // mm
+        const Flow   narrow_flow(float(bead_width), flow.height(), flow.nozzle_diameter());
+        for (const ExPolygon &inset : offset_ex(surface.expolygon, -0.5 * scale_(bead_width)))
+            extrusion_entities_append_paths(dst, draw_perimeters(inset, 0.), role, narrow_flow.mm3_per_mm(), narrow_flow.width(),
+                                            narrow_flow.height());
     }
     extrusion_entities_append_paths(
         dst,
@@ -474,10 +492,11 @@ static inline void fill_expolygons_generate_paths(
     const FillParams        &fill_params,
     float                    density,
     ExtrusionRole            role,
-    const Flow              &flow)
+    const Flow              &flow,
+    bool                     keep_narrow_islands = false)
 {
     for (ExPolygon &expoly : expolygons)
-        fill_expolygon_generate_paths(dst, std::move(expoly), filler, fill_params, density, role, flow);
+        fill_expolygon_generate_paths(dst, std::move(expoly), filler, fill_params, density, role, flow, keep_narrow_islands);
 }
 
 static inline void fill_expolygons_generate_paths(
@@ -486,12 +505,13 @@ static inline void fill_expolygons_generate_paths(
     Fill                    *filler,
     float                    density,
     ExtrusionRole            role,
-    const Flow              &flow)
+    const Flow              &flow,
+    bool                     keep_narrow_islands = false)
 {
     FillParams fill_params;
     fill_params.density     = density;
     fill_params.dont_adjust = true;
-    fill_expolygons_generate_paths(dst, std::move(expolygons), filler, fill_params, density, role, flow);
+    fill_expolygons_generate_paths(dst, std::move(expolygons), filler, fill_params, density, role, flow, keep_narrow_islands);
 }
 
 static Polylines draw_perimeters(const ExPolygon &expoly, double clip_length)
@@ -1758,7 +1778,8 @@ void generate_support_toolpaths(
                         // Filler and its parameters
                         filler, float(density),
                         // Extrusion parameters
-                        interface_as_base ? ExtrusionRole::erSupportMaterial : ExtrusionRole::erSupportMaterialInterface, interface_flow);
+                        interface_as_base ? ExtrusionRole::erSupportMaterial : ExtrusionRole::erSupportMaterialInterface, interface_flow,
+                        support_params.keep_narrow_islands);
                 }
             };
             extrude_interface(top_contact_layer,    raft_layer ? InterfaceLayerType::RaftContact : top_interfaces ? InterfaceLayerType::TopContact : InterfaceLayerType::InterfaceAsBase);
@@ -1786,7 +1807,7 @@ void generate_support_toolpaths(
                     // Filler and its parameters
                     filler, float(base_interface_density),
                     // Extrusion parameters
-                    ExtrusionRole::erSupportMaterial, interface_flow);
+                    ExtrusionRole::erSupportMaterial, interface_flow, support_params.keep_narrow_islands);
             }
 
             // Base support or flange.
@@ -1831,6 +1852,19 @@ void generate_support_toolpaths(
                     if (support_layer.print_z > 100.0)
                         support_params2.tree_branch_diameter_double_wall_area_scaled = 0.1;
                     tree_supports_generate_paths(base_layer.extrusions, base_layer.polygons_to_extrude(), flow, support_params2);
+                    done = true;
+                }
+                if (! done && support_params.keep_narrow_islands) {
+                    // MAGPIE: island by island, so a pillar the walls or the fill miss still prints.
+                    for (const ExPolygon &island : union_safety_offset_ex(base_layer.polygons_to_extrude())) {
+                        const size_t before = base_layer.extrusions.size();
+                        if (sheath)
+                            fill_expolygons_with_sheath_generate_paths(base_layer.extrusions, to_polygons(island), filler, density,
+                                                                       ExtrusionRole::erSupportMaterial, flow, support_params, true, no_sort);
+                        if (! sheath || base_layer.extrusions.size() == before)
+                            fill_expolygons_generate_paths(base_layer.extrusions, ExPolygons{island}, filler, density,
+                                                           ExtrusionRole::erSupportMaterial, flow, true);
+                    }
                     done = true;
                 }
                 if (! done)

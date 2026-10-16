@@ -1,5 +1,8 @@
+///|/ Copyright (c) Prusa Research 2020 - 2022 Tomáš Mészáros @tamasmeszaros
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #include "Clustering.hpp"
-#include "boost/geometry/index/rtree.hpp"
 
 #include <boost/geometry/index/parameters.hpp>
 #include <functional>
@@ -10,6 +13,10 @@
 #include <libslic3r/SLA/SpatIndex.hpp>
 #include <libslic3r/SLA/BoostAdapter.hpp>
 #include <vector>
+#include <libslic3r/BoostAdapter.hpp> // IWYU pragma: keep
+#include <boost/geometry.hpp>
+#include <boost/geometry/index/rtree.hpp>
+#include <iterator>
 #include <utility>
 
 namespace Slic3r { namespace sla {
