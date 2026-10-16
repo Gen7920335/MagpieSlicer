@@ -8133,6 +8133,13 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "filament_mod_settings"sv,
         "mod_settings"sv,
         "object_elevation"sv,
+        "support_interface_pattern_override"sv,
+        "support_interface_sublayer_start"sv,
+        "support_interface_sublayer_end"sv,
+        "support_interface_sublayer_pattern"sv,
+        "support_interface_sublayer_angle"sv,
+        "support_wall_loops"sv,
+        "tree_support_wall_loops"sv,
         "printer_mod_settings"sv,
         "support_generator"sv,
         // The fast-purge / prime-volume-mode keys are new static-member registrations. Excluding them from

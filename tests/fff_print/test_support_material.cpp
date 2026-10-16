@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <catch2/catch_all.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -610,4 +611,95 @@ TEST_CASE("The Cura support generator prints its first layer with the same lines
     const auto solid_layers = solid.objects().front()->support_layers();
     REQUIRE(solid_layers.size() > 3);
     CHECK(path_length_mm(solid_layers[0]) > 1.5 * path_length_mm(solid_layers[1]));
+}
+
+// Length (mm) of support extrusion whose G-code comment contains `role`, excluding interfaces when
+// `role` is the base "support material".
+static double support_role_length(const std::string &gcode, bool interface)
+{
+    double len = 0;
+    GCodeReader parser;
+    parser.parse_buffer(gcode, [&len, interface](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        if (! line.extruding(self)) return;
+        const std::string_view comment = line.comment();
+        const bool is_interface = comment.find("support material interface") != std::string_view::npos;
+        if (comment.find("support material") == std::string_view::npos || is_interface != interface) return;
+        len += std::hypot(line.dist_X(self), line.dist_Y(self));
+    });
+    return len;
+}
+
+TEST_CASE("A triangle interface pattern lays the top interface in three directions", "[SupportMaterial]")
+{
+    // Directions holding at least 15 % of the top interface layer's length, in 10 degree bins.
+    const auto directions = [](const std::string &override_pattern) {
+        const std::string gcode = slice({ support_capital() }, {
+            { "enable_support", 1 }, { "layer_height", 0.2 }, { "support_type", "normal(auto)" },
+            { "support_interface_top_layers", 2 }, { "support_interface_bottom_layers", 0 },
+            { "support_interface_pattern", "rectilinear" },
+            { "support_interface_pattern_override", override_pattern } });
+        double highest = 0;
+        GCodeReader parser;
+        parser.parse_buffer(gcode, [&highest](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+            if (line.extruding(self) && line.comment().find("support material interface") != std::string_view::npos)
+                highest = std::max(highest, double(self.z()));
+        });
+        std::array<double, 18> bins{};
+        double total = 0;
+        GCodeReader again;
+        again.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+            if (! line.extruding(self) || std::abs(self.z() - highest) > 1e-3) return;
+            if (line.comment().find("support material interface") == std::string_view::npos) return;
+            const double len = std::hypot(line.dist_X(self), line.dist_Y(self));
+            double a = std::atan2(line.dist_Y(self), line.dist_X(self));
+            if (a < 0) a += M_PI;
+            bins[size_t(a / M_PI * 18.) % 18] += len;
+            total += len;
+        });
+        size_t n = 0;
+        for (size_t i = 0; i < bins.size(); ++ i) {
+            const double next = bins[(i + 1) % bins.size()];
+            if (bins[i] + next > 0.15 * total && bins[i] >= next)
+                ++ n;
+        }
+        return n;
+    };
+    CHECK(directions("") < 3);
+    CHECK(directions("triangles") >= 3);
+}
+
+TEST_CASE("The interface sublayer prints its layers at its own angle", "[SupportMaterial]")
+{
+    const std::string gcode = slice({ support_capital() }, {
+        { "enable_support", 1 }, { "layer_height", 0.2 }, { "support_type", "normal(auto)" },
+        { "support_interface_top_layers", 3 }, { "support_interface_bottom_layers", 0 },
+        { "support_interface_pattern", "rectilinear" },
+        { "support_interface_sublayer_start", 2 }, { "support_interface_sublayer_end", 3 },
+        { "support_interface_sublayer_pattern", "rectilinear" }, { "support_interface_sublayer_angle", 45 } });
+    const std::map<double, double> angles = interface_fill_angle_by_layer(gcode);
+    REQUIRE(angles.size() >= 3);
+    // The contact layer (the highest) keeps the interface angle; the two below it turn to 45 degrees.
+    auto it = angles.rbegin();
+    const double contact = it->second;
+    ++ it;
+    CHECK(axial_angle_diff_deg(it->second, M_PI / 4) < 10.);
+    CHECK(axial_angle_diff_deg(it->second, contact) > 20.);
+}
+
+TEST_CASE("Support wall loops add walls to normal and tree support", "[SupportMaterial]")
+{
+    for (const char *type : { "normal(auto)", "tree(auto)" }) {
+        CAPTURE(type);
+        const bool tree = std::string(type) == "tree(auto)";
+        auto base_length = [&](int loops) {
+            return support_role_length(slice({ support_capital() }, {
+                { "enable_support", 1 }, { "layer_height", 0.2 }, { "support_type", type }, { "support_style", tree ? "tree_slim" : "default" },
+                { "tree_support_wall_count", 1 },
+                { tree ? "tree_support_wall_loops" : "support_wall_loops", loops } }), false);
+        };
+        const double one   = base_length(1);
+        const double three = base_length(3);
+        CAPTURE(one, three);
+        CHECK(three > 1.2 * one);
+    }
 }

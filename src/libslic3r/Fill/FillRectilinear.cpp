@@ -3004,8 +3004,9 @@ static inline void remove_overlapped(Polylines& polylines, coord_t line_width){
 bool FillRectilinear::fill_surface_by_multilines(const Surface *surface, FillParams params, const std::initializer_list<SweepParams> &sweep_params, Polylines &polylines_out)
 {
     assert(sweep_params.size() >= 1);
-    assert(!params.full_infill());
-    params.density /= double(sweep_params.size());
+    assert(params.density_per_direction || !params.full_infill());
+    if (!params.density_per_direction)
+        params.density /= double(sweep_params.size());
     assert(params.density > 0.0001f && params.density <= 1.f);
 
     ExPolygonWithOffset poly_with_offset_base(surface->expolygon, 0, float(scale_(this->overlap + 0.5 * params.multiline * this->spacing)));//increase offset to crop infill lines when using multiline infill

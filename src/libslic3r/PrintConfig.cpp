@@ -7266,6 +7266,68 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloat(0.));
 
+    // MAGPIE: support toolpath settings driven by mod rules (resources/mods/support_extras.json).
+    // Their defaults leave Orca's toolpaths unchanged.
+    def = this->add("support_interface_pattern_override", coString);
+    def->label = L("Interface pattern override");
+    def->category = L("Support");
+    def->tooltip = L("Fill pattern of the support interface instead of the interface pattern above: triangles, grid, "
+                     "rectilinear or concentric. Empty keeps the interface pattern.");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionString(""));
+
+    def = this->add("support_interface_sublayer_start", coInt);
+    def->label = L("Interface sublayer start");
+    def->category = L("Support");
+    def->tooltip = L("First interface layer, counted from the contact layer (1), printed with the sublayer pattern. "
+                     "0 turns the sublayer off; the contact layer itself is never a sublayer.");
+    def->min = 0;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("support_interface_sublayer_end", coInt);
+    def->label = L("Interface sublayer end");
+    def->category = L("Support");
+    def->tooltip = L("Last interface layer, counted from the contact layer, printed with the sublayer pattern.");
+    def->min = 0;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("support_interface_sublayer_pattern", coString);
+    def->label = L("Interface sublayer pattern");
+    def->category = L("Support");
+    def->tooltip = L("Fill pattern of the interface sublayers: rectilinear, grid, triangles or concentric. Empty uses the interface pattern.");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionString(""));
+
+    def = this->add("support_interface_sublayer_angle", coFloat);
+    def->label = L("Interface sublayer angle");
+    def->category = L("Support");
+    def->tooltip = L("Line direction of the interface sublayers.");
+    def->sidetext = u8"°";
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(0.));
+
+    def = this->add("support_wall_loops", coInt);
+    def->label = L("Normal support walls");
+    def->category = L("Support");
+    def->tooltip = L("Number of walls around normal support. -1 keeps Orca's behaviour (one wall when the tree "
+                     "support wall count is above zero).");
+    def->min = -1;
+    def->max = 10;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionInt(-1));
+
+    def = this->add("tree_support_wall_loops", coInt);
+    def->label = L("Tree support walls (exact)");
+    def->category = L("Support");
+    def->tooltip = L("Exact number of walls around each tree branch, as far as the branch has room for them. "
+                     "-1 keeps Orca's behaviour (one wall, two on thick branches).");
+    def->min = -1;
+    def->max = 10;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionInt(-1));
+
     def = this->add("support_type", coEnum);
     def->label = L("Type");
     def->category = L("Support");

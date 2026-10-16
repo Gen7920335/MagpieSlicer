@@ -610,7 +610,23 @@ void tree_supports_generate_paths(
     for (ExPolygon& expoly : closing_ex(polygons, float(SCALED_EPSILON), float(SCALED_EPSILON + 0.5 * flow.scaled_width()))) {
         std::unique_ptr<ExtrusionEntityCollection> eec;
         ExPolygons                                 regions_to_draw_inner_wall{expoly};
-        if (support_params.tree_branch_diameter_double_wall_area_scaled > 0)
+        if (support_params.tree_wall_loops >= 1) {
+            // MAGPIE: tree_support_wall_loops walls (support_extras mod), as many as the branch has room
+            // for, printed from the inside out; the innermost one gets the anchor below.
+            for (int wall = 1; wall < support_params.tree_wall_loops; ++wall) {
+                ExPolygons next = offset2_ex(regions_to_draw_inner_wall, -1.5 * flow.scaled_width(), 0.5 * flow.scaled_width());
+                if (next.empty())
+                    break;
+                if (!eec) {
+                    eec = std::make_unique<ExtrusionEntityCollection>();
+                    eec->no_sort = true;
+                }
+                for (const ExPolygon &region : regions_to_draw_inner_wall)
+                    extrusion_entities_append_paths(eec->entities, draw_perimeters(region, clip_length), ExtrusionRole::erSupportMaterial,
+                                                    flow.mm3_per_mm(), flow.width(), flow.height(), false);
+                regions_to_draw_inner_wall = std::move(next);
+            }
+        } else if (support_params.tree_branch_diameter_double_wall_area_scaled > 0)
             if (double area = expoly.area(); area > support_params.tree_branch_diameter_double_wall_area_scaled) {
                 BOOST_LOG_TRIVIAL(debug)<< "TreeSupports: double wall area: " << area<< " > " << support_params.tree_branch_diameter_double_wall_area_scaled;
                 eec = std::make_unique<ExtrusionEntityCollection>();
@@ -777,9 +793,17 @@ void fill_expolygons_with_sheath_generate_paths(
             eec->no_sort = true;
         }
         ExtrusionEntitiesPtr &out = no_sort ? eec->entities : dst;
-        extrusion_entities_append_paths(out, draw_perimeters(expoly, clip_length), ExtrusionRole::erSupportMaterial, flow.mm3_per_mm(), flow.width(), flow.height());
-        // Fill in the rest.
-        fill_expolygons_generate_paths(out, offset_ex(expoly, float(-0.4 * spacing)), filler, fill_params, density, role, flow);
+        // MAGPIE: support_wall_loops walls (support_extras mod); one otherwise, as Orca.
+        const size_t wall_count = support_params.normal_wall_loops > 1 ? size_t(support_params.normal_wall_loops) : 1;
+        ExPolygons   walls{expoly};
+        for (size_t wall = 0; wall < wall_count && !walls.empty(); ++wall) {
+            for (const ExPolygon &region : walls)
+                extrusion_entities_append_paths(out, draw_perimeters(region, clip_length), ExtrusionRole::erSupportMaterial, flow.mm3_per_mm(), flow.width(), flow.height());
+            if (wall + 1 < wall_count)
+                walls = offset_ex(walls, float(-spacing));
+        }
+        // Fill in the rest, from 0.4 spacing inside the innermost wall.
+        fill_expolygons_generate_paths(out, offset_ex(expoly, float(-(double(wall_count) - 0.6) * spacing)), filler, fill_params, density, role, flow);
         if (no_sort && ! eec->empty())
             dst.emplace_back(eec.release());
     }
@@ -1579,9 +1603,41 @@ void generate_support_toolpaths(
     };
     std::vector<LayerCache>             layer_caches(support_layers.size());
 
+    // MAGPIE: interface layers numbered from their contact layer (1), for the interface sublayer.
+    // 0 where a layer is not part of a top (or bottom) interface stack.
+    std::vector<int> top_interface_numbers, bottom_interface_numbers;
+    if (support_params.sublayer_enabled()) {
+        top_interface_numbers.assign(support_layers.size(), 0);
+        bottom_interface_numbers.assign(support_layers.size(), 0);
+        std::vector<char> top_contact(support_layers.size(), 0), top_interface(support_layers.size(), 0);
+        std::vector<char> bottom_contact(support_layers.size(), 0), bottom_interface(support_layers.size(), 0);
+        auto layer_at = [&support_layers](coordf_t print_z) -> size_t {
+            auto it = std::lower_bound(support_layers.begin(), support_layers.end(), print_z - EPSILON,
+                                       [](const SupportLayer *layer, coordf_t z) { return layer->print_z < z; });
+            return it != support_layers.end() && std::abs((*it)->print_z - print_z) < EPSILON ? size_t(it - support_layers.begin()) : size_t(-1);
+        };
+        for (const SupportGeneratorLayersPtr *layers : { &top_contacts, &bottom_contacts, &interface_layers })
+            for (const SupportGeneratorLayer *layer : *layers)
+                if (const size_t idx = layer_at(layer->print_z); idx != size_t(-1)) {
+                    if (layer->layer_type == SupporLayerType::TopContact)          top_contact[idx] = 1;
+                    else if (layer->layer_type == SupporLayerType::TopInterface)   top_interface[idx] = 1;
+                    else if (layer->layer_type == SupporLayerType::BottomContact)  bottom_contact[idx] = 1;
+                    else if (layer->layer_type == SupporLayerType::BottomInterface) bottom_interface[idx] = 1;
+                }
+        // Top interfaces count down from their contact; bottom interfaces count up from theirs.
+        for (int idx = int(support_layers.size()) - 1, n = 0; idx >= 0; --idx) {
+            n = top_contact[idx] ? 1 : top_interface[idx] && n > 0 ? n + 1 : 0;
+            top_interface_numbers[idx] = top_interface[idx] ? n : 0;
+        }
+        for (size_t idx = 0, n = 0; idx < support_layers.size(); ++idx) {
+            n = bottom_contact[idx] ? 1 : bottom_interface[idx] && n > 0 ? n + 1 : 0;
+            bottom_interface_numbers[idx] = bottom_interface[idx] ? int(n) : 0;
+        }
+    }
+
     tbb::parallel_for(tbb::blocked_range<size_t>(n_raft_layers, support_layers.size()),
         [&config, &slicing_params, &support_params, &support_layers, &bottom_contacts, &top_contacts, &intermediate_layers, &interface_layers, &base_interface_layers, &layer_caches, &loop_interface_processor,
-            &bbox_object, &angles, n_raft_layers, link_max_length_factor]
+            &bbox_object, &angles, &top_interface_numbers, &bottom_interface_numbers, n_raft_layers, link_max_length_factor]
             (const tbb::blocked_range<size_t>& range) {
         // Indices of the 1st layer in their respective container at the support layer height.
         size_t idx_layer_bottom_contact   = size_t(-1);
@@ -1608,6 +1664,10 @@ void generate_support_toolpaths(
         auto filler_base_interface  = std::unique_ptr<Fill>(base_interface_layers.empty() ? nullptr :
             Fill::new_from_type(base_interface_density > 0.95 || support_params.with_sheath ? ipRectilinear : ipSupportBase));
         auto filler_support         = std::unique_ptr<Fill>(Fill::new_from_type(support_params.base_fill_pattern));
+        // MAGPIE: filler of the interface sublayer.
+        auto filler_sublayer        = std::unique_ptr<Fill>(support_params.sublayer_enabled() ? Fill::new_from_type(support_params.sublayer_pattern) : nullptr);
+        if (filler_sublayer)
+            filler_sublayer->set_bounding_box(bbox_object);
         filler_interface->set_bounding_box(bbox_object);
         if (filler_first_layer_ptr)
             filler_first_layer_ptr->set_bounding_box(bbox_object);
@@ -1620,7 +1680,9 @@ void generate_support_toolpaths(
         {
             SupportLayer &support_layer = *support_layers[support_layer_id];
             LayerCache   &layer_cache   = layer_caches[support_layer_id];
-            const float   support_interface_angle = support_params.support_interface_angle(support_layer.interface_id());
+            // MAGPIE: an overriding interface pattern keeps the interface angle on every layer.
+            const float   support_interface_angle = support_params.interface_pattern_override ? support_params.interface_angle :
+                                                                                               support_params.support_interface_angle(support_layer.interface_id());
 
             // Find polygons with the same print_z.
             SupportGeneratorLayerExtruded &bottom_contact_layer = layer_cache.bottom_contact_layer;
@@ -1753,7 +1815,13 @@ void generate_support_toolpaths(
                         (interface_layer_type == InterfaceLayerType::Interface && layer_ex.layer->layer_type == SupporLayerType::BottomInterface);
                     //FIXME Bottom interfaces are extruded with the briding flow. Some bridging layers have its height slightly reduced, therefore
                     // the bridging flow does not quite apply. Reduce the flow to area of an ellipse? (A = pi * a * b)
-                    auto *filler = raft_contact ? filler_raft_contact : filler_interface.get();
+                    // MAGPIE: the interface sublayer (support_extras mod). The contact layer (number 1) never is one.
+                    const int interface_number = !support_params.sublayer_enabled() ? 0 :
+                        layer_ex.layer->layer_type == SupporLayerType::TopInterface    ? top_interface_numbers[support_layer_id] :
+                        layer_ex.layer->layer_type == SupporLayerType::BottomInterface ? bottom_interface_numbers[support_layer_id] : 0;
+                    const bool use_sublayer = !interface_as_base && !raft_contact && interface_number >= 2 &&
+                        interface_number >= support_params.sublayer_start && interface_number <= support_params.sublayer_end;
+                    auto *filler = raft_contact ? filler_raft_contact : use_sublayer ? filler_sublayer.get() : filler_interface.get();
                     auto interface_flow = layer_ex.layer->bridging ?
                         Flow::bridging_flow(layer_ex.layer->height, support_params.support_material_bottom_interface_flow.nozzle_diameter()) :
                         (raft_contact ? &support_params.raft_interface_flow :
@@ -1765,7 +1833,7 @@ void generate_support_toolpaths(
                             // Use interface angle for the interface layers.
                             raft_contact ?
                                 support_params.raft_interface_angle(support_layer.interface_id()) :
-                                support_interface_angle;
+                                use_sublayer ? support_params.sublayer_angle : support_interface_angle;
                     // ORCA: pick density based on interface type.
                     double density = raft_contact ? support_params.raft_interface_density :
                         interface_as_base ? support_params.support_density :
@@ -1773,13 +1841,25 @@ void generate_support_toolpaths(
                     filler->spacing = raft_contact ? support_params.raft_interface_flow.spacing() :
                         interface_as_base ? support_params.support_material_flow.spacing() : support_params.support_material_interface_flow.spacing();
                     filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / density));
+                    const InfillPattern pattern = use_sublayer ? support_params.sublayer_pattern : support_params.contact_fill_pattern;
+                    FillParams fill_params;
+                    fill_params.density     = float(density);
+                    fill_params.dont_adjust = true;
+                    if (!interface_as_base && !raft_contact && pattern == ipTriangles && (use_sublayer || support_params.interface_pattern_override)) {
+                        // MAGPIE: triangle interfaces keep the interface line spacing in each of the three
+                        // directions and are not anchored.
+                        fill_params.multiline             = 1;
+                        fill_params.density_per_direction = true;
+                        fill_params.anchor_length         = 0.f;
+                        fill_params.anchor_length_max     = 0.f;
+                    }
                     fill_expolygons_generate_paths(
                         // Destination
                         layer_ex.extrusions,
                         // Regions to fill
                         union_safety_offset_ex(layer_ex.polygons_to_extrude()),
                         // Filler and its parameters
-                        filler, float(density),
+                        filler, fill_params, float(density),
                         // Extrusion parameters
                         interface_as_base ? ExtrusionRole::erSupportMaterial : ExtrusionRole::erSupportMaterialInterface, interface_flow,
                         support_params.keep_narrow_islands);

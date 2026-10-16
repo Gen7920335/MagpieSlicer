@@ -1295,6 +1295,13 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionEnum<SupportType>,   support_type))
     ((ConfigOptionString,              support_generator))
     ((ConfigOptionFloat,               object_elevation))
+    ((ConfigOptionString,              support_interface_pattern_override))
+    ((ConfigOptionInt,                 support_interface_sublayer_start))
+    ((ConfigOptionInt,                 support_interface_sublayer_end))
+    ((ConfigOptionString,              support_interface_sublayer_pattern))
+    ((ConfigOptionFloat,               support_interface_sublayer_angle))
+    ((ConfigOptionInt,                 support_wall_loops))
+    ((ConfigOptionInt,                 tree_support_wall_loops))
     // Direction of the support pattern (in XY plane).`
     ((ConfigOptionFloat,               support_angle))
     ((ConfigOptionBool,                support_on_build_plate_only))

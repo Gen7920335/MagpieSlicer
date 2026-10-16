@@ -1575,6 +1575,13 @@ bool PrintObject::invalidate_state_by_config_options(
         } else if (
         	   opt_key == "support_type"
             || opt_key == "support_generator"
+            || opt_key == "support_interface_pattern_override"
+            || opt_key == "support_interface_sublayer_start"
+            || opt_key == "support_interface_sublayer_end"
+            || opt_key == "support_interface_sublayer_pattern"
+            || opt_key == "support_interface_sublayer_angle"
+            || opt_key == "support_wall_loops"
+            || opt_key == "tree_support_wall_loops"
             || opt_key == "support_angle"
             || opt_key == "support_on_build_plate_only"
             || opt_key == "support_critical_regions_only"

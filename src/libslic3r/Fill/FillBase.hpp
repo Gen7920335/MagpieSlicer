@@ -64,6 +64,9 @@ struct FillParams
     // Fill density, fraction in <0, 1>
     float       density 		{ 0.f };
     int   multiline{1};
+    // MAGPIE: apply density to every sweep of a multi-direction pattern (triangles, grid) instead of
+    // splitting it between them, so each direction keeps the requested line spacing (support interfaces).
+    bool  density_per_direction{false};
 
     // Length of an infill anchor along the perimeter.
     // 1000mm is roughly the maximum length line that fits into a 32bit coord_t.

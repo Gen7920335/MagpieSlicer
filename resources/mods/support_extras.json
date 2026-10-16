@@ -1,0 +1,26 @@
+{
+    // Support toolpath extras from Magpie line 1, for every support generator: a triangle (or other)
+    // interface pattern, an interface sublayer printed with its own pattern and angle, and separate
+    // wall counts for normal and tree support. The defaults change nothing.
+    "id": "support_extras",
+    "name": "Support extras",
+    "version": "1.0.0",
+    "params": {
+        "interface_pattern": { "type": "string", "default": "",  "label": "Interface pattern (triangles, grid, rectilinear, concentric; empty = Orca's)" },
+        "sublayer_start":    { "type": "int",    "default": 0,   "label": "Interface sublayer: first layer from the contact (2 or more; 0 = off)" },
+        "sublayer_end":      { "type": "int",    "default": 0,   "label": "Interface sublayer: last layer from the contact" },
+        "sublayer_pattern":  { "type": "string", "default": "",  "label": "Interface sublayer pattern (rectilinear, grid, triangles, concentric)" },
+        "sublayer_angle":    { "type": "float",  "default": 0,   "unit": "deg", "label": "Interface sublayer angle" },
+        "normal_wall_loops": { "type": "int",    "default": -1,  "label": "Normal support walls (0-10; -1 = Orca's)" },
+        "tree_wall_loops":   { "type": "int",    "default": -1,  "label": "Tree support walls per branch (1-10; -1 = Orca's)" }
+    },
+    "rules": [
+        { "target": "support_interface_pattern_override", "value": "support_extras.interface_pattern" },
+        { "target": "support_interface_sublayer_start",   "value": "support_extras.sublayer_start" },
+        { "target": "support_interface_sublayer_end",     "value": "max(support_extras.sublayer_start, support_extras.sublayer_end)" },
+        { "target": "support_interface_sublayer_pattern", "value": "support_extras.sublayer_pattern" },
+        { "target": "support_interface_sublayer_angle",   "value": "support_extras.sublayer_angle" },
+        { "target": "support_wall_loops",                 "value": "support_extras.normal_wall_loops" },
+        { "target": "tree_support_wall_loops",            "value": "support_extras.tree_wall_loops" }
+    ]
+}

@@ -7,6 +7,8 @@
 #include <cassert>
 #include <math.h>
 #include <limits>
+#include <optional>
+#include <string>
 #include "../libslic3r.h"
 #include "../Flow.hpp"
 #include "../Layer.hpp"
@@ -139,6 +141,11 @@ struct SupportParameters {
 
         SupportMaterialPattern  support_pattern = object_config.support_base_pattern;
         this->with_sheath = object_config.tree_support_wall_count > 0;
+        // MAGPIE: support_wall_loops >= 0 sets the walls of normal support on its own (-1 keeps Orca's).
+        this->normal_wall_loops = object_config.support_wall_loops.value;
+        if (this->normal_wall_loops >= 0 && !is_tree(object_config.support_type.value))
+            this->with_sheath = this->normal_wall_loops > 0;
+        this->tree_wall_loops = object_config.tree_support_wall_loops.value;
         this->base_fill_pattern =
             support_pattern == smpHoneycomb ? ipHoneycomb :
             this->support_density > 0.95 || this->with_sheath ? ipRectilinear : ipSupportBase;
@@ -160,6 +167,15 @@ struct SupportParameters {
             object_config.support_interface_pattern == smipConcentric ?
             ipConcentric :
             (contact_interface_density > 0.95 ? ipRectilinear : ipSupportBase);
+        // MAGPIE: support_interface_pattern_override and the interface sublayer (support_extras mod).
+        if (const auto p = interface_pattern_from_name(object_config.support_interface_pattern_override.value)) {
+            this->contact_fill_pattern       = *p;
+            this->interface_pattern_override = true;
+        }
+        this->sublayer_start   = std::max(0, object_config.support_interface_sublayer_start.value);
+        this->sublayer_end     = std::max(this->sublayer_start, object_config.support_interface_sublayer_end.value);
+        this->sublayer_pattern = interface_pattern_from_name(object_config.support_interface_sublayer_pattern.value).value_or(this->contact_fill_pattern);
+        this->sublayer_angle   = Geometry::deg2rad(float(object_config.support_interface_sublayer_angle.value));
 
         this->raft_angle_1st_layer  = 0.f;
         this->raft_angle_base       = 0.f;
@@ -290,6 +306,25 @@ struct SupportParameters {
     InfillPattern           raft_interface_fill_pattern;
     // Pattern of the contact layers.
     InfillPattern 			contact_fill_pattern;
+    // MAGPIE (support_extras mod). normal_wall_loops / tree_wall_loops: -1 keeps Orca's walls.
+    int                     normal_wall_loops { -1 };
+    int                     tree_wall_loops { -1 };
+    bool                    interface_pattern_override { false };
+    // Interface layers sublayer_start..sublayer_end, counted from the contact layer (1), use
+    // sublayer_pattern and sublayer_angle; sublayer_start 0 turns it off.
+    int                     sublayer_start { 0 };
+    int                     sublayer_end { 0 };
+    InfillPattern           sublayer_pattern { ipRectilinear };
+    float                   sublayer_angle { 0.f };
+    bool                    sublayer_enabled() const { return sublayer_start > 0; }
+    static std::optional<InfillPattern> interface_pattern_from_name(const std::string &name)
+    {
+        if (name == "triangles")   return ipTriangles;
+        if (name == "grid")        return ipGrid;
+        if (name == "rectilinear") return ipRectilinear;
+        if (name == "concentric")  return ipConcentric;
+        return std::nullopt;
+    }
     // Shall the sparse (base) layers be printed with a single perimeter line (sheath) for robustness?
     bool                    with_sheath;
     // MAGPIE: print every support island, even one the fill pattern misses (a thin pillar of a
