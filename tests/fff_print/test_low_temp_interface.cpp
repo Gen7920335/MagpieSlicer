@@ -9,8 +9,17 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cmath>
+#include <cstdlib>
+#include <limits>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 using namespace Slic3r;
@@ -122,7 +131,28 @@ TEST_CASE("Low temperature interface off leaves support and temperatures to Orca
             gcode.erase(begin, gcode.find('\n', begin) - begin);
         return gcode;
     };
-    CHECK(without_timestamp(off) == without_timestamp(slice({ TestMesh::overhang }, orca)));
+    // Compare line by line so a failure names the first differing line.
+    std::istringstream a(without_timestamp(off)), b(without_timestamp(slice({ TestMesh::overhang }, orca)));
+    std::string        line_a, line_b;
+    size_t             line_no = 0;
+    while (true) {
+        const bool more_a = bool(std::getline(a, line_a)), more_b = bool(std::getline(b, line_b));
+        ++line_no;
+        if (!more_a || !more_b) {
+            CHECK(more_a == more_b);
+            break;
+        }
+        // Object labels carry a per-process object id (golden.py normalizes them the same way).
+        const auto id_pos_a = line_a.find(" id:"), id_pos_b = line_b.find(" id:");
+        if (line_a.rfind("; ", 0) == 0 && id_pos_a != std::string::npos && id_pos_b != std::string::npos &&
+            line_a.substr(0, id_pos_a) == line_b.substr(0, id_pos_b))
+            continue;
+        if (line_a != line_b) {
+            INFO("line " << line_no);
+            CHECK(line_a == line_b);
+            break;
+        }
+    }
 }
 
 TEST_CASE("Low temperature interface hardware actions follow their toggles", "[LowTemperatureInterface]")
@@ -201,4 +231,265 @@ TEST_CASE("Low temperature interface targets stay within extrudable filament lim
     CHECK(validate(true, 241).opt_key == "support_interface_temperature");
     // Feature off: the interface target is never emitted, so it is not judged.
     CHECK(validate(false, 1).string == "");
+}
+
+// ---- Temperature drop tower (Magpie line 1 test_support_material.cpp) ----
+
+namespace {
+
+struct TowerSettings
+{
+    int                normal_temperature { 220 };   // degC
+    int                interface_temperature { 170 }; // degC
+    bool               tower_enabled { true };
+    bool               low_temperature_interface_enabled { true };
+    int                interface_filament { 0 };
+    PrintSequence      print_sequence { PrintSequence::ByLayer };
+    bool               configured_wiper { false };
+    bool               support_enabled { true };
+    double             tower_x { -1.0 }; // mm
+    double             tower_y { -1.0 }; // mm
+    std::vector<Vec2d> printable_area { Vec2d(0., 0.), Vec2d(200., 0.), Vec2d(200., 200.), Vec2d(0., 200.) };
+};
+
+std::string tower_gcode(const TowerSettings &settings)
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "enable_support", settings.support_enabled },
+        { "support_interface_top_layers", 2 },
+        { "support_interface_filament", settings.interface_filament },
+        { "single_nozzle_low_temperature_interface", settings.low_temperature_interface_enabled },
+        { "support_interface_temperature", settings.interface_temperature },
+        { "support_interface_temperature_drop_tower", settings.tower_enabled },
+        { "support_interface_nozzle_wiping_on_temperature_change", settings.configured_wiper },
+        { "support_interface_brush_repetitions", 2 },
+        { "support_interface_brush_speed", 80.0 },
+        { "layer_height", 0.2 },
+        { "initial_layer_print_height", 0.2 },
+    });
+    config.set_key_value("nozzle_temperature", new ConfigOptionInts({ settings.normal_temperature }));
+    config.set_key_value("nozzle_temperature_initial_layer", new ConfigOptionInts({ settings.normal_temperature }));
+    config.set_key_value("print_sequence", new ConfigOptionEnum<PrintSequence>(settings.print_sequence));
+    config.set_key_value("printable_area", new ConfigOptionPoints(settings.printable_area));
+    config.set_key_value("support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ settings.tower_x }));
+    config.set_key_value("support_interface_temperature_drop_tower_y", new ConfigOptionFloats({ settings.tower_y }));
+    config.set_key_value("support_interface_brush_start", new ConfigOptionPoint(Vec2d(10.0, 10.0)));
+    config.set_key_value("support_interface_brush_end", new ConfigOptionPoint(Vec2d(20.0, 10.0)));
+    return slice({ TestMesh::overhang }, config);
+}
+
+std::optional<double> gcode_word(const std::string &line, char letter)
+{
+    for (size_t pos = 0; pos < line.size(); ++pos) {
+        if (line[pos] != letter || (pos > 0 && !std::isspace(static_cast<unsigned char>(line[pos - 1]))))
+            continue;
+        const char  *begin = line.c_str() + pos + 1;
+        char        *end   = nullptr;
+        const double value = std::strtod(begin, &end);
+        if (end != begin)
+            return value;
+    }
+    return std::nullopt;
+}
+
+size_t count_substring(const std::string &text, const std::string &needle)
+{
+    size_t count = 0;
+    for (size_t pos = 0; (pos = text.find(needle, pos)) != std::string::npos; pos += needle.size())
+        ++count;
+    return count;
+}
+
+// The first cooling pass: its fast and slow lengths (mm), feed rates (mm/min) and extent (mm); and every pass's Z.
+struct TowerMetrics
+{
+    size_t              cooling_passes { 0 };
+    std::vector<double> cooling_pass_z;
+    double              fast_length { 0.0 }, slow_length { 0.0 };
+    double              min_fast_feedrate { std::numeric_limits<double>::max() }, max_fast_feedrate { std::numeric_limits<double>::lowest() };
+    double              min_slow_feedrate { std::numeric_limits<double>::max() }, max_slow_feedrate { std::numeric_limits<double>::lowest() };
+    double              min_x { std::numeric_limits<double>::max() }, min_y { std::numeric_limits<double>::max() };
+    double              max_x { std::numeric_limits<double>::lowest() }, max_y { std::numeric_limits<double>::lowest() };
+};
+
+TowerMetrics analyze_tower(const std::string &gcode)
+{
+    enum class Section { None, Fast, Slow };
+    TowerMetrics       metrics;
+    Section            section    = Section::None;
+    bool               first_pass = false;
+    double             x = 0.0, y = 0.0, z = 0.0, feedrate = 0.0;
+    std::istringstream stream(gcode);
+    for (std::string line; std::getline(stream, line);) {
+        if (line.find("temperature drop tower cooling pass") != std::string::npos && line.find("pass end") == std::string::npos) {
+            ++metrics.cooling_passes;
+            metrics.cooling_pass_z.push_back(z);
+            first_pass = metrics.cooling_passes == 1;
+            section    = Section::None;
+        } else if (first_pass && line.find("cooling fast section") != std::string::npos) {
+            section = Section::Fast;
+        } else if (first_pass && line.find("cooling final 10 mm") != std::string::npos) {
+            section = Section::Slow;
+        } else if (first_pass && line.find("cooling pass end") != std::string::npos) {
+            first_pass = false;
+            section    = Section::None;
+        }
+        const bool linear_move = line.rfind("G0 ", 0) == 0 || line.rfind("G1 ", 0) == 0;
+        if (!linear_move)
+            continue;
+        const double previous_x = x, previous_y = y;
+        if (const auto v = gcode_word(line, 'F')) feedrate = *v;
+        if (const auto v = gcode_word(line, 'X')) x = *v;
+        if (const auto v = gcode_word(line, 'Y')) y = *v;
+        if (const auto v = gcode_word(line, 'Z')) z = *v;
+        if (!first_pass || section == Section::None || !gcode_word(line, 'E'))
+            continue;
+        const double length = std::hypot(x - previous_x, y - previous_y);
+        if (length <= 1e-6)
+            continue;
+        metrics.min_x = std::min({ metrics.min_x, previous_x, x });
+        metrics.min_y = std::min({ metrics.min_y, previous_y, y });
+        metrics.max_x = std::max({ metrics.max_x, previous_x, x });
+        metrics.max_y = std::max({ metrics.max_y, previous_y, y });
+        if (section == Section::Fast) {
+            metrics.min_fast_feedrate = std::min(metrics.min_fast_feedrate, feedrate);
+            metrics.max_fast_feedrate = std::max(metrics.max_fast_feedrate, feedrate);
+            metrics.fast_length += length;
+        } else {
+            metrics.min_slow_feedrate = std::min(metrics.min_slow_feedrate, feedrate);
+            metrics.max_slow_feedrate = std::max(metrics.max_slow_feedrate, feedrate);
+            metrics.slow_length += length;
+        }
+    }
+    return metrics;
+}
+
+void check_passes_on_distinct_layers(const TowerMetrics &metrics)
+{
+    REQUIRE(metrics.cooling_passes >= 2);
+    std::vector<double> z = metrics.cooling_pass_z;
+    std::sort(z.begin(), z.end());
+    // One cooling pass per layer, mm.
+    for (size_t idx = 1; idx < z.size(); ++idx)
+        CHECK(z[idx] - z[idx - 1] > 0.05);
+}
+
+} // namespace
+
+TEST_CASE("Temperature drop tower scales and slows only its final 10 mm", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    // Arm length in mm for the temperature drop (line 1): 50 mm up to 30 degC, then one mm per degree, at most 80.
+    const auto [normal_temperature, expected_size] = GENERATE(table<int, double>({ { 200, 50.0 }, { 201, 51.0 }, { 220, 70.0 }, { 260, 80.0 } }));
+    DYNAMIC_SECTION("normal " << normal_temperature) {
+        TowerSettings settings;
+        settings.normal_temperature = normal_temperature;
+        const std::string  output  = tower_gcode(settings);
+        const TowerMetrics metrics = analyze_tower(output);
+        check_passes_on_distinct_layers(metrics);
+        CHECK(metrics.fast_length > metrics.slow_length);
+        CHECK_THAT(metrics.slow_length, Catch::Matchers::WithinAbs(10.0, 0.03));
+        // Feed rates in mm/min: the tail at 10 mm/s, the rest faster and constant.
+        CHECK(metrics.min_fast_feedrate > 600.0);
+        CHECK_THAT(metrics.max_fast_feedrate, Catch::Matchers::WithinAbs(metrics.min_fast_feedrate, 0.1));
+        CHECK_THAT(metrics.min_slow_feedrate, Catch::Matchers::WithinAbs(600.0, 0.1));
+        CHECK_THAT(metrics.max_slow_feedrate, Catch::Matchers::WithinAbs(600.0, 0.1));
+        CHECK_THAT(metrics.max_x - metrics.min_x, Catch::Matchers::WithinAbs(expected_size, 0.03));
+        CHECK_THAT(metrics.max_y - metrics.min_y, Catch::Matchers::WithinAbs(expected_size, 0.03));
+        // Rear left of the 200 mm bed, 3 mm from its edge.
+        CHECK(metrics.min_x > 3.0);
+        CHECK(metrics.max_y < 197.0);
+        CHECK(count_substring(output, "; temperature drop tower brim line") == 5);
+        CHECK(count_substring(output, "; temperature drop tower brim begin") == 1);
+
+        // Cooling: M104 (no wait) to the interface temperature, the cooling pass, then the interface; no M109 wait.
+        const std::string set_temperature  = "M104 S" + std::to_string(settings.interface_temperature);
+        const std::string wait_temperature = "M109 S" + std::to_string(settings.interface_temperature);
+        const size_t      begin            = output.find("low-temperature support interface begin");
+        const size_t      nonblocking      = output.find(set_temperature, begin);
+        const size_t      brim_end         = output.find("temperature drop tower brim end");
+        const size_t      cooling_pass     = output.find("temperature drop tower cooling pass", begin);
+        const size_t      cooling_end      = output.find("temperature drop tower cooling pass end", cooling_pass);
+        const size_t      interface        = output.find("support material interface", cooling_end);
+        REQUIRE(begin != std::string::npos);
+        REQUIRE(nonblocking != std::string::npos);
+        REQUIRE(brim_end != std::string::npos);
+        REQUIRE(cooling_pass != std::string::npos);
+        REQUIRE(cooling_end != std::string::npos);
+        REQUIRE(interface != std::string::npos);
+        CHECK(begin < nonblocking);
+        CHECK(brim_end < cooling_pass);
+        CHECK(cooling_end < interface);
+        CHECK(output.find(wait_temperature, nonblocking) > interface);
+    }
+}
+
+TEST_CASE("Temperature drop tower stays inside rear-left bed bounds", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    // Bed, its x range, the highest tower y and the largest tower size, mm.
+    const std::array<std::tuple<std::vector<Vec2d>, double, double, double, double>, 2> beds{ {
+        { { Vec2d(0., 0.), Vec2d(200., 0.), Vec2d(200., 70.), Vec2d(0., 70.) }, 0.0, 200.0, 67.0, 64.0 },
+        { { Vec2d(-10., -20.), Vec2d(190., -20.), Vec2d(190., 180.), Vec2d(-10., 180.) }, -10.0, 190.0, 177.0, 70.0 },
+    } };
+    for (const auto &[bed, bed_min_x, bed_max_x, expected_max_y, expected_size] : beds) {
+        TowerSettings settings;
+        settings.printable_area    = bed;
+        const TowerMetrics metrics = analyze_tower(tower_gcode(settings));
+        CAPTURE(bed_min_x, bed_max_x, expected_max_y, expected_size);
+        check_passes_on_distinct_layers(metrics);
+        CHECK(metrics.min_x >= bed_min_x + 3.0 - 0.03);
+        CHECK(metrics.max_x <= bed_max_x - 3.0 + 0.03);
+        CHECK(metrics.max_y < expected_max_y);
+        CHECK(metrics.max_x - metrics.min_x <= expected_size + 0.03);
+        CHECK(metrics.max_y - metrics.min_y <= expected_size + 0.03);
+    }
+}
+
+TEST_CASE("Temperature drop tower clamps a configured position to the bed", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    TowerSettings settings;
+    settings.tower_x           = 500.0;
+    settings.tower_y           = 100.0;
+    const TowerMetrics metrics = analyze_tower(tower_gcode(settings));
+    check_passes_on_distinct_layers(metrics);
+    // Pushed against the right edge of the 200 mm bed, 3 mm margin.
+    CHECK(metrics.max_x <= 197.0 + 0.03);
+    CHECK(metrics.max_x > 150.0);
+}
+
+TEST_CASE("Temperature drop tower honors every activation guard", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    std::vector<std::pair<std::string, TowerSettings>> disabled_cases;
+    TowerSettings                                      settings;
+    settings.tower_enabled = false;
+    disabled_cases.emplace_back("tower toggle off", settings);
+    settings = {};
+    settings.low_temperature_interface_enabled = false;
+    disabled_cases.emplace_back("low-temperature mode off", settings);
+    settings = {};
+    settings.interface_filament = 1;
+    disabled_cases.emplace_back("dedicated interface filament", settings);
+    settings = {};
+    settings.print_sequence = PrintSequence::ByObject;
+    disabled_cases.emplace_back("print by object", settings);
+    settings = {};
+    settings.configured_wiper = true;
+    disabled_cases.emplace_back("configured nozzle wiper", settings);
+    settings = {};
+    settings.normal_temperature = settings.interface_temperature;
+    disabled_cases.emplace_back("no temperature drop", settings);
+    settings = {};
+    settings.support_enabled = false;
+    disabled_cases.emplace_back("support disabled", settings);
+    for (const auto &[name, disabled] : disabled_cases) {
+        CAPTURE(name);
+        const std::string output = tower_gcode(disabled);
+        CHECK(output.find("temperature drop tower layer") == std::string::npos);
+        CHECK(output.find("temperature drop tower cooling pass") == std::string::npos);
+    }
+    TowerSettings wiper_fallback;
+    wiper_fallback.configured_wiper = true;
+    const std::string fallback      = tower_gcode(wiper_fallback);
+    CHECK(fallback.find("M109 S170") != std::string::npos);
+    CHECK(fallback.find("temperature drop tower") == std::string::npos);
 }

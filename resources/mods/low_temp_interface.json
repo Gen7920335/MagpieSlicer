@@ -1,8 +1,9 @@
 {
     // Low temperature support interface (Magpie line 1): on a single nozzle, support interfaces print at their own
     // lower temperature, so they stick less to the model. The support prints after the object on each layer, the
-    // nozzle waits for the interface temperature, and the next other extrusion heats back. Optional nozzle cooling
-    // with the auxiliary fan and brushing on a nozzle brush. The defaults change nothing.
+    // nozzle waits for the interface temperature (or cools while printing a temperature drop tower), and the next other
+    // extrusion heats back. Optional nozzle cooling with the auxiliary fan and brushing on a nozzle brush. The defaults
+    // change nothing.
     "id": "low_temp_interface",
     "name": "Low temperature support interface",
     "version": "1.0.0",
@@ -12,7 +13,8 @@
         "heating_time":    { "type": "float", "default": 5,     "unit": "s",    "label": "Heating time before the model resumes" },
         "aux_fan":         { "type": "bool",  "default": false, "label": "Cool the nozzle with the auxiliary fan (air duct adapter required)" },
         "aux_fan_speed":   { "type": "int",   "default": 100,   "unit": "%",    "label": "Auxiliary fan speed" },
-        "brush":           { "type": "bool",  "default": false, "label": "Wipe the nozzle on the brush after cooling" }
+        "brush":           { "type": "bool",  "default": false, "label": "Wipe the nozzle on the brush after cooling" },
+        "tower":           { "type": "bool",  "default": false, "label": "Cool down on a temperature drop tower (without a brush)" }
     },
     "rules": [
         { "target": "single_nozzle_low_temperature_interface",                       "value": "low_temp_interface.enable" },
@@ -20,6 +22,7 @@
         { "target": "support_interface_heating_time",                                "value": "low_temp_interface.heating_time" },
         { "target": "support_interface_auxiliary_fan_cooling_on_temperature_change", "value": "low_temp_interface.aux_fan" },
         { "target": "support_interface_auxiliary_fan_speed",                         "value": "low_temp_interface.aux_fan_speed" },
-        { "target": "support_interface_nozzle_wiping_on_temperature_change",         "value": "low_temp_interface.brush" }
+        { "target": "support_interface_nozzle_wiping_on_temperature_change",         "value": "low_temp_interface.brush" },
+        { "target": "support_interface_temperature_drop_tower",                      "value": "low_temp_interface.tower" }
     ]
 }

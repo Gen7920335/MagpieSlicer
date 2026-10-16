@@ -549,6 +549,7 @@ set(lisbslic3r_sources
     Support/BeltFloorContext.hpp
     Support/SupportCommon.cpp
     Support/SupportCommon.hpp
+    Support/TemperatureDropTower.hpp
     Support/SupportLayer.hpp
     Support/SupportMaterial.cpp
     Support/SupportMaterial.hpp

@@ -646,6 +646,11 @@ protected:
     std::string     extrude_support(const ExtrusionEntityCollection& support_fills, const ExtrusionRole support_extrusion_role);
     // MAGPIE: low temperature support interface.
     bool            low_temperature_interface_enabled() const;
+    bool            has_configured_low_temperature_nozzle_wiper() const;
+    bool            temperature_drop_tower_enabled() const;
+    bool            build_temperature_drop_tower_path(ExtrusionPath &path);
+    bool            build_temperature_drop_tower_brim_paths(std::vector<ExtrusionPath> &paths);
+    std::string     extrude_temperature_drop_tower(const ExtrusionPath &path, bool cooling_transition);
     std::string     start_low_temperature_interface();
     std::string     finish_low_temperature_interface();
 
@@ -735,6 +740,15 @@ protected:
     int                                 m_support_extrusion_context_depth { 0 };
     // Set while extrude_support() prints one role of mixed support, so mixed sub-collections are entered.
     bool                                m_support_role_pass { false };
+    // MAGPIE: the temperature drop tower, one path per layer in plate coordinates (mm), placed on first use.
+    coordf_t                            m_temperature_drop_tower_last_print_z { -std::numeric_limits<coordf_t>::max() };
+    bool                                m_temperature_drop_tower_path_initialized { false };
+    bool                                m_temperature_drop_tower_brim_printed { false };
+    std::vector<Vec2d>                  m_temperature_drop_tower_plate_path;
+    double                              m_temperature_drop_tower_left { 0.0 };    // mm
+    double                              m_temperature_drop_tower_rear { 0.0 };    // mm
+    double                              m_temperature_drop_tower_size { 0.0 };    // mm
+    double                              m_temperature_drop_tower_spacing { 0.0 }; // mm
     DynamicConfig                       m_calib_config;
     // scaled G-code resolution
     double                              m_scaled_resolution;

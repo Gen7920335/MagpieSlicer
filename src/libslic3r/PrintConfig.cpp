@@ -7453,6 +7453,23 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("support_interface_temperature_drop_tower", coBool);
+    def->label = L("Use temperature drop tower");
+    def->category = L("Support");
+    def->tooltip = L("Build an L-shaped tower at the rear-left of the bed and print it slowly while lowering the nozzle temperature. "
+                     "This is used when nozzle wiping is unavailable or disabled and is not supported for print-by-object mode.");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    // Per plate tower position, mm; negative asks for the rear left of the bed.
+    def = this->add("support_interface_temperature_drop_tower_x", coFloats);
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloats{ -1.0 });
+
+    def = this->add("support_interface_temperature_drop_tower_y", coFloats);
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloats{ -1.0 });
+
     def = this->add("support_interface_cooling_position", coPoint);
     def->label = L("Low temperature interface cooling position");
     def->tooltip = L("Machine X/Y position for auxiliary-fan nozzle cooling. Negative values use the rear-left corner of the printable area.");

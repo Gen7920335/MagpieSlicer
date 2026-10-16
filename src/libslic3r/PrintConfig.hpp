@@ -1309,6 +1309,9 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                support_interface_auxiliary_fan_cooling_on_temperature_change))
     ((ConfigOptionInt,                 support_interface_auxiliary_fan_speed))
     ((ConfigOptionBool,                support_interface_nozzle_wiping_on_temperature_change))
+    ((ConfigOptionBool,                support_interface_temperature_drop_tower))
+    ((ConfigOptionFloats,              support_interface_temperature_drop_tower_x))
+    ((ConfigOptionFloats,              support_interface_temperature_drop_tower_y))
     // Direction of the support pattern (in XY plane).`
     ((ConfigOptionFloat,               support_angle))
     ((ConfigOptionBool,                support_on_build_plate_only))

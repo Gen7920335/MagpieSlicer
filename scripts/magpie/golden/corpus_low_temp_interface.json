@@ -1,5 +1,5 @@
 {
- "description": "Low temperature support interface (resources/mods/low_temp_interface.json) on the U1: compared by hand with Magpie line 1 (Beta 7) per layer (temperature commands, role order).",
+ "description": "Low temperature support interface and temperature drop tower (resources/mods/low_temp_interface.json) on the U1: compared by hand with Magpie line 1 (Beta 7) per layer (temperature commands, role order, tower extent).",
  "printers": {
   "u1": {
    "machine": "presets/u1_04_machine.json",
@@ -53,6 +53,18 @@
     "support_interface_top_layers": "3",
     "support_interface_bottom_layers": "0",
     "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.temperature\": 170, \"low_temp_interface.heating_time\": 5}"
+   }
+  },
+  {
+   "name": "overhang_tower",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "3",
+    "support_interface_bottom_layers": "0",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.temperature\": 170, \"low_temp_interface.heating_time\": 5, \"low_temp_interface.tower\": true}"
    }
   }
  ]
