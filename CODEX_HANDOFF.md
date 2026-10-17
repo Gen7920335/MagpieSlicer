@@ -14,6 +14,12 @@
 
 ## History
 
+### 2026-10-17 P5 Snapmaker U1 Monitor plugin
+
+- Nightly already has `SnapmakerPrinterAgent` (Moonraker-based) and Python pages plugins, so line 1's native `SnapmakerMonitorPanel` (C++, ~4,300 lines with camera session and toolpath layer view) is rebuilt as a pages plugin: `scripts/magpie/plugins/magpie_snapmaker_u1_monitor_plugin_any.py`. Status, temperatures, pause/resume/cancel, emergency stop, skip object, jog/home, camera snapshot, files and print, console, over Moonraker HTTP. Line 1's safety rules kept as functions: motion only in standby/complete/cancelled/error, print control only while printing/paused, emergency stop on its own request in any state, bounded heater/jog/extrude values, command-safe object names.
+- Tested against a fake Moonraker server (`scripts/magpie/plugins/test_snapmaker_u1_monitor.py`, 8 tests) and loaded in the real plugin host (`tests/slic3rutils/test_snapmaker_u1_plugin.cpp`: Pages capability, UI carries the controls). Not tried on a printer; not shown on screen.
+- Not ported from line 1: the WebSocket camera stream (snapshot polling instead), the layer toolpath canvas, temperature history graph, numeric-input edit protection, system/history pages. The user installs the plugin file through the Plugins dialog; it is not bundled.
+
 ### 2026-10-17 P5 mod distribution and U1 start guard
 
 - `ModHost/ModIndex` (libslic3r): index format `{"version":1,"mods":[...]}` with id, version, url, sha256, trust (official/verified/community), tags; search; `install_mod` checks hash, id, bundled-id takeover and conflicts with the loaded set before writing `<data dir>/mods/<id>.json`; `missing_mod_ids` for projects. `slic3r/Utils/ModIndexFetch` downloads (http/https/file) and reloads mods.

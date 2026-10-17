@@ -27,6 +27,7 @@ add_executable(${_TEST_NAME}_tests
     test_printer_agent.cpp
     test_plugin_install.cpp
     test_plugin_lifecycle.cpp
+    test_snapmaker_u1_plugin.cpp
     test_plugin_printer_agent.cpp
     test_printhost.cpp
     test_slicing_pipeline_bindings.cpp
