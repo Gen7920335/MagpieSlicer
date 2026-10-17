@@ -575,7 +575,7 @@ void PrintObjectSupportMaterial::generate(PrintObject &object)
 #ifdef SLIC3R_DEBUG
     SupportGeneratorLayersPtr layers_sorted =
 #endif // SLIC3R_DEBUG
-    generate_support_layers(object, raft_layers, bottom_contacts, top_contacts, intermediate_layers, interface_layers, base_interface_layers);
+    generate_support_layers(object, raft_layers, bottom_contacts, top_contacts, intermediate_layers, interface_layers, base_interface_layers, &layer_storage);
 
     BOOST_LOG_TRIVIAL(info) << "Support generator - Generating tool paths";
 
@@ -1858,9 +1858,12 @@ static inline std::pair<SupportGeneratorLayer*, SupportGeneratorLayer*> new_cont
     }
     else {
         // BBS: need to consider adaptive layer heights
-        if (print_config.independent_support_layer_height) {
+        if (print_config.independent_support_layer_height || layer.lower_layer == nullptr) {
             print_z = layer.bottom_z() - slicing_params.gap_support_object;
-            height = 0;
+            // An elevated first model layer has no model layer to synchronize
+            // against. Its contact belongs below the model, not on the bed/raft.
+            height = print_config.independent_support_layer_height && !slicing_params.zero_gap_interface_top ?
+                0. : std::min(layer.height, slicing_params.max_suport_layer_height);
         }
         else if (layer.lower_layer == nullptr) {
             // MAGPIE: a lifted first layer has no object layer below to synchronize with.

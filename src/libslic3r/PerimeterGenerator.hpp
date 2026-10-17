@@ -12,6 +12,7 @@
 #include <vector>
 #include "Layer.hpp"
 #include "Flow.hpp"
+#include "HalfLayerPlan.hpp"
 #include "Polygon.hpp"
 #include "PrintConfig.hpp"
 #include "Config.hpp"
@@ -106,6 +107,7 @@ struct WallPlan
     coord_t minimum_spacing(int current_depth) const;
     coord_t boundary_overlap() const { return active ? coord_t(std::min(detail_spacing, large_spacing) * overlap_ratio) : 0; }
 };
+struct PerimeterGapDemand;
 
 class PerimeterGenerator {
 public:
@@ -131,6 +133,8 @@ public:
     SurfaceCollection           *fill_surfaces;
     //BBS
     ExPolygons                  *fill_no_overlap;
+    // Optional detached-plan output; normal slicing incurs no retained copy.
+    std::vector<PerimeterGapDemand> *gap_demands = nullptr;
 
     //BBS
     Flow                        smaller_ext_perimeter_flow;
@@ -139,6 +143,17 @@ public:
     const ModHost::WallPlanner *wall_planner { nullptr };
     int                         detail_wall_count { 0 };
     bool                        detail_wall_routing { false };
+    // MAGPIE: H/2 outer walls. Transient geometry-plan input, never inferred from the detail-nozzle count.
+    // The parent layer height is unchanged; only the outer two physical paths use half that height. Both
+    // half-layer cross sections must be supplied by the owning layer planner before this is used for output.
+    bool                        half_layer_outer_walls = false;
+    bool is_outer_wall_depth(size_t depth) const { return depth == 0 || is_half_layer_outer_wall(depth, half_layer_outer_walls); }
+    Flow wall_flow_at_depth(size_t depth, int effective_detail_count) const {
+        Flow flow = depth < size_t(std::max(0, effective_detail_count)) ? smaller_ext_perimeter_flow :
+            (is_outer_wall_depth(depth) ? ext_perimeter_flow : perimeter_flow);
+        return is_half_layer_outer_wall(depth, half_layer_outer_walls) ? flow.with_height(float(0.5 * layer_height)) : flow;
+    }
+    Flow wall_flow_at_depth(size_t depth) const { return wall_flow_at_depth(depth, detail_wall_count); }
     std::vector<Polygons>       m_lower_polygons_series;
     std::vector<Polygons>       m_external_lower_polygons_series;
     std::vector<Polygons>       m_smaller_external_lower_polygons_series;

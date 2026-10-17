@@ -687,10 +687,12 @@ void generate(PrintObject &object, const std::vector<Polygons> *mask)
     SupportGeneratorLayersPtr raft_layers = generate_raft_base(object, support_params, object.slicing_parameters(), empty, interface_layers, empty,
                                                                base_layers, storage);
     if (object.print()->canceled()) throw CanceledException();
-    generate_support_layers(object, raft_layers, empty, empty, base_layers, interface_layers, empty);
+    // H/2 support refines these layers into half-height bands, so each role gets its own list.
+    SupportGeneratorLayersPtr bottom_contacts, top_contacts, base_interface_layers;
+    generate_support_layers(object, raft_layers, bottom_contacts, top_contacts, base_layers, interface_layers, base_interface_layers, &storage);
     if (object.print()->canceled()) throw CanceledException();
-    generate_support_toolpaths(object.support_layers(), object.config(), support_params, object.slicing_parameters(), raft_layers, empty, empty,
-                               base_layers, interface_layers, empty);
+    generate_support_toolpaths(object.support_layers(), object.config(), support_params, object.slicing_parameters(), raft_layers, bottom_contacts,
+                               top_contacts, base_layers, interface_layers, base_interface_layers);
 }
 
 } // namespace CuraSupport

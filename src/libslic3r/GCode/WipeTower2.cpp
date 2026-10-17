@@ -1,5 +1,6 @@
 // Orca: WipeTower2 for all non bbl printers, support all MMU device and toolchanger.
 #include "WipeTower2.hpp"
+#include "WipeTowerTravel.hpp"
 
 #include <algorithm>
 #include <Eigen/Geometry>
@@ -506,10 +507,24 @@ public:
 
 	// Travel to a new XY position. f=0 means use the current value.
 	WipeTowerWriter2& travel(float x, float y, float f = 0.f)
-		{ return extrude_explicit(x, y, 0.f, f); }
+	{
+        const bool relocate = !m_preview_suppressed && Vec2f(x, y) != m_current_pos;
+        const size_t begin = m_gcode.size();
+        extrude_explicit(x, y, 0.f, f);
+        if (relocate) {
+            const std::string move = m_gcode.substr(begin);
+            m_gcode.resize(begin);
+            m_gcode += wipe_tower_interblock_travel(move, int(m_current_tool), m_current_feedrate);
+        }
+        return *this;
+    }
 
 	WipeTowerWriter2& travel(const Vec2f &dest, float f = 0.f) 
-		{ return extrude_explicit(dest.x(), dest.y(), 0.f, f); }
+		{ return travel(dest.x(), dest.y(), f); }
+
+    // Intentional surface wiping/ironing is not a relocation.
+    WipeTowerWriter2& wipe_travel(float x, float y, float f = 0.f)
+        { return extrude_explicit(x, y, 0.f, f); }
 
 	// Extrude a line from current position to x, y with the extrusion amount given by m_extrusion_flow.
 	WipeTowerWriter2& extrude(float x, float y, float f = 0.f)
@@ -762,10 +777,10 @@ public:
         if (n <= 0)
             return;
         while (n--) {
-            travel(box_max.x(), m_current_pos.y(), feedrate);
-            travel(m_current_pos.x(), box_max.y(), feedrate);
-            travel(box_min.x(), m_current_pos.y(), feedrate);
-            travel(m_current_pos.x(), box_min.y(), feedrate);
+            wipe_travel(box_max.x(), m_current_pos.y(), feedrate);
+            wipe_travel(m_current_pos.x(), box_max.y(), feedrate);
+            wipe_travel(box_min.x(), m_current_pos.y(), feedrate);
+            wipe_travel(m_current_pos.x(), box_min.y(), feedrate);
 
             box_max += Vec2f{step_length, step_length};
             box_min -= Vec2f{step_length, step_length};
@@ -1327,7 +1342,7 @@ std::vector<WipeTower::ToolChangeResult> WipeTower2::prime(
 	return results;
 }
 
-WipeTower::ToolChangeResult WipeTower2::tool_change(size_t tool)
+WipeTower::ToolChangeResult WipeTower2::tool_change(size_t tool, size_t planned_change_index)
 {
     size_t old_tool = m_current_tool;
 
@@ -1339,13 +1354,24 @@ WipeTower::ToolChangeResult WipeTower2::tool_change(size_t tool)
 	// Finds this toolchange info
 	if (tool != (unsigned int)(-1))
 	{
-		for (const auto &b : m_layer_info->tool_changes)
-			if ( b.new_tool == tool ) {
-                wipe_volume = b.wipe_volume;
-				wipe_area = b.required_depth;
-                ramming_depth = b.ramming_depth;
-				break;
-			}
+		// MAGPIE: H/2 can visit A->B->A within one layer; take the planned change of this visit.
+		const WipeTowerInfo::ToolChange *planned = nullptr;
+        if (planned_change_index < m_layer_info->tool_changes.size()) {
+            const WipeTowerInfo::ToolChange &candidate = m_layer_info->tool_changes[planned_change_index];
+            if (candidate.old_tool == old_tool && candidate.new_tool == tool)
+                planned = &candidate;
+        }
+        if (planned == nullptr)
+            for (const auto &candidate : m_layer_info->tool_changes)
+                if (candidate.new_tool == tool) {
+                    planned = &candidate;
+                    break;
+                }
+        if (planned != nullptr) {
+            wipe_volume   = planned->wipe_volume;
+			wipe_area     = planned->required_depth;
+            ramming_depth = planned->ramming_depth;
+        }
 	}
 	else {
 		// Otherwise we are going to Unload only. And m_layer_info would be invalid.
@@ -1963,7 +1989,7 @@ void WipeTower2::toolchange_Wipe(
         // completely (quantizing the purge up to the planned rows) so the next block
         // can start right above it without a blank band in between.
         if (!fill_box && x_to_wipe < WT_EPSILON) {
-            writer.travel(m_left_to_right ? xl + 1.5f*line_width : xr - 1.5f*line_width, writer.y(), 7200);
+            writer.wipe_travel(m_left_to_right ? xl + 1.5f*line_width : xr - 1.5f*line_width, writer.y(), 7200);
 			break;
 		}
 		// stepping to the next line:
@@ -2374,7 +2400,7 @@ void WipeTower2::save_on_last_wipe()
 
         for (int i=0; i<int(m_layer_info->tool_changes.size()); ++i) {
             auto& toolchange = m_layer_info->tool_changes[i];
-            tool_change(toolchange.new_tool);
+            tool_change(toolchange.new_tool, size_t(i));
 
             if (i == idx) {
                 recompute_toolchange(toolchange, length_to_volume(finish_layer().total_extrusion_length_in_plane(), m_perimeter_width, m_layer_info->height));
@@ -2432,9 +2458,9 @@ static WipeTower::ToolChangeResult merge_tcr(WipeTower::ToolChangeResult& first,
     WipeTower::ToolChangeResult out = first;
     out.is_contact = first.is_contact || second.is_contact;
     if (first.end_pos != second.start_pos)
-        out.gcode += "G1 X" + Slic3r::float_to_string_decimal_point(second.start_pos.x(), 3)
+        out.gcode += wipe_tower_interblock_travel("G1 X" + Slic3r::float_to_string_decimal_point(second.start_pos.x(), 3)
                      + " Y" + Slic3r::float_to_string_decimal_point(second.start_pos.y(), 3)
-                     + " F7200\n";
+                     + " F7200\n", first.new_tool, 7200.f);
     out.gcode += second.gcode;
     out.extrusions.insert(out.extrusions.end(), second.extrusions.begin(), second.extrusions.end());
     out.end_pos = second.end_pos;
@@ -2554,7 +2580,7 @@ void WipeTower2::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> 
         }
 
         for (int i=0; i<int(layer.tool_changes.size()); ++i) {
-            layer_result.emplace_back(tool_change(layer.tool_changes[i].new_tool));
+            layer_result.emplace_back(tool_change(layer.tool_changes[i].new_tool, size_t(i)));
             if (i == idx) // finish_layer will be called after this toolchange
                 finish_layer_tcr = finish_layer();
         }

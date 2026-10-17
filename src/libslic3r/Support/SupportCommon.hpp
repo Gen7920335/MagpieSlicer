@@ -22,6 +22,15 @@ namespace Slic3r {
 class PrintObject;
 class SupportLayer;
 
+std::vector<double> half_height_support_z_grid(const PrintObject &object);
+// Smallest and largest physical support band, mm, for H/2 refinement.
+std::pair<double, double> half_height_support_band_limits_mm(const PrintObject &object);
+// Band ends follow the model H/2 grid. A support layer boundary off that grid (independent
+// support layer heights) would leave a sliver band; it is merged into its neighbour, or the
+// two are split evenly when the merged band would exceed max_band_mm.
+std::vector<double> half_height_support_band_ends(
+    const std::vector<double> &cuts_mm, double bottom_mm, double top_mm, double min_band_mm, double max_band_mm);
+
 // Turn some of the base layers into base interface layers.
 // For soluble interfaces with non-soluble bases, print maximum two first interface layers with the base
 // extruder to improve adhesion of the soluble filament to the base.
@@ -59,12 +68,13 @@ void fill_expolygons_with_sheath_generate_paths(
 // returns sorted layers
 SupportGeneratorLayersPtr generate_support_layers(
 	PrintObject							&object,
-    const SupportGeneratorLayersPtr     &raft_layers,
-    const SupportGeneratorLayersPtr     &bottom_contacts,
-    const SupportGeneratorLayersPtr     &top_contacts,
-    const SupportGeneratorLayersPtr     &intermediate_layers,
-    const SupportGeneratorLayersPtr     &interface_layers,
-    const SupportGeneratorLayersPtr     &base_interface_layers);
+    SupportGeneratorLayersPtr           &raft_layers,
+    SupportGeneratorLayersPtr           &bottom_contacts,
+    SupportGeneratorLayersPtr           &top_contacts,
+    SupportGeneratorLayersPtr           &intermediate_layers,
+    SupportGeneratorLayersPtr           &interface_layers,
+    SupportGeneratorLayersPtr           &base_interface_layers,
+    SupportGeneratorLayerStorage        *half_layer_storage = nullptr);
 
 // Produce the support G-code.
 // Used by both classic and tree supports.

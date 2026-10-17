@@ -206,7 +206,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    { this->tool_hint = rhs.tool_hint; }
+    { this->tool_hint = rhs.tool_hint; this->inset_idx = rhs.inset_idx; }
     ExtrusionPath(ExtrusionPath &&rhs)
         : polyline(std::move(rhs.polyline))
         , overhang_degree(rhs.overhang_degree)
@@ -219,7 +219,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    { this->tool_hint = rhs.tool_hint; }
+    { this->tool_hint = rhs.tool_hint; this->inset_idx = rhs.inset_idx; }
     ExtrusionPath(const Polyline3 &polyline, const ExtrusionPath &rhs)
         : polyline(polyline)
         , overhang_degree(rhs.overhang_degree)
@@ -232,7 +232,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    { this->tool_hint = rhs.tool_hint; }
+    { this->tool_hint = rhs.tool_hint; this->inset_idx = rhs.inset_idx; }
     ExtrusionPath(Polyline3 &&polyline, const ExtrusionPath &rhs)
         : polyline(std::move(polyline))
         , overhang_degree(rhs.overhang_degree)
@@ -245,10 +245,10 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    { this->tool_hint = rhs.tool_hint; }
+    { this->tool_hint = rhs.tool_hint; this->inset_idx = rhs.inset_idx; }
 
     ExtrusionPath& operator=(const ExtrusionPath& rhs) {
-        this->tool_hint = rhs.tool_hint;
+        this->tool_hint = rhs.tool_hint; this->inset_idx = rhs.inset_idx;
         m_can_reverse = rhs.m_can_reverse;
         m_role = rhs.m_role;
         m_no_extrusion = rhs.m_no_extrusion;
@@ -263,7 +263,7 @@ public:
         return *this;
     }
     ExtrusionPath& operator=(ExtrusionPath&& rhs) {
-        this->tool_hint = rhs.tool_hint;
+        this->tool_hint = rhs.tool_hint; this->inset_idx = rhs.inset_idx;
         m_can_reverse = rhs.m_can_reverse;
         m_role = rhs.m_role;
         m_no_extrusion = rhs.m_no_extrusion;
@@ -407,8 +407,8 @@ public:
     ExtrusionPaths paths;
 
     ExtrusionMultiPath() {}
-    ExtrusionMultiPath(const ExtrusionMultiPath &rhs) : paths(rhs.paths), m_can_reverse(rhs.m_can_reverse) { this->tool_hint = rhs.tool_hint; }
-    ExtrusionMultiPath(ExtrusionMultiPath &&rhs) : paths(std::move(rhs.paths)), m_can_reverse(rhs.m_can_reverse) { this->tool_hint = rhs.tool_hint; }
+    ExtrusionMultiPath(const ExtrusionMultiPath &rhs) : paths(rhs.paths), m_can_reverse(rhs.m_can_reverse) { this->tool_hint = rhs.tool_hint; this->inset_idx = rhs.inset_idx; }
+    ExtrusionMultiPath(ExtrusionMultiPath &&rhs) : paths(std::move(rhs.paths)), m_can_reverse(rhs.m_can_reverse) { this->tool_hint = rhs.tool_hint; this->inset_idx = rhs.inset_idx; }
     ExtrusionMultiPath(const ExtrusionPaths &paths) : paths(paths) {}
     ExtrusionMultiPath(const ExtrusionPath &path) {this->paths.push_back(path); m_can_reverse = path.can_reverse(); }
 
@@ -416,14 +416,14 @@ public:
     {
         this->paths   = rhs.paths;
         m_can_reverse = rhs.m_can_reverse;
-        this->tool_hint = rhs.tool_hint;
+        this->tool_hint = rhs.tool_hint; this->inset_idx = rhs.inset_idx;
         return *this;
     }
     ExtrusionMultiPath &operator=(ExtrusionMultiPath &&rhs)
     {
         this->paths   = std::move(rhs.paths);
         m_can_reverse = rhs.m_can_reverse;
-        this->tool_hint = rhs.tool_hint;
+        this->tool_hint = rhs.tool_hint; this->inset_idx = rhs.inset_idx;
         return *this;
     }
 

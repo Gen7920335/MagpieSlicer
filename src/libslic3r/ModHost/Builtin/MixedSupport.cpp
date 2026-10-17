@@ -144,6 +144,8 @@ void merge_layers(PrintObject &object, SupportLayerPtrs normal_layers, SupportLa
         normal->height       = std::min(normal->height, tree->height);
         normal->print_z      = 0.5 * (normal->print_z + tree->print_z);
         normal->support_type = stInnerMixed;
+        // H/2 support: the merged layer keeps both channels' source events.
+        append(normal->half_layer_parent_bands, tree->half_layer_parent_bands);
         // The normal support owns overlaps: the plan gave the tree only what normal support cannot
         // reach, and letting a many-walled tree own them can erase the normal support entirely.
         const ExPolygons owner_coverage = union_ex(normal->support_fills.polygons_covered_by_width(float(SCALED_EPSILON)));

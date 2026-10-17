@@ -272,6 +272,7 @@ public:
 
 protected:
     friend class PrintObject;
+    friend struct HalfLayerSourceDeleter;
     friend std::vector<Layer*> new_layers(PrintObject*, const std::vector<coordf_t>&);
     friend std::string fix_slicing_errors(PrintObject* object, LayerPtrs&, const std::function<void()>&, int &);
 
@@ -307,6 +308,14 @@ inline bool has_tree_channel(SupportInnerType type) { return type == stInnerTree
 class SupportLayer : public Layer
 {
 public:
+    struct LogicalBand {
+        double print_z_mm;
+        double height_mm;
+        size_t interface_id;
+    };
+    // Surviving geometry carries its pre-refinement event identity through
+    // generator retries and Mixed channel merging. Empty when the feature is off.
+    std::vector<LogicalBand> half_layer_parent_bands;
     // Polygons covered by the supports: base, interface and contact areas.
     // Used to suppress retraction if moving for a support extrusion over these support_islands.
     ExPolygons                  support_islands;
@@ -326,6 +335,9 @@ public:
 
     void simplify_support_extrusion_path() { this->simplify_support_entity_collection(&support_fills); }
 
+    // MAGPIE: public so detached H/2 support layers can use RAII ownership (Magpie line 1).
+    virtual ~SupportLayer() = default;
+
 protected:
     friend class PrintObject;
     friend class TreeSupport;
@@ -334,7 +346,6 @@ protected:
     // between the raft and the object first layer.
     SupportLayer(size_t id, size_t interface_id, PrintObject *object, coordf_t height, coordf_t print_z, coordf_t slice_z) :
         Layer(id, object, height, print_z, slice_z), m_interface_id(interface_id), support_type(stInnerNormal) {}
-    virtual ~SupportLayer() = default;
 
     size_t m_interface_id;
 

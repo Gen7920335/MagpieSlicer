@@ -62,6 +62,8 @@ class Layer;
 class ModelObject;
 class Print;
 class PrintObject;
+struct HalfLayerSourceLayers;
+struct HalfLayerSupportSources;
 class SupportLayer;
 // BBS
 class TreeSupportData;
@@ -527,6 +529,16 @@ public:
     // Called by make_perimeters()
     void slice();
 
+    // Detached lower/upper samples through the normal slicing/region pipeline.
+    // Called only from the serialized object-planning stage, before parallel
+    // perimeter work. Does not change model layer IDs or retain an extra cache.
+    HalfLayerSourceLayers make_half_layer_source_layers();
+    const HalfLayerSourceLayers *half_layer_sources() const;
+    // Logical model-layer index, not Layer::id() (which may include raft layers).
+    // Includes detached physical shells; Layer::has_extrusions remains physical-only.
+    bool model_layer_has_extrusions(size_t parent_index) const;
+    const HalfLayerSupportSources *half_layer_support_sources() const;
+
     // Helpers to slice support enforcer / blocker meshes by the support generator.
     std::vector<Polygons>       slice_support_volumes(const ModelVolumeType model_volume_type) const;
     std::vector<Polygons>       slice_support_blockers() const { return this->slice_support_volumes(ModelVolumeType::SUPPORT_BLOCKER); }
@@ -651,7 +663,7 @@ private:
     void detect_overhangs_for_lift();
     void clear_overhangs_for_lift();
 
-   void _transform_hole_to_polyholes();
+   void _transform_hole_to_polyholes(const std::vector<size_t> *parent_layer_indices = nullptr);
 
     // Has any support (not counting the raft).
     void detect_surfaces_type();
@@ -699,6 +711,8 @@ private:
         ExtrusionEntity *entity     { nullptr };
     };
     std::vector<BeltDroppedFill>            m_belt_dropped_fills;
+    std::unique_ptr<HalfLayerSourceLayers>   m_half_layer_sources;
+    std::unique_ptr<HalfLayerSupportSources> m_half_layer_support_sources;
     SupportLayerPtrs                        m_support_layers;
     // Belt brim, generated in posSupportMaterial by BeltBrim.cpp.  Object-local
     // slicing frame, one entry per object layer plus a prologue of brim-only
@@ -1196,6 +1210,7 @@ public:
     bool                        has_belt_purge_tower() const;
     const WipeTowerData&        wipe_tower_data(size_t filaments_cnt = 0) const;
     const ToolOrdering& 		tool_ordering() const { return m_tool_ordering; }
+    const HalfLayerPrintExecutionPlan* half_layer_execution_plan() const { return m_half_layer_execution_plan.get(); }
 
     void update_filament_maps_to_config(std::vector<int> f_maps, std::vector<int> f_volume_maps = std::vector<int>{}, std::vector<int> f_nozzle_maps = std::vector<int>{});
     // Write-back for a selector (per-layer planned) grouping result. When a filament actually
@@ -1554,6 +1569,7 @@ private:
 
     // Following section will be consumed by the GCodeGenerator.
     ToolOrdering 							m_tool_ordering;
+    std::shared_ptr<const HalfLayerPrintExecutionPlan> m_half_layer_execution_plan;
     WipeTowerData                           m_wipe_tower_data {m_tool_ordering};
 
     // Estimated print time, filament consumed.
@@ -1587,6 +1603,7 @@ private:
 
     // To allow GCode to set the Print's GCodeExport step status.
     friend class GCode;
+    friend class ToolOrdering;
     // Allow PrintObject to access m_mutex and m_cancel_callback.
     friend class PrintObject;
 

@@ -237,6 +237,14 @@ DynamicPrintConfig multifilament_config(unsigned int filaments, std::initializer
 	return config;
 }
 
+void set_toolhead_nozzle_diameter(DynamicPrintConfig &config, size_t toolhead_index, double nozzle_diameter)
+{
+	auto *nozzles = config.option<ConfigOptionFloats>("nozzle_diameter", true);
+	if (nozzles->values.size() < toolhead_index + 1)
+		config.set_num_extruders(unsigned(toolhead_index + 1));
+	config.option<ConfigOptionFloats>("nozzle_diameter", true)->values[toolhead_index] = nozzle_diameter;
+}
+
 void size_flush_to_nozzles(DynamicPrintConfig &config)
 {
 	// One filaments x filaments flush block and one flush multiplier per nozzle, as the GUI

@@ -40,6 +40,10 @@ public:
     // between the innermost of them and the walls inside it. 1 and 0 are Orca's beading.
     size_t  fixed_outer_wall_count           = 1;
     coord_t fixed_outer_wall_boundary_overlap = 0;
+    // MAGPIE: optional per-depth spacing/overlap, in scaled mm, outside to inside (H/2 outer walls).
+    // Empty preserves the established uniform fixed-shell strategy.
+    std::vector<coord_t> fixed_outer_wall_spacings;
+    std::vector<coord_t> fixed_outer_wall_overlaps;
 
     coord_t wall_maximum_resolution = meshfix_maximum_resolution();
     coord_t wall_maximum_deviation  = meshfix_maximum_deviation();

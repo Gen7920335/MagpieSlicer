@@ -35,7 +35,9 @@ public:
         // MAGPIE: outer shells of preferred_bead_width_outer (one in Orca), and the overlap of the
         // innermost of them with the walls inside it (scaled; 0 in Orca).
         size_t fixed_outer_wall_count = 1,
-        coord_t fixed_outer_wall_boundary_overlap = 0
+        coord_t fixed_outer_wall_boundary_overlap = 0,
+        const std::vector<coord_t>& fixed_outer_wall_spacings = {},
+        const std::vector<coord_t>& fixed_outer_wall_overlaps = {}
     );
 };
 

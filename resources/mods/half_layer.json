@@ -1,0 +1,17 @@
+{
+    // H/2 (Magpie line 1): the outer two walls, or the support, print in two half-height passes per model layer,
+    // the second near the middle of the layer's print time. Travel Z hop is at least 1.5 model layer heights.
+    // Half-height outer walls always bring half-height support with them (PrintObject owns that rule).
+    // The defaults change nothing.
+    "id": "half_layer",
+    "name": "Half-height outer walls and support",
+    "version": "1.0.0",
+    "params": {
+        "outer_walls": { "type": "bool", "default": false, "label": "Half-height outer walls" },
+        "support":     { "type": "bool", "default": false, "label": "Half-height support" }
+    },
+    "rules": [
+        { "target": "outer_wall_half_layer_height", "value": "half_layer.outer_walls" },
+        { "target": "support_half_layer_height",    "value": "half_layer.support" }
+    ]
+}

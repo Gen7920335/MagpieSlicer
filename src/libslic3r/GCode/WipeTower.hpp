@@ -329,9 +329,12 @@ public:
 	// Returns gcode for a toolchange and a final print head position.
 	// On the first layer, extrude a brim around the future wipe tower first.
 	// BBS
-    ToolChangeResult tool_change(size_t new_tool, bool extrude_perimeter = false, bool first_toolchange_to_nonsoluble = false);
+    ToolChangeResult tool_change(size_t new_tool, bool extrude_perimeter = false,
+                                 bool first_toolchange_to_nonsoluble = false,
+                                 size_t planned_change_index = size_t(-1));
 
-	NozzleChangeResult nozzle_change(int old_filament_id, int new_filament_id);
+	NozzleChangeResult nozzle_change(int old_filament_id, int new_filament_id,
+                                    size_t planned_change_index = size_t(-1));
 
 	// Fill the unfilled space with a sparse infill.
 	// Call this method only if layer_finished() is false.
@@ -462,8 +465,11 @@ public:
     void set_accelerations(const std::vector<double> &normal, const std::vector<double> &first_layer_normal,
                            const std::vector<double> &travel, const std::vector<double> &first_layer_travel);
     void calc_block_infill_gap();
-    ToolChangeResult   tool_change_new(size_t new_tool, bool solid_change = false, bool solid_nozzlechange=false);
-    NozzleChangeResult ramming(int old_filament_id, int new_filament_id, bool solid_change = false, bool extruder_change = true); // extruder_chang means nozzle_change
+    // MAGPIE: planned_change_index names the layer's planned change this visit performs (H/2 can visit A->B->A).
+    ToolChangeResult   tool_change_new(size_t new_tool, bool solid_change = false, bool solid_nozzlechange = false,
+                                       size_t planned_change_index = size_t(-1));
+    NozzleChangeResult ramming(int old_filament_id, int new_filament_id, bool solid_change = false, bool extruder_change = true,
+                               size_t planned_change_index = size_t(-1)); // extruder_chang means nozzle_change
     ToolChangeResult   finish_layer_new(bool extrude_perimeter = true, bool extrude_fill = true, bool extrude_fill_wall = true);
     ToolChangeResult   finish_block(const WipeTowerBlock &block, int filament_id, bool extrude_fill = true);
     ToolChangeResult   finish_block_solid(const WipeTowerBlock &block, int filament_id, bool extrude_fill = true, WipeTowerLayerType layer_type = WipeTowerLayerType::Normal);

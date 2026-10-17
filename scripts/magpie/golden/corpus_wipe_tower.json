@@ -1,0 +1,280 @@
+{
+ "description": "Two objects on filaments 2 and 1 with a prime tower (type2 and type1) on the U1, H/2 off: must match vanilla Orca byte for byte. The second model is passed through cli_args with --load-filament-ids, since one object alone counts as one filament and the CLI drops the tower.",
+ "printers": {
+  "u1mn": {
+   "machine": "presets/u1_04_machine.json",
+   "process": "presets/u1_04_process.json",
+   "filaments": [
+    "presets/u1_pla.json",
+    "presets/u1_pla_2.json",
+    "presets/u1_pla_3.json",
+    "presets/u1_pla_4.json"
+   ],
+   "bed_type": "High Temp Plate"
+  }
+ },
+ "cases": [
+  {
+   "name": "frog_wt2_classic",
+   "printer": "u1mn",
+   "model": "tests/data/frog_legs.obj",
+   "machine": {
+    "nozzle_diameter": [
+     "0.4",
+     "0.4",
+     "0.6",
+     "0.6"
+    ],
+    "max_layer_height": [
+     "0.32",
+     "0.32",
+     "0.48",
+     "0.48"
+    ],
+    "min_layer_height": [
+     "0.08",
+     "0.08",
+     "0.12",
+     "0.12"
+    ],
+    "nozzle_type": "hardened_steel"
+   },
+   "process": {
+    "line_width": "105%",
+    "outer_wall_line_width": "105%",
+    "inner_wall_line_width": "112%",
+    "sparse_infill_line_width": "105%",
+    "internal_solid_infill_line_width": "105%",
+    "support_line_width": "105%",
+    "top_surface_line_width": "105%",
+    "ooze_prevention": "0",
+    "slowdown_for_curled_perimeters": "0",
+    "standby_temperature_delta": "-150",
+    "wipe_tower_filament": "0",
+    "preheat_time": "30",
+    "wipe_tower_cone_angle": "15",
+    "prime_tower_brim_width": "5",
+    "initial_layer_print_height": "0.25",
+    "top_shell_layers": "5",
+    "bottom_shell_layers": "3",
+    "brim_width": "0",
+    "bridge_line_width": "0.4",
+    "wall_loops": "3",
+    "outer_wall_filament_id": "1",
+    "inner_wall_filament_id": "2",
+    "sparse_infill_filament_id": "2",
+    "internal_solid_filament_id": "1",
+    "top_surface_filament_id": "2",
+    "bottom_surface_filament_id": "1",
+    "wall_generator": "classic",
+    "enable_prime_tower": "1"
+   },
+   "cli_args": [
+    "--filament-colour",
+    "#F2754E;#2E86DE;#F2754E;#F2754E",
+    "--load-filament-ids",
+    "2,1",
+    "--arrange",
+    "1",
+    "D:\\claude\\magpie-next\\tests\\data\\20mm_cube.obj"
+   ]
+  },
+  {
+   "name": "tee_wt2_arachne",
+   "printer": "u1mn",
+   "model": "external:tee.stl",
+   "machine": {
+    "nozzle_diameter": [
+     "0.4",
+     "0.4",
+     "0.6",
+     "0.6"
+    ],
+    "max_layer_height": [
+     "0.32",
+     "0.32",
+     "0.48",
+     "0.48"
+    ],
+    "min_layer_height": [
+     "0.08",
+     "0.08",
+     "0.12",
+     "0.12"
+    ],
+    "nozzle_type": "hardened_steel"
+   },
+   "process": {
+    "line_width": "105%",
+    "outer_wall_line_width": "105%",
+    "inner_wall_line_width": "112%",
+    "sparse_infill_line_width": "105%",
+    "internal_solid_infill_line_width": "105%",
+    "support_line_width": "105%",
+    "top_surface_line_width": "105%",
+    "ooze_prevention": "0",
+    "slowdown_for_curled_perimeters": "0",
+    "standby_temperature_delta": "-150",
+    "wipe_tower_filament": "0",
+    "preheat_time": "30",
+    "wipe_tower_cone_angle": "15",
+    "prime_tower_brim_width": "5",
+    "initial_layer_print_height": "0.25",
+    "top_shell_layers": "5",
+    "bottom_shell_layers": "3",
+    "brim_width": "0",
+    "bridge_line_width": "0.4",
+    "wall_loops": "3",
+    "outer_wall_filament_id": "1",
+    "inner_wall_filament_id": "2",
+    "sparse_infill_filament_id": "2",
+    "internal_solid_filament_id": "1",
+    "top_surface_filament_id": "2",
+    "bottom_surface_filament_id": "1",
+    "wall_generator": "arachne",
+    "enable_prime_tower": "1"
+   },
+   "cli_args": [
+    "--filament-colour",
+    "#F2754E;#2E86DE;#F2754E;#F2754E",
+    "--load-filament-ids",
+    "2,1",
+    "--arrange",
+    "1",
+    "D:\\claude\\magpie-next\\tests\\data\\20mm_cube.obj"
+   ]
+  },
+  {
+   "name": "frog_wt2_classic_type1",
+   "printer": "u1mn",
+   "model": "tests/data/frog_legs.obj",
+   "machine": {
+    "nozzle_diameter": [
+     "0.4",
+     "0.4",
+     "0.6",
+     "0.6"
+    ],
+    "max_layer_height": [
+     "0.32",
+     "0.32",
+     "0.48",
+     "0.48"
+    ],
+    "min_layer_height": [
+     "0.08",
+     "0.08",
+     "0.12",
+     "0.12"
+    ],
+    "nozzle_type": "hardened_steel",
+    "wipe_tower_type": "type1"
+   },
+   "process": {
+    "line_width": "105%",
+    "outer_wall_line_width": "105%",
+    "inner_wall_line_width": "112%",
+    "sparse_infill_line_width": "105%",
+    "internal_solid_infill_line_width": "105%",
+    "support_line_width": "105%",
+    "top_surface_line_width": "105%",
+    "ooze_prevention": "0",
+    "slowdown_for_curled_perimeters": "0",
+    "standby_temperature_delta": "-150",
+    "wipe_tower_filament": "0",
+    "preheat_time": "30",
+    "wipe_tower_cone_angle": "15",
+    "prime_tower_brim_width": "5",
+    "initial_layer_print_height": "0.25",
+    "top_shell_layers": "5",
+    "bottom_shell_layers": "3",
+    "brim_width": "0",
+    "bridge_line_width": "0.4",
+    "wall_loops": "3",
+    "outer_wall_filament_id": "1",
+    "inner_wall_filament_id": "2",
+    "sparse_infill_filament_id": "2",
+    "internal_solid_filament_id": "1",
+    "top_surface_filament_id": "2",
+    "bottom_surface_filament_id": "1",
+    "wall_generator": "classic",
+    "enable_prime_tower": "1"
+   },
+   "cli_args": [
+    "--filament-colour",
+    "#F2754E;#2E86DE;#F2754E;#F2754E",
+    "--load-filament-ids",
+    "2,1",
+    "--arrange",
+    "1",
+    "D:\\claude\\magpie-next\\tests\\data\\20mm_cube.obj"
+   ]
+  },
+  {
+   "name": "tee_wt2_arachne_type1",
+   "printer": "u1mn",
+   "model": "external:tee.stl",
+   "machine": {
+    "nozzle_diameter": [
+     "0.4",
+     "0.4",
+     "0.6",
+     "0.6"
+    ],
+    "max_layer_height": [
+     "0.32",
+     "0.32",
+     "0.48",
+     "0.48"
+    ],
+    "min_layer_height": [
+     "0.08",
+     "0.08",
+     "0.12",
+     "0.12"
+    ],
+    "nozzle_type": "hardened_steel",
+    "wipe_tower_type": "type1"
+   },
+   "process": {
+    "line_width": "105%",
+    "outer_wall_line_width": "105%",
+    "inner_wall_line_width": "112%",
+    "sparse_infill_line_width": "105%",
+    "internal_solid_infill_line_width": "105%",
+    "support_line_width": "105%",
+    "top_surface_line_width": "105%",
+    "ooze_prevention": "0",
+    "slowdown_for_curled_perimeters": "0",
+    "standby_temperature_delta": "-150",
+    "wipe_tower_filament": "0",
+    "preheat_time": "30",
+    "wipe_tower_cone_angle": "15",
+    "prime_tower_brim_width": "5",
+    "initial_layer_print_height": "0.25",
+    "top_shell_layers": "5",
+    "bottom_shell_layers": "3",
+    "brim_width": "0",
+    "bridge_line_width": "0.4",
+    "wall_loops": "3",
+    "outer_wall_filament_id": "1",
+    "inner_wall_filament_id": "2",
+    "sparse_infill_filament_id": "2",
+    "internal_solid_filament_id": "1",
+    "top_surface_filament_id": "2",
+    "bottom_surface_filament_id": "1",
+    "wall_generator": "arachne",
+    "enable_prime_tower": "1"
+   },
+   "cli_args": [
+    "--filament-colour",
+    "#F2754E;#2E86DE;#F2754E;#F2754E",
+    "--load-filament-ids",
+    "2,1",
+    "--arrange",
+    "1",
+    "D:\\claude\\magpie-next\\tests\\data\\20mm_cube.obj"
+   ]
+  }
+ ]
+}
