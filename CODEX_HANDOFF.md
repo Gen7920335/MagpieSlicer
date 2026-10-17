@@ -14,6 +14,14 @@
 
 ## History
 
+### 2026-10-17 P6 Beta 7 test port, batch 1-2
+
+- Inventory: 593 line 1 test cases, 249 missing here by name; triage in D:\claude\golden\line1-test-triage.md (116 to port, 87 for line 1 features not ported here, 24 replaced by the U1 plugin, 22 doc examples).
+- Ported and passing: LESIC layout (3, test_calib), Mixed paint 3MF round trips (2, test_3mf), temperature drop tower 36-setting matrix and five-brim test (P4's exit matrix, test_low_temp_interface), 7 Resin and 6 Mixed integration tests (`tests/fff_print/test_line1_support.cpp`). Line 1 settings go in through `tests/fff_print/line1_settings.hpp`: `line1(config, key, value)` runs the load-time migration, so the tests also exercise it. Dropped: "Mixed Prusa demand preserves painted support enforcers" (line 1's internal detect_mixed_support_demand).
+- Fixes found by the port: (1) Beta 7's raft fix (0ba86a096d) was missing: under a Resin-elevated object the raft interface layer, which holds only columns, was dropped (2 raft layers printed instead of 3, a 0.3 mm hole); SupportCommon now keeps it. (2) Mixed organic trees ignored the tree wall count: their toolpaths come from the object's normal-support params, so the tree wall count now goes into normal_wall_loops when a module overrides the tree style (line 1 did the same with support_wall_count). A first attempt that drew Mixed's organic branches as hollow organic paths moved the Mixed support lengths away from Beta 7 (pillar prusa 14574 -> 12361 vs Beta 7 15164) and was dropped. Default (tree walls -1) output unchanged: corpus_mixed prusa cases identical to before; the cura cases differ from the P2 reference runs, which predate 717c1d19f2 (Cura first layer), as the plain Cura corpus does (ASSUMED attribution by timestamps).
+- Adaptation: line 1 read Orca's tree_support_wall_count for organic trees; it is not migrated (Orca projects carry the same key), the test sets support_extras.tree_wall_loops instead.
+- Golden off 15/15, mods 30/30.
+
 ### 2026-10-17 P6 random combination sweep
 
 - `scripts/magpie/sweep/random_sweep.py` (line 1's 204-combination checker was not in its repository; rebuilt): N seeded random cases over model, support type and generator (Orca, Cura, Mixed, Resin), H/2 walls and support, low temperature interface and tower, support extras, multi-nozzle walls on a 0.4/0.6 U1, wall generator/count, layer height, infill. Slices through the golden harness, re-slices every fourth case for determinism, and checks every G-code (crash/timeout vs rejection, XY on the bed, Z range, temperatures, NaN/inf, relative E per move). The checker flags a hand-made bad G-code (off-bed X, M104 S500, Znan, 80 mm E).

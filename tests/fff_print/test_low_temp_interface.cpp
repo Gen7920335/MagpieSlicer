@@ -4,6 +4,7 @@
 
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/Support/TemperatureDropTower.hpp"
 
 #include "test_helpers.hpp"
 
@@ -249,6 +250,8 @@ struct TowerSettings
     bool               support_enabled { true };
     double             tower_x { -1.0 }; // mm
     double             tower_y { -1.0 }; // mm
+    double             nozzle_diameter { 0.4 }; // mm
+    double             layer_height { 0.2 };    // mm
     std::vector<Vec2d> printable_area { Vec2d(0., 0.), Vec2d(200., 0.), Vec2d(200., 200.), Vec2d(0., 200.) };
 };
 
@@ -265,9 +268,10 @@ std::string tower_gcode(const TowerSettings &settings)
         { "support_interface_nozzle_wiping_on_temperature_change", settings.configured_wiper },
         { "support_interface_brush_repetitions", 2 },
         { "support_interface_brush_speed", 80.0 },
-        { "layer_height", 0.2 },
-        { "initial_layer_print_height", 0.2 },
+        { "layer_height", settings.layer_height },
+        { "initial_layer_print_height", settings.layer_height },
     });
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ settings.nozzle_diameter }));
     config.set_key_value("nozzle_temperature", new ConfigOptionInts({ settings.normal_temperature }));
     config.set_key_value("nozzle_temperature_initial_layer", new ConfigOptionInts({ settings.normal_temperature }));
     config.set_key_value("print_sequence", new ConfigOptionEnum<PrintSequence>(settings.print_sequence));
@@ -298,6 +302,23 @@ size_t count_substring(const std::string &text, const std::string &needle)
     size_t count = 0;
     for (size_t pos = 0; (pos = text.find(needle, pos)) != std::string::npos; pos += needle.size())
         ++count;
+    return count;
+}
+
+// Extruding moves between two markers.
+size_t count_extruding_moves_between(const std::string &gcode, const std::string &begin_marker, const std::string &end_marker)
+{
+    const size_t begin = gcode.find(begin_marker);
+    const size_t end   = begin == std::string::npos ? std::string::npos : gcode.find(end_marker, begin);
+    if (begin == std::string::npos || end == std::string::npos)
+        return 0;
+    size_t             count = 0;
+    std::istringstream stream(gcode.substr(begin, end - begin));
+    for (std::string line; std::getline(stream, line);) {
+        const bool linear_move = line.rfind("G0 ", 0) == 0 || line.rfind("G1 ", 0) == 0 || line == "G0" || line == "G1";
+        if (linear_move && gcode_word(line, 'E'))
+            ++count;
+    }
     return count;
 }
 
@@ -492,4 +513,111 @@ TEST_CASE("Temperature drop tower honors every activation guard", "[LowTemperatu
     const std::string fallback      = tower_gcode(wiper_fallback);
     CHECK(fallback.find("M109 S170") != std::string::npos);
     CHECK(fallback.find("temperature drop tower") == std::string::npos);
+}
+
+// Ported from Magpie line 1 (the P4 exit matrix: 3 normal x 2 interface temperatures x 3 nozzles x 2 positions).
+TEST_CASE("Temperature drop tower keeps its brim across a 36-setting slicing matrix",
+          "[LowTemperatureInterface][TemperatureDropTower][Matrix]")
+{
+    struct NozzleCase {
+        double diameter;
+        double layer_height;
+    };
+    const std::array<int, 3> normal_temperatures {{ 200, 220, 260 }};
+    const std::array<int, 2> interface_temperatures {{ 170, 182 }};
+    const std::array<NozzleCase, 3> nozzle_cases {{
+        { 0.15, 0.08 },
+        { 0.4, 0.2 },
+        { 0.8, 0.3 }
+    }};
+    const std::array<bool, 2> manual_position_cases {{ false, true }};
+
+    size_t sliced_combinations = 0;
+    for (const int normal_temperature : normal_temperatures) {
+        for (const int interface_temperature : interface_temperatures) {
+            for (const NozzleCase &nozzle : nozzle_cases) {
+                for (const bool manual_position : manual_position_cases) {
+                    TowerSettings settings;
+                    settings.normal_temperature = normal_temperature;
+                    settings.interface_temperature = interface_temperature;
+                    settings.nozzle_diameter = nozzle.diameter;
+                    settings.layer_height = nozzle.layer_height;
+                    if (manual_position) {
+                        settings.tower_x = 20.0;
+                        settings.tower_y = 25.0;
+                    }
+
+                    const std::string output = tower_gcode(settings);
+                    const TowerMetrics metrics = analyze_tower(output);
+                    const double temperature_delta = normal_temperature - interface_temperature;
+                    const double expected_size = temperature_delta <= 30.0
+                        ? 50.0
+                        : std::min(80.0, 50.0 + temperature_delta - 30.0);
+                    const size_t brim_begin = output.find("; temperature drop tower brim begin");
+                    const size_t brim_end = output.find("; temperature drop tower brim end", brim_begin);
+                    const size_t first_tower_layer = output.find("; temperature drop tower layer");
+
+                    CAPTURE(normal_temperature, interface_temperature, nozzle.diameter,
+                            nozzle.layer_height, manual_position, expected_size);
+                    check_passes_on_distinct_layers(metrics);
+                    REQUIRE(brim_begin != std::string::npos);
+                    REQUIRE(brim_end != std::string::npos);
+                    REQUIRE(first_tower_layer != std::string::npos);
+                    CHECK(brim_begin < brim_end);
+                    CHECK(brim_end < first_tower_layer);
+                    CHECK(count_substring(output, "; temperature drop tower brim begin") == 1);
+                    CHECK(count_substring(output, "; temperature drop tower brim end") == 1);
+                    CHECK(count_substring(output, "; temperature drop tower brim line") ==
+                          TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT);
+                    CHECK(count_extruding_moves_between(
+                              output,
+                              "; temperature drop tower brim begin",
+                              "; temperature drop tower brim end") >=
+                          TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT);
+                    CHECK(std::isfinite(metrics.min_x));
+                    CHECK(std::isfinite(metrics.min_y));
+                    CHECK(std::isfinite(metrics.max_x));
+                    CHECK(std::isfinite(metrics.max_y));
+                    CHECK(metrics.min_x >= 3.0 - 0.03);
+                    CHECK(metrics.min_y >= 3.0 - 0.03);
+                    CHECK(metrics.max_x <= 197.0 + 0.03);
+                    CHECK(metrics.max_y <= 197.0 + 0.03);
+                    CHECK(metrics.max_x - metrics.min_x == Catch::Approx(expected_size).margin(0.03));
+                    CHECK(metrics.max_y - metrics.min_y == Catch::Approx(expected_size).margin(0.03));
+                    CHECK(metrics.slow_length == Catch::Approx(10.0).margin(0.03));
+                    ++sliced_combinations;
+                }
+            }
+        }
+    }
+    CHECK(sliced_combinations == 36);
+}
+
+TEST_CASE("Temperature drop tower keeps five brim lines across nozzle diameters",
+          "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    const std::array<std::pair<double, double>, 3> nozzle_cases {{
+        { 0.15, 0.08 },
+        { 0.4, 0.2 },
+        { 0.8, 0.3 }
+    }};
+    double previous_body_offset = 0.0;
+    for (const auto &[nozzle_diameter, layer_height] : nozzle_cases) {
+        TowerSettings settings;
+        settings.tower_x = 20.0;
+        settings.tower_y = 25.0;
+        settings.nozzle_diameter = nozzle_diameter;
+        settings.layer_height = layer_height;
+        const std::string output = tower_gcode(settings);
+        const TowerMetrics metrics = analyze_tower(output);
+        const double body_offset = metrics.min_x - settings.tower_x;
+
+        CAPTURE(nozzle_diameter, body_offset);
+        check_passes_on_distinct_layers(metrics);
+        CHECK(metrics.max_x - metrics.min_x == Catch::Approx(70.0).margin(0.03));
+        CHECK(metrics.max_y - metrics.min_y == Catch::Approx(70.0).margin(0.03));
+        CHECK(count_substring(output, "; temperature drop tower brim line") == 5);
+        CHECK(body_offset > previous_body_offset);
+        previous_body_offset = body_offset;
+    }
 }
