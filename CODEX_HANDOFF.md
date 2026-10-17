@@ -14,6 +14,11 @@
 
 ## History
 
+### 2026-10-17 P6 random combination sweep
+
+- `scripts/magpie/sweep/random_sweep.py` (line 1's 204-combination checker was not in its repository; rebuilt): N seeded random cases over model, support type and generator (Orca, Cura, Mixed, Resin), H/2 walls and support, low temperature interface and tower, support extras, multi-nozzle walls on a 0.4/0.6 U1, wall generator/count, layer height, infill. Slices through the golden harness, re-slices every fourth case for determinism, and checks every G-code (crash/timeout vs rejection, XY on the bed, Z range, temperatures, NaN/inf, relative E per move). The checker flags a hand-made bad G-code (off-bed X, M104 S500, Znan, 80 mm E).
+- Seed 1, 204 cases: 204 sliced, 0 rejected, 0 crashed, 0 G-code problems, 51 repeats identical. Mods took effect: H/2 59/59, multi-nozzle tool use 30/30, low temperature interface 28/37 (the other 9 have no support interface: cube or frog without interface paths).
+
 ### 2026-10-17 P6 line 1 settings migration
 
 - `ModHost/LegacySettings`: while a project or preset loads, `DynamicPrintConfig::handle_legacy` records line 1 settings (mod-owned keys this build defines, 71 line 1 only keys, and the enum values only line 1 had: support_type normal_cura/mixed/resin, support_interface_pattern triangles), drops the line 1 only keys and rewrites those enum values to Orca's base. `handle_legacy_composite` then writes the implied mod parameters into mod_settings, keeping values mod_settings already has and leaving out defaults. Unsupported line 1 settings (toolhead_* widths, sublayer temperature) are logged when set.
