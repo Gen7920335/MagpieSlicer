@@ -17,7 +17,7 @@
     "rules": [
         { "target": "support_interface_pattern_override", "value": "support_extras.interface_pattern" },
         { "target": "support_interface_sublayer_start",   "value": "support_extras.sublayer_start" },
-        { "target": "support_interface_sublayer_end",     "value": "max(support_extras.sublayer_start, support_extras.sublayer_end)" },
+        { "target": "support_interface_sublayer_end",     "value": "support_extras.sublayer_end" },
         { "target": "support_interface_sublayer_pattern", "value": "support_extras.sublayer_pattern" },
         { "target": "support_interface_sublayer_angle",   "value": "support_extras.sublayer_angle" },
         { "target": "support_wall_loops",                 "value": "support_extras.normal_wall_loops" },

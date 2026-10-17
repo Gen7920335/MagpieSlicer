@@ -9,6 +9,8 @@
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Slicing.hpp"
 #include "libslic3r/SlicesToTriangleMesh.hpp"
+#include "libslic3r/Support/SupportCommon.hpp"
+#include "libslic3r/Support/SupportParameters.hpp"
 
 #include "line1_settings.hpp"
 #include "test_helpers.hpp"
@@ -834,4 +836,70 @@ TEST_CASE("Mixed Bunny60 different Z channels do not intersect",
             CHECK(channel_overlap_mm3 <= overlap_dust_mm3);
         }
     }
+}
+
+TEST_CASE("Support interface sublayer range is contact-first and clamped", "[SupportExtras][Line1]")
+{
+    const auto selected = [](bool enabled, int start, int end, int number, int total) {
+        return support_interface_sublayer_selected(enabled, start, end, number, total);
+    };
+
+    CHECK_FALSE(selected(false, 2, 4, 2, 5));
+    CHECK_FALSE(selected(true, 2, 4, 1, 5));
+    CHECK_FALSE(selected(true, 2, 4, 2, 1));
+    CHECK_FALSE(selected(true, 2, 4, 5, 5));
+    CHECK(selected(true, 2, 4, 2, 5));
+    CHECK(selected(true, 2, 4, 3, 5));
+    CHECK(selected(true, 2, 4, 4, 5));
+
+    CHECK(selected(true, -20, 99, 2, 5));
+    CHECK(selected(true, -20, 99, 5, 5));
+    CHECK_FALSE(selected(true, -20, 99, 1, 5));
+    CHECK_FALSE(selected(true, -20, 99, 6, 5));
+
+    CHECK(selected(true, 99, 1, 5, 5));
+    CHECK_FALSE(selected(true, 99, 1, 4, 5));
+}
+
+TEST_CASE("Normal support wall count zero keeps the upstream bed-layer sheath only",
+          "[SupportExtras][Line1][Integration]")
+{
+    BundledMods mods;
+    const auto support_has_closed_wall = [](int wall_count) {
+        TriangleMesh fixture = make_cube(12., 20., 4.);
+        TriangleMesh ceiling = make_cube(32., 20., 2.);
+        ceiling.translate(0.f, 0.f, 20.f);
+        fixture.merge(ceiling);
+
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormalAuto));
+        config.set_key_value("support_base_pattern", new ConfigOptionEnum<SupportMaterialPattern>(smpRectilinear));
+        line1(config, "support_wall_count", wall_count);
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4 }));
+        config.set_key_value("layer_height", new ConfigOptionFloat(0.2));
+        config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(0.2));
+        config.set_key_value("support_interface_top_layers", new ConfigOptionInt(0));
+        config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+
+        Print print;
+        init_and_process_print({ fixture }, print, config);
+        REQUIRE(print.objects().size() == 1);
+        const auto support_layers = print.objects().front()->support_layers();
+        REQUIRE_FALSE(support_layers.empty());
+        // {bed layer has a closed wall, any layer above the bed has a closed wall}
+        const bool bed = collection_has_closed_path_with_role(support_layers.front()->support_fills, erSupportMaterial);
+        const bool above = std::any_of(support_layers.begin() + 1, support_layers.end(), [](const SupportLayer *layer) {
+            return collection_has_closed_path_with_role(layer->support_fills, erSupportMaterial);
+        });
+        return std::make_pair(bed, above);
+    };
+
+    // Upstream always sheathes the bed flange; the wall count governs the layers above it.
+    const auto zero = support_has_closed_wall(0);
+    CHECK(zero.first);
+    CHECK_FALSE(zero.second);
+    const auto two = support_has_closed_wall(2);
+    CHECK(two.first);
+    CHECK(two.second);
 }

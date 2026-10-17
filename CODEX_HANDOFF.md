@@ -14,6 +14,12 @@
 
 ## History
 
+### 2026-10-17 P6 Beta 7 test port, batch 3 and triage
+
+- Interface sublayer range now follows line 1: `support_interface_sublayer_selected` (contact-first, numbers clamped to 2..interface count); the support_extras rule passes sublayer_end as given. Ported "contact-first and clamped" and "Normal support wall count zero keeps the bed-layer sheath only".
+- Triage of the 249 line 1 tests missing by name (D:\claude\golden\line1-test-triage.md): 23 ported and passing, 9 covered by an existing test here, 19 test line 1 internals replaced here (its Cura port, Mixed planner), 91 line 1 hotend/toolhead/filament-map/project subsystems not ported, 24 replaced by the U1 plugin, 14 profiler/GPU, 22 doc examples, 34 still to review. Two groups need Gen's decision: 7 tests of line 1 changes to Orca's own behaviour (top interface footprint stabilization, automatic support width for tree geometry, inclusive threshold conversion, Classic narrow islands, FillConcentricInternal defaults), which would change Orca output if ported plainly; and 6 tests of the interface sublayer extrusion role and sublayer temperature, not ported.
+- Tests 2324/2324, golden off 15/15, mods 30/30.
+
 ### 2026-10-17 P6 Beta 7 test port, batch 1-2
 
 - Inventory: 593 line 1 test cases, 249 missing here by name; triage in D:\claude\golden\line1-test-triage.md (116 to port, 87 for line 1 features not ported here, 24 replaced by the U1 plugin, 22 doc examples).

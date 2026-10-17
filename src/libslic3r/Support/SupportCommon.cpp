@@ -1419,6 +1419,17 @@ std::vector<double> half_height_support_z_grid(const PrintObject &object)
     return cuts_mm;
 }
 
+bool support_interface_sublayer_selected(
+    bool enabled, int start_layer, int end_layer, int interface_number, int interface_total)
+{
+    if (!enabled || interface_total <= 1 || interface_number < 2)
+        return false;
+    // Magpie line 1: the range is clamped to the interface layers below the contact (numbers 2..total).
+    const int first = std::clamp(start_layer, 2, interface_total);
+    const int last  = std::clamp(end_layer, first, interface_total);
+    return interface_number >= first && interface_number <= last;
+}
+
 std::pair<double, double> half_height_support_band_limits_mm(const PrintObject &object)
 {
     // Nominal H/2 band and half of it. The logical support grid keeps independent support
@@ -1995,8 +2006,11 @@ void generate_support_toolpaths(
                     const int interface_number = !support_params.sublayer_enabled() ? 0 :
                         layer_ex.layer->layer_type == SupporLayerType::TopInterface    ? top_interface_numbers[support_layer_id] :
                         layer_ex.layer->layer_type == SupporLayerType::BottomInterface ? bottom_interface_numbers[support_layer_id] : 0;
-                    const bool use_sublayer = !interface_as_base && !raft_contact && interface_number >= 2 &&
-                        interface_number >= support_params.sublayer_start && interface_number <= support_params.sublayer_end;
+                    const int interface_total = bottom_interface ?
+                        int(support_params.num_bottom_interface_layers) : int(support_params.num_top_interface_layers);
+                    const bool use_sublayer = !interface_as_base && !raft_contact &&
+                        support_interface_sublayer_selected(support_params.sublayer_enabled(), support_params.sublayer_start,
+                                                            support_params.sublayer_end, interface_number, interface_total);
                     auto *filler = raft_contact ? filler_raft_contact : use_sublayer ? filler_sublayer.get() : filler_interface.get();
                     auto interface_flow = layer_ex.layer->bridging ?
                         Flow::bridging_flow(layer_ex.layer->height, support_params.support_material_bottom_interface_flow.nozzle_diameter()) :

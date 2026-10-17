@@ -173,7 +173,7 @@ struct SupportParameters {
             this->interface_pattern_override = true;
         }
         this->sublayer_start   = std::max(0, object_config.support_interface_sublayer_start.value);
-        this->sublayer_end     = std::max(this->sublayer_start, object_config.support_interface_sublayer_end.value);
+        this->sublayer_end     = object_config.support_interface_sublayer_end.value;
         this->sublayer_pattern = interface_pattern_from_name(object_config.support_interface_sublayer_pattern.value).value_or(this->contact_fill_pattern);
         this->sublayer_angle   = Geometry::deg2rad(float(object_config.support_interface_sublayer_angle.value));
 
