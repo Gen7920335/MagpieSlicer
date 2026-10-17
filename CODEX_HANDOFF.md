@@ -14,6 +14,12 @@
 
 ## History
 
+### 2026-10-17 P5 LESIC ring calibration
+
+- Line 1's LESIC (calibration menu "LESIC"): a vase-mode cylinder sized to the bed (bed minus 20 mm, line width 1.2 x nozzle, layer 0.6 x nozzle); one temperature per band of `lesic_layers_per_temp` layers from start to end; above the first layer the wall speed follows the angle around the ring from `mvs_start` to `mvs_end` mm3/s; on the first layer the bottom label, ring value labels and a 5-line inner brim are printed as G-code segments. Ported as C++: `calib.hpp` (mode, params, layout), `GCode/LesicAnnotations.hpp` (line 1's annotation geometry, verbatim), `GCode.cpp` (per-layer temperature, angle speed in `_extrude`, `emit_lesic_ring_annotations`), `Plater::calib_lesic`, `LESIC_Calibration_Dlg`, both calibration menus, CalibUtils mode names. Everything is gated by `CalibMode::Calib_LESIC`.
+- Tests `tests/fff_print/test_lesic.cpp`: line 1's G-code token test, and a ring that prints more than 20 distinct feed rates with LESIC and fewer than 5 without, with no LESIC lines in the plain vase. Not compared with Beta 7 (LESIC runs only from the GUI there); the dialog was not seen on screen.
+- Tests 2299/2299, golden off 15/15, mods 30/30.
+
 ### 2026-10-17 P5 Snapmaker U1 Monitor plugin
 
 - Nightly already has `SnapmakerPrinterAgent` (Moonraker-based) and Python pages plugins, so line 1's native `SnapmakerMonitorPanel` (C++, ~4,300 lines with camera session and toolpath layer view) is rebuilt as a pages plugin: `scripts/magpie/plugins/magpie_snapmaker_u1_monitor_plugin_any.py`. Status, temperatures, pause/resume/cancel, emergency stop, skip object, jog/home, camera snapshot, files and print, console, over Moonraker HTTP. Line 1's safety rules kept as functions: motion only in standby/complete/cancelled/error, print control only while printing/paused, emergency stop on its own request in any state, bounded heater/jog/extrude values, command-safe object names.

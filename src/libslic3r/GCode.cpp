@@ -9,6 +9,7 @@
 #include "GCode/ThumbnailData.hpp"
 #include "GCode/ToolOrdering.hpp"
 #include "GCode/SnapmakerHomingPolicy.hpp"
+#include "GCode/LesicAnnotations.hpp"
 #include "Support/TemperatureDropTower.hpp"
 #include "GCode/SpiralVase.hpp"
 #include "GCode/PressureEqualizer.hpp"
@@ -6891,6 +6892,72 @@ std::string GCode::generate_timelapse_gcode(const Print &print, coordf_t print_z
     return timelapse_gcode;
 }
 
+// MAGPIE: LESIC ring labels and inner brim (Magpie line 1).
+std::string GCode::emit_lesic_ring_annotations(const Calib_Params &params)
+{
+    if (params.lesic_circle_diameter <= 0.0 || params.mvs_end <= params.mvs_start || m_writer.filament() == nullptr)
+        return {};
+
+    const unsigned int filament_id = m_writer.filament()->id();
+    const double filament_diameter = m_config.filament_diameter.get_at(filament_id);
+    const double filament_area = M_PI * sqr(filament_diameter * 0.5);
+    if (filament_area <= EPSILON)
+        return {};
+
+    const double layer_height = params.lesic_layer_height > 0.0 ? params.lesic_layer_height : std::max(0.05, double(m_last_height));
+    const double flow_scale = layer_height * m_config.print_flow_ratio / filament_area;
+    std::vector<LesicAnnotationSegment> segments = lesic_bottom_label_segments(params, m_config, filament_id);
+    const std::vector<LesicAnnotationSegment> ring_segments = lesic_ring_annotation_segments(params);
+    segments.insert(segments.end(), ring_segments.begin(), ring_segments.end());
+    const size_t label_and_ring_segment_count = segments.size();
+    const std::vector<LesicAnnotationSegment> inner_brim_segments = lesic_inner_brim_segments(params, segments);
+    segments.insert(segments.end(), inner_brim_segments.begin(), inner_brim_segments.end());
+    if (segments.empty() || flow_scale <= EPSILON)
+        return {};
+
+    std::ostringstream gcode;
+    gcode << "\n; ---------- LESIC labels and ring annotations ----------\n";
+    const std::vector<std::string> label_lines = lesic_label_lines(params, m_config, filament_id);
+    gcode << "; lesic_bottom_label_lines=";
+    for (size_t i = 0; i < label_lines.size(); ++i) {
+        if (i > 0)
+            gcode << " | ";
+        gcode << label_lines[i];
+    }
+    gcode << "\n";
+    gcode << "; lesic_ring_mvs_values=";
+    const std::vector<double> label_values = lesic_ring_label_values(params.mvs_start, params.mvs_end);
+    for (size_t i = 0; i < label_values.size(); ++i) {
+        if (i > 0)
+            gcode << ",";
+        gcode << lesic_format_label_value(label_values[i]);
+    }
+    gcode << "\n";
+    gcode << "; lesic_bottom_label_height=" << lesic_format_label_value(lesic_bottom_label_height(params, label_lines)) << "\n";
+    gcode << "; lesic_bottom_label_stroke_width=" << lesic_format_label_value(lesic_bottom_label_stroke_width(params)) << "\n";
+    gcode << "; lesic_annotation_segments=" << segments.size() << "\n";
+    gcode << "; lesic_label_and_ring_segments=" << label_and_ring_segment_count << "\n";
+    gcode << "; lesic_inner_brim_lines=" << LESIC_INNER_BRIM_LINES << "\n";
+    gcode << "; lesic_inner_brim_segments=" << inner_brim_segments.size() << "\n";
+    gcode << m_writer.set_speed(20.0 * 60.0, "LESIC annotation speed");
+    this->set_origin(0., 0.);
+
+    for (const LesicAnnotationSegment &segment : segments) {
+        const double length = (segment.b - segment.a).norm();
+        if (length <= EPSILON)
+            continue;
+
+        gcode << m_writer.travel_to_xy(segment.a, "LESIC annotation travel");
+        this->set_last_pos(this->gcode_to_point(segment.a));
+        gcode << m_writer.extrude_to_xy(segment.b, flow_scale * segment.width * length, "LESIC annotation");
+        this->set_last_pos(this->gcode_to_point(segment.b));
+    }
+
+    gcode << "; ---------- end LESIC labels and ring annotations ----------\n\n";
+    m_wipe.reset_path();
+    return gcode.str();
+}
+
 // In sequential mode, process_layer is called once per each object and its copy,
 // therefore layers will contain a single entry and single_object_instance_idx will point to the copy of the object.
 // In non-sequential mode, process_layer is called per each print_z height with all object and support layers accumulated.
@@ -7165,6 +7232,17 @@ LayerResult GCode::process_layer(
         case CalibMode::Calib_Vol_speed_Tower: {
             auto _speed = print.calib_params().start + std::max(0.0, calib_z) * print.calib_params().step;
             m_calib_config.set_key_value("outer_wall_speed", new ConfigOptionFloatsNullable({std::round(_speed)}));
+            break;
+        }
+        case CalibMode::Calib_LESIC: {
+            // MAGPIE: LESIC ring (Magpie line 1): one temperature per band of layers_per_temp layers.
+            const Calib_Params &params = print.calib_params();
+            const int layers_per_temp = std::max(1, params.lesic_layers_per_temp);
+            const int temp_band = std::max(0, m_layer_index) / layers_per_temp;
+            const double temp = lesic_temperature_for_band(params.start, params.end, params.step, temp_band);
+            gcode += writer().set_temperature(static_cast<unsigned int>(std::lround(temp)));
+            sprintf(buf, "; LESIC: TEMP:%g BAND:%d MVS:%g-%g\n", temp, temp_band, params.mvs_start, params.mvs_end);
+            gcode += buf;
             break;
         }
         case CalibMode::Calib_Retraction_tower: {
@@ -8875,6 +8953,9 @@ LayerResult GCode::process_layer(
             if (!iter->second.empty())
                 m_initial_layer_extruders.insert(iter->first);
         }
+        // MAGPIE: LESIC ring labels and inner brim (Magpie line 1).
+        if (print.calib_mode() == CalibMode::Calib_LESIC)
+            gcode += this->emit_lesic_ring_annotations(print.calib_params());
     }
 
     // MAGPIE: the temperature drop tower grows by one layer on every layer that did not use it to cool down.
@@ -11037,6 +11118,50 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
                         return (previous.overlap <= fan_overlap_threshold) != (current.overlap <= fan_overlap_threshold);
                     }) != new_points.end();
             }
+    }
+
+    // MAGPIE: LESIC ring (Magpie line 1). Above the first layer the walls of the ring print at a volumetric
+    // speed that grows with the angle around the ring, from mvs_start to mvs_end mm3/s.
+    if (m_curr_print != nullptr &&
+        m_curr_print->calib_mode() == CalibMode::Calib_LESIC &&
+        !this->on_first_layer() &&
+        !object_layer_over_raft() &&
+        _mm3_per_mm > EPSILON &&
+        (path.role() == erExternalPerimeter || path.role() == erPerimeter) &&
+        path.polyline.points.size() > 1) {
+        const Calib_Params &params = m_curr_print->calib_params();
+        BoundingBoxf bed_ext = get_extents(m_config.printable_area.values);
+        const Vec2d center = params.lesic_circle_diameter > 0.0 ?
+            Vec2d(params.lesic_center_x, params.lesic_center_y) :
+            bed_ext.center();
+        const double mvs_start = params.mvs_start;
+        const double mvs_range = params.mvs_end - params.mvs_start;
+
+        new_points.clear();
+        new_points.reserve(path.polyline.points.size());
+        for (size_t i = 0; i < path.polyline.points.size(); ++i) {
+            const Point3 &point = path.polyline.points[i];
+            const Point3 &next_point = path.polyline.points[std::min(i + 1, path.polyline.points.size() - 1)];
+            const Vec2d a = this->point_to_gcode(point.to_point());
+            const Vec2d b = this->point_to_gcode(next_point.to_point());
+            const Vec2d mid = (a + b) * 0.5;
+            const double angle = std::atan2(mid.y() - center.y(), mid.x() - center.x()) * 180.0 / M_PI;
+            const double ratio = lesic_angle_progress(angle);
+            const double target_mvs = mvs_start + mvs_range * ratio;
+            // Slowest speed, mm/s.
+            const double segment_speed = std::max(1.0, target_mvs / _mm3_per_mm);
+
+            ProcessedPoint processed_point;
+            processed_point.p = point;
+            processed_point.speed = static_cast<float>(segment_speed);
+            processed_point.overlap = 1.0f;
+            new_points.emplace_back(processed_point);
+        }
+
+        // Speed differences under 1 mm/s do not split the path.
+        requires_segmented_extrusion = new_points.size() > 1 &&
+            std::any_of(new_points.begin(), new_points.end(),
+                        [speed](const ProcessedPoint &p) { return fabs(double(p.speed) - speed) > 1; });
     }
 
     double F = speed * 60;  // convert mm/sec to mm/min

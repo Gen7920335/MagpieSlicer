@@ -3587,6 +3587,15 @@ void MainFrame::init_menubar_as_editor()
         [this](wxCommandEvent&) { run_calibration(CalibKind::MaxVolumetric); }, "", nullptr,
         [this]() {return m_plater->is_view3D_shown();; }, this);
 
+    // MAGPIE: LESIC ring (Magpie line 1).
+    append_menu_item(m_topbar->GetCalibMenu(), wxID_ANY, _L("LESIC"), _L("Low-temperature support interface calibration"),
+        [this](wxCommandEvent&) {
+            if (!m_lesic_calib_dlg)
+                m_lesic_calib_dlg = new LESIC_Calibration_Dlg((wxWindow*)this, wxID_ANY, m_plater);
+            m_lesic_calib_dlg->ShowModal();
+        }, "", nullptr,
+        [this]() {return m_plater->is_view3D_shown();; }, this);
+
     // Pressure Advance
     append_menu_item(m_topbar->GetCalibMenu(), wxID_ANY, _L("Pressure advance"), _L("Pressure advance"),
         [this](wxCommandEvent&) { run_calibration(CalibKind::PressureAdvance); }, "", nullptr,
@@ -3690,6 +3699,15 @@ void MainFrame::init_menubar_as_editor()
     // Max Volumetric Speed
     append_menu_item(calib_menu, wxID_ANY, _L("Max flowrate"), _L("Max flowrate"),
         [this](wxCommandEvent&) { run_calibration(CalibKind::MaxVolumetric); }, "", nullptr,
+        [this]() {return m_plater->is_view3D_shown();; }, this);
+
+    // MAGPIE: LESIC ring (Magpie line 1).
+    append_menu_item(calib_menu, wxID_ANY, _L("LESIC"), _L("Low-temperature support interface calibration"),
+        [this](wxCommandEvent&) {
+            if (!m_lesic_calib_dlg)
+                m_lesic_calib_dlg = new LESIC_Calibration_Dlg((wxWindow*)this, wxID_ANY, m_plater);
+            m_lesic_calib_dlg->ShowModal();
+        }, "", nullptr,
         [this]() {return m_plater->is_view3D_shown();; }, this);
 
     // Pressure Advance

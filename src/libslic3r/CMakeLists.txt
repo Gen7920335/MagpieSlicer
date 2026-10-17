@@ -314,6 +314,7 @@ set(lisbslic3r_sources
     GCode/ToolOrdering.cpp
     GCode/ToolOrdering.hpp
     GCode/SnapmakerHomingPolicy.hpp
+    GCode/LesicAnnotations.hpp
     GCode/OrderingStrategies.cpp
     GCode/OrderingStrategies.hpp
     GCode/WipeTower2.cpp

@@ -492,6 +492,8 @@ protected:
         const bool                       last_layer,
         const size_t                     single_object_instance_idx);
 
+    // MAGPIE: LESIC ring labels and inner brim, printed on the first layer (Magpie line 1).
+    std::string emit_lesic_ring_annotations(const Calib_Params &params);
     // Emit the apron bands carried by these layers whose brim filament is extruder_id
     // (0-based).  Called from both the brim-only branch and the ordinary path, since a
     // band's print_z can coincide with another object's layer on a multi-object belt.
