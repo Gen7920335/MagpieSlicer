@@ -1761,3 +1761,29 @@ TEST_CASE("Non-zero Z offset initializes before selecting an extruder", "[GCodeW
         }));
     }
 }
+
+TEST_CASE("Initial filament start G-code tolerates a list shorter than the filament count", "[GCodeWriter]")
+{
+    // Two filaments but only one filament_start_gcode entry, and the only object prints on
+    // filament 2, so the BBL export starts on a filament past the end of the list.
+    DynamicPrintConfig config = multifilament_config(2);
+    config.set_key_value("filament_start_gcode", new ConfigOptionStrings({"; filament start"}));
+
+    Model model;
+    auto *obj = model.add_object();
+    obj->add_volume(cube(20));
+    obj->add_instance();
+    obj->config.set_key_value("extruder", new ConfigOptionInt(2));
+
+    Print print;
+    print.is_BBL_printer() = true;
+    arrange_objects_on_test_bed(model, config);
+    for (auto *mo : model.objects) {
+        mo->ensure_on_bed();
+        print.auto_assign_extruders(mo);
+    }
+    print.apply(model, config);
+    print.validate();
+
+    REQUIRE_NOTHROW(Slic3r::Test::gcode(print));
+}
