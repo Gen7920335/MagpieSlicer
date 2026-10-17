@@ -1,3 +1,4 @@
+#include "libslic3r/StageTimer.hpp"
 #include "ModHost/SlotRegistry.hpp"
 #include "ArcFitter.hpp"
 #include "BoundingBox.hpp"
@@ -2845,6 +2846,7 @@ static void set_mass_locator(GCodeProcessor &processor, const Print &print)
 
 void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* result, ThumbnailsGeneratorCallback thumbnail_cb)
 {
+    MAGPIE_STAGE_TIMER("step.gcode_export");
     PROFILE_CLEAR();
 
     // BBS
@@ -6980,6 +6982,7 @@ LayerResult GCode::process_layer(
     const bool                               prime_extruder,
     const HalfLayerExecutionFrame           *half_layer_frame)
 {
+    MAGPIE_STAGE_TIMER("gcode.process_layer");
     assert(! layers.empty());
     m_logical_layer = nullptr;
     m_half_layer_motion_reference_height = 0.;

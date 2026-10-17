@@ -1,3 +1,4 @@
+#include "libslic3r/StageTimer.hpp"
 #include <numeric>
 #include <math.h>
 #include <initializer_list>
@@ -776,6 +777,7 @@ enum DirectionMask
 
 static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(const ExPolygonWithOffset &poly_with_offset, size_t n_vlines, coord_t x0, coord_t line_spacing)
 {
+    MAGPIE_STAGE_TIMER("fn.rectilinear_vertical_intersections");
     // Allocate storage for the segments.
     std::vector<SegmentedIntersectionLine> segs(n_vlines, SegmentedIntersectionLine());
     for (coord_t i = 0; i < coord_t(n_vlines); ++ i) {

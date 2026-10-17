@@ -1,3 +1,4 @@
+#include "libslic3r/StageTimer.hpp"
 #include <algorithm>
 #include <assert.h>
 #include <regex>
@@ -1341,6 +1342,7 @@ void export_group_fills_to_svg(const char *path, const std::vector<SurfaceFill> 
 // friend to Layer
 void Layer::make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLightning::Generator* lightning_generator)
 {
+    MAGPIE_STAGE_TIMER("fn.make_fills");
 	for (LayerRegion *layerm : m_regions)
 		layerm->fills.clear();
 

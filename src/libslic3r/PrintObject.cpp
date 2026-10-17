@@ -1,3 +1,4 @@
+#include "libslic3r/StageTimer.hpp"
 #include "ExPolygon.hpp"
 #include "Config.hpp"
 #include "Exception.hpp"
@@ -515,6 +516,7 @@ std::vector<std::set<int>> PrintObject::detect_extruder_geometric_unprintables()
 // 3) Generates perimeters, gap fills and fill regions (fill regions of type stInternal).
 void PrintObject::make_perimeters()
 {
+    MAGPIE_STAGE_TIMER("step.perimeters");
     // prerequisites
     this->slice();
 
@@ -686,6 +688,7 @@ void PrintObject::make_perimeters()
 
 void PrintObject::prepare_infill()
 {
+    MAGPIE_STAGE_TIMER("step.prepare_infill");
     if (! this->set_started(posPrepareInfill))
         return;
     m_print->set_status(25, L("Generating infill regions"));
@@ -872,6 +875,7 @@ void PrintObject::prepare_infill()
 
 void PrintObject::infill()
 {
+    MAGPIE_STAGE_TIMER("step.infill");
     // prerequisites
     this->prepare_infill();
 
@@ -899,6 +903,7 @@ void PrintObject::infill()
 
 void PrintObject::ironing()
 {
+    MAGPIE_STAGE_TIMER("step.ironing");
     if (this->set_started(posIroning)) {
         BOOST_LOG_TRIVIAL(debug) << "Ironing in parallel - start";
         tbb::parallel_for(
@@ -1094,6 +1099,7 @@ void PrintObject::generate_belt_brim()
 
 void PrintObject::estimate_curled_extrusions()
 {
+    MAGPIE_STAGE_TIMER("step.curled_extrusions");
     if (this->set_started(posEstimateCurledExtrusions)) {
         const auto any_region_enables = [this](ConfigOptionBoolsNullable PrintRegionConfig::*option) {
             return std::any_of(this->print()->m_print_regions.begin(), this->print()->m_print_regions.end(),
@@ -5005,6 +5011,7 @@ void PrintObject::combine_infill()
 
 void PrintObject::_generate_support_material()
 {
+    MAGPIE_STAGE_TIMER("step.support");
     // MAGPIE: support.generator slot. An empty support_generator runs Orca's generators unchanged.
     if (const std::string &name = m_config.support_generator.value; !name.empty()) {
         const ModHost::SupportGenerator *generator = ModHost::find_support_generator(name);

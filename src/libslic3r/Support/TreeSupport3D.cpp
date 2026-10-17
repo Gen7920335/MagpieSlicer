@@ -6,6 +6,7 @@
 // Copyright (c) 2021 Ultimaker B.V.
 // CuraEngine is released under the terms of the AGPLv3 or higher.
 
+#include "libslic3r/StageTimer.hpp"
 #include "TreeSupport3D.hpp"
 #include "AABBTreeIndirect.hpp"
 #include "AABBTreeLines.hpp"
@@ -4289,6 +4290,7 @@ void organic_draw_branches(
 
 void generate_tree_support_3D(PrintObject &print_object, TreeSupport* tree_support, std::function<void()> throw_on_cancel)
 {
+    MAGPIE_STAGE_TIMER("fn.tree_support_organic");
     size_t idx = 0;
     for (const PrintObject *po : print_object.print()->objects()) {
         if (po == &print_object)

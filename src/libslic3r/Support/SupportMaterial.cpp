@@ -1,3 +1,4 @@
+#include "libslic3r/StageTimer.hpp"
 #include "ClipperUtils.hpp"
 #include "libslic3r/ExPolygon.hpp"
 #include "ExtrusionEntity.hpp"
@@ -418,6 +419,7 @@ static void trim_support_layers_by_belt_floor(
 
 void PrintObjectSupportMaterial::generate(PrintObject &object)
 {
+    MAGPIE_STAGE_TIMER("fn.normal_support");
     BOOST_LOG_TRIVIAL(info) << "Support generator - Start";
 
     coordf_t max_object_layer_height = 0.;

@@ -1,3 +1,4 @@
+#include "libslic3r/StageTimer.hpp"
 #include "ClipperUtils.hpp"
 #include "ExPolygon.hpp"
 #include "Point.hpp"
@@ -608,6 +609,7 @@ static inline std::vector<IntersectionLines> slice_make_lines(
     const std::vector<float>                        &zs,
     const ThrowOnCancel                              throw_on_cancel_fn)
 {
+    MAGPIE_STAGE_TIMER("fn.slice_make_lines");
     std::vector<IntersectionLines>  lines(zs.size(), IntersectionLines());
     std::array<std::mutex, 64>      lines_mutex;
     tbb::parallel_for(
@@ -2145,6 +2147,7 @@ std::vector<ExPolygons> slice_mesh_ex(
     const MeshSlicingParamsEx        &params,
     std::function<void()>             throw_on_cancel)
 {
+    MAGPIE_STAGE_TIMER("fn.mesh_slice");
     std::vector<Polygons> layers_p;
     {
         MeshSlicingParams slicing_params(params);

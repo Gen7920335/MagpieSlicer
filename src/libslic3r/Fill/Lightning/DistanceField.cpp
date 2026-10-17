@@ -1,6 +1,7 @@
 //Copyright (c) 2021 Ultimaker B.V.
 //CuraEngine is released under the terms of the AGPLv3 or higher.
 
+#include "libslic3r/StageTimer.hpp"
 #include "DistanceField.hpp" //Class we're implementing.
 #include "../FillRectilinear.hpp"
 #include "../../ClipperUtils.hpp"
@@ -54,6 +55,7 @@ DistanceField::DistanceField(const coord_t& radius, const Polygons& current_outl
     m_supporting_radius(radius),
     m_unsupported_points_bbox(current_outlines_bbox)
 {
+    MAGPIE_STAGE_TIMER("fn.lightning_distance_field");
     m_supporting_radius2 = Slic3r::sqr(int64_t(radius));
     // Sample source polygons with a regular grid sampling pattern.
     const BoundingBox overhang_bbox = get_extents(current_overhang);

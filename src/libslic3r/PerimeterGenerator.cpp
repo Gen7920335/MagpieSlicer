@@ -1,3 +1,4 @@
+#include "libslic3r/StageTimer.hpp"
 #include "PerimeterGenerator.hpp"
 #include "ModHost/SlotRegistry.hpp"
 #include "Arachne/utils/ExtrusionLine.hpp"
@@ -1073,6 +1074,7 @@ bool paths_touch(const ExtrusionPath &path_one, const ExtrusionPath &path_two, d
 
 Polylines reconnect_polylines(const Polylines &polylines, double limit_distance)
 {
+    MAGPIE_STAGE_TIMER("fn.reconnect_polylines");
     if (polylines.empty())
         return polylines;
 
@@ -1124,6 +1126,7 @@ Polylines reconnect_polylines(const Polylines &polylines, double limit_distance)
 
 ExtrusionPaths sort_extra_perimeters(const ExtrusionPaths& extra_perims, int index_of_first_unanchored, double extrusion_spacing)
 {
+    MAGPIE_STAGE_TIMER("fn.sort_extra_perimeters");
     if (extra_perims.empty()) return {};
 
     std::vector<std::unordered_set<size_t>> dependencies(extra_perims.size());
@@ -1589,6 +1592,7 @@ static void defer_unsupported_loops(const PerimeterGenerator &perimeter_generato
 
 void PerimeterGenerator::process_classic()
 {
+    MAGPIE_STAGE_TIMER("fn.perimeters_classic");
     group_region_by_fuzzify(*this);
 
     // other perimeters
@@ -2702,6 +2706,7 @@ void bringContoursToFront(std::vector<PerimeterGeneratorArachneExtrusion>& order
 // "A framework for adaptive width control of dense contour-parallel toolpaths in fused deposition modeling"
 void PerimeterGenerator::process_arachne()
 {
+    MAGPIE_STAGE_TIMER("fn.perimeters_arachne");
     group_region_by_fuzzify(*this);
 
     // other perimeters

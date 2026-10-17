@@ -123,6 +123,8 @@ set(lisbslic3r_sources
     ModHost/Builtin/ResinSupport.hpp
     ModHost/Expr.cpp
     ModHost/Expr.hpp
+    StageTimer.cpp
+    StageTimer.hpp
     ModHost/ModIndex.cpp
     ModHost/ModIndex.hpp
     ModHost/LegacySettings.cpp

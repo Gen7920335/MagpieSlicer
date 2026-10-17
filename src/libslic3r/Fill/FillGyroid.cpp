@@ -1,3 +1,4 @@
+#include "libslic3r/StageTimer.hpp"
 #include "../ClipperUtils.hpp"
 #include "../MarchingSquares.hpp"
 #include <cmath>
@@ -315,6 +316,7 @@ void FillGyroid::_fill_surface_single(
     ExPolygon                        expolygon,
     Polylines                       &polylines_out)
 {
+    MAGPIE_STAGE_TIMER("fn.fill_gyroid");
     if (params.tpms_adaptive == TpmsAdaptiveMode::SteppedShells && this->tpms_radial_field != nullptr) {
         fill_tpms_shells(*this->tpms_radial_field, expolygon, this->z - 0.5 * params.layer_height, params, this->spacing,
                          [&](const FillParams &shell_params, const ExPolygon &shell) {
@@ -376,7 +378,10 @@ void FillGyroid::_fill_surface_single(
     // Apply multiline offset if needed
     multiline_fill(polylines, params, spacing);
 
-	polylines = intersection_pl(std::move(polylines), expolygon);
+	{
+		MAGPIE_STAGE_TIMER("fn.gyroid_clip");
+		polylines = intersection_pl(std::move(polylines), expolygon);
+	}
 
     if (! polylines.empty()) {
 		// Remove very small bits, but be careful to not remove infill lines connecting thin walls!

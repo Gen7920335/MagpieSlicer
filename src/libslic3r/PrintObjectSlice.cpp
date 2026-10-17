@@ -1,3 +1,4 @@
+#include "libslic3r/StageTimer.hpp"
 #include <algorithm>
 #include <boost/log/trivial.hpp>
 #include <limits>
@@ -990,6 +991,7 @@ HalfLayerSourceLayers PrintObject::make_half_layer_source_layers()
 // Resulting expolygons of layer regions are marked as Internal.
 void PrintObject::slice()
 {
+    MAGPIE_STAGE_TIMER("step.slice");
     if (! this->set_started(posSlice))
         return;
     //BBS: add flag to reload scene for shell rendering

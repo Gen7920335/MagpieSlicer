@@ -1,6 +1,7 @@
 // Copyright (c) 2022 Ultimaker B.V.
 // CuraEngine is released under the terms of the AGPLv3 or higher.
 
+#include "libslic3r/StageTimer.hpp"
 #include <algorithm> //For std::partition_copy and std::min_element.
 #include <cstddef>
 #include <cstdint>
@@ -491,6 +492,7 @@ void removeColinearEdges(Polygons &thiss, const double max_deviation_angle = 0.0
 
 const std::vector<VariableWidthLines> &WallToolPaths::generate()
 {
+    MAGPIE_STAGE_TIMER("fn.arachne_wall_toolpaths");
     if (this->inset_count < 1)
         return toolpaths;
 
@@ -823,6 +825,7 @@ bool WallToolPaths::removeEmptyToolPaths(std::vector<VariableWidthLines> &toolpa
  */
 WallToolPaths::ExtrusionLineSet WallToolPaths::getRegionOrder(const std::vector<ExtrusionLine *> &input, const bool outer_to_inner)
 {
+    MAGPIE_STAGE_TIMER("fn.arachne_region_order");
     ExtrusionLineSet order_requirements;
     // We build a grid where we map toolpath vertex locations to toolpaths,
     // so that we can easily find which two toolpaths are next to each other,

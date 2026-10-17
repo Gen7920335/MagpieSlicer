@@ -1,3 +1,4 @@
+#include "libslic3r/StageTimer.hpp"
 #include <boost/date_time/posix_time/ptime.hpp>
 #include <boost/date_time/posix_time/posix_time_types.hpp>
 #include <cassert>
@@ -1940,6 +1941,7 @@ void TreeSupport::move_bounds_to_contact_nodes(std::vector<TreeSupport3D::Suppor
 
 void TreeSupport::generate()
 {
+    MAGPIE_STAGE_TIMER("fn.tree_support");
     if (!is_tree(m_object_config->support_type.value) && m_overrides.demand_mask == nullptr) return;
 
     if (m_support_params.support_style == smsTreeOrganic) {
@@ -3902,6 +3904,7 @@ void TreeSupport::generate_contact_points()
                     // add inner supports
                     overhang_bounds.inflated(-radius_scaled);
                     ExPolygons overhang_inner = offset_ex(overhang, -radius_scaled);
+                    MAGPIE_STAGE_TIMER("fn.tree_contact_inside");
                     for (Point candidate : grid_points) {
                         if (overhang_bounds.contains(candidate)) {
                             // BBS: move_inside_expoly shouldn't be used if candidate is already inside, as it moves point to boundary and the inside is not well supported!

@@ -1,6 +1,7 @@
 #ifdef _WIN32
 // Keep this first. A header below reaches boost/regex, whose w32_regex_traits
 // needs the Win32 types declared already.
+#include "libslic3r/StageTimer.hpp"
 #include <Windows.h>
 #endif
 
@@ -3152,6 +3153,7 @@ std::map<ObjectID, unsigned int> getObjectExtruderMap(const Print& print) {
 // Slicing process, running at a background thread.
 void Print::process(long long *time_cost_with_cache, bool use_cache)
 {
+    MAGPIE_STAGE_TIMER("print.process");
     long long start_time = 0, end_time = 0;
     if (time_cost_with_cache)
         *time_cost_with_cache = 0;
