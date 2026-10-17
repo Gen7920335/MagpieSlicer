@@ -5,6 +5,7 @@
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/ExtrusionEntityCollection.hpp"
 #include "libslic3r/Format/DRC.hpp"
+#include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Slicing.hpp"
@@ -902,4 +903,141 @@ TEST_CASE("Normal support wall count zero keeps the upstream bed-layer sheath on
     const auto two = support_has_closed_wall(2);
     CHECK(two.first);
     CHECK(two.second);
+}
+
+TEST_CASE("Resin style preserves dedicated body and interface filaments",
+          "[ResinSupport][Line1][Integration][MultiMaterial]")
+{
+    BundledMods mods;
+    TriangleMesh fixture = make_cube(8., 8., 18.);
+    TriangleMesh ceiling = make_cube(28., 20., 2.);
+    ceiling.translate(-10.f, -6.f, 18.f);
+    fixture.merge(ceiling);
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_num_extruders(3);
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    line1(config, "support_type", "resin(auto)");
+    config.set_key_value("support_filament", new ConfigOptionInt(2));
+    config.set_key_value("support_interface_filament", new ConfigOptionInt(3));
+    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(2));
+    config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(0));
+    line1(config, "resin_support_points_density_relative", 50);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4, 0.4, 0.4 }));
+    config.set_key_value("printer_extruder_id", new ConfigOptionInts({ 1, 2, 3 }));
+    config.set_key_value("printer_extruder_variant", new ConfigOptionStrings({
+        "Direct Drive Standard", "Direct Drive Standard", "Direct Drive Standard" }));
+    config.set_key_value("filament_diameter", new ConfigOptionFloats({ 1.75, 1.75, 1.75 }));
+    config.set_key_value("filament_type", new ConfigOptionStrings({ "PLA", "PLA", "PLA" }));
+    config.set_key_value("filament_colour",
+        new ConfigOptionStrings({ "#808080", "#00AAFF", "#FFAA00" }));
+    config.set_key_value("default_filament_colour",
+        new ConfigOptionStrings({ "#808080", "#00AAFF", "#FFAA00" }));
+    config.set_key_value("flush_multiplier", new ConfigOptionFloats({ 1. }));
+    config.set_key_value("flush_volumes_matrix",
+        new ConfigOptionFloats({ 0., 0., 0., 0., 0., 0., 0., 0., 0. }));
+    config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+    config.set_key_value("filament_map", new ConfigOptionInts({ 1, 2, 3 }));
+    config.set_key_value("gcode_comments", new ConfigOptionBool(true));
+
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({ fixture }, print, config));
+    CHECK(print.support_material_extruders() == std::vector<unsigned int>{ 1, 2 });
+    const std::string output = gcode(print);
+    CHECK(output.find("\nT1") != std::string::npos);
+    CHECK(output.find("\nT2 ; change extruder\n") != std::string::npos);
+    CHECK(output.find("support material interface") != std::string::npos);
+}
+
+TEST_CASE("Elevated Resin support remains continuous when synchronized with a prime tower",
+          "[ResinSupport][Line1][ElevatedSupportRegression]")
+{
+    BundledMods mods;
+    const auto strategy = GENERATE(rstDefault, rstBranching);
+    const bool synchronized = GENERATE(false, true);
+    const bool half = GENERATE(false, true);
+    const int raft = GENERATE(0, 2);
+    const bool dense = GENERATE(false, true);
+    const int support_walls = GENERATE(0, 1);
+    const int interface_layers = GENERATE(0, 3);
+    auto config = multifilament_config(2, {
+        {"enable_support", true},
+        {"support_filament", 2}, {"support_interface_filament", 2},
+        {"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
+        {"support_half_layer_height", half}, {"raft_layers", raft},
+        {"enable_prime_tower", synchronized}, {"independent_support_layer_height", !synchronized},
+        {"single_extruder_multi_material", true}, {"use_relative_e_distances", true},
+        {"layer_change_gcode", "G92 E0\n"}, {"skirt_loops", 0}, {"brim_type", "no_brim"},
+    });
+    line1(config, "support_type", "resin(auto)");
+    line1(config, "resin_support_object_elevation", 1.2);
+    line1(config, "resin_branching_support_object_elevation", 1.2);
+    line1(config, "resin_support_tree_type", line1_name(strategy));
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 1});
+    config.set_key_value("max_layer_height", new ConfigOptionFloats{0.2, 0.2});
+    // Nightly's default tower position lies off the test bed (the H/2 tests place it the same way).
+    config.set_key_value("wipe_tower_x", new ConfigOptionFloats{50.});
+    config.set_key_value("wipe_tower_y", new ConfigOptionFloats{50.});
+    line1(config, "support_wall_count", support_walls);
+    config.set("support_interface_top_layers", interface_layers);
+    if (dense) {
+        config.set_key_value("support_interface_spacing", new ConfigOptionFloat(0.));
+        config.set_key_value("support_base_pattern_spacing", new ConfigOptionFloat(0.));
+    }
+    Print print;
+    Model model;
+    init_print({make_cube(8., 8., 2.)}, print, model, config);
+    CAPTURE(int(strategy), synchronized, half, raft, dense, support_walls, interface_layers);
+    REQUIRE_NOTHROW(print.process());
+    const PrintObject &object = *print.objects().front();
+    REQUIRE_FALSE(object.support_layers().empty());
+    const double model_bottom_mm = object.layers().front()->bottom_z();
+    double previous_top_mm = 0.;
+    size_t below_model_layers = 0;
+    // This fixture uses 0.2 mm layers; auto raft layers may be 0.3 mm.
+    const double maximum_step_mm = raft ? 0.3 : 0.2;
+    constexpr double z_tolerance_mm = 0.00001;
+    for (const auto *layer : object.support_layers()) {
+        INFO("support plane Z=" << layer->print_z << " H=" << layer->height << " extrusions=" << layer->has_extrusions());
+        if (!layer->has_extrusions() || layer->print_z >= model_bottom_mm) continue;
+        CAPTURE(previous_top_mm, layer->print_z, layer->height, model_bottom_mm);
+        CHECK(layer->print_z - previous_top_mm <= maximum_step_mm + z_tolerance_mm);
+        previous_top_mm = layer->print_z;
+        ++below_model_layers;
+    }
+    CHECK(below_model_layers >= 3);
+    // Allow the configured model-contact air gap, but not the elevation void.
+    CHECK(model_bottom_mm - previous_top_mm <= maximum_step_mm + 0.2 + z_tolerance_mm);
+    std::string output;
+    REQUIRE_NOTHROW(output = gcode(print));
+    REQUIRE_FALSE(output.empty());
+    GCodeReader reader;
+    reader.apply_config(config);
+    std::set<float> support_z;
+    reader.parse_buffer(output, [&](GCodeReader &state, const GCodeReader::GCodeLine &line) {
+        if (line.extruding(state) && line.dist_XY(state) > 0. &&
+            std::string(line.comment()).find("support material") != std::string::npos && line.new_Z(state) < model_bottom_mm)
+            support_z.insert(line.new_Z(state));
+    });
+    REQUIRE(support_z.size() >= 3);
+    double last_z_mm = 0.;
+    for (const double z_mm : support_z) {
+        CHECK(z_mm - last_z_mm <= maximum_step_mm + z_tolerance_mm);
+        last_z_mm = z_mm;
+    }
+}
+
+TEST_CASE("Consecutive support exports keep independent G-code state", "[SupportMaterial][Line1][StateIsolation]")
+{
+    const std::string raft = slice({ cube(20) }, {
+        { "initial_layer_line_width", 0 }, { "enable_support", true }, { "raft_layers", 3 },
+    });
+    CHECK(raft.find("support material") != std::string::npos);
+
+    const std::string overhang = slice({ TestMesh::overhang }, {
+        { "layer_height", 0.4 }, { "initial_layer_print_height", 0.4 },
+        { "enable_support", true }, { "skirt_loops", 1 }, { "skirt_distance", 0 },
+        { "brim_type", "outer_only" }, { "brim_width", 5 },
+    });
+    CHECK(overhang.find("support material") != std::string::npos);
 }

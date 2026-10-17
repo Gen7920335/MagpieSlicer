@@ -1748,3 +1748,16 @@ TEST_CASE("Percent accelerations resolve against the option they are a percentag
         REQUIRE(accelerations_by_role[role_name] == std::set<int>{ value });
     }
 }
+
+// MAGPIE: from Magpie line 1 (Beta 7).
+TEST_CASE("Non-zero Z offset initializes before selecting an extruder", "[GCodeWriter][ZOffset]")
+{
+    for (const double z_offset : { -0.2, 0.2 }) {
+        CAPTURE(z_offset);
+        REQUIRE_NOTHROW(Slic3r::Test::slice({ Slic3r::Test::cube(20) }, {
+            { "z_offset", z_offset },
+            { "initial_layer_print_height", 0.25 },
+            { "layer_height", 0.25 }
+        }));
+    }
+}

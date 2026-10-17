@@ -14,6 +14,11 @@
 
 ## History
 
+### 2026-10-17 P6 Beta 7 test port, batch 4-5
+
+- Ported and passing: Z offset init, three drop tower placement tests (manual move, extruder offset transform, configured position over a model), Resin dedicated body/interface filaments, the 128-combination "Elevated Resin support remains continuous when synchronized with a prime tower" matrix (strategy x prime tower x H/2 support x raft x dense x walls x interface; tower placed at 50,50 as in the H/2 tests), consecutive support exports. The tower test fixture now builds through `tower_config`.
+- Two more line 1 changes to Orca's own behaviour found (legacy printer vectors repaired to the nozzle count in Preset::normalize, also for the Elegoo Z-offset case); not ported, in the decision group with the interface stabilization and tree support width.
+
 ### 2026-10-17 P6 Beta 7 test port, batch 3 and triage
 
 - Interface sublayer range now follows line 1: `support_interface_sublayer_selected` (contact-first, numbers clamped to 2..interface count); the support_extras rule passes sublayer_end as given. Ported "contact-first and clamped" and "Normal support wall count zero keeps the bed-layer sheath only".

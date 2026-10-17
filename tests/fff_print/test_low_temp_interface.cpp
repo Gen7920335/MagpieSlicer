@@ -252,10 +252,11 @@ struct TowerSettings
     double             tower_y { -1.0 }; // mm
     double             nozzle_diameter { 0.4 }; // mm
     double             layer_height { 0.2 };    // mm
+    std::vector<Vec2d> extruder_offsets;        // mm; empty keeps the default
     std::vector<Vec2d> printable_area { Vec2d(0., 0.), Vec2d(200., 0.), Vec2d(200., 200.), Vec2d(0., 200.) };
 };
 
-std::string tower_gcode(const TowerSettings &settings)
+DynamicPrintConfig tower_config(const TowerSettings &settings)
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({
@@ -280,7 +281,14 @@ std::string tower_gcode(const TowerSettings &settings)
     config.set_key_value("support_interface_temperature_drop_tower_y", new ConfigOptionFloats({ settings.tower_y }));
     config.set_key_value("support_interface_brush_start", new ConfigOptionPoint(Vec2d(10.0, 10.0)));
     config.set_key_value("support_interface_brush_end", new ConfigOptionPoint(Vec2d(20.0, 10.0)));
-    return slice({ TestMesh::overhang }, config);
+    if (!settings.extruder_offsets.empty())
+        config.set_key_value("extruder_offset", new ConfigOptionPoints(settings.extruder_offsets));
+    return config;
+}
+
+std::string tower_gcode(const TowerSettings &settings)
+{
+    return slice({ TestMesh::overhang }, tower_config(settings));
 }
 
 std::optional<double> gcode_word(const std::string &line, char letter)
@@ -620,4 +628,90 @@ TEST_CASE("Temperature drop tower keeps five brim lines across nozzle diameters"
         CHECK(body_offset > previous_body_offset);
         previous_body_offset = body_offset;
     }
+}
+
+TEST_CASE("Temperature drop tower G-code follows a manual project move exactly",
+          "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    TowerSettings before_move;
+    before_move.tower_x = 20.0;
+    before_move.tower_y = 25.0;
+    const std::string before_output = tower_gcode(before_move);
+    const TowerMetrics before =
+        analyze_tower(before_output);
+
+    TowerSettings after_move = before_move;
+    after_move.tower_x = 42.0;
+    after_move.tower_y = 31.0;
+    const std::string after_output = tower_gcode(after_move);
+    const TowerMetrics after =
+        analyze_tower(after_output);
+
+    check_passes_on_distinct_layers(before);
+    check_passes_on_distinct_layers(after);
+    CHECK(after.min_x - before.min_x == Catch::Approx(22.0).margin(0.03));
+    CHECK(after.max_x - before.max_x == Catch::Approx(22.0).margin(0.03));
+    CHECK(after.min_y - before.min_y == Catch::Approx(6.0).margin(0.03));
+    CHECK(after.max_y - before.max_y == Catch::Approx(6.0).margin(0.03));
+    CHECK(count_substring(before_output, "; temperature drop tower brim line") == 5);
+    CHECK(count_substring(after_output, "; temperature drop tower brim line") == 5);
+}
+
+TEST_CASE("Temperature drop tower follows the standard extruder offset transform",
+          "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    TowerSettings settings;
+    settings.extruder_offsets = { Vec2d(-32.0, 0.0) };
+    const TowerMetrics metrics = analyze_tower(
+        tower_gcode(settings));
+
+    check_passes_on_distinct_layers(metrics);
+    CHECK(metrics.min_x > 34.0);
+    CHECK(metrics.max_x < 109.0);
+    CHECK(metrics.min_y > 2.0);
+    CHECK(metrics.max_y < 198.0);
+}
+
+TEST_CASE("Temperature drop tower keeps its configured position when a model overlaps it",
+          "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    TowerSettings settings;
+    settings.tower_x = 5.0;
+    settings.tower_y = 145.0;
+    const TowerMetrics baseline =
+        analyze_tower(tower_gcode(settings));
+    DynamicPrintConfig config = tower_config(settings);
+    TriangleMesh overhang = mesh(TestMesh::overhang);
+    const BoundingBoxf3 original_bbox = overhang.bounding_box();
+    const double target_min_x = 5.0;
+    const double target_max_y = 195.0;
+    overhang.translate(
+        target_min_x - original_bbox.min.x(),
+        target_max_y - original_bbox.max.y(),
+        -original_bbox.min.z());
+    const BoundingBoxf3 placed_bbox = overhang.bounding_box();
+
+    Print print;
+    Model model;
+    std::vector<TriangleMesh> meshes;
+    meshes.emplace_back(std::move(overhang));
+    init_print(std::move(meshes), print, model, config, nullptr, false);
+    const TowerMetrics metrics =
+        analyze_tower(gcode(print));
+
+    check_passes_on_distinct_layers(metrics);
+    CHECK(metrics.min_x >= 3.0 - 0.03);
+    CHECK(metrics.max_x <= 197.0 + 0.03);
+    CHECK(metrics.min_y >= 3.0 - 0.03);
+    CHECK(metrics.max_y <= 197.0 + 0.03);
+    const bool overlaps =
+        metrics.max_x > placed_bbox.min.x() &&
+        metrics.min_x < placed_bbox.max.x() &&
+        metrics.max_y > placed_bbox.min.y() &&
+        metrics.min_y < placed_bbox.max.y();
+    CHECK(overlaps);
+    CHECK(metrics.min_x == Catch::Approx(baseline.min_x).margin(0.03));
+    CHECK(metrics.max_x == Catch::Approx(baseline.max_x).margin(0.03));
+    CHECK(metrics.min_y == Catch::Approx(baseline.min_y).margin(0.03));
+    CHECK(metrics.max_y == Catch::Approx(baseline.max_y).margin(0.03));
 }
