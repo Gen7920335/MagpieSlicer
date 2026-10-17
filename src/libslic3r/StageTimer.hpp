@@ -7,6 +7,7 @@
 // several threads at once add up their own times, so a total is CPU-side time summed over threads,
 // not wall time; wall time comes from the Print step scopes, which never overlap themselves.
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -43,10 +44,18 @@ private:
 #define MAGPIE_STAGE_TIMER_CAT2(a, b) a##b
 #define MAGPIE_STAGE_TIMER_CAT(a, b) MAGPIE_STAGE_TIMER_CAT2(a, b)
 #define MAGPIE_STAGE_TIMER(name) ::Slic3r::StageTimer::Scope MAGPIE_STAGE_TIMER_CAT(magpie_stage_timer_, __LINE__)(name)
+// Consecutive phases of one function: MAGPIE_STAGE_PHASE(var, name) ends the previous phase of
+// `var` and starts `name`; the last phase ends with the function or MAGPIE_STAGE_PHASE_END(var).
+#define MAGPIE_STAGE_PHASES(var) std::optional<::Slic3r::StageTimer::Scope> var
+#define MAGPIE_STAGE_PHASE(var, name) (var).emplace(name)
+#define MAGPIE_STAGE_PHASE_END(var) (var).reset()
 
 #else
 
 #define MAGPIE_STAGE_TIMER(name) ((void)0)
+#define MAGPIE_STAGE_PHASES(var) ((void)0)
+#define MAGPIE_STAGE_PHASE(var, name) ((void)0)
+#define MAGPIE_STAGE_PHASE_END(var) ((void)0)
 
 #endif
 

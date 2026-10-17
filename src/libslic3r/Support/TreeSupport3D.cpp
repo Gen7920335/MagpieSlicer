@@ -379,6 +379,7 @@ static std::vector<std::pair<TreeSupportSettings, std::vector<size_t>>> group_me
  */
 [[nodiscard]] static LayerIndex precalculate(const Print &print, const std::vector<Polygons> &overhangs, const TreeSupportSettings &config, const std::vector<size_t> &object_ids, TreeModelVolumes &volumes, std::function<void()> throw_on_cancel)
 {
+    MAGPIE_STAGE_TIMER("fn.tree3d_precalc");
     // calculate top most layer that is relevant for support
     LayerIndex max_layer = 0;
     for (size_t object_id : object_ids) {
@@ -1300,6 +1301,7 @@ static void generate_initial_areas(
     InterfacePlacer                 &interface_placer,
     std::function<void()>            throw_on_cancel)
 {
+    MAGPIE_STAGE_TIMER("fn.tree3d_initial_areas");
     using                           AvoidanceType = TreeModelVolumes::AvoidanceType;
     TreeSupportMeshGroupSettings    mesh_group_settings(print_object);
 
@@ -2490,6 +2492,7 @@ static void merge_influence_areas(
  */
 static void create_layer_pathing(const TreeModelVolumes &volumes, const TreeSupportSettings &config, std::vector<SupportElements> &move_bounds, std::function<void()> throw_on_cancel)
 {
+    MAGPIE_STAGE_TIMER("fn.tree3d_layer_pathing");
 #ifdef SLIC3R_TREESUPPORTS_PROGRESS
     const double data_size_inverse = 1 / double(move_bounds.size());
     double progress_total = TREE_PROGRESS_PRECALC_AVO + TREE_PROGRESS_PRECALC_COLL + TREE_PROGRESS_GENERATE_NODES;
@@ -2737,6 +2740,7 @@ static void create_nodes_from_area(
     std::vector<SupportElements> &move_bounds,
     std::function<void()>         throw_on_cancel)
 {
+    MAGPIE_STAGE_TIMER("fn.tree3d_nodes");
     // Initialize points on layer 0, with a "random" point in the influence area.
     // Point is chosen based on an inaccurate estimate where the branches will split into two, but every point inside the influence area would produce a valid result.
     {
@@ -3081,6 +3085,7 @@ static void organic_smooth_branches_avoid_collisions(
     const std::vector<size_t>                           &linear_data_layers,
     std::function<void()>                                throw_on_cancel)
 {
+    MAGPIE_STAGE_TIMER("fn.tree3d_smooth");
     struct LayerCollisionCache {
         coord_t          min_element_radius{ std::numeric_limits<coord_t>::max() };
         bool             min_element_radius_known() const { return this->min_element_radius != std::numeric_limits<coord_t>::max(); }
@@ -3346,6 +3351,7 @@ static void organic_smooth_branches_avoid_collisions(
     const std::vector<size_t>                           &linear_data_layers,
     std::function<void()>                                throw_on_cancel)
 {
+    MAGPIE_STAGE_TIMER("fn.tree3d_smooth");
     TriangleMesh mesh = print_object.model_object()->raw_mesh();
     mesh.transform(print_object.trafo_centered());
     double scale = 10.;
@@ -3759,6 +3765,7 @@ void organic_draw_branches(
 
     std::function<void()>            throw_on_cancel)
 {
+    MAGPIE_STAGE_TIMER("fn.tree3d_draw_branches");
     // All SupportElements are put into a layer independent storage to improve parallelization.
     std::vector<std::pair<SupportElement*, int>> elements_with_link_down;
     std::vector<size_t>                          linear_data_layers;
@@ -3813,6 +3820,8 @@ void organic_draw_branches(
         for (SupportElement &element : elements)
             element.state.marked = false;
 
+    MAGPIE_STAGE_PHASES(phase);
+    MAGPIE_STAGE_PHASE(phase, "fn.tree3d_p1_traverse");
     // Traverse all nodes, generate tubes.
     // Traversal stack with nodes and their current parent
 
@@ -3925,6 +3934,7 @@ void organic_draw_branches(
     MeshSlicingParams mesh_slicing_params;
     mesh_slicing_params.mode = MeshSlicingParams::SlicingMode::Positive;
 
+    MAGPIE_STAGE_PHASE(phase, "fn.tree3d_p2_tubes");
     tbb::parallel_for(tbb::blocked_range<size_t>(0, trees.size(), 1),
         [&trees, &volumes, &config, &slicing_params, &move_bounds, &mesh_slicing_params, &interface_placer, &throw_on_cancel](const tbb::blocked_range<size_t> &range) {
             indexed_triangle_set    partial_mesh;
@@ -3949,7 +3959,11 @@ void organic_draw_branches(
                         slice_z.emplace_back(float(0.5 * (bottom_z + print_z)));
                     }
 
-                    std::vector<Polygons> slices = slice_mesh(partial_mesh, slice_z, mesh_slicing_params, throw_on_cancel);
+                    std::vector<Polygons> slices;
+                    {
+                        MAGPIE_STAGE_TIMER("fn.tree3d_tube_slice");
+                        slices = slice_mesh(partial_mesh, slice_z, mesh_slicing_params, throw_on_cancel);
+                    }
 
                     // ORCA: guard against empty slices from meshing.
                     if (slices.empty())
@@ -4192,6 +4206,7 @@ void organic_draw_branches(
             }
         }, tbb::simple_partitioner());
 
+    MAGPIE_STAGE_PHASE(phase, "fn.tree3d_p3_union_tree");
     tbb::parallel_for(tbb::blocked_range<size_t>(0, trees.size(), 1),
         [&trees, &throw_on_cancel](const tbb::blocked_range<size_t> &range) {
         for (size_t tree_id = range.begin(); tree_id < range.end(); ++ tree_id) {
@@ -4211,6 +4226,7 @@ void organic_draw_branches(
         }
     }, tbb::simple_partitioner());
 
+    MAGPIE_STAGE_PHASE(phase, "fn.tree3d_p4_merge");
     size_t num_layers = 0;
     for (Tree &tree : trees)
         if (tree.first_layer_id >= 0)
@@ -4242,6 +4258,7 @@ void organic_draw_branches(
             }
         }
 
+    MAGPIE_STAGE_PHASE(phase, "fn.tree3d_p5_layers");
     tbb::parallel_for(tbb::blocked_range<size_t>(0, std::min(move_bounds.size(), slices.size()), 1),
         [&print_object, &config, &slices, &bottom_contacts, &top_contacts, &intermediate_layers, &layer_storage, &throw_on_cancel](const tbb::blocked_range<size_t> &range) {
         for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++layer_idx) {
