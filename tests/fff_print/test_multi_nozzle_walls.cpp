@@ -413,3 +413,72 @@ TEST_CASE("Gap fill between walls prints with the detail nozzle", "[MultiNozzleW
     config.set_deserialize_strict({ { "use_smaller_nozzles_in_crisp_corners", false } });
     CHECK(tools_for_type(slice({ make_cube(20., 3., 10.) }, config), "Gap infill") == std::set<int>{ 1 });
 }
+
+// MAGPIE: from Magpie line 1 (Beta 7): wall ownership with every half-layer mode.
+TEST_CASE("Different inner and outer materials retain their actual tools with every half-layer mode",
+          "[MultiNozzleWalls][HalfLayer][Line1]")
+{
+    const char *engine = GENERATE("classic", "arachne");
+    const bool mixed_sizes = GENERATE(false, true);
+    const bool reversed = GENERATE(false, true);
+    const int half_mode = GENERATE(0, 1, 2, 3);
+    const bool sequential = GENERATE(false, true);
+    const int outer = reversed ? 2 : 1;
+    const int inner = reversed ? 1 : 2;
+    auto config = two_nozzle_config(mixed_sizes ? 0.15 : 0.4, 0.4, outer, engine, false);
+    config.set_deserialize_strict({
+        {"inner_wall_filament_id", inner}, {"wall_loops", 4},
+        {"layer_height", 0.12}, {"initial_layer_print_height", 0.12},
+        {"outer_wall_half_layer_height", (half_mode & 1) != 0},
+        {"support_half_layer_height", (half_mode & 2) != 0},
+        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
+        {"enable_prime_tower", false}, {"enable_overhang_speed", "0,0"},
+        {"print_sequence", sequential ? "by object" : "by layer"},
+    });
+    config.set_key_value("filament_colour", new ConfigOptionStrings{"#FF0000", "#00FF00"});
+    TriangleMesh mesh = cube(6);
+    mesh.scale(Vec3f(1.f, 1.f, 0.2f));
+    const std::string output = slice({mesh}, config);
+    std::string role;
+    int tool = -1;
+    std::set<int> outer_tools, inner_tools;
+    GCodeReader reader;
+    reader.parse_buffer(output, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw()), cmd(line.cmd());
+        if (raw.rfind(";TYPE:", 0) == 0)
+            role = raw.substr(6);
+        else if (cmd.size() > 1 && cmd[0] == 'T' && std::isdigit(static_cast<unsigned char>(cmd[1])))
+            tool = std::stoi(cmd.substr(1));
+        else if (line.extruding(self) && line.dist_XY(self) > 0.) {
+            if (role == "Outer wall") outer_tools.insert(tool);
+            if (role == "Inner wall") inner_tools.insert(tool);
+        }
+    });
+    CAPTURE(engine, mixed_sizes, reversed, half_mode, sequential);
+    CHECK(outer_tools == std::set<int>{outer - 1});
+    CHECK(inner_tools == std::set<int>{inner - 1});
+}
+
+// MAGPIE: from Magpie line 1 (Beta 7), on its small-nozzle geometry probe.
+TEST_CASE("Loaded STL geometry preserves mixed-nozzle wall routing",
+          "[MultiNozzleWalls][Line1][LoadedMesh]")
+{
+    TriangleMesh probe;
+    const std::string probe_path = std::string(TEST_DATA_DIR) + "/small_nozzle_geometry_probe.stl";
+    probe.ReadSTLFile(probe_path.c_str());
+    REQUIRE_FALSE(probe.empty());
+
+    const char *wall_generator = GENERATE("classic", "arachne");
+    DYNAMIC_SECTION(wall_generator) {
+        DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, wall_generator, true);
+        config.set_deserialize_strict({
+            { "layer_height", 0.1 },
+            { "initial_layer_print_height", 0.1 },
+            { "only_one_wall_top", false },
+            { "only_one_wall_first_layer", false },
+        });
+
+        const std::string output = slice({ probe }, config);
+        CHECK(tools_for_role(output, "perimeter") == std::set<int>{ 0, 1 });
+    }
+}
