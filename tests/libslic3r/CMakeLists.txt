@@ -23,6 +23,7 @@ add_executable(${_TEST_NAME}_tests
     test_config_variant_expansion.cpp
     test_mod_host.cpp
     test_mod_index.cpp
+    test_legacy_settings.cpp
     test_snapmaker_u1_start.cpp
     test_param_graph.cpp
     test_locales_utils.cpp

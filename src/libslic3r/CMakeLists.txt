@@ -125,6 +125,8 @@ set(lisbslic3r_sources
     ModHost/Expr.hpp
     ModHost/ModIndex.cpp
     ModHost/ModIndex.hpp
+    ModHost/LegacySettings.cpp
+    ModHost/LegacySettings.hpp
     ModHost/ModSet.cpp
     ModHost/ModSet.hpp
     ModHost/ParamGraph.cpp

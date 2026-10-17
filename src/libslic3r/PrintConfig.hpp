@@ -932,17 +932,22 @@ public:
     // Both opt_key and value may be modified by handle_legacy().
     // If the opt_key is no more valid in this version of Slic3r, opt_key is cleared by handle_legacy().
     // handle_legacy() is called internally by set_deserialize().
-    void                handle_legacy(t_config_option_key &opt_key, std::string &value) const override
-        { PrintConfigDef::handle_legacy(opt_key, value); }
+    // MAGPIE: Magpie line 1 settings are recorded here while a file loads and become mod parameters in
+    // handle_legacy_composite() (ModHost/LegacySettings).
+    void                handle_legacy(t_config_option_key &opt_key, std::string &value) const override;
 
     // Called after a config is loaded as a whole.
     // Perform composite conversions, for example merging multiple keys into one key.
     // For conversion of single options, the handle_legacy() method above is called.
-    void                handle_legacy_composite() override
-        { PrintConfigDef::handle_legacy_composite(*this); }
+    void                handle_legacy_composite() override;
 
     //BBS special case Support G/ Support W
     std::string get_filament_type(std::string &displayed_filament_type, int id = 0);
+
+private:
+    // MAGPIE: line 1 values seen by handle_legacy() since the last handle_legacy_composite().
+    mutable std::map<std::string, std::string> m_magpie_legacy_stash;
+public:
 
     //BBS
     bool is_using_different_extruders();

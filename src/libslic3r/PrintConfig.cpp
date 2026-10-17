@@ -1,4 +1,5 @@
 #include "PrintConfig.hpp"
+#include "ModHost/LegacySettings.hpp"
 #include "CommonDefs.hpp"
 #include "Point.hpp"
 #include "Polygon.hpp"
@@ -10232,6 +10233,18 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
 // Called after a config is loaded as a whole.
 // Perform composite conversions, for example merging multiple keys into one key.
 // Don't convert single options here, implement such conversion in PrintConfigDef::handle_legacy() instead.
+void DynamicPrintConfig::handle_legacy(t_config_option_key &opt_key, std::string &value) const
+{
+    if (!ModHost::stash_legacy_setting(opt_key, value, m_magpie_legacy_stash))
+        PrintConfigDef::handle_legacy(opt_key, value);
+}
+
+void DynamicPrintConfig::handle_legacy_composite()
+{
+    PrintConfigDef::handle_legacy_composite(*this);
+    ModHost::migrate_legacy_settings(*this, m_magpie_legacy_stash);
+}
+
 void PrintConfigDef::handle_legacy_composite(DynamicPrintConfig &config)
 {
     if (config.has("thumbnails")) {

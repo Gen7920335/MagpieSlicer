@@ -14,6 +14,13 @@
 
 ## History
 
+### 2026-10-17 P6 line 1 settings migration
+
+- `ModHost/LegacySettings`: while a project or preset loads, `DynamicPrintConfig::handle_legacy` records line 1 settings (mod-owned keys this build defines, 71 line 1 only keys, and the enum values only line 1 had: support_type normal_cura/mixed/resin, support_interface_pattern triangles), drops the line 1 only keys and rewrites those enum values to Orca's base. `handle_legacy_composite` then writes the implied mod parameters into mod_settings, keeping values mod_settings already has and leaving out defaults. Unsupported line 1 settings (toolhead_* widths, sublayer temperature) are logged when set.
+- Tests `tests/libslic3r/test_legacy_settings.cpp` (support types, feature keys, mod_settings precedence, a plain file unchanged).
+- Checked with line 1 Beta 7 process presets used as they are (H/2 outer walls, low temperature interface, Cura, Resin branching, triangle interface with support walls): every feature switches on and the per-layer Z sets match Beta 7's G-code (remaining differences are the known support base differences and profile values). Line 1 CLI-exported 3MFs could not be used for this: the CLI (vanilla Orca too) reslices a BBL 3MF from the system presets when different_settings_to_system is empty, which is what line 1's CLI writes.
+- Tests 2303/2303, golden off 15/15, mods 30/30.
+
 ### 2026-10-17 P5 LESIC ring calibration
 
 - Line 1's LESIC (calibration menu "LESIC"): a vase-mode cylinder sized to the bed (bed minus 20 mm, line width 1.2 x nozzle, layer 0.6 x nozzle); one temperature per band of `lesic_layers_per_temp` layers from start to end; above the first layer the wall speed follows the angle around the ring from `mvs_start` to `mvs_end` mm3/s; on the first layer the bottom label, ring value labels and a 5-line inner brim are printed as G-code segments. Ported as C++: `calib.hpp` (mode, params, layout), `GCode/LesicAnnotations.hpp` (line 1's annotation geometry, verbatim), `GCode.cpp` (per-layer temperature, angle speed in `_extrude`, `emit_lesic_ring_annotations`), `Plater::calib_lesic`, `LESIC_Calibration_Dlg`, both calibration menus, CalibUtils mode names. Everything is gated by `CalibMode::Calib_LESIC`.
