@@ -1,5 +1,5 @@
 # A CPU-only first gate for the production schedule calculations. No slicer,
-# GUI, CUDA or Vulkan dependency is necessary for these interval tests.
+# GUI or CUDA dependency is necessary for these interval tests.
 add_executable(half_layer_plan_tests test_half_layer_plan.cpp)
 target_include_directories(half_layer_plan_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(half_layer_plan_tests PRIVATE Catch2::Catch2WithMain)
@@ -9,7 +9,7 @@ orcaslicer_discover_tests(half_layer_plan_tests)
 # Native geometry gate, without building the GUI or all integration suites.
 add_executable(half_layer_geometry_tests test_half_layer_geometry.cpp test_runtime.cpp)
 target_link_libraries(half_layer_geometry_tests PRIVATE test_common libslic3r Catch2::Catch2WithMain)
-if(NOT SLIC3R_ENABLE_CUDA_SLICER AND NOT SLIC3R_ENABLE_VULKAN_SLICER)
+if(NOT SLIC3R_ENABLE_CUDA_SLICER)
     target_compile_definitions(half_layer_geometry_tests PRIVATE MAGPIE_HALF_LAYER_CPU_GATE)
 endif()
 set_property(TARGET half_layer_geometry_tests PROPERTY FOLDER "tests")

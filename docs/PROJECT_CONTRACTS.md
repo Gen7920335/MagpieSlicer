@@ -4,7 +4,7 @@ This document contains conditional project-specific contracts. Read or search on
 
 # 1. Project Purpose
 
-- Magpie Slicer is an OrcaSlicer-based FDM slicer focused on mixed-nozzle toolheads, extended support generation and interfaces, low-temperature support interfaces, selected Snapmaker integration, and optional Vulkan-assisted slicing.
+- Magpie Slicer is an OrcaSlicer-based FDM slicer focused on mixed-nozzle toolheads, extended support generation and interfaces, low-temperature support interfaces, selected Snapmaker integration, and optional CUDA-assisted slicing.
 - Preserve OrcaSlicer's normal workflows, project/profile compatibility, output correctness, and printer safety while adding opt-in Magpie behavior.
 - Generated geometry and G-code correctness outrank preview appearance and benchmark speed.
 
@@ -19,7 +19,7 @@ This document contains conditional project-specific contracts. Read or search on
 - Preview and G-code routing must consume the same resolved tool assignment used by geometry generation.
 - Prusa-style normal, Cura-style normal, Tree/Organic, Mixed, and Resin-style support must remain selectable and independent.
 - Low-temperature interface sequencing must remain isolated from the normal G-code path, with explicit and restored temporary state.
-- Vulkan is optional and CPU-authoritative. GPU output must be exact or conservative and validated by deterministic CPU logic.
+- CUDA is optional and CPU-authoritative. GPU output must be exact or conservative and validated by deterministic CPU logic.
 - Stable Magpie and profiler builds must retain separate application, binary, configuration, installer, registry, and package identities.
 - Device transport/state ownership must remain separate from wxWidgets view lifetime. Asynchronous work must be cancellable or lifetime-gated.
 
@@ -134,8 +134,8 @@ Before an authorized build or test:
 Confirmed Windows release commands:
 
 ```powershell
-cmake --build build-vulkan --config Release --parallel 8
-powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -BuildDirectory build-vulkan -Parallel 8
+cmake --build build --config Release --parallel 8
+powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -BuildDirectory build -Parallel 8
 ```
 
 Profiler build:
@@ -167,8 +167,6 @@ scripts/verify_cura_support_geometry.ps1
 scripts/verify_cura_solid_support_raft.ps1
 scripts/verify_tree_support_wall_counts.ps1
 scripts/verify_interface_underside_smoothing.ps1
-scripts/verify_vulkan_integration_contract.ps1
-scripts/verify_vulkan_cpu_baseline_matrix.ps1
 scripts/verify_slicing_profiler_contract.ps1
 scripts/verify_setup_guide_scroll.ps1
 scripts/verify_installer.ps1
@@ -213,7 +211,7 @@ Run `git diff --check` before reporting completion when verification is authoriz
 - Do not assign different nozzles inside one connected cosmetic wall loop.
 - Do not derive physical nozzle geometry from a filament/material index.
 - Do not maintain a second persisted hotend/nozzle configuration beside printer-preset vectors.
-- Do not accept partial, unvalidated, overflow-prone, or device-failed Vulkan results.
+- Do not accept partial, unvalidated, overflow-prone, or device-failed CUDA results.
 - Do not remove or rename OrcaSlicer-owned calibration tools/models or compatibility identifiers as part of branding.
 - Do not reintroduce AUX-fan always-on controls that were explicitly removed.
 - Do not package or publish a portable archive under current policy.

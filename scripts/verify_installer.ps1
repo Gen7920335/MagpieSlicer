@@ -20,8 +20,7 @@ $testInstallParent = "C:\MagpieInstallTest"
 $installRoot = Join-Path $testInstallParent $stamp
 
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
-    # Release builds package from build; the 2.5.0.1.x line used build-vulkan.
-    $InstallerPath = @("build\installer", "build-vulkan\installer") |
+    $InstallerPath = @("build\installer") |
         ForEach-Object { Join-Path $root $_ } |
         Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
         ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter "MagpieSlicerNext_Windows_Installer_*_x64.exe" } |

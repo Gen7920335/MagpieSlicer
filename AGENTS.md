@@ -40,7 +40,7 @@ Select contracts from the task domain, referenced symbols, touched files, settin
 | Nozzle, hotend, extrusion width, wall count, Classic, Arachne, tool mapping, filament mapping, or interlocking | `docs/PROJECT_CONTRACTS.md` sections 2, 3, 7, 8, and 10 as applicable |
 | Prusa/Normal Support, Cura Support, Tree/Organic Support, interface, raft, support pattern, or support serialization | `docs/PROJECT_CONTRACTS.md` sections 2, 4, 7, 8, and 10 as applicable |
 | Low-temperature interface, temperature tower, AUX cooling, wiping, interface temperature, or reheating | `docs/PROJECT_CONTRACTS.md` sections 2, 5, 7, 8, and 10 as applicable |
-| Vulkan, GPU, CPU fallback, dispatch, overflow, device buffer, or profiler | `docs/PROJECT_CONTRACTS.md` sections 2, 8, 9, 11, and 12 as applicable |
+| CUDA, GPU, CPU fallback, dispatch, overflow, device buffer, or profiler | `docs/PROJECT_CONTRACTS.md` sections 2, 8, 9, 11, and 12 as applicable |
 | Snapmaker, LESIC, branding, installer, packaging, application identity, file association, or release | `docs/PROJECT_CONTRACTS.md` sections 6, 10, 11, 12, and 13 as applicable |
 | Performance, profiling, benchmark, hot loop, allocation, cache, batching, parallelism, latency, throughput, or asymptotic-work changes in any feature domain | Add `docs/PROJECT_CONTRACTS.md` section 9 to the feature-specific sections above |
 | Build or test execution | Add `docs/PROJECT_CONTRACTS.md` sections 11 and 12; add section 13 for packaging or release work |

@@ -55,11 +55,8 @@ if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
     throw "CMake cache not found: $cachePath"
 }
 $cacheText = Get-Content -LiteralPath $cachePath -Raw
-# The Vulkan/CUDA compute backends are modules on this line and are not required to package.
-$vulkanEnabled = $cacheText -match '(?m)^SLIC3R_ENABLE_VULKAN_SLICER:BOOL=ON\r?$'
-if ($cacheText -match '(?m)^MAGPIE_VULKAN_TEST_BRANDING:BOOL=ON\r?$') {
-    throw "Installer packaging rejects MAGPIE_VULKAN_TEST_BRANDING=ON: $cachePath"
-}
+# The CUDA compute backend is optional and not required to package.
+$cudaEnabled = $cacheText -match '(?m)^SLIC3R_ENABLE_CUDA_SLICER:BOOL=ON\r?$'
 $profilerEnabled = $cacheText -match '(?m)^MAGPIE_SLICING_PROFILER:BOOL=ON\r?$'
 if ($DevelopmentProfiler -and -not $profilerEnabled) {
     throw "Development profiler packaging requires MAGPIE_SLICING_PROFILER=ON: $cachePath"
@@ -97,8 +94,7 @@ Write-Output "Free physical memory: $([Math]::Round($freeMemoryBytes / 1GB, 1)) 
 Write-Output "Free staging disk: $([Math]::Round($stageDrive.Free / 1GB, 1)) GiB"
 Write-Output "Build directory: $buildDir"
 Write-Output "Package identity: $appName ($appKey)"
-Write-Output "Vulkan slicer: $vulkanEnabled"
-Write-Output "Vulkan test branding: OFF"
+Write-Output "CUDA slicer: $cudaEnabled"
 Write-Output "Slicing profiler: $($DevelopmentProfiler.IsPresent)"
 Write-Output "Short staging directory: $stageDir"
 
