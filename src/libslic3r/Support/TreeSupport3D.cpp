@@ -4207,24 +4207,27 @@ void organic_draw_branches(
         }, tbb::simple_partitioner());
 
     MAGPIE_STAGE_PHASE(phase, "fn.tree3d_p3_union_tree");
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, trees.size(), 1),
-        [&trees, &throw_on_cancel](const tbb::blocked_range<size_t> &range) {
-        for (size_t tree_id = range.begin(); tree_id < range.end(); ++ tree_id) {
-            Tree &tree = trees[tree_id];
-            for (Slice &slice : tree.slices)
-                if (slice.num_branches > 1) {
-                    // ORCA: avoid union_ on empty containers.
-                    if (!slice.polygons.empty())
-                        slice.polygons = union_(slice.polygons);
-                    if (!slice.bottom_contacts.empty())
-                        slice.bottom_contacts = union_(slice.bottom_contacts);
+    // MAGPIE: one task per slice rather than per tree. Each slice's union is independent, and a
+    // print with one large tree otherwise ran this whole step on one thread.
+    std::vector<Slice*> slices_to_union;
+    for (Tree &tree : trees)
+        for (Slice &slice : tree.slices)
+            if (slice.num_branches > 1)
+                slices_to_union.push_back(&slice);
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, slices_to_union.size(), 1),
+        [&slices_to_union, &throw_on_cancel](const tbb::blocked_range<size_t> &range) {
+        for (size_t i = range.begin(); i < range.end(); ++ i) {
+            Slice &slice = *slices_to_union[i];
+            // ORCA: avoid union_ on empty containers.
+            if (!slice.polygons.empty())
+                slice.polygons = union_(slice.polygons);
+            if (!slice.bottom_contacts.empty())
+                slice.bottom_contacts = union_(slice.bottom_contacts);
 
-                    slice.num_branches = 1;
-                }
-
+            slice.num_branches = 1;
             throw_on_cancel();
         }
-    }, tbb::simple_partitioner());
+    });
 
     MAGPIE_STAGE_PHASE(phase, "fn.tree3d_p4_merge");
     size_t num_layers = 0;
