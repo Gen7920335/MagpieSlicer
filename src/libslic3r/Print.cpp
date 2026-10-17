@@ -188,6 +188,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "support_interface_brush_end",
         "support_interface_brush_repetitions",
         "support_interface_brush_speed",
+        "snapmaker_u1_start_guard",
         "reduce_crossing_wall",
         "max_travel_detour_distance",
         "printable_area",

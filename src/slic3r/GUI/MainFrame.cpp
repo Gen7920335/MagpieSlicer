@@ -3494,6 +3494,10 @@ void MainFrame::init_menubar_as_editor()
             wxGetApp().open_preferences();
         },
         "", nullptr, []() { return true; }, this, 1);
+    append_menu_item(
+        parent_menu, wxID_ANY, _L("Get Mods") + dots, _L("Search the mod index and install mods"),
+        [](wxCommandEvent &) { wxGetApp().open_mod_browser(); },
+        "", nullptr, []() { return true; }, this, 2);
     //parent_menu->Insert(1, preference_item);
 #endif
     // Help menu
@@ -3513,6 +3517,11 @@ void MainFrame::init_menubar_as_editor()
             // Orca: Use GUI_App::open_preferences instead of direct call so windows associations are updated on exit
             wxGetApp().open_preferences();
         },
+        "", nullptr, []() { return true; }, this);
+    // MAGPIE: search the mod index and install mods.
+    append_menu_item(
+        m_topbar->GetTopMenu(), wxID_ANY, _L("Get Mods") + dots, _L("Search the mod index and install mods"),
+        [](wxCommandEvent &) { wxGetApp().open_mod_browser(); },
         "", nullptr, []() { return true; }, this);
 
     auto top_menu = m_topbar->GetTopMenu();

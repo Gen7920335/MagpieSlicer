@@ -8,6 +8,7 @@
 #include "Flow.hpp"
 #include "GCode/ThumbnailData.hpp"
 #include "GCode/ToolOrdering.hpp"
+#include "GCode/SnapmakerHomingPolicy.hpp"
 #include "Support/TemperatureDropTower.hpp"
 #include "GCode/SpiralVase.hpp"
 #include "GCode/PressureEqualizer.hpp"
@@ -4333,7 +4334,15 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         file.write(m_writer.set_additional_fan(0));
     }
 
-    std::string machine_start_gcode = this->placeholder_parser_process("machine_start_gcode", print.config().machine_start_gcode.value, initial_extruder_id);
+    // MAGPIE: on a Snapmaker U1 the guard puts back the stock pre-print sequence when the start G-code
+    // lacks it, and homes after PRINT_START when the start G-code would move unhomed (Magpie line 1).
+    const bool u1_start_guard = print.config().snapmaker_u1_start_guard.value &&
+                                is_snapmaker_u1_model(print.config().printer_model.value);
+    const std::string machine_start_template = u1_start_guard ?
+        snapmaker_u1_start_gcode_template(print.config().machine_start_gcode.value) : print.config().machine_start_gcode.value;
+    std::string machine_start_gcode = this->placeholder_parser_process("machine_start_gcode", machine_start_template, initial_extruder_id);
+    if (u1_start_guard && !snapmaker_u1_has_native_start(machine_start_gcode))
+        ensure_snapmaker_u1_safe_homing(machine_start_gcode);
     if (print.config().gcode_flavor != gcfKlipper) {
         // Set bed temperature if the start G-code does not contain any bed temp control G-codes.
         this->_print_first_layer_bed_temperature(file, print, machine_start_gcode, initial_extruder_id, true);
@@ -9088,6 +9097,7 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "support_interface_brush_end"sv,
         "support_interface_brush_repetitions"sv,
         "support_interface_brush_speed"sv,
+        "snapmaker_u1_start_guard"sv,
         "printer_mod_settings"sv,
         "support_generator"sv,
         // The fast-purge / prime-volume-mode keys are new static-member registrations. Excluding them from

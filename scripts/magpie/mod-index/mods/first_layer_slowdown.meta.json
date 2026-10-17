@@ -1,0 +1,6 @@
+{
+    "description": "Prints the first layer at a chosen speed for better bed adhesion.",
+    "author": "Magpie",
+    "trust": "official",
+    "tags": ["speed", "adhesion", "first layer"]
+}

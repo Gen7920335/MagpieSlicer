@@ -29,6 +29,8 @@
 #include <boost/filesystem/operations.hpp>
 #include <boost/filesystem/fstream.hpp>
 #include "libslic3r/LocalesUtils.hpp"
+#include "libslic3r/ModHost/ModIndex.hpp"
+#include "slic3r/Utils/ModIndexFetch.hpp"
 #include <fstream>
 #include <exception>
 #include <set>
@@ -82,6 +84,7 @@
 #include "nlohmann/json.hpp"
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/nowide/args.hpp>
 #include <boost/nowide/cstdlib.hpp>
@@ -1256,6 +1259,9 @@ int CLI::run(int argc, char **argv)
         return CLI_INVALID_PARAMS;
     }
     BOOST_LOG_TRIVIAL(info) << "finished setup params, argc="<< argc << std::endl;
+    // MAGPIE: mod index actions run on their own and exit.
+    if (m_given_option_keys.count("mod_search") || m_given_option_keys.count("mod_install"))
+        return run_mod_index_actions();
     std::string temp_path = per_user_temp_dir(wxFileName::GetTempDir().utf8_str().data(), per_user_temp_id());
     // Some consumers write into the temp root directly, so create it up front.
     try {
@@ -8097,6 +8103,50 @@ bool CLI::setup(int argc, char **argv)
     }
 
     return true;
+}
+
+// MAGPIE: --mod-search lists the index entries matching the words given; --mod-install downloads,
+// checks and installs mods by id into <datadir>/mods. Output goes to stdout, one mod per line.
+int CLI::run_mod_index_actions()
+{
+    const std::string url = m_config.opt_string("mod_index").empty() ? std::string(DEFAULT_MOD_INDEX_URL) :
+                                                                         m_config.opt_string("mod_index");
+    std::vector<ModHost::ModIndexEntry> entries;
+    try {
+        entries = fetch_mod_index(url);
+    } catch (const std::exception &e) {
+        boost::nowide::cerr << "Mod index error: " << e.what() << std::endl;
+        return CLI_INVALID_PARAMS;
+    }
+    if (m_given_option_keys.count("mod_search"))
+        for (const ModHost::ModIndexEntry &e : ModHost::search_mod_index(entries, m_config.opt_string("mod_search")))
+            boost::nowide::cout << e.id << "\t" << e.version << "\t" << ModHost::trust_name(e.trust) << "\t" << e.name
+                                << "\t" << e.description << std::endl;
+    int result = 0;
+    if (m_given_option_keys.count("mod_install")) {
+        std::vector<std::string> ids;
+        boost::split(ids, m_config.opt_string("mod_install"), boost::is_any_of(","), boost::token_compress_on);
+        for (std::string id : ids) {
+            boost::trim(id);
+            if (id.empty())
+                continue;
+            auto it = std::find_if(entries.begin(), entries.end(), [&id](const ModHost::ModIndexEntry &e) { return e.id == id; });
+            if (it == entries.end()) {
+                boost::nowide::cerr << "Mod not in the index: " << id << std::endl;
+                result = CLI_INVALID_PARAMS;
+                continue;
+            }
+            try {
+                const std::string path = download_and_install_mod(*it);
+                boost::nowide::cout << "Installed " << it->id << " " << it->version << " (" << ModHost::trust_name(it->trust)
+                                    << ") to " << path << std::endl;
+            } catch (const std::exception &e) {
+                boost::nowide::cerr << "Could not install " << id << ": " << e.what() << std::endl;
+                result = CLI_INVALID_PARAMS;
+            }
+        }
+    }
+    return result;
 }
 
 void attach_console_on_demand(){

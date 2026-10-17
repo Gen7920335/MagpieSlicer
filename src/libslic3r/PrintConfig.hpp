@@ -1863,6 +1863,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionPoint,               support_interface_brush_end))
     ((ConfigOptionInt,                 support_interface_brush_repetitions))
     ((ConfigOptionFloat,               support_interface_brush_speed))
+    // MAGPIE: Snapmaker U1 start G-code guard.
+    ((ConfigOptionBool,                snapmaker_u1_start_guard))
     ((ConfigOptionEnum<FanDirection>,  fan_direction))
     ((ConfigOptionBool,                support_air_filtration))
     ((ConfigOptionBool,                support_cooling_filter))

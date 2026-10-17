@@ -1,0 +1,79 @@
+# Mods
+
+A mod is a JSON file that adds parameters to the settings tabs and sets existing settings from
+them. Mods change no code: everything a mod can do is reach a setting the slicer already has,
+including the hidden settings that switch on a built-in module (a support generator, the wall
+planner, half-height walls). With no mod enabled the slicer slices exactly like OrcaSlicer.
+
+## Where mods come from
+
+The app loads every `*.json` in `<resources>/mods` (bundled with the app) and then in
+`<data dir>/mods` (installed by the user), checks them together and keeps the set for GUI and CLI
+slicing. A file that fails to load is logged and left out; the others still load.
+
+## The definition
+
+```json
+{
+    // Comments are allowed.
+    "id": "first_layer_slowdown",          // a-z, 0-9 and _, not starting with a digit
+    "name": "First layer slowdown",
+    "version": "1.0.0",
+    "params": {
+        "enable": { "type": "bool",  "default": false, "label": "Slow the first layer" },
+        "speed":  { "type": "float", "default": 20, "unit": "mm/s", "label": "First layer speed" }
+    },
+    "rules": [
+        { "target": "initial_layer_speed", "value": "first_layer_slowdown.speed",
+          "when": "first_layer_slowdown.enable" }
+    ]
+}
+```
+
+- **params** become rows on the Mods page of a settings tab. `type` is `float`, `int`, `bool`
+  or `string`. `scope` picks the preset that stores the value: `process` (default, stored in
+  `mod_settings`), `printer` (`printer_mod_settings`) or `filament` (`filament_mod_settings`,
+  one value per filament, read as `<id>.<name>[i]`). `label`, `unit` and `page` are display
+  text; `invalidates` lists the slicing steps a change redoes.
+- **rules** set `target` (any print, printer or filament setting) to the expression `value`,
+  when the optional `when` holds. `index` writes one element of a list setting. A higher
+  `priority` is applied later and wins; two rules on one setting with the same priority do not
+  load together.
+- **Expressions** read settings by key and parameters as `<id>.<name>`; they support
+  arithmetic, comparisons, `and`/`or`/`not`, `if(c, a, b)`, `min`/`max` and string literals in
+  double quotes.
+
+Rules sit above the printer, filament and process presets and below a value the user changed
+in a preset: a setting the user edited stays as the user set it. A rule that cannot be
+evaluated is reported and slicing stops rather than slicing with a half-applied mod.
+
+Keep the defaults neutral, so that installing a mod changes nothing until the user turns it on.
+
+## Mod index
+
+The app finds mods to install in an index: `{"version": 1, "mods": [entry, ...]}`. Each entry
+has `id`, `name`, `version`, `description`, `author`, `tags`, `trust`, `url` (http, https or
+file) and `sha256` (lower-case hex of the file at `url`). A malformed entry makes the whole
+index invalid.
+
+`trust` is `official` (published with the app), `verified` (reviewed by the index maintainers)
+or `community`. The app asks before installing a community mod.
+
+Installing downloads the definition, refuses it unless its SHA-256 matches the index, it parses
+with the entry's id, it does not take a bundled mod's id, and it loads together with the mods
+already present. Only then is it written to `<data dir>/mods/<id>.json`; the settings pages are
+rebuilt so its parameters appear.
+
+- GUI: **Get Mods...** in the main menu searches the index and installs with one button.
+- Opening a project whose mod settings name mods that are not installed offers to look them up.
+- CLI: `--mod-search "words"` lists matching entries (id, version, trust, name, description,
+  tab-separated); `--mod-install id1,id2` installs. `--mod-index <url>` picks the index; the GUI
+  reads the app config key `mod_index_url`. Both default to the official index.
+
+## Publishing mods
+
+`scripts/magpie/mod-index` is the layout of an index repository: `mods/<id>.json` with an
+optional `mods/<id>.meta.json` (`description`, `author`, `tags`, `trust`), `build_index.py`,
+which validates the mods and writes `index.json` with their hashes, and a GitHub Actions
+workflow that rebuilds `index.json` on every push. A mod author opens a pull request adding
+their two files; the workflow validates it.

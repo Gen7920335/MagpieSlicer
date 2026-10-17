@@ -29,6 +29,7 @@ add_executable(${_TEST_NAME}_tests
 	test_mixed_support.cpp
 	test_multi_nozzle_walls.cpp
 	test_low_temp_interface.cpp
+	test_snapmaker_u1_start.cpp
 	test_resin_support.cpp
 	test_support_material.cpp
 	test_texture_displacement.cpp

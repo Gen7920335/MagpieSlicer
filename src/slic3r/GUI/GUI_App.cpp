@@ -202,6 +202,7 @@
 #include "../Utils/UndoRedo.hpp"
 #include "slic3r/Config/Snapshot.hpp"
 #include "Preferences.hpp"
+#include "ModBrowserDialog.hpp"
 #include "Tab.hpp"
 #include "UpdateDialogs.hpp"
 #include "Mouse3DController.hpp"
@@ -4813,6 +4814,14 @@ void GUI_App::check_printer_presets()
 
 void switch_window_pools();
 void release_window_pools();
+
+void GUI_App::open_mod_browser(const std::vector<std::string>& wanted_ids)
+{
+    ModBrowserDialog dlg(mainframe, wanted_ids);
+    dlg.ShowModal();
+    if (dlg.installed_any())
+        recreate_GUI(_L("Loading mods"));
+}
 
 void GUI_App::recreate_GUI(const wxString &msg_name)
 {

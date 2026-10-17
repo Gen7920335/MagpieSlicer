@@ -70,6 +70,9 @@ private:
     std::vector<std::string>    m_transforms;
     // Options the user typed; setup() fills the CLI's own options with defaults afterwards.
     std::set<std::string>       m_given_option_keys;
+
+    // MAGPIE: --mod-search / --mod-install; returns the process exit code.
+    int run_mod_index_actions();
     std::vector<Model>          m_models;
 
     bool setup(int argc, char **argv);

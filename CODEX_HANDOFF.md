@@ -14,6 +14,14 @@
 
 ## History
 
+### 2026-10-17 P5 mod distribution and U1 start guard
+
+- `ModHost/ModIndex` (libslic3r): index format `{"version":1,"mods":[...]}` with id, version, url, sha256, trust (official/verified/community), tags; search; `install_mod` checks hash, id, bundled-id takeover and conflicts with the loaded set before writing `<data dir>/mods/<id>.json`; `missing_mod_ids` for projects. `slic3r/Utils/ModIndexFetch` downloads (http/https/file) and reloads mods.
+- CLI `--mod-search`, `--mod-install`, `--mod-index`. GUI: "Get Mods..." in the main menu (`ModBrowserDialog`, asks before community mods, rebuilds the GUI after an install); opening a project whose mod settings name missing mods offers the dialog. App config `mod_index_url` overrides the default `DEFAULT_MOD_INDEX_URL`, which points at a repository that does not exist yet (Gen7920335/magpie-mods, decision open).
+- `scripts/magpie/mod-index`: sample mod `first_layer_slowdown`, `build_index.py`, Actions workflow; `docs/HLSD/mods.md` is the SDK description.
+- Checked end to end with a file:// index: search lists the sample, install writes it, slicing with it on gives first-layer F900 (15 mm/s) and with it off matches vanilla. The GUI dialog and the missing-mods prompt were not seen on screen.
+- U1 start guard: `snapmaker_u1_start_guard` (printer, comDevelop, out of the dump) from `resources/mods/snapmaker_u1.json` (default on). Line 1's `SnapmakerHomingPolicy.hpp`: replaces a non-stock start G-code with the stock sequence and adds G28 after PRINT_START before unhomed moves, U1 only. The nightly U1 profiles already carry the stock sequence, so golden U1 cases are unchanged (mods 30/30). Nightly U1 and A2L profiles are newer than line 1's; no profile data mod was needed.
+
 ### 2026-10-17 P4 H/2 (half-height outer walls and support)
 
 - Merged line-1 993128afaa (H/2), the H/2 parts of 2bdb257445, and the H/2 parts of the beta 6 commit f6b600337a (missed by the first merge, found by the Beta 7 comparison): sliver-free support bands (`half_height_support_band_limits_mm`), outer-wall H/2 forcing support H/2 (`PrintObject::object_config_from_model_object`), upper-plane support moved into the frame core (`finalize_half_layer_frame`), H/2 gap opening (`assign_joint_half_layer_gaps`). Keys `outer_wall_half_layer_height`/`support_half_layer_height` are comDevelop, kept out of the dump, driven by `resources/mods/half_layer.json`.

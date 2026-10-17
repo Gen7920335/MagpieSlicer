@@ -123,6 +123,8 @@ set(lisbslic3r_sources
     ModHost/Builtin/ResinSupport.hpp
     ModHost/Expr.cpp
     ModHost/Expr.hpp
+    ModHost/ModIndex.cpp
+    ModHost/ModIndex.hpp
     ModHost/ModSet.cpp
     ModHost/ModSet.hpp
     ModHost/ParamGraph.cpp
@@ -311,6 +313,7 @@ set(lisbslic3r_sources
     GCode/Thumbnails.hpp
     GCode/ToolOrdering.cpp
     GCode/ToolOrdering.hpp
+    GCode/SnapmakerHomingPolicy.hpp
     GCode/OrderingStrategies.cpp
     GCode/OrderingStrategies.hpp
     GCode/WipeTower2.cpp

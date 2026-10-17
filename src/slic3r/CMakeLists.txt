@@ -287,6 +287,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/IMEXFilamentPickerPopover.hpp
     GUI/IMEXModesCtrl.cpp
     GUI/IMEXModesCtrl.hpp
+    GUI/ModBrowserDialog.cpp
+    GUI/ModBrowserDialog.hpp
     GUI/ModParamsPanel.cpp
     GUI/ModParamsPanel.hpp
     GUI/IdleScheduler.cpp
@@ -759,6 +761,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/HexFile.hpp
     Utils/Http.cpp
     Utils/Http.hpp
+    Utils/ModIndexFetch.cpp
+    Utils/ModIndexFetch.hpp
     Utils/InstanceID.cpp
     Utils/InstanceID.hpp
     Utils/json_diff.cpp

@@ -32,6 +32,8 @@
 #include <cstdlib>
 #include "libslic3r/CommonDefs.hpp"
 #include "libslic3r/TriangleSelector.hpp"
+#include "libslic3r/ModHost/ModIndex.hpp"
+#include "libslic3r/ModHost/ModSet.hpp"
 #include <cstdio>
 #include "libslic3r/LocalesUtils.hpp"
 #include "libslic3r/FlushVolCalc.hpp"
@@ -9549,9 +9551,30 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                                     for (std::string& id : ids->values)
                                         id = agent->to_orca_filament_id(id);
                             }
+                            // MAGPIE: mods the project's mod settings refer to that are not installed.
+                            std::vector<std::string> missing_mods;
+                            {
+                                std::vector<std::string> loaded_mods;
+                                if (auto mods = ModHost::active_mods())
+                                    for (const ModHost::Mod& mod : mods->mods())
+                                        loaded_mods.push_back(mod.id);
+                                missing_mods = ModHost::missing_mod_ids(config, loaded_mods);
+                            }
                             preset_bundle->load_config_model(filename.string(), std::move(config), file_version, &published_config);
                             if (config_loaded_out != nullptr)
                                 *config_loaded_out = true;
+                            if (!missing_mods.empty())
+                                wxGetApp().CallAfter([missing_mods]() {
+                                    wxString list;
+                                    for (const std::string& id : missing_mods)
+                                        list += "\n- " + from_u8(id);
+                                    MessageDialog ask(wxGetApp().mainframe,
+                                        _L("This project uses mods that are not installed. Without them it slices without their settings:") + list +
+                                            "\n\n" + _L("Look for them in the mod index?"),
+                                        _L("Missing mods"), wxYES_NO | wxICON_QUESTION);
+                                    if (ask.ShowModal() == wxID_YES)
+                                        wxGetApp().open_mod_browser(missing_mods);
+                                });
 
                             // Mixed-filament definitions that collided with one of the
                             // receiver's real slots were relocated during the preset load.

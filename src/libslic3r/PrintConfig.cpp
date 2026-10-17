@@ -7491,6 +7491,14 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionPoint(Vec2d(-1.0, -1.0)));
 
+    // MAGPIE: Snapmaker U1 start G-code guard (Magpie line 1), driven by resources/mods/snapmaker_u1.json.
+    def = this->add("snapmaker_u1_start_guard", coBool);
+    def->label = L("Guard the Snapmaker U1 start G-code");
+    def->tooltip = L("On a Snapmaker U1, use the stock pre-print sequence when the start G-code lacks it, and home all axes "
+                     "after PRINT_START before any move when the start G-code would move unhomed.");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("support_interface_brush_repetitions", coInt);
     def->label = L("Nozzle brush repetitions");
     def->tooltip = L("Number of gentle round trips over the nozzle brush after cooling. Zero disables automatic brushing.");
@@ -13331,6 +13339,22 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def = this->add("datadir", coString);
     def->label = L("Data directory");
     def->tooltip = L("Load and store settings at the given directory. This is useful for maintaining different profiles or including configurations from a network storage.");
+
+    // MAGPIE: mod index used by --mod-search and --mod-install.
+    def = this->add("mod_index", coString);
+    def->label = L("Mod index");
+    def->tooltip = L("Address of the mod index (https or file) for --mod-search and --mod-install.");
+    def->cli_params = "url";
+
+    def = this->add("mod_search", coString);
+    def->label = L("Search mods");
+    def->tooltip = L("List the mods in the mod index whose name, description or tags contain every word given, then exit.");
+    def->cli_params = "\"words\"";
+
+    def = this->add("mod_install", coString);
+    def->label = L("Install mods");
+    def->tooltip = L("Download the mods with these ids (comma-separated) from the mod index into the data directory's mods folder, then exit.");
+    def->cli_params = "id1,id2";
 
 
     def = this->add("outputdir", coString);

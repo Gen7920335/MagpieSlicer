@@ -1,0 +1,14 @@
+{
+    // Sample external mod for the mod index: prints the first layer at a chosen speed.
+    // The default changes nothing.
+    "id": "first_layer_slowdown",
+    "name": "First layer slowdown",
+    "version": "1.0.0",
+    "params": {
+        "enable": { "type": "bool",  "default": false, "label": "Slow the first layer" },
+        "speed":  { "type": "float", "default": 20, "unit": "mm/s", "label": "First layer speed" }
+    },
+    "rules": [
+        { "target": "initial_layer_speed", "value": "first_layer_slowdown.speed", "when": "first_layer_slowdown.enable" }
+    ]
+}

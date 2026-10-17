@@ -680,6 +680,9 @@ public:
     bool            is_localized() const { return m_wxLocale->GetLocale() != "English"; }
 
     void            open_preferences();   // on the General tab
+    // MAGPIE: the Get Mods dialog; `wanted_ids` are mods a project needs. Rebuilds the settings
+    // pages after an install so the new mod's parameters appear.
+    void            open_mod_browser(const std::vector<std::string>& wanted_ids = {});
     void            open_preferences(PreferencesTab tab, const std::string& highlight_option = std::string());
     void            open_presetbundledialog(size_t open_on_tab = 0, const std::string& highlight_option = std::string());
     void            open_plugins_dialog(size_t open_on_tab = 0, const std::string& highlight_option = std::string());
