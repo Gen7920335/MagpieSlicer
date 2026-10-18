@@ -2950,6 +2950,7 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
     }
 
     try {
+        MAGPIE_STAGE_TIMER("fn.gcode_generate");
         this->_do_export(*print, file, thumbnail_cb);
         file.flush();
         if (file.is_error()) {
@@ -3048,7 +3049,10 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
     // single-nozzle prints, where the injector is gated off anyway (enable_pre_heating false).
     m_processor.result().nozzle_group_result = m_print->get_layered_nozzle_group_result();
 
-    m_processor.finalize(true);
+    {
+        MAGPIE_STAGE_TIMER("fn.gcode_processor_finalize");
+        m_processor.finalize(true);
+    }
 //    DoExport::update_print_estimated_times_stats(m_processor, print->m_print_statistics);
     DoExport::update_print_estimated_stats(m_processor, m_writer.extruders(), print->m_print_statistics, print->config());
     // Printed-mass safety check. Flushed filament leaves the bed, so subtract it
@@ -10006,6 +10010,7 @@ void GCode::GCodeOutputStream::write(const char *what)
         // writes string to file
         fwrite(gcode, 1, ::strlen(gcode), this->f);
         //FIXME don't allocate a string, maybe process a batch of lines?
+        MAGPIE_STAGE_TIMER("fn.gcode_processor_parse");
         m_processor.process_buffer(std::string(gcode));
     }
 }
