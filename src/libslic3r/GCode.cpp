@@ -10304,17 +10304,6 @@ bool GCode::has_configured_low_temperature_nozzle_wiper() const
            (brush_start - brush_end).norm() > 1e-6; // mm
 }
 
-int GCode::lowest_low_temperature_interface_target() const
-{
-    int       target   = std::max(0, m_config.support_interface_temperature.value); // degC
-    const int sublayer = m_config.support_interface_sublayer_temperature.value;     // degC
-    // Sublayers exist only from the second interface layer down (the contact layer never is one).
-    const bool sublayers = m_config.support_interface_sublayer_start.value > 0 && m_config.support_interface_top_layers.value >= 2;
-    if (sublayers && sublayer > 0 && (target == 0 || sublayer < target))
-        target = sublayer;
-    return target;
-}
-
 // The tower replaces the wait for cooling when there is no brush, printing layer by layer.
 bool GCode::temperature_drop_tower_enabled() const
 {
@@ -10325,7 +10314,7 @@ bool GCode::temperature_drop_tower_enabled() const
     if (m_print == nullptr || std::none_of(m_print->objects().begin(), m_print->objects().end(),
                                            [](const PrintObject *object) { return object != nullptr && ! object->support_layers().empty(); }))
         return false;
-    const int interface_temperature = this->lowest_low_temperature_interface_target(); // degC
+    const int interface_temperature = Slic3r::lowest_low_temperature_interface_target(m_config); // degC
     if (interface_temperature <= 0)
         return false;
     auto hotter = [interface_temperature](int t) { return t > interface_temperature; };
@@ -10413,46 +10402,28 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
             throw SlicingError(_u8L("The temperature drop tower has no printable area shared by all participating tools."));
         const Polygons placement_bounds = multiple_tools && automatic_placement ? common_area : Polygons{ *placement_polygon };
 
-        double min_x = std::numeric_limits<double>::max(), min_y = std::numeric_limits<double>::max();
-        double max_x = std::numeric_limits<double>::lowest(), max_y = std::numeric_limits<double>::lowest();
+        BoundingBoxf bounds; // mm
         for (const Polygon &region : placement_bounds)
-            for (const Point &point : region.points) {
-                const Vec2d p = unscale(point);
-                min_x = std::min(min_x, p.x());
-                min_y = std::min(min_y, p.y());
-                max_x = std::max(max_x, p.x());
-                max_y = std::max(max_y, p.y());
-            }
+            for (const Point &point : region.points)
+                bounds.merge(unscale(point));
 
         const int    normal_temperature    = tower_tools.maximum_temperature;                // degC
-        const int    interface_temperature = this->lowest_low_temperature_interface_target(); // degC
+        const int    interface_temperature = Slic3r::lowest_low_temperature_interface_target(m_config); // degC
         const double requested_tower_size  = temperature_drop_tower_size(std::max(normal_temperature - interface_temperature, 0)); // mm
         const double spacing               = multiple_widths ? temperature_drop_tower_multi_pitch(tower_tools.maximum_nozzle_mm) :
                                                                std::max(double(nozzle_diameter), double(flow.spacing())); // mm
         const double brim_width            = TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT * spacing;                            // mm
-        const double usable_margin         = TEMPERATURE_DROP_TOWER_BED_MARGIN + brim_width;                              // mm
-        const double tower_size            = std::min(requested_tower_size,
-                                                      std::min(max_x - min_x - 2.0 * usable_margin, max_y - min_y - 2.0 * usable_margin));
-        // Minimum usable L-arm length, mm.
-        constexpr double minimum_tower_size = 8.0;
-        if (tower_size < minimum_tower_size) {
+        const std::optional<TemperatureDropTowerPlacement> placement =
+            place_temperature_drop_tower(bounds, configured_x, configured_y, requested_tower_size, brim_width);
+        if (! placement) {
             if (multiple_tools)
                 throw SlicingError(_u8L("The temperature drop tower does not fit inside the printable area shared by all participating tools."));
             return false;
         }
-
-        const double footprint_size = tower_size + 2.0 * brim_width;
-        const double min_origin_x   = min_x + TEMPERATURE_DROP_TOWER_BED_MARGIN;
-        const double min_origin_y   = min_y + TEMPERATURE_DROP_TOWER_BED_MARGIN;
-        const double max_origin_x   = max_x - TEMPERATURE_DROP_TOWER_BED_MARGIN - footprint_size;
-        const double max_origin_y   = max_y - TEMPERATURE_DROP_TOWER_BED_MARGIN - footprint_size;
-        if (max_origin_x < min_origin_x || max_origin_y < min_origin_y) {
-            if (multiple_tools)
-                throw SlicingError(_u8L("The temperature drop tower does not fit inside the printable area shared by all participating tools."));
-            return false;
-        }
-        const double origin_x = configured_x < 0.0 ? min_origin_x : std::clamp(configured_x, min_origin_x, max_origin_x);
-        const double origin_y = configured_y < 0.0 ? max_origin_y : std::clamp(configured_y, min_origin_y, max_origin_y);
+        const double tower_size     = placement->tower_size;
+        const double footprint_size = placement->footprint_size;
+        const double origin_x       = placement->origin_x;
+        const double origin_y       = placement->origin_y;
 
         const std::array<Vec2d, 4> footprint_corners = { Vec2d(origin_x, origin_y), Vec2d(origin_x + footprint_size, origin_y),
                                                          Vec2d(origin_x, origin_y + footprint_size),

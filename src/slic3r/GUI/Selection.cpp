@@ -1,3 +1,4 @@
+#include "libslic3r/Support/TemperatureDropTower.hpp"
 #include "libslic3r/libslic3r.h"
 #include "Selection.hpp"
 
@@ -1308,13 +1309,18 @@ void Selection::translate(const Vec3d &displacement, TransformationType transfor
                 transform_instance_relative(v, volume_data, transformation_type, Geometry::translation_transform(displacement), m_cache.dragging_center);
         } else {
             if (v.is_wipe_tower) {//in world cs
-                int           plate_idx           = v.object_idx() - 1000;
+                // MAGPIE: temperature drop towers (2000 + plate) are kept on their plate like wipe towers,
+                // TEMPERATURE_DROP_TOWER_BED_MARGIN inside the bed, as G-code export clamps them.
+                const bool    temperature_tower   = v.object_idx() >= TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE;
+                int           plate_idx           = temperature_tower ? temperature_drop_tower_plate_index(v.object_idx()) : v.object_idx() - 1000;
+                if (plate_idx < 0 || plate_idx >= wxGetApp().plater()->get_partplate_list().get_plate_count())
+                    continue;
                 const Polygons bed_polys{wxGetApp().plater()->get_partplate_list().get_plate(plate_idx)->get_shared_printable_polygon()};
                 Vec3d         tower_origin        = m_cache.volumes_data[i].get_volume_position();
                 Vec3d         actual_displacement = displacement;
                 // Both preview volumes carry the brim in their bounding box, and the release
                 // clamp holds it WIPE_TOWER_MARGIN inside — same margin, so drops don't snap.
-                const double margin = WIPE_TOWER_MARGIN;
+                const double margin = temperature_tower ? TEMPERATURE_DROP_TOWER_BED_MARGIN : WIPE_TOWER_MARGIN;
 
                 actual_displacement = (m_cache.volumes_data[i].get_instance_rotation_matrix() * m_cache.volumes_data[i].get_instance_scale_matrix() *
                                         m_cache.volumes_data[i].get_instance_mirror_matrix())
@@ -2432,6 +2438,9 @@ void Selection::update_type()
                 unsigned int sels_cntr = 0;
                 for (ObjectIdxsToInstanceIdxsMap::iterator it = m_cache.content.begin(); it != m_cache.content.end(); ++it)
                 {
+                    // MAGPIE: a temperature drop tower has no model object behind it.
+                    if (it->first >= TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE)
+                        continue;
                     bool               is_wipe_tower   = it->first >= 1000;
                     int                actual_obj_id   = is_wipe_tower ? it->first - 1000 : it->first;
                     const ModelObject *model_object    = m_model->objects[actual_obj_id];

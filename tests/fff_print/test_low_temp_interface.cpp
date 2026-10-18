@@ -848,3 +848,77 @@ TEST_CASE("Multi-nozzle tower fill preserves its fixed physical band", "[LowTemp
     CHECK_THROWS(temperature_drop_tower_fill(flow, 0.));
     CHECK_THROWS(temperature_drop_tower_fill(flow, std::numeric_limits<double>::infinity()));
 }
+
+// MAGPIE: per-plate tower positions (project options), ported from line 1's ProjectConfigService tests.
+TEST_CASE("Temperature drop tower follows an instance to an automatic destination plate", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    DynamicConfig config;
+    config.set_key_value("support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ 10.0, -1.0, 70.0 }));
+    config.set_key_value("support_interface_temperature_drop_tower_y", new ConfigOptionFloats({ 20.0, -1.0, 80.0 }));
+    SECTION("moving the last instance off the source plate moves the manual position") {
+        transfer_temperature_drop_tower_plate(config, 0, 1, 3, true);
+        CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ -1.0, 10.0, 70.0 });
+        CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y")->values == std::vector<double>{ -1.0, 20.0, 80.0 });
+    }
+    SECTION("a source plate with other instances keeps its position") {
+        transfer_temperature_drop_tower_plate(config, 0, 1, 3, false);
+        CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ 10.0, 10.0, 70.0 });
+        CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y")->values == std::vector<double>{ 20.0, 20.0, 80.0 });
+    }
+    SECTION("a manual destination position wins") {
+        transfer_temperature_drop_tower_plate(config, 0, 2, 3, true);
+        CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ -1.0, -1.0, 70.0 });
+        CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y")->values == std::vector<double>{ -1.0, -1.0, 80.0 });
+    }
+}
+
+TEST_CASE("Temperature drop tower plate vectors are normalized together", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    DynamicConfig config;
+    config.set_key_value("support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ 10.0, 20.0 }));
+    config.set_key_value("support_interface_temperature_drop_tower_y",
+                         new ConfigOptionFloats({ 30.0, std::numeric_limits<double>::quiet_NaN(), 50.0, 60.0 }));
+    CHECK(normalize_temperature_drop_tower_positions(config, 4).size() == 2);
+    CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ 10.0, 20.0, -1.0, -1.0 });
+    CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y")->values == std::vector<double>{ 30.0, -1.0, 50.0, 60.0 });
+    DynamicConfig empty;
+    normalize_temperature_drop_tower_positions(empty, 0);
+    CHECK(empty.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ -1.0 });
+}
+
+TEST_CASE("Temperature drop tower positions survive plate deletion by index", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    DynamicConfig config;
+    config.set_key_value("support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ 10.0, 20.0, 30.0 }));
+    config.set_key_value("support_interface_temperature_drop_tower_y", new ConfigOptionFloats({ 40.0, 50.0, 60.0 }));
+    erase_temperature_drop_tower_plate(config, 1, 3);
+    CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ 10.0, 30.0 });
+    CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y")->values == std::vector<double>{ 40.0, 60.0 });
+}
+
+TEST_CASE("Temperature drop tower reads are safe for short vectors", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    const ConfigOptionFloats positions({ 12.5 });
+    CHECK(temperature_drop_tower_position_at(&positions, 0) == 12.5);
+    CHECK(temperature_drop_tower_position_at(&positions, 4) == -1.0);
+    CHECK(temperature_drop_tower_position_at(nullptr, 0) == -1.0);
+}
+
+TEST_CASE("Temperature drop tower placement clamps into the bed and refuses what does not fit", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    const BoundingBoxf bed(Vec2d(0., 0.), Vec2d(200., 200.)); // mm
+    const double       brim = 2.0;                            // mm
+    // Automatic: rear left, 3 mm inside the bed.
+    const auto automatic = place_temperature_drop_tower(bed, -1., -1., 80., brim);
+    REQUIRE(automatic);
+    CHECK(automatic->origin_x == Catch::Approx(3.0));
+    CHECK(automatic->origin_y == Catch::Approx(200. - 3. - (80. + 2. * brim)));
+    CHECK(automatic->tower_size == Catch::Approx(80.0));
+    // An explicit position past the bed edge is clamped back inside.
+    const auto clamped = place_temperature_drop_tower(bed, 500., 1., 80., brim); // (below zero would mean automatic)
+    REQUIRE(clamped);
+    CHECK(clamped->origin_x == Catch::Approx(200. - 3. - clamped->footprint_size));
+    CHECK(clamped->origin_y == Catch::Approx(3.0));
+    // A bed too small for the shortest (8 mm) tower gives nothing.
+    CHECK_FALSE(place_temperature_drop_tower(BoundingBoxf(Vec2d(0., 0.), Vec2d(15., 15.)), -1., -1., 80., brim));
+}

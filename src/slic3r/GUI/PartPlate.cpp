@@ -6,6 +6,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <cstddef>
 #include <algorithm>
+#include "libslic3r/Support/TemperatureDropTower.hpp"
 #include "libslic3r/Color.hpp"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/Config.hpp"
@@ -5544,6 +5545,8 @@ void PartPlateList::set_default_wipe_tower_pos_for_plate(int plate_idx, bool ini
     ConfigOptionFloats *wipe_tower_y = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_y");
     wipe_tower_x->values.resize(m_plate_list.size(), wipe_tower_x->values.front());
     wipe_tower_y->values.resize(m_plate_list.size(), wipe_tower_y->values.front());
+    // MAGPIE: one temperature drop tower position per plate, automatic for a new plate.
+    normalize_temperature_drop_tower_positions(proj_cfg, m_plate_list.size());
 
     auto printer_structure_opt = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionEnum<PrinterStructure>>("printer_structure");
     // set the default position, the same with print config(left top)
@@ -5945,6 +5948,8 @@ int PartPlateList::delete_plate(int index)
 			wipe_tower_x->values.erase(wipe_tower_x->values.begin() + index);
 		if (index < wipe_tower_y->values.size())
 			wipe_tower_y->values.erase(wipe_tower_y->values.begin() + index);
+		// MAGPIE: the temperature drop tower positions follow the plates.
+		erase_temperature_drop_tower_plate(proj_cfg, size_t(index), m_plate_list.size());
 	}
 
 	int cols = compute_colum_count(m_plate_list.size() - 1);
@@ -6428,6 +6433,10 @@ int PartPlateList::find_instance_belongs(int obj_id, int instance_id)
 int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_new)
 {
 	int ret = 0, index;
+	// MAGPIE: the plate the instance leaves, and whether it is left without instances, so a manually
+	// placed temperature drop tower can follow the instance.
+	int previous_plate_index = -1;
+	bool previous_plate_became_empty = false;
 	PartPlate* plate = NULL;
 	ModelObject* object = NULL;
 
@@ -6435,9 +6444,9 @@ int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_n
 	{
 		object = m_model->objects[obj_id];
 	}
-	else if (obj_id >= 1000 && obj_id < 1000 + m_plate_count) {
-		//wipe tower updates
-		PartPlate* plate = m_plate_list[obj_id - 1000];
+	else if ((obj_id >= 1000 && obj_id < 1000 + m_plate_count) || is_temperature_drop_tower_object_id(obj_id, m_plate_count)) {
+		//wipe tower updates (MAGPIE: and temperature drop towers, 2000 + plate)
+		PartPlate* plate = m_plate_list[obj_id >= TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE ? temperature_drop_tower_plate_index(obj_id) : obj_id - 1000];
 		plate->update_slice_result_valid_state( false );
 		plate->thumbnail_data.reset();
         plate->no_light_thumbnail_data.reset();
@@ -6455,6 +6464,7 @@ int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_n
 	index = find_instance(obj_id, instance_id);
 	if (index != -1)
 	{
+		previous_plate_index = index;
 		//found it added before
 		BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": found it in previous plate %1%") % index;
 		plate = m_plate_list[index];
@@ -6463,6 +6473,7 @@ int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_n
 			//not include anymore, remove it from original plate
 			BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": not in plate %1% anymore, remove it") % index;
 			plate->remove_instance(obj_id, instance_id);
+			previous_plate_became_empty = plate->empty();
 		}
 		else
 		{
@@ -6524,6 +6535,9 @@ int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_n
 		{
 			//found a new plate, add it to plate
 			plate->add_instance(obj_id, instance_id, false, &boundingbox);
+			if (m_plater != nullptr && previous_plate_index >= 0 && previous_plate_index != int(i))
+				transfer_temperature_drop_tower_plate(wxGetApp().preset_bundle->project_config, size_t(previous_plate_index), size_t(i),
+				                                      m_plate_list.size(), previous_plate_became_empty);
 
 			// spiral mode, update object setting
 			if (plate->config()->has("spiral_mode") && plate->config()->opt_bool("spiral_mode") && !is_object_config_compatible_with_spiral_vase(object)) {

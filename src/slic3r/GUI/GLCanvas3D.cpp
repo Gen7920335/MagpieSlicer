@@ -1,3 +1,5 @@
+#include "libslic3r/ModHost/ModSet.hpp"
+#include "libslic3r/Support/TemperatureDropTower.hpp"
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Point.hpp"
 #include <limits>
@@ -3210,6 +3212,7 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
     PartPlateList& ppl = wxGetApp().plater()->get_partplate_list();
     int n_plates = ppl.get_plate_count();
     std::vector<int> volume_idxs_wipe_tower_old(n_plates, -1);
+    std::vector<int> volume_idxs_temperature_drop_tower_old(n_plates, -1);
 
     // Release invalidated volumes to conserve GPU memory in case of delayed refresh (see m_reload_delayed).
     // First initialize model_volumes_new_sorted & model_instances_new_sorted.
@@ -3304,11 +3307,16 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
         if (mvs == nullptr || force_full_scene_refresh) {
             // This GLVolume will be released.
             if (volume->is_wipe_tower) {
-                // There is only one wipe tower.
-                //assert(volume_idx_wipe_tower_old == -1);
-                int plate_id = volume->composite_id.object_id - 1000;
-                if (plate_id < n_plates)
-                    volume_idxs_wipe_tower_old[plate_id] = (int)volume_id;
+                const int object_id = volume->composite_id.object_id;
+                if (is_temperature_drop_tower_object_id(object_id, n_plates))
+                    volume_idxs_temperature_drop_tower_old[temperature_drop_tower_plate_index(object_id)] = int(volume_id);
+                else {
+                    // There is only one wipe tower.
+                    //assert(volume_idx_wipe_tower_old == -1);
+                    int plate_id = object_id - 1000;
+                    if (plate_id < n_plates)
+                        volume_idxs_wipe_tower_old[plate_id] = (int)volume_id;
+                }
             }
             if (!m_reload_delayed) {
                 deleted_volumes.emplace_back(volume, volume_id);
@@ -3614,6 +3622,113 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                     int volume_idx_wipe_tower_old = volume_idxs_wipe_tower_old[plate_id];
                     if (volume_idx_wipe_tower_old != -1) map_glvolume_old_to_new[volume_idx_wipe_tower_old] = volume_idx_wipe_tower_new;
                 }
+            }
+        }
+    }
+
+    // MAGPIE: the low temperature interface's temperature drop tower, one per plate with support, placed
+    // by the same function G-code export uses (place_temperature_drop_tower). Mod rules are resolved on a
+    // copy of the config so the preview follows the mods' settings like the slice does.
+    if (printer_technology == ptFFF && m_config != nullptr && !wxGetApp().plater()->only_gcode_mode() && !wxGetApp().plater()->is_gcode_3mf()) {
+        DynamicPrintConfig resolved = *m_config;
+        if (std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods(); mods && !mods->empty())
+            mods->resolve(resolved);
+        auto bool_value = [&resolved](const char *key) { const ConfigOption *o = resolved.option(key); return o != nullptr && o->getBool(); };
+        auto int_value  = [&resolved](const char *key) { const ConfigOption *o = resolved.option(key); return o != nullptr ? o->getInt() : 0; };
+        const auto *nozzle_diameters     = resolved.option<ConfigOptionFloats>("nozzle_diameter");
+        const auto *normal_temperatures  = resolved.option<ConfigOptionInts>("nozzle_temperature");
+        const auto *initial_temperatures = resolved.option<ConfigOptionInts>("nozzle_temperature_initial_layer");
+        const auto *print_sequence       = resolved.option<ConfigOptionEnum<PrintSequence>>("print_sequence");
+        const int   interface_temperature = lowest_low_temperature_interface_target(resolved); // degC
+        const bool  show_tower = bool_value("support_interface_temperature_drop_tower") && bool_value("single_nozzle_low_temperature_interface") &&
+                                 interface_temperature > 0 && int_value("support_interface_filament") == 0 &&
+                                 (print_sequence == nullptr || print_sequence->value == PrintSequence::ByLayer) &&
+                                 !bool_value("support_interface_nozzle_wiping_on_temperature_change") &&
+                                 nozzle_diameters != nullptr && !nozzle_diameters->values.empty();
+        int normal_temperature = 0; // degC, hottest filament
+        if (normal_temperatures != nullptr)
+            for (int t : normal_temperatures->values) normal_temperature = std::max(normal_temperature, t);
+        if (initial_temperatures != nullptr)
+            for (int t : initial_temperatures->values) normal_temperature = std::max(normal_temperature, t);
+        if (show_tower && normal_temperature > interface_temperature) {
+            const auto [min_nozzle, max_nozzle] = std::minmax_element(nozzle_diameters->values.begin(), nozzle_diameters->values.end());
+            const double spacing    = *min_nozzle != *max_nozzle ? temperature_drop_tower_multi_pitch(*max_nozzle) : std::max(*max_nozzle, 0.1); // mm
+            const double brim_width = TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT * spacing;                                                            // mm
+            const double requested  = temperature_drop_tower_size(normal_temperature - interface_temperature);                                    // mm
+            DynamicPrintConfig &project_config = wxGetApp().preset_bundle->project_config;
+            const auto *tower_x = project_config.option<ConfigOptionFloats>(TEMPERATURE_DROP_TOWER_POSITION_KEYS[0]);
+            const auto *tower_y = project_config.option<ConfigOptionFloats>(TEMPERATURE_DROP_TOWER_POSITION_KEYS[1]);
+            const bool  global_support = bool_value("enable_support") || int_value("raft_layers") > 0 || int_value("enforce_support_layers") > 0;
+            auto plate_has_support = [global_support](PartPlate *plate) {
+                if (plate == nullptr || !plate->has_printable_instances())
+                    return false;
+                for (ModelObject *object : plate->get_objects_on_this_plate()) {
+                    if (object == nullptr)
+                        continue;
+                    const ConfigOption *support  = object->config.option("enable_support");
+                    const ConfigOption *raft     = object->config.option("raft_layers");
+                    const ConfigOption *enforced = object->config.option("enforce_support_layers");
+                    bool enabled = (support == nullptr && raft == nullptr && enforced == nullptr) ? global_support : false;
+                    if (support != nullptr) enabled |= support->getBool();
+                    if (raft != nullptr) enabled |= raft->getInt() > 0;
+                    if (enforced != nullptr) enabled |= enforced->getInt() > 0;
+                    if (enabled)
+                        return true;
+                }
+                return false;
+            };
+            const auto *filament_map = resolved.option<ConfigOptionInts>("filament_map");
+            const auto *bed          = resolved.option<ConfigOptionPoints>("printable_area");
+            const auto *tool_area_option = resolved.option<ConfigOptionPointsGroups>("extruder_printable_area");
+            for (int plate_id = 0; plate_id < n_plates; ++plate_id) {
+                PartPlate *part_plate = ppl.get_plate(plate_id);
+                if (!plate_has_support(part_plate))
+                    continue;
+                const Vec3d         plate_origin = part_plate->get_origin();
+                const BoundingBoxf3 plate_bbox   = part_plate->get_bounding_box();
+                BoundingBoxf bounds(Vec2d(plate_bbox.min.x() - plate_origin.x(), plate_bbox.min.y() - plate_origin.y()),
+                                    Vec2d(plate_bbox.max.x() - plate_origin.x(), plate_bbox.max.y() - plate_origin.y())); // mm, plate frame
+                const double configured_x = temperature_drop_tower_position_at(tower_x, size_t(plate_id));
+                const double configured_y = temperature_drop_tower_position_at(tower_y, size_t(plate_id));
+                // The tower is printed by every tool on the plate; automatic placement keeps to the area they share.
+                std::vector<size_t> physical_tools;
+                for (int filament_1based : part_plate->get_extruders(true)) {
+                    if (filament_1based <= 0)
+                        continue;
+                    const int    mapped = filament_map != nullptr && !filament_map->values.empty() ? filament_map->get_at(size_t(filament_1based - 1)) : 1;
+                    const size_t tool   = mapped > 0 && size_t(mapped) <= nozzle_diameters->values.size() ? size_t(mapped - 1) : 0;
+                    if (std::find(physical_tools.begin(), physical_tools.end(), tool) == physical_tools.end())
+                        physical_tools.push_back(tool);
+                }
+                Polygons common_area;
+                if (physical_tools.size() > 1 && bed != nullptr && bed->values.size() >= 3) {
+                    std::vector<Polygons> tool_areas;
+                    if (tool_area_option != nullptr)
+                        for (const auto &points : tool_area_option->values)
+                            tool_areas.push_back(Polygons{ Polygon::new_scale(points) });
+                    common_area = temperature_drop_tower_common_area(Polygons{ Polygon::new_scale(bed->values) }, tool_areas, physical_tools);
+                    if (common_area.empty())
+                        continue;
+                    if (configured_x < 0. || configured_y < 0.) {
+                        const BoundingBox box = get_extents(common_area);
+                        bounds = BoundingBoxf(unscale(box.min), unscale(box.max));
+                    }
+                }
+                const std::optional<TemperatureDropTowerPlacement> placement =
+                    place_temperature_drop_tower(bounds, configured_x, configured_y, requested, brim_width);
+                if (!placement)
+                    continue;
+                if (!common_area.empty()) {
+                    const double   x0 = placement->origin_x, y0 = placement->origin_y, f = placement->footprint_size;
+                    const Polygon  footprint{ Points{ Point::new_scale(x0, y0), Point::new_scale(x0 + f, y0), Point::new_scale(x0 + f, y0 + f), Point::new_scale(x0, y0 + f) } };
+                    if (!diff_ex(Polygons{ footprint }, common_area).empty())
+                        continue;
+                }
+                const int new_volume = m_volumes.load_temperature_drop_tower_preview(
+                    TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE + plate_id, float(placement->origin_x + plate_origin.x()), float(placement->origin_y + plate_origin.y()),
+                    float(placement->tower_size), float(TEMPERATURE_DROP_TOWER_LINE_COUNT * spacing), float(brim_width), 0.2f);
+                if (const int old_volume = volume_idxs_temperature_drop_tower_old[plate_id]; old_volume != -1)
+                    map_glvolume_old_to_new[old_volume] = new_volume;
             }
         }
     }
@@ -5562,6 +5677,7 @@ void GLCanvas3D::do_move(const std::string& snapshot_type, bool force_volume_mov
     // BBS: support wipe-tower for multi-plates
     int n_plates = wxGetApp().plater()->get_partplate_list().get_plate_count();
     std::vector<Vec3d> wipe_tower_origins(n_plates, Vec3d::Zero());
+    std::vector<Vec3d> temperature_drop_tower_origins(n_plates, Vec3d::Zero());
 
     Selection::EMode selection_mode = m_selection.get_mode();
 
@@ -5608,6 +5724,10 @@ void GLCanvas3D::do_move(const std::string& snapshot_type, bool force_volume_mov
         else if (object_idx >= 1000 && object_idx < 1000 + n_plates) {
             // Move a wipe tower proxy.
             wipe_tower_origins[object_idx - 1000] = v->get_volume_offset();
+        }
+        else if (is_temperature_drop_tower_object_id(object_idx, n_plates)) {
+            // MAGPIE: a temperature drop tower; its offset is the footprint's lower left corner.
+            temperature_drop_tower_origins[temperature_drop_tower_plate_index(object_idx)] = v->get_volume_offset();
         }
     }
 
@@ -5679,6 +5799,22 @@ void GLCanvas3D::do_move(const std::string& snapshot_type, bool force_volume_mov
         ConfigOptionFloats* wipe_tower_y_opt = proj_cfg.option<ConfigOptionFloats>("wipe_tower_y", true);
         wipe_tower_x_opt->set_at(&wipe_tower_x, plate_id, 0);
         wipe_tower_y_opt->set_at(&wipe_tower_y, plate_id, 0);
+    }
+
+    // MAGPIE: store a dragged temperature drop tower as that plate's position (plate frame, mm).
+    for (int plate_id = 0; plate_id < int(temperature_drop_tower_origins.size()); ++plate_id) {
+        const Vec3d &tower_origin = temperature_drop_tower_origins[plate_id];
+        if (tower_origin == Vec3d::Zero())
+            continue;
+        PartPlateList &ppl   = wxGetApp().plater()->get_partplate_list();
+        PartPlate     *plate = plate_id < ppl.get_plate_count() ? ppl.get_plate(plate_id) : nullptr;
+        if (plate == nullptr)
+            continue;
+        DynamicConfig &project_config = wxGetApp().preset_bundle->project_config;
+        normalize_temperature_drop_tower_positions(project_config, size_t(ppl.get_plate_count()));
+        const Vec3d plate_origin = plate->get_origin();
+        project_config.option<ConfigOptionFloats>(TEMPERATURE_DROP_TOWER_POSITION_KEYS[0])->values[plate_id] = tower_origin.x() - plate_origin.x();
+        project_config.option<ConfigOptionFloats>(TEMPERATURE_DROP_TOWER_POSITION_KEYS[1])->values[plate_id] = tower_origin.y() - plate_origin.y();
     }
 
     reset_sequential_print_clearance();

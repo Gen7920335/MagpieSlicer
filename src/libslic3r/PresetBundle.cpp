@@ -130,6 +130,10 @@ static std::vector<std::string> s_project_options {
     "filament_multi_colour",
     "wipe_tower_x",
     "wipe_tower_y",
+    // MAGPIE: per-plate positions of the low temperature interface's temperature drop tower, like
+    // the wipe tower's (Magpie line 1).
+    "support_interface_temperature_drop_tower_x",
+    "support_interface_temperature_drop_tower_y",
     "curr_bed_type",
     "flush_multiplier",
     // Fast-purge mode: project-level purge control, inert at Default.
@@ -180,7 +184,8 @@ static std::vector<std::string> s_project_options {
 // state (it must NOT be added). curr_bed_type is deliberately NOT in this list: the receiver
 // keeps its own bed type when loading a published project. The published-mode project_config
 // assertions in tests/libslic3r/test_preset_bundle_loading.cpp guard both directions.
-static std::vector<std::string> s_project_options_published{"wipe_tower_x", "wipe_tower_y", "wipe_tower_rotation_angle"};
+static std::vector<std::string> s_project_options_published{"wipe_tower_x", "wipe_tower_y", "wipe_tower_rotation_angle",
+    "support_interface_temperature_drop_tower_x", "support_interface_temperature_drop_tower_y"};
 
 //Orca: add custom as default
 const char *PresetBundle::ORCA_DEFAULT_BUNDLE = "Custom";

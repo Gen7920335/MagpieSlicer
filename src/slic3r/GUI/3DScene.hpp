@@ -50,6 +50,18 @@ extern Slic3r::ColorRGBA              adjust_color_for_rendering(const Slic3r::C
 namespace Slic3r {
 namespace GUI {
     class Size;
+    // MAGPIE: the temperature drop tower preview of plate n is object TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE + n
+    // (wipe towers use 1000 + n).
+    inline constexpr int TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE = 2000;
+    inline constexpr bool is_temperature_drop_tower_object_id(int object_id, int plate_count)
+    {
+        return plate_count > 0 && object_id >= TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE &&
+               object_id < TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE + plate_count;
+    }
+    inline constexpr int temperature_drop_tower_plate_index(int object_id) { return object_id - TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE; }
+    static_assert(is_temperature_drop_tower_object_id(TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE, 1));
+    static_assert(!is_temperature_drop_tower_object_id(TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE - 1, 1));
+    static_assert(!is_temperature_drop_tower_object_id(TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE + 1, 1));
 }
 
 class SLAPrintObject;
@@ -505,6 +517,9 @@ public:
 
     int load_wipe_tower_preview(
         int obj_idx, float pos_x, float pos_y, float width, float depth, float height, float rotation_angle, bool size_unknown, float brim_width);
+    // MAGPIE: an L-shaped stand-in for the temperature drop tower: arms `size` long and `arm_width` wide
+    // on a brim `brim_width` wide, lower left corner of the brim at (pos_x, pos_y); all in mm.
+    int load_temperature_drop_tower_preview(int obj_idx, float pos_x, float pos_y, float size, float arm_width, float brim_width, float height);
     int load_real_wipe_tower_preview(
     int obj_idx, float pos_x, float pos_y,const TriangleMesh& wt_mesh,const TriangleMesh &brim_mesh,bool render_brim, float rotation_angle, bool size_unknown,  bool opengl_initialized);
     GLVolume* new_toolpath_volume(const ColorRGBA& rgba);

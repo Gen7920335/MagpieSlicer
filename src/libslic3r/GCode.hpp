@@ -662,9 +662,6 @@ protected:
                                              bool preserve_order);
     // MAGPIE: low temperature support interface.
     bool            low_temperature_interface_enabled() const;
-    // Lowest positive interface target in degC: the interface temperature, or the interface sublayer
-    // temperature when sublayers are on and colder. The temperature drop tower is sized for it.
-    int             lowest_low_temperature_interface_target() const;
     bool            has_configured_low_temperature_nozzle_wiper() const;
     bool            temperature_drop_tower_enabled() const;
     bool            build_temperature_drop_tower_path(ExtrusionPath &path);

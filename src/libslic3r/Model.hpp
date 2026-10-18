@@ -1607,6 +1607,10 @@ public:
     // BBS: add partplate logic
 	std::vector<Vec2d>      positions;
 	double 	                rotation;
+    // MAGPIE: per-plate temperature drop tower positions (mm; below zero = automatic), kept with the
+    // wipe tower so Undo / Redo restores a dragged tower too.
+    std::vector<double>     temperature_drop_x;
+    std::vector<double>     temperature_drop_y;
 
 private:
 	friend class cereal::access;
@@ -1628,7 +1632,7 @@ private:
     ModelWipeTower& operator=(ModelWipeTower &&rhs) = delete;
 
     // For serialization / deserialization of ModelWipeTower composed into another class into the Undo / Redo stack as a separate object.
-    template<typename Archive> void serialize(Archive &ar) { ar(positions, rotation); }
+    template<typename Archive> void serialize(Archive &ar) { ar(positions, rotation, temperature_drop_x, temperature_drop_y); }
 };
 
 // BBS structure stores extruder parameters and speed map of all models
