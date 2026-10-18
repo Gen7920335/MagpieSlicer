@@ -34,6 +34,16 @@ if (ORCA_TOOLS)
     target_link_libraries(texture_unwrap_dump libslic3r boost_headeronly nanosvg)
     target_compile_definitions(texture_unwrap_dump PRIVATE ${_DEV_DEFS})
 
+    # gcode_processor_bench: times GCodeProcessor on an exported G-code file, layer by layer as the
+    # export feeds it, to see where the processor spends its time. Built only on request.
+    add_executable(gcode_processor_bench EXCLUDE_FROM_ALL gcode_processor_bench.cpp)
+    target_link_libraries(gcode_processor_bench libslic3r boost_headeronly nanosvg)
+    target_compile_definitions(gcode_processor_bench PRIVATE ${_DEV_DEFS})
+    if (MSVC)
+        # Function addresses for resolving the sampled stacks.
+        target_link_options(gcode_processor_bench PRIVATE /MAP)
+    endif ()
+
     # profile_include_dump: prints what included templates contribute to a vendor's presets,
     # to diff against the same tool built in BambuStudio. Built only on request.
     add_executable(profile_include_dump EXCLUDE_FROM_ALL profile_include_dump.cpp)
