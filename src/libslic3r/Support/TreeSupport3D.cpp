@@ -4176,53 +4176,58 @@ void organic_draw_branches(
             }
         });
 
+    MAGPIE_STAGE_PHASE(phase, "fn.tree3d_p2b_merge");
+    // Roof recovery runs in branch order as before. The tree's layer range is then allocated once
+    // and filled one layer range per task, each layer taking its branches in branch order, so every
+    // slice receives the same polygons in the same order as the branch-by-branch merge did.
     tbb::parallel_for(tbb::blocked_range<size_t>(0, trees.size(), 1),
         [&trees, &interface_placer, &branch_ids, &branch_slices](const tbb::blocked_range<size_t> &range) {
             for (size_t tree_id = range.begin(); tree_id < range.end(); ++ tree_id) {
                 Tree &tree = trees[tree_id];
-                for (size_t flat_id = std::lower_bound(branch_ids.begin(), branch_ids.end(), std::make_pair(tree_id, size_t(0))) - branch_ids.begin();
-                     flat_id < branch_ids.size() && branch_ids[flat_id].first == tree_id; ++ flat_id) {
+                const size_t flat_begin = std::lower_bound(branch_ids.begin(), branch_ids.end(), std::make_pair(tree_id, size_t(0))) - branch_ids.begin();
+                size_t       flat_end   = flat_begin;
+                while (flat_end < branch_ids.size() && branch_ids[flat_end].first == tree_id)
+                    ++ flat_end;
+
+                LayerIndex tree_begin = std::numeric_limits<LayerIndex>::max();
+                LayerIndex tree_end   = std::numeric_limits<LayerIndex>::lowest();
+                for (size_t flat_id = flat_begin; flat_id < flat_end; ++ flat_id) {
                     BranchSlices &branch_result = branch_slices[flat_id];
                     if (! branch_result.valid)
                         continue;
-                    const Branch          &branch          = tree.branches[branch_ids[flat_id].second];
-                    LayerIndex             layer_begin     = branch_result.layer_begin;
-                    LayerIndex             layer_end;
-                    std::vector<Polygons> &slices          = branch_result.slices;
-                    std::vector<Polygons> &bottom_contacts = branch_result.bottom_contacts;
-
-                    recover_pending_branch_roofs(interface_placer, branch.path, layer_begin, slices);
-
-                    while (! slices.empty() && slices.back().empty()) {
-                        slices.pop_back();
+                    recover_pending_branch_roofs(interface_placer, tree.branches[branch_ids[flat_id].second].path, branch_result.layer_begin, branch_result.slices);
+                    while (! branch_result.slices.empty() && branch_result.slices.back().empty())
+                        branch_result.slices.pop_back();
+                    if (branch_result.slices.empty()) {
+                        branch_result.valid = false;
+                        continue;
                     }
+                    tree_begin = std::min(tree_begin, branch_result.layer_begin);
+                    tree_end   = std::max(tree_end, branch_result.layer_begin + LayerIndex(branch_result.slices.size()));
+                }
+                if (tree_begin >= tree_end)
+                    continue;
 
-                    // ORCA: recompute layer_end after trimming trailing empty slices.
-                    layer_end = layer_begin + LayerIndex(slices.size());
-
-                    if (layer_begin < layer_end) {
-                        LayerIndex new_begin = tree.first_layer_id == -1 ? layer_begin : std::min(tree.first_layer_id, layer_begin);
-                        LayerIndex new_end   = tree.first_layer_id == -1 ? layer_end : std::max(tree.first_layer_id + LayerIndex(tree.slices.size()), layer_end);
-                        size_t     new_size  = size_t(new_end - new_begin);
-                        if (tree.first_layer_id == -1) {
-                        } else if (tree.slices.capacity() < new_size) {
-                            std::vector<Slice> new_slices;
-                            new_slices.reserve(new_size);
-                            if (LayerIndex dif = tree.first_layer_id - new_begin; dif > 0)
-                                new_slices.insert(new_slices.end(), dif, {});
-                            append(new_slices, std::move(tree.slices));
-                            tree.slices.swap(new_slices);
-                        } else if (LayerIndex dif = tree.first_layer_id - new_begin; dif > 0)
-                            tree.slices.insert(tree.slices.begin(), tree.first_layer_id - new_begin, {});
-                        tree.slices.insert(tree.slices.end(), new_size - tree.slices.size(), {});
-                        for (LayerIndex i = layer_begin; i != layer_end; ++ i) {
+                tree.first_layer_id = tree_begin;
+                tree.slices.assign(size_t(tree_end - tree_begin), Slice{});
+                tbb::parallel_for(tbb::blocked_range<LayerIndex>(tree_begin, tree_end, 16),
+                    [&tree, &branch_slices, flat_begin, flat_end, tree_begin](const tbb::blocked_range<LayerIndex> &layers) {
+                    for (size_t flat_id = flat_begin; flat_id < flat_end; ++ flat_id) {
+                        BranchSlices &branch_result = branch_slices[flat_id];
+                        if (! branch_result.valid)
+                            continue;
+                        const LayerIndex layer_begin = branch_result.layer_begin;
+                        const LayerIndex first       = std::max(layers.begin(), layer_begin);
+                        const LayerIndex last        = std::min(layers.end(), layer_begin + LayerIndex(branch_result.slices.size()));
+                        for (LayerIndex i = first; i < last; ++ i) {
                             int j = i - layer_begin;
-                            Polygons &src = slices[j];
+                            Polygons &src = branch_result.slices[j];
+                            std::vector<Polygons> &bottom_contacts = branch_result.bottom_contacts;
                             bool has_bottom_contacts = j < int(bottom_contacts.size()) && !bottom_contacts[j].empty();
 
                             // ORCA: preserve bottom contacts even if base polygons are empty.
                             if (!src.empty() || has_bottom_contacts) {
-                                Slice &dst = tree.slices[i - new_begin];
+                                Slice &dst = tree.slices[i - tree_begin];
                                 if (++ dst.num_branches > 1) {
                                     if (!src.empty())
                                         append(dst.polygons, std::move(src));
@@ -4236,10 +4241,8 @@ void organic_draw_branches(
                                 }
                             }
                         }
-
-                        tree.first_layer_id = new_begin;
                     }
-                }
+                });
             }
         }, tbb::simple_partitioner());
 

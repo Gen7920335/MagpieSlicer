@@ -36,6 +36,8 @@
 #include <boost/log/trivial.hpp>
 
 #include <tbb/parallel_for.h>
+
+#include "libslic3r/StageTimer.hpp"
 #include <tbb/task_group.h>
 #include <vector>
 #include <unordered_map>
@@ -279,6 +281,8 @@ void TreeModelVolumes::precalculate(const PrintObject& print_object, const coord
     std::vector<RadiusLayerPair> relevant_collision_radiis{ radius_until_layer.begin(), radius_until_layer.end() };
 
     // Calculate the relevant collisions
+    MAGPIE_STAGE_PHASES(phase);
+    MAGPIE_STAGE_PHASE(phase, "fn.tree3d_pre_collision");
     calculateCollision(relevant_collision_radiis, throw_on_cancel);
 
     // calculate a separate Collisions with all holes removed. These are relevant for some avoidances that try to avoid holes (called safe)
@@ -288,20 +292,24 @@ void TreeModelVolumes::precalculate(const PrintObject& print_object, const coord
             relevant_hole_collision_radiis.emplace_back(key);
 
     // Calculate collisions without holes, built from regular collision
+    MAGPIE_STAGE_PHASE(phase, "fn.tree3d_pre_holefree");
     calculateCollisionHolefree(relevant_hole_collision_radiis, throw_on_cancel);
     // Let placables be calculated from calculateAvoidance() for better parallelization.
+    MAGPIE_STAGE_PHASE(phase, "fn.tree3d_pre_placeables");
     if (m_support_rests_on_model)
         calculatePlaceables(relevant_avoidance_radiis, throw_on_cancel);
 
     auto t_coll = std::chrono::high_resolution_clock::now();
 
     // Calculate the relevant avoidances in parallel as far as possible
+    MAGPIE_STAGE_PHASE(phase, "fn.tree3d_pre_avoidance");
     {
         tbb::task_group task_group;
-        task_group.run([this, relevant_avoidance_radiis, throw_on_cancel]{ calculateAvoidance(relevant_avoidance_radiis, true, m_support_rests_on_model, throw_on_cancel); });
-        task_group.run([this, relevant_avoidance_radiis, throw_on_cancel]{ calculateWallRestrictions(relevant_avoidance_radiis, throw_on_cancel); });
+        task_group.run([this, relevant_avoidance_radiis, throw_on_cancel]{ MAGPIE_STAGE_TIMER("fn.tree3d_pre_avoidance_only"); calculateAvoidance(relevant_avoidance_radiis, true, m_support_rests_on_model, throw_on_cancel); });
+        task_group.run([this, relevant_avoidance_radiis, throw_on_cancel]{ MAGPIE_STAGE_TIMER("fn.tree3d_pre_walls_only"); calculateWallRestrictions(relevant_avoidance_radiis, throw_on_cancel); });
         task_group.wait();
     }
+    MAGPIE_STAGE_PHASE_END(phase);
     auto t_end = std::chrono::high_resolution_clock::now();
     auto dur_col = 0.001 * std::chrono::duration_cast<std::chrono::microseconds>(t_coll - t_start).count();
     auto dur_avo = 0.001 * std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_coll).count();
