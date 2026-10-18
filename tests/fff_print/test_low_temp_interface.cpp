@@ -410,8 +410,8 @@ void check_passes_on_distinct_layers(const TowerMetrics &metrics)
 
 TEST_CASE("Temperature drop tower scales and slows only its final 10 mm", "[LowTemperatureInterface][TemperatureDropTower]")
 {
-    // Arm length in mm for the temperature drop (line 1): 50 mm up to 30 degC, then one mm per degree, at most 80.
-    const auto [normal_temperature, expected_size] = GENERATE(table<int, double>({ { 200, 50.0 }, { 201, 51.0 }, { 220, 70.0 }, { 260, 80.0 } }));
+    // Arm length in mm for the temperature drop: 80 mm up to 30 degC, then one mm per degree, at most 110.
+    const auto [normal_temperature, expected_size] = GENERATE(table<int, double>({ { 200, 80.0 }, { 201, 81.0 }, { 220, 100.0 }, { 260, 110.0 } }));
     DYNAMIC_SECTION("normal " << normal_temperature) {
         TowerSettings settings;
         settings.normal_temperature = normal_temperature;
@@ -460,7 +460,7 @@ TEST_CASE("Temperature drop tower stays inside rear-left bed bounds", "[LowTempe
     // Bed, its x range, the highest tower y and the largest tower size, mm.
     const std::array<std::tuple<std::vector<Vec2d>, double, double, double, double>, 2> beds{ {
         { { Vec2d(0., 0.), Vec2d(200., 0.), Vec2d(200., 70.), Vec2d(0., 70.) }, 0.0, 200.0, 67.0, 64.0 },
-        { { Vec2d(-10., -20.), Vec2d(190., -20.), Vec2d(190., 180.), Vec2d(-10., 180.) }, -10.0, 190.0, 177.0, 70.0 },
+        { { Vec2d(-10., -20.), Vec2d(190., -20.), Vec2d(190., 180.), Vec2d(-10., 180.) }, -10.0, 190.0, 177.0, 100.0 },
     } };
     for (const auto &[bed, bed_min_x, bed_max_x, expected_max_y, expected_size] : beds) {
         TowerSettings settings;
@@ -561,8 +561,8 @@ TEST_CASE("Temperature drop tower keeps its brim across a 36-setting slicing mat
                     const TowerMetrics metrics = analyze_tower(output);
                     const double temperature_delta = normal_temperature - interface_temperature;
                     const double expected_size = temperature_delta <= 30.0
-                        ? 50.0
-                        : std::min(80.0, 50.0 + temperature_delta - 30.0);
+                        ? 80.0
+                        : std::min(110.0, 80.0 + temperature_delta - 30.0);
                     const size_t brim_begin = output.find("; temperature drop tower brim begin");
                     const size_t brim_end = output.find("; temperature drop tower brim end", brim_begin);
                     const size_t first_tower_layer = output.find("; temperature drop tower layer");
@@ -624,8 +624,8 @@ TEST_CASE("Temperature drop tower keeps five brim lines across nozzle diameters"
 
         CAPTURE(nozzle_diameter, body_offset);
         check_passes_on_distinct_layers(metrics);
-        CHECK(metrics.max_x - metrics.min_x == Catch::Approx(70.0).margin(0.03));
-        CHECK(metrics.max_y - metrics.min_y == Catch::Approx(70.0).margin(0.03));
+        CHECK(metrics.max_x - metrics.min_x == Catch::Approx(100.0).margin(0.03)); // 220 - 170 degC: 100 mm arms
+        CHECK(metrics.max_y - metrics.min_y == Catch::Approx(100.0).margin(0.03));
         CHECK(count_substring(output, "; temperature drop tower brim line") == 5);
         CHECK(body_offset > previous_body_offset);
         previous_body_offset = body_offset;
@@ -669,7 +669,7 @@ TEST_CASE("Temperature drop tower follows the standard extruder offset transform
 
     check_passes_on_distinct_layers(metrics);
     CHECK(metrics.min_x > 34.0);
-    CHECK(metrics.max_x < 109.0);
+    CHECK(metrics.max_x < 139.0); // 100 mm arms (220 - 170 degC)
     CHECK(metrics.min_y > 2.0);
     CHECK(metrics.max_y < 198.0);
 }

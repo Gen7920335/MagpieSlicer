@@ -24,17 +24,18 @@ inline constexpr double TEMPERATURE_DROP_TOWER_BED_MARGIN = 3.0;
 // A tower position below zero asks for the automatic (rear left) position.
 inline constexpr double TEMPERATURE_DROP_TOWER_AUTOMATIC_POSITION = -1.0;
 
-// Arm length in mm for a temperature drop in degC: 50 mm up to 30 degC, one more mm per degree, at most 80 mm.
+// Arm length in mm for a temperature drop in degC: 80 mm up to 30 degC, one more mm per degree, at most
+// 110 mm. (Line 1 used 50 to 80 mm; Gen asked for an 80 mm base, 2026-10-19.)
 constexpr double temperature_drop_tower_size(double temperature_delta)
 {
     const double growth = temperature_delta > 30.0 ? temperature_delta - 30.0 : 0.0;
-    const double size   = 50.0 + growth;
-    return size < 50.0 ? 50.0 : (size > 80.0 ? 80.0 : size);
+    const double size   = 80.0 + growth;
+    return size < 80.0 ? 80.0 : (size > 110.0 ? 110.0 : size);
 }
-static_assert(temperature_drop_tower_size(0.0) == 50.0);
-static_assert(temperature_drop_tower_size(30.0) == 50.0);
-static_assert(temperature_drop_tower_size(50.0) == 70.0);
-static_assert(temperature_drop_tower_size(80.0) == 80.0);
+static_assert(temperature_drop_tower_size(0.0) == 80.0);
+static_assert(temperature_drop_tower_size(30.0) == 80.0);
+static_assert(temperature_drop_tower_size(50.0) == 100.0);
+static_assert(temperature_drop_tower_size(80.0) == 110.0);
 
 // The tower position (mm) stored for plate plate_index, or fallback.
 inline double temperature_drop_tower_position_at(const ConfigOptionFloats *positions, size_t plate_index,
