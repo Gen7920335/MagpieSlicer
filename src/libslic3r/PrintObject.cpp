@@ -1713,6 +1713,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "support_interface_sublayer_angle"
             || opt_key == "support_wall_loops"
             || opt_key == "tree_support_wall_loops"
+            || opt_key == "support_interface_sublayer_temperature"
             || opt_key == "support_half_layer_height"
             || opt_key == "support_angle"
             || opt_key == "support_on_build_plate_only"

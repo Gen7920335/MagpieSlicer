@@ -945,14 +945,12 @@ static void apply_first_layer_order(const DynamicPrintConfig* config, std::vecto
     if (first_layer_print_sequence_op) {
         const std::vector<int>& print_sequence_1st = first_layer_print_sequence_op->values;
         if (print_sequence_1st.size() >= tool_order.size()) {
-            std::sort(tool_order.begin(), tool_order.end(), [&print_sequence_1st](int lh, int rh) {
-                auto lh_it = std::find(print_sequence_1st.begin(), print_sequence_1st.end(), lh);
-                auto rh_it = std::find(print_sequence_1st.begin(), print_sequence_1st.end(), rh);
-
-                if (lh_it == print_sequence_1st.end() || rh_it == print_sequence_1st.end())
-                    return false;
-
-                return lh_it < rh_it;
+            // MAGPIE (Magpie line 1): unlisted filaments share the last rank and keep their area order.
+            // Orca treated an unlisted filament as equal to every listed one, which is not a strict weak
+            // ordering, so a sequence that left out a used filament came out in no defined order.
+            std::stable_sort(tool_order.begin(), tool_order.end(), [&print_sequence_1st](int lh, int rh) {
+                return std::find(print_sequence_1st.begin(), print_sequence_1st.end(), lh) <
+                       std::find(print_sequence_1st.begin(), print_sequence_1st.end(), rh);
             });
         }
     }

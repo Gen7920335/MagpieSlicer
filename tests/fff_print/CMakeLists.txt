@@ -33,6 +33,7 @@ add_executable(${_TEST_NAME}_tests
 	test_snapmaker_u1_start.cpp
 	test_lesic.cpp
 	test_line1_support.cpp
+	test_line1_orca_fixes.cpp
 	test_resin_support.cpp
 	test_support_material.cpp
 	test_texture_displacement.cpp

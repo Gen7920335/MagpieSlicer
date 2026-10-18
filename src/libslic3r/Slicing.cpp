@@ -262,7 +262,10 @@ std::vector<coordf_t> layer_height_profile_from_ranges(
     for (t_layer_config_ranges::const_iterator it_range = layer_config_ranges.begin(); it_range != layer_config_ranges.end(); ++ it_range) {
         coordf_t lo = it_range->first.first;
         coordf_t hi = std::min(it_range->first.second, slicing_params.object_print_z_height());
-        coordf_t height = it_range->second.option("layer_height")->getFloat();
+        // MAGPIE: a range imported with only material or other settings has no layer_height; it
+        // inherits the object's layer height instead of dereferencing a missing option.
+        const ConfigOption *height_option = it_range->second.option("layer_height");
+        coordf_t height = height_option != nullptr ? height_option->getFloat() : slicing_params.layer_height;
         if (! ranges_non_overlapping.empty())
             // Trim current low with the last high.
             lo = std::max(lo, ranges_non_overlapping.back().first.second);

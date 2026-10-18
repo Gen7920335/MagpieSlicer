@@ -7307,6 +7307,17 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloat(0.));
 
+    def = this->add("support_interface_sublayer_temperature", coInt);
+    def->label = L("Interface sublayer temperature");
+    def->category = L("Support");
+    def->tooltip = L("Nozzle temperature while printing the interface sublayers. 0 keeps the filament temperature. "
+                     "With the low temperature support interface on, the sublayers use this target instead of "
+                     "the interface temperature.");
+    def->sidetext = u8"°C";
+    def->min = 0;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionInt(0));
+
     def = this->add("support_wall_loops", coInt);
     def->label = L("Normal support walls");
     def->category = L("Support");
@@ -10837,6 +10848,9 @@ static void extend_extruder_variant(DynamicPrintConfig& config, const unsigned i
     }
     auto extruder_variant_opt = dynamic_cast<ConfigOptionStrings*>(config.option("extruder_variant_list"));
     assert(extruder_variant_opt != nullptr);
+    // MAGPIE: an empty list (legacy custom profiles) has no first value to pad with.
+    if (extruder_variant_opt->values.empty())
+        extruder_variant_opt->values.push_back("Direct Drive Standard");
     extruder_variant_opt->resize(num_extruders, extruder_variant_opt); // Use the first option as the default value, so all extruders have the same variant
 
     // 2. Update `printer_extruder_variant` and `printer_extruder_id` based on `extruder_variant_list`
@@ -10869,6 +10883,8 @@ static void extend_extruder_variant(DynamicPrintConfig& config, const unsigned i
 
 void DynamicPrintConfig::set_num_extruders(unsigned int num_extruders)
 {
+    // MAGPIE: a printer has at least one extruder; legacy profiles may carry an empty nozzle list.
+    num_extruders = std::max(1u, num_extruders);
     extend_extruder_variant(*this, num_extruders);
 
     const auto &defaults = FullPrintConfig::defaults();

@@ -662,12 +662,18 @@ protected:
                                              bool preserve_order);
     // MAGPIE: low temperature support interface.
     bool            low_temperature_interface_enabled() const;
+    // Lowest positive interface target in degC: the interface temperature, or the interface sublayer
+    // temperature when sublayers are on and colder. The temperature drop tower is sized for it.
+    int             lowest_low_temperature_interface_target() const;
     bool            has_configured_low_temperature_nozzle_wiper() const;
     bool            temperature_drop_tower_enabled() const;
     bool            build_temperature_drop_tower_path(ExtrusionPath &path);
     bool            build_temperature_drop_tower_brim_paths(std::vector<ExtrusionPath> &paths);
     std::string     extrude_temperature_drop_tower(const ExtrusionPath &path, bool cooling_transition);
-    std::string     start_low_temperature_interface();
+    // target_temperature in degC; 0 uses support_interface_temperature.
+    std::string     start_low_temperature_interface(int target_temperature = 0);
+    // MAGPIE: interface sublayer temperature (support_extras mod) when the low temperature interface is off.
+    std::string     finish_interface_sublayer_temperature();
     std::string     finish_low_temperature_interface();
 
     // Farthest-point timelapse: find the extrusion point farthest from camera (0,0)
@@ -756,6 +762,10 @@ protected:
     int                                 m_support_extrusion_context_depth { 0 };
     // Set while extrude_support() prints one role of mixed support, so mixed sub-collections are entered.
     bool                                m_support_role_pass { false };
+    // MAGPIE: inside a support collection marked interface_sublayer, and whether the sublayer
+    // temperature is set while the low temperature interface is off.
+    bool                                m_in_interface_sublayer { false };
+    bool                                m_interface_sublayer_temperature_active { false };
     // MAGPIE: the temperature drop tower, one path per layer in plate coordinates (mm), placed on first use.
     coordf_t                            m_temperature_drop_tower_last_print_z { -std::numeric_limits<coordf_t>::max() };
     bool                                m_temperature_drop_tower_path_initialized { false };

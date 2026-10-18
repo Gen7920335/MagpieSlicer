@@ -9201,6 +9201,7 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "support_interface_sublayer_end"sv,
         "support_interface_sublayer_pattern"sv,
         "support_interface_sublayer_angle"sv,
+        "support_interface_sublayer_temperature"sv,
         "support_wall_loops"sv,
         "tree_support_wall_loops"sv,
         "single_nozzle_low_temperature_interface"sv,
@@ -9975,6 +9976,9 @@ std::string GCode::extrude_support_entities(const ExtrusionEntitiesPtr &support_
                 gcode += extrude_loop(*loop, label, speed_for_path(loop->length(), role));
             }
             else if (collection) {
+                const bool was_sublayer = m_in_interface_sublayer;
+                m_in_interface_sublayer = was_sublayer || collection->interface_sublayer;
+                ScopeGuard restore_sublayer([this, was_sublayer]() { m_in_interface_sublayer = was_sublayer; });
                 gcode += extrude_support(*collection, support_extrusion_role);
             }
             else {
@@ -9982,6 +9986,9 @@ std::string GCode::extrude_support_entities(const ExtrusionEntitiesPtr &support_
             }
         }
     }
+    // MAGPIE: the sublayer temperature ends with the support it belongs to.
+    if (m_support_extrusion_context_depth == 1)
+        gcode += this->finish_interface_sublayer_temperature();
     return gcode;
 }
 
@@ -10289,6 +10296,17 @@ bool GCode::has_configured_low_temperature_nozzle_wiper() const
            (brush_start - brush_end).norm() > 1e-6; // mm
 }
 
+int GCode::lowest_low_temperature_interface_target() const
+{
+    int       target   = std::max(0, m_config.support_interface_temperature.value); // degC
+    const int sublayer = m_config.support_interface_sublayer_temperature.value;     // degC
+    // Sublayers exist only from the second interface layer down (the contact layer never is one).
+    const bool sublayers = m_config.support_interface_sublayer_start.value > 0 && m_config.support_interface_top_layers.value >= 2;
+    if (sublayers && sublayer > 0 && (target == 0 || sublayer < target))
+        target = sublayer;
+    return target;
+}
+
 // The tower replaces the wait for cooling when there is no brush, printing layer by layer.
 bool GCode::temperature_drop_tower_enabled() const
 {
@@ -10299,7 +10317,7 @@ bool GCode::temperature_drop_tower_enabled() const
     if (m_print == nullptr || std::none_of(m_print->objects().begin(), m_print->objects().end(),
                                            [](const PrintObject *object) { return object != nullptr && ! object->support_layers().empty(); }))
         return false;
-    const int interface_temperature = m_config.support_interface_temperature.value; // degC
+    const int interface_temperature = this->lowest_low_temperature_interface_target(); // degC
     if (interface_temperature <= 0)
         return false;
     auto hotter = [interface_temperature](int t) { return t > interface_temperature; };
@@ -10399,7 +10417,7 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
             }
 
         const int    normal_temperature    = tower_tools.maximum_temperature;                // degC
-        const int    interface_temperature = m_config.support_interface_temperature.value;   // degC
+        const int    interface_temperature = this->lowest_low_temperature_interface_target(); // degC
         const double requested_tower_size  = temperature_drop_tower_size(std::max(normal_temperature - interface_temperature, 0)); // mm
         const double spacing               = multiple_widths ? temperature_drop_tower_multi_pitch(tower_tools.maximum_nozzle_mm) :
                                                                std::max(double(nozzle_diameter), double(flow.spacing())); // mm
@@ -10599,7 +10617,7 @@ std::string GCode::extrude_temperature_drop_tower(const ExtrusionPath &path, boo
     return gcode;
 }
 
-std::string GCode::start_low_temperature_interface()
+std::string GCode::start_low_temperature_interface(int target_temperature)
 {
     if (m_low_temperature_interface_active || m_writer.filament() == nullptr)
         return {};
@@ -10607,8 +10625,8 @@ std::string GCode::start_low_temperature_interface()
     const ConfigOptionInts &normal      = this->on_first_layer() ? m_config.nozzle_temperature_initial_layer : m_config.nozzle_temperature;
     if (normal.values.empty())
         return {};
-    const int normal_temperature    = normal.get_at(filament_id);                    // degC
-    const int interface_temperature = m_config.support_interface_temperature.value; // degC
+    const int normal_temperature    = normal.get_at(filament_id); // degC
+    const int interface_temperature = target_temperature > 0 ? target_temperature : m_config.support_interface_temperature.value; // degC
 
     std::string gcode;
     if (interface_temperature > 0 && interface_temperature != normal_temperature) {
@@ -10692,19 +10710,50 @@ std::string GCode::finish_low_temperature_interface()
     return gcode;
 }
 
+std::string GCode::finish_interface_sublayer_temperature()
+{
+    if (! m_interface_sublayer_temperature_active)
+        return {};
+    m_interface_sublayer_temperature_active = false;
+    if (m_writer.filament() == nullptr)
+        return {};
+    const unsigned int      filament_id = m_writer.filament()->id();
+    const ConfigOptionInts &normal      = this->on_first_layer() ? m_config.nozzle_temperature_initial_layer : m_config.nozzle_temperature;
+    return normal.values.empty() ? std::string() : m_writer.set_temperature(normal.get_at(filament_id), false, filament_id);
+}
+
 std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_description, double speed)
 {
     std::string gcode;
 
     // MAGPIE: low temperature support interface. Interface paths (and support ironing) print at the interface
     // temperature; the first other extrusion restores the filament temperature.
+    // MAGPIE: interface sublayers with their own temperature (support_extras mod), in degC; 0 = none.
+    const int sublayer_temperature = m_in_interface_sublayer && path.role() == erSupportMaterialInterface ?
+                                         m_config.support_interface_sublayer_temperature.value : 0;
     if (m_low_temperature_interface_active || m_config.single_nozzle_low_temperature_interface.value) {
         const bool interface_role = path.role() == erSupportMaterialInterface ||
                                     (path.role() == erIroning && m_support_extrusion_context_depth > 0);
-        if (interface_role && this->low_temperature_interface_enabled())
-            gcode += this->start_low_temperature_interface();
-        else if (m_low_temperature_interface_active)
+        if (interface_role && this->low_temperature_interface_enabled()) {
+            if (! m_low_temperature_interface_active)
+                gcode += this->start_low_temperature_interface(sublayer_temperature);
+            else {
+                // Between sublayer and contact interface the target changes without another cooling wait.
+                const int target = sublayer_temperature > 0 ? sublayer_temperature : m_config.support_interface_temperature.value;
+                if (target > 0 && target != m_low_temperature_interface_target && m_writer.filament() != nullptr) {
+                    gcode += m_writer.set_temperature(target, false, m_writer.filament()->id());
+                    m_low_temperature_interface_target = target;
+                }
+            }
+        } else if (m_low_temperature_interface_active)
             gcode += this->finish_low_temperature_interface();
+    }
+    if (! this->low_temperature_interface_enabled()) {
+        if (sublayer_temperature > 0 && ! m_interface_sublayer_temperature_active && m_writer.filament() != nullptr) {
+            gcode += m_writer.set_temperature(sublayer_temperature, false, m_writer.filament()->id());
+            m_interface_sublayer_temperature_active = true;
+        } else if (sublayer_temperature == 0 && m_interface_sublayer_temperature_active)
+            gcode += this->finish_interface_sublayer_temperature();
     }
 
     const std::string  bridge_description = is_bridge(path.role()) ? path_description + " (bridge)" : std::string();

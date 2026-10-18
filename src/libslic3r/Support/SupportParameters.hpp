@@ -176,6 +176,7 @@ struct SupportParameters {
         this->sublayer_end     = object_config.support_interface_sublayer_end.value;
         this->sublayer_pattern = interface_pattern_from_name(object_config.support_interface_sublayer_pattern.value).value_or(this->contact_fill_pattern);
         this->sublayer_angle   = Geometry::deg2rad(float(object_config.support_interface_sublayer_angle.value));
+        this->sublayer_temperature = std::max(0, object_config.support_interface_sublayer_temperature.value);
 
         this->raft_angle_1st_layer  = 0.f;
         this->raft_angle_base       = 0.f;
@@ -212,6 +213,9 @@ struct SupportParameters {
         const coordf_t extrusion_width = object_config.line_width.get_abs_value(nozzle_diameter);
         support_extrusion_width        = object_config.support_line_width.get_abs_value(nozzle_diameter);
         support_extrusion_width        = support_extrusion_width > 0 ? support_extrusion_width : extrusion_width;
+        // MAGPIE (Magpie line 1): with both widths automatic the above is 0; use the flow's real width.
+        if (support_extrusion_width <= 0)
+            support_extrusion_width = support_material_flow.width();
 
         independent_layer_height = print_config.independent_support_layer_height;
 
@@ -316,6 +320,9 @@ struct SupportParameters {
     int                     sublayer_end { 0 };
     InfillPattern           sublayer_pattern { ipRectilinear };
     float                   sublayer_angle { 0.f };
+    // Nozzle temperature of the sublayers in degC; 0 keeps the filament temperature. When set, the
+    // sublayer fills are grouped in a collection marked interface_sublayer for G-code export.
+    int                     sublayer_temperature { 0 };
     bool                    sublayer_enabled() const { return sublayer_start > 0; }
     static std::optional<InfillPattern> interface_pattern_from_name(const std::string &name)
     {

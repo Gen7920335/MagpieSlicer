@@ -24,6 +24,7 @@ add_executable(${_TEST_NAME}_tests
     test_mod_host.cpp
     test_mod_index.cpp
     test_legacy_settings.cpp
+    test_line1_orca_fixes.cpp
     test_snapmaker_u1_start.cpp
     test_param_graph.cpp
     test_locales_utils.cpp

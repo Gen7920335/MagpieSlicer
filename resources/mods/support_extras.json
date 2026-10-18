@@ -1,6 +1,6 @@
 {
     // Support toolpath extras from Magpie line 1, for every support generator: a triangle (or other)
-    // interface pattern, an interface sublayer printed with its own pattern and angle, and separate
+    // interface pattern, an interface sublayer printed with its own pattern, angle and temperature, and separate
     // wall counts for normal and tree support. The defaults change nothing.
     "id": "support_extras",
     "name": "Support extras",
@@ -11,6 +11,7 @@
         "sublayer_end":      { "type": "int",    "default": 0,   "label": "Interface sublayer: last layer from the contact" },
         "sublayer_pattern":  { "type": "string", "default": "",  "label": "Interface sublayer pattern (rectilinear, grid, triangles, concentric)" },
         "sublayer_angle":    { "type": "float",  "default": 0,   "unit": "deg", "label": "Interface sublayer angle" },
+        "sublayer_temperature": { "type": "int", "default": 0,   "unit": "°C", "label": "Interface sublayer nozzle temperature (0 = filament temperature)" },
         "normal_wall_loops": { "type": "int",    "default": -1,  "label": "Normal support walls (0-10; -1 = Orca's)" },
         "tree_wall_loops":   { "type": "int",    "default": -1,  "label": "Tree support walls per branch (1-10; -1 = Orca's)" }
     },
@@ -20,6 +21,7 @@
         { "target": "support_interface_sublayer_end",     "value": "support_extras.sublayer_end" },
         { "target": "support_interface_sublayer_pattern", "value": "support_extras.sublayer_pattern" },
         { "target": "support_interface_sublayer_angle",   "value": "support_extras.sublayer_angle" },
+        { "target": "support_interface_sublayer_temperature", "value": "support_extras.sublayer_temperature" },
         { "target": "support_wall_loops",                 "value": "support_extras.normal_wall_loops" },
         { "target": "tree_support_wall_loops",            "value": "support_extras.tree_wall_loops" }
     ]

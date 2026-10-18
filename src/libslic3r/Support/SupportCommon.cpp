@@ -2055,9 +2055,12 @@ void generate_support_toolpaths(
                         fill_params.anchor_length         = 0.f;
                         fill_params.anchor_length_max     = 0.f;
                     }
+                    // MAGPIE: sublayers with their own temperature are kept together and marked for G-code export.
+                    const bool mark_sublayer = use_sublayer && support_params.sublayer_temperature > 0;
+                    ExtrusionEntitiesPtr sublayer_extrusions;
                     fill_expolygons_generate_paths(
                         // Destination
-                        layer_ex.extrusions,
+                        mark_sublayer ? sublayer_extrusions : layer_ex.extrusions,
                         // Regions to fill
                         union_safety_offset_ex(layer_ex.polygons_to_extrude()),
                         // Filler and its parameters
@@ -2065,6 +2068,12 @@ void generate_support_toolpaths(
                         // Extrusion parameters
                         interface_as_base ? ExtrusionRole::erSupportMaterial : ExtrusionRole::erSupportMaterialInterface, interface_flow,
                         support_params.keep_narrow_islands);
+                    if (! sublayer_extrusions.empty()) {
+                        auto *sublayer = new ExtrusionEntityCollection();
+                        sublayer->interface_sublayer = true;
+                        sublayer->entities = std::move(sublayer_extrusions);
+                        layer_ex.extrusions.emplace_back(sublayer);
+                    }
                 }
             };
             extrude_interface(top_contact_layer,    raft_layer ? InterfaceLayerType::RaftContact : top_interfaces ? InterfaceLayerType::TopContact : InterfaceLayerType::InterfaceAsBase);
@@ -2245,7 +2254,24 @@ void generate_support_toolpaths(
             // For all extrusion types at this print_z, ordered by decreasing layer height:
             for (LayerCacheItem &layer_cache_item : layer_cache.nonempty) {
                 // Trim the extrusion height from the bottom by the overlapping layers.
-                modulate_extrusion_by_overlapping_layers(layer_cache_item.layer_extruded->extrusions, *layer_cache_item.layer_extruded->layer, layer_cache_item.overlapping);
+                ExtrusionEntitiesPtr &extrusions = layer_cache_item.layer_extruded->extrusions;
+                // MAGPIE: the modulation takes plain paths, so a marked sublayer collection is modulated on its own.
+                auto is_sublayer = [](const ExtrusionEntity *ee) {
+                    const auto *collection = dynamic_cast<const ExtrusionEntityCollection*>(ee);
+                    return collection != nullptr && collection->interface_sublayer;
+                };
+                if (std::any_of(extrusions.begin(), extrusions.end(), is_sublayer)) {
+                    ExtrusionEntitiesPtr sublayers;
+                    auto split = std::stable_partition(extrusions.begin(), extrusions.end(), [&is_sublayer](const ExtrusionEntity *ee) { return ! is_sublayer(ee); });
+                    sublayers.assign(split, extrusions.end());
+                    extrusions.erase(split, extrusions.end());
+                    modulate_extrusion_by_overlapping_layers(extrusions, *layer_cache_item.layer_extruded->layer, layer_cache_item.overlapping);
+                    for (ExtrusionEntity *ee : sublayers)
+                        modulate_extrusion_by_overlapping_layers(static_cast<ExtrusionEntityCollection*>(ee)->entities,
+                                                                 *layer_cache_item.layer_extruded->layer, layer_cache_item.overlapping);
+                    append(extrusions, std::move(sublayers));
+                } else
+                    modulate_extrusion_by_overlapping_layers(extrusions, *layer_cache_item.layer_extruded->layer, layer_cache_item.overlapping);
                 support_layer.support_fills.append(std::move(layer_cache_item.layer_extruded->extrusions));
             }
 

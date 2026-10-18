@@ -1309,6 +1309,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,               support_interface_sublayer_angle))
     ((ConfigOptionInt,                 support_wall_loops))
     ((ConfigOptionInt,                 tree_support_wall_loops))
+    ((ConfigOptionInt,                 support_interface_sublayer_temperature))
     // MAGPIE: low temperature support interface (resources/mods/low_temp_interface.json).
     ((ConfigOptionBool,                single_nozzle_low_temperature_interface))
     ((ConfigOptionInt,                 support_interface_temperature))

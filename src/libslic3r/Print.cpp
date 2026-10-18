@@ -2154,6 +2154,27 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         }
     }
 
+    // MAGPIE: the interface sublayer temperature (support_extras mod), checked like the interface temperature above.
+    for (const PrintObject *object : m_objects) {
+        const PrintObjectConfig &oc = object->config();
+        const int temperature_c = oc.support_interface_sublayer_temperature.value; // degC, 0 = filament temperature
+        if (!object->has_support_material() || oc.support_interface_sublayer_start.value <= 0 || temperature_c <= 0)
+            continue;
+        // Marlin EXTRUDE_MINTEMP and Klipper min_extrude_temp both default to 170 degC.
+        constexpr int firmware_min_extrude_temperature_c = 170;
+        if (temperature_c < firmware_min_extrude_temperature_c)
+            return {Slic3r::format(_u8L("Support interface sublayer temperature %1% °C is below the firmware cold-extrusion limit of %2% °C."),
+                                   temperature_c, firmware_min_extrude_temperature_c), object, "support_interface_sublayer_temperature"};
+        const std::vector<unsigned int> support_filaments = oc.support_filament.value > 0 ?
+            std::vector<unsigned int>{ unsigned(oc.support_filament.value - 1) } : object->object_extruders();
+        for (const unsigned int filament : support_filaments) {
+            const int max_temperature_c = m_config.nozzle_temperature_range_high.get_at(filament);
+            if (max_temperature_c > 0 && temperature_c > max_temperature_c)
+                return {Slic3r::format(_u8L("Support interface sublayer temperature %1% °C exceeds the maximum nozzle temperature %2% °C of filament %3%."),
+                                       temperature_c, max_temperature_c, filament + 1), object, "support_interface_sublayer_temperature"};
+        }
+    }
+
     if (m_config.print_sequence == PrintSequence::ByObject && (m_objects.size() > 1 || m_objects[0]->instances().size() > 1)) {
         if (m_config.timelapse_type == TimelapseType::tlSmooth)
             return {L("Smooth mode of timelapse is not supported when \"by object\" sequence is enabled.")};

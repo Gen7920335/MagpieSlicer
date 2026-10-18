@@ -47,6 +47,7 @@ const LegacyKey legacy_keys[] = {
     { "crisp_corner_small_nozzle_wall_speed", "multi_nozzle_walls.small_wall_speed", Kind::Float, true },
     { "crisp_corner_large_nozzle_override_regions", "multi_nozzle_walls.override_regions", Kind::String, true },
     { "support_interface_sublayer_angle", "support_extras.sublayer_angle", Kind::Float, true },
+    { "support_interface_sublayer_temperature", "support_extras.sublayer_temperature", Kind::Int, true },
     { "cura_support_join_distance", "cura_support.join_distance", Kind::Float, false },
     { "cura_solid_support_raft", "cura_support.solid_first_layer", Kind::Bool, false },
     { "mixed_normal_coverage_threshold", "mixed_support.coverage_threshold", Kind::Percent, false },
@@ -63,7 +64,7 @@ const char *const special_keys[] = {
     "support_interface_sublayer_start_layer", "support_interface_sublayer_end_layer", "support_wall_count",
 };
 const char *const unsupported_keys[] = {
-    "support_interface_sublayer_temperature", "toolhead_bridge_line_width", "toolhead_initial_layer_line_width",
+    "toolhead_bridge_line_width", "toolhead_initial_layer_line_width",
     "toolhead_inner_wall_line_width", "toolhead_internal_solid_infill_line_width", "toolhead_line_width",
     "toolhead_outer_wall_line_width", "toolhead_sparse_infill_line_width", "toolhead_support_line_width",
     "toolhead_top_surface_line_width",

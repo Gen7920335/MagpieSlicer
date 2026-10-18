@@ -715,3 +715,69 @@ TEST_CASE("Temperature drop tower keeps its configured position when a model ove
     CHECK(metrics.min_y == Catch::Approx(baseline.min_y).margin(0.03));
     CHECK(metrics.max_y == Catch::Approx(baseline.max_y).margin(0.03));
 }
+
+namespace {
+
+// Nozzle temperature (degC) in force for every model extrusion (wall or infill), and every M104/M109 target.
+struct TemperatureTrace
+{
+    std::vector<int> targets;
+    std::vector<int> model_temperatures;
+};
+
+TemperatureTrace trace_temperatures(const std::string &gcode, const DynamicPrintConfig &config)
+{
+    TemperatureTrace trace;
+    GCodeReader      reader;
+    reader.apply_config(config);
+    int         temperature = 0;
+    std::string role;
+    reader.parse_buffer(gcode, [&](GCodeReader &state, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw());
+        if (raw.rfind(";TYPE:", 0) == 0)
+            role = raw.substr(6);
+        float target;
+        if ((line.cmd_is("M104") || line.cmd_is("M109")) && line.has_value('S', target)) {
+            temperature = int(std::lround(target));
+            trace.targets.push_back(temperature);
+        }
+        if (line.extruding(state) && line.dist_XY(state) > 0.f &&
+            (role.find("wall") != std::string::npos || role.find("infill") != std::string::npos))
+            trace.model_temperatures.push_back(temperature);
+    });
+    return trace;
+}
+
+DynamicPrintConfig sublayer_temperature_config(bool low_temperature_interface, int sublayer_temperature_c)
+{
+    DynamicPrintConfig config = low_temperature_config(low_temperature_interface);
+    config.set_deserialize_strict({
+        { "support_type", "normal(auto)" },
+        { "support_interface_top_layers", 4 },
+        { "support_interface_temperature", 200 },
+        { "support_interface_sublayer_start", 2 },
+        { "support_interface_sublayer_end", 3 },
+        { "support_interface_sublayer_temperature", sublayer_temperature_c },
+    });
+    return config;
+}
+
+} // namespace
+
+TEST_CASE("Interface sublayers print at their own temperature and the model at the filament temperature", "[LowTempInterface][Sublayer]")
+{
+    const bool low_temperature_interface = GENERATE(false, true);
+    CAPTURE(low_temperature_interface);
+    const DynamicPrintConfig config = sublayer_temperature_config(low_temperature_interface, 185);
+    Print print;
+    init_and_process_print({ TestMesh::overhang }, print, config);
+    const TemperatureTrace trace = trace_temperatures(Slic3r::Test::gcode(print), config);
+
+    // 185 degC is set for the sublayers; with the low temperature interface the contact layer uses 200 degC.
+    CHECK(std::count(trace.targets.begin(), trace.targets.end(), 185) > 0);
+    CHECK((std::count(trace.targets.begin(), trace.targets.end(), 200) > 0) == low_temperature_interface);
+    REQUIRE_FALSE(trace.model_temperatures.empty());
+    for (const int temperature_c : trace.model_temperatures)
+        CHECK(temperature_c == 220);
+}
+
