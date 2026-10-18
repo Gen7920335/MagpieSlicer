@@ -2,6 +2,8 @@
 // test_support_material.cpp low temperature interface cases.
 #include <catch2/catch_all.hpp>
 
+#include "libslic3r/ClipperUtils.hpp"
+#include "libslic3r/Flow.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Support/TemperatureDropTower.hpp"
@@ -764,7 +766,7 @@ DynamicPrintConfig sublayer_temperature_config(bool low_temperature_interface, i
 
 } // namespace
 
-TEST_CASE("Interface sublayers print at their own temperature and the model at the filament temperature", "[LowTempInterface][Sublayer]")
+TEST_CASE("Interface sublayers print at their own temperature and the model at the filament temperature", "[LowTemperatureInterface][Sublayer]")
 {
     const bool low_temperature_interface = GENERATE(false, true);
     CAPTURE(low_temperature_interface);
@@ -781,3 +783,68 @@ TEST_CASE("Interface sublayers print at their own temperature and the model at t
         CHECK(temperature_c == 220);
 }
 
+
+// MAGPIE: line 1 (Beta 7) temperature drop tower tests for printers with several physical tools.
+TEST_CASE("Tower placement intersects only participating physical tool areas", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    // Rectangles spanning x = left..right mm and y = 0..200 mm.
+    auto rectangle = [](double left, double right) {
+        return Polygons{ Polygon{ Points{ Point::new_scale(left, 0.), Point::new_scale(right, 0.), Point::new_scale(right, 200.),
+                                          Point::new_scale(left, 200.) } } };
+    };
+    const Polygons              bed = rectangle(0., 200.);
+    const std::vector<Polygons> areas{ rectangle(0., 150.), rectangle(50., 200.) };
+    const double                mm2 = SCALING_FACTOR * SCALING_FACTOR; // scaled area to mm2
+    for (const auto &tools : { std::vector<size_t>{ 0, 1 }, std::vector<size_t>{ 1, 0 }, std::vector<size_t>{ 0, 1, 1 } }) {
+        const Polygons common = temperature_drop_tower_common_area(bed, areas, tools);
+        CHECK(area(common) * mm2 == Catch::Approx(20000.)); // 100 x 200 mm
+        CHECK(diff_ex(common, rectangle(50., 150.)).empty());
+    }
+    CHECK(temperature_drop_tower_common_area(bed, { rectangle(0., 80.), rectangle(120., 200.) }, { 0, 1 }).empty());
+    CHECK(area(temperature_drop_tower_common_area(bed, areas, { 0 })) * mm2 == Catch::Approx(30000.));
+    CHECK(area(temperature_drop_tower_common_area(bed, {}, { 0, 1 })) * mm2 == Catch::Approx(40000.));
+}
+
+TEST_CASE("Temperature drop tower automatic placement respects the mapped extruder area", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    TowerSettings settings; // automatic placement (tower_x, tower_y = -1)
+    const std::vector<std::vector<Vec2d>> extruder_areas{
+        settings.printable_area,
+        { Vec2d(24., 12.), Vec2d(176., 12.), Vec2d(176., 188.), Vec2d(24., 188.) } // mm
+    };
+    DynamicPrintConfig config = tower_config(settings);
+    config.set_num_extruders(2);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4, 0.4 }));
+    config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+    config.set_key_value("filament_map", new ConfigOptionInts({ 2 }));
+    config.set_key_value("extruder_printable_area", new ConfigOptionPointsGroups(extruder_areas));
+
+    const TowerMetrics metrics = analyze_tower(slice({ TestMesh::overhang }, config));
+    check_passes_on_distinct_layers(metrics);
+    CHECK(metrics.min_x > 24.0);
+    CHECK(metrics.min_y > 12.0);
+    CHECK(metrics.max_x < 176.0);
+    CHECK(metrics.max_y < 188.0);
+}
+
+TEST_CASE("Multi-nozzle tower fill preserves its fixed physical band", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    for (double maximum : { 0.4, 0.8, 1.2 })                    // largest nozzle, mm
+        for (double nozzle : { 0.15, 0.2, 0.4, 0.6, 0.8, 1.2 })  // mm
+            for (double height : { 0.04, 0.08, 0.12, 0.2, 0.28 }) { // mm
+                if (nozzle > maximum || height >= nozzle)
+                    continue;
+                CAPTURE(maximum, nozzle, height);
+                const double band = 4. * temperature_drop_tower_multi_pitch(maximum); // mm
+                const Flow   nominal(Flow::auto_extrusion_width(frPerimeter, float(nozzle)), float(height), float(nozzle));
+                const auto   fill = temperature_drop_tower_fill(nominal, band);
+                CHECK(fill.line_count >= 4);
+                CHECK(fill.flow.width() + (fill.line_count - 1) * double(fill.flow.spacing()) == Catch::Approx(band).margin(0.000002));
+                CHECK(fill.flow.mm3_per_mm() > 0.);
+                CHECK(fill.flow.width() > 0.9 * nozzle);
+                CHECK(fill.flow.width() < 1.5 * nozzle);
+            }
+    const Flow flow(0.45f, 0.2f, 0.4f);
+    CHECK_THROWS(temperature_drop_tower_fill(flow, 0.));
+    CHECK_THROWS(temperature_drop_tower_fill(flow, std::numeric_limits<double>::infinity()));
+}

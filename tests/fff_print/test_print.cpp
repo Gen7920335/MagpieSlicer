@@ -1840,3 +1840,67 @@ TEST_CASE("Height ranges and modifiers count for the filament shrinkage compensa
     });
     CHECK(mismatch_warning == ! object_on_filament_2);
 }
+
+// MAGPIE: line 1 (Beta 7). Half-height (H/2) walls need each role's nozzle to fit a half layer;
+// validation looks at the nozzle each role actually uses.
+TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle", "[Print][validate][HalfLayer]")
+{
+    const char *engine   = GENERATE("classic", "arachne");
+    const int   scenario = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+    auto config = multifilament_config(2, {
+        {"layer_height", 0.16}, {"initial_layer_print_height", 0.16},
+        {"wall_generator", engine}, {"wall_loops", 4},
+        {"outer_wall_filament_id", 1}, {"inner_wall_filament_id", 2},
+        {"sparse_infill_filament_id", 2}, {"internal_solid_filament_id", 2},
+        {"top_surface_filament_id", 2}, {"bottom_surface_filament_id", 2},
+        {"outer_wall_half_layer_height", true}, {"outer_wall_line_width", 0.15},
+        {"initial_layer_line_width", 0.}, {"line_width", 0.},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}, {"enable_prime_tower", false},
+        {"use_relative_e_distances", true}, {"layer_change_gcode", "G92 E0\n"},
+    });
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.15, 0.4}); // mm
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_key_value("max_layer_height", new ConfigOptionFloats{0.4, 0.4});   // mm
+    // Scenario 6 asks for full-height support under half-height outer walls; that combination is
+    // forced to half-height support, so it validates like scenario 5.
+    const bool should_pass = scenario == 0 || scenario == 5 || scenario == 6 || scenario == 8;
+    if (scenario == 1) config.set("outer_wall_half_layer_height", false);
+    if (scenario == 2) config.set("inner_wall_filament_id", 1);
+    if (scenario == 3) config.set("sparse_infill_filament_id", 1);
+    if (scenario == 4) config.set("initial_layer_print_height", 0.32);
+    if (scenario == 5 || scenario == 6) {
+        config.set("enable_support", true);
+        config.set("outer_wall_filament_id", 2);
+        config.set("outer_wall_line_width", 0.4);
+        config.set("support_filament", 1);
+        config.set("support_interface_filament", 1);
+        config.set("support_half_layer_height", scenario == 5);
+        config.set("support_line_width", 0.15);
+    }
+    if (scenario == 7 || scenario == 8) {
+        config.set("outer_wall_filament_id", 2);
+        config.set("use_smaller_nozzles_in_crisp_corners", true);
+        config.set("crisp_corner_detail_toolhead", 1);
+        config.set("crisp_corner_small_nozzle_wall_count", scenario == 7 ? 3 : 2);
+        config.set("crisp_corner_interlace_small_nozzle_walls", true);
+    }
+    if (scenario == 9) {
+        config.set("skirt_loops", 1);
+        config.set("skirt_height", 2);
+    }
+    if (scenario == 11) config.set("bridge_line_width", 0.2);
+    Model model;
+    Print print;
+    build_cubes(model, print, config, 1, false);
+    if (scenario == 10) {
+        model.objects.front()->layer_height_profile.set({0., 0.16, 10., 0.36, 20., 0.16});
+        print.apply(model, config);
+    }
+    if (scenario == 11) {
+        model.objects.front()->layer_height_profile.set({0., 0.16, 10., 0.24, 20., 0.16});
+        print.apply(model, config);
+    }
+    const auto error = print.validate();
+    CAPTURE(engine, scenario, error.string, error.opt_key);
+    CHECK(error.string.empty() == should_pass);
+}

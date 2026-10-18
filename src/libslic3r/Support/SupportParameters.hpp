@@ -113,8 +113,9 @@ struct SupportParameters {
         if (!this->can_merge_support_regions && (object_config.support_filament.value == 0 || object_config.support_interface_filament.value == 0)) {
             // One of the support extruders is of "don't care" type.
             auto object_extruders = object.object_extruders();
+            // MAGPIE (Magpie line 1): object_extruders() is 0-based, the support filament settings 1-based.
             if (object_extruders.size() == 1 &&
-                *object_extruders.begin() == std::max<unsigned int>(object_config.support_filament.value, object_config.support_interface_filament.value))
+                *object_extruders.begin() + 1 == std::max<unsigned int>(object_config.support_filament.value, object_config.support_interface_filament.value))
                 // Object is printed with the same extruder as the support.
                 this->can_merge_support_regions = true;
         }

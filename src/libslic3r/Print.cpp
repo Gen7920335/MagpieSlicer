@@ -1859,6 +1859,90 @@ StringObjectException Print::check_multi_filament_valid(const Print& print)
     return ret;
 }
 
+// MAGPIE (Magpie line 1): half-height (H/2) outer walls and support print their roles at half the
+// layer height, so each role is checked against the nozzle of the filament that prints it at the
+// height it actually prints at, instead of the full layer against the smallest nozzle. Skirt, brim
+// and tower are not split and keep the full height on every used nozzle. Heights and widths in mm.
+static StringObjectException validate_half_layer_nozzles(const PrintObject &object, double first_height_mm, double max_height_mm)
+{
+    const PrintObjectConfig &config = object.config();
+    const Print             &print  = *object.print();
+    const PrintConfig       &pc     = print.config();
+    std::set<int>            used_filaments; // 1-based
+    StringObjectException    error;
+    auto check = [&](int filament, const ConfigOptionFloatOrPercent &width, double height_mm, bool first, const char *width_key) {
+        if (!error.string.empty())
+            return;
+        filament = std::max(1, filament);
+        used_filaments.insert(filament);
+        const double nozzle_mm = nozzle_diameter_for_filament(pc, filament, print.is_BBL_printer());
+        if (height_mm > nozzle_mm + EPSILON) {
+            error = {L("Layer height cannot exceed nozzle diameter."), &object, first && !object.has_raft() ? "initial_layer_print_height" : "layer_height"};
+            return;
+        }
+        ConfigOptionFloatOrPercent role_width = width;
+        if (first && !object.has_raft() && pc.initial_layer_line_width.value > 0.)
+            role_width = pc.initial_layer_line_width;
+        if (role_width.value == 0.)
+            role_width = config.line_width;
+        const double width_mm = role_width.get_abs_value(nozzle_mm);
+        if (width_mm != 0. && width_mm <= height_mm)
+            error = {L("Line width too small"), &object, width_key};
+        else if (width_mm > nozzle_mm * MAX_LINE_WIDTH_MULTIPLIER)
+            error = {L("Line width too large"), &object, width_key};
+    };
+    const int outer_count = config.outer_wall_half_layer_height.value ? 2 : 1; // walls printed at half height
+    for (const bool first : { true, false }) {
+        const double full_mm  = first ? first_height_mm : max_height_mm;
+        const double outer_mm = config.outer_wall_half_layer_height.value ? 0.5 * full_mm : full_mm;
+        for (const PrintRegion &region : object.all_regions()) {
+            const PrintRegionConfig &rc = region.config();
+            const int outer = std::max(1, rc.outer_wall_filament_id.value);
+            const int inner = rc.inner_wall_filament_id.value > 0 ? rc.inner_wall_filament_id.value : outer;
+            if (rc.wall_loops.value > 0) {
+                check(outer, rc.outer_wall_line_width, outer_mm, first, "outer_wall_line_width");
+                if (rc.wall_loops.value > outer_count)
+                    check(inner, rc.inner_wall_line_width, full_mm, first, "inner_wall_line_width");
+                // Multi-nozzle detail walls: the detail toolhead prints the outer walls; walls beyond the
+                // half-height ones print at full height.
+                if (rc.use_smaller_nozzles_in_crisp_corners.value && rc.crisp_corner_detail_toolhead.value > 0)
+                    check(rc.crisp_corner_detail_toolhead.value, rc.outer_wall_line_width,
+                          rc.crisp_corner_small_nozzle_wall_count.value > outer_count ? full_mm : outer_mm, first, "outer_wall_line_width");
+            }
+            if (rc.sparse_infill_density.value > 0.)
+                check(rc.sparse_infill_filament_id.value, rc.sparse_infill_line_width, full_mm, first, "sparse_infill_line_width");
+            if (rc.sparse_infill_density.value > 0. || rc.top_shell_layers.value > 0 || rc.bottom_shell_layers.value > 0)
+                check(rc.internal_solid_filament_id.value, rc.internal_solid_infill_line_width, full_mm, first, "internal_solid_infill_line_width");
+            if (rc.top_shell_layers.value > 0)
+                check(rc.top_surface_filament_id.value, rc.top_surface_line_width, full_mm, first, "top_surface_line_width");
+            if (rc.bottom_shell_layers.value > 0)
+                check(rc.bottom_surface_filament_id.value, rc.internal_solid_infill_line_width, full_mm, first, "internal_solid_infill_line_width");
+        }
+        if (object.has_support() || object.has_raft()) {
+            const double support_mm = config.support_half_layer_height.value ? 0.5 * full_mm : full_mm;
+            for (const int filament : { config.support_filament.value, config.support_interface_filament.value }) {
+                std::vector<int> candidates;
+                if (filament > 0)
+                    candidates.push_back(filament);
+                else
+                    for (const unsigned int extruder : object.object_extruders())
+                        candidates.push_back(int(extruder) + 1);
+                for (const int candidate : candidates)
+                    check(candidate, config.support_line_width, support_mm, first, "support_line_width");
+            }
+        }
+    }
+    const bool skirt = pc.skirt_loops.value > 0 && (print.has_skirt() || print.has_infinite_skirt());
+    if (error.string.empty() && (skirt || object.has_brim() || print.has_wipe_tower())) {
+        const double auxiliary_mm = print.has_wipe_tower() || (skirt && (pc.skirt_height.value > 1 || print.has_infinite_skirt())) ?
+            std::max(first_height_mm, max_height_mm) : pc.initial_layer_print_height.value;
+        for (const int filament : used_filaments)
+            if (auxiliary_mm > nozzle_diameter_for_filament(pc, filament, print.is_BBL_printer()) + EPSILON)
+                return {L("Layer height cannot exceed nozzle diameter."), &object, "layer_height"};
+    }
+    return error;
+}
+
 // Precondition: Print::validate() requires the Print::apply() to be called its invocation.
 //BBS: refine seq-print validation logic
 // The exception's own message is just "Errors"; the detail is in the per-object errors,
@@ -2608,6 +2692,19 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                 }
             }
 
+            // MAGPIE: H/2 objects are checked per role (validate_half_layer_nozzles) instead of below.
+            const bool half_layer_object = object->config().outer_wall_half_layer_height.value || object->config().support_half_layer_height.value;
+            // Tallest layer of the object (variable layer height included), mm.
+            double max_height_mm = object->config().layer_height.value;
+            if (half_layer_object) {
+                const std::vector<coordf_t> &profile = layer_height_profile(size_t(std::find(m_objects.begin(), m_objects.end(), object) - m_objects.begin()));
+                for (size_t k = 1; k < profile.size(); k += 2)
+                    max_height_mm = std::max(max_height_mm, double(profile[k]));
+                if (StringObjectException error = validate_half_layer_nozzles(*object, m_config.initial_layer_print_height.value, max_height_mm);
+                    !error.string.empty())
+                    return error;
+            }
+
             double initial_layer_print_height = m_config.initial_layer_print_height.value;
             double first_layer_min_nozzle_diameter;
             if (object->has_raft()) {
@@ -2622,25 +2719,25 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                 // if we don't have raft layers, any nozzle diameter is potentially used in first layer
                 first_layer_min_nozzle_diameter = min_nozzle_diameter;
             }
-            if (initial_layer_print_height > first_layer_min_nozzle_diameter)
+            if (!half_layer_object && initial_layer_print_height > first_layer_min_nozzle_diameter)
                 return {L("Layer height cannot exceed nozzle diameter."), object, "initial_layer_print_height"};
 
             // validate layer_height
             double layer_height = object->config().layer_height.value;
-            if (layer_height > min_nozzle_diameter)
+            if (!half_layer_object && layer_height > min_nozzle_diameter)
                 return {L("Layer height cannot exceed nozzle diameter."), object, "layer_height"};
 
             // Validate extrusion widths.
             std::string err_msg;
-            if (!validate_extrusion_width(object->config(), "line_width", layer_height, err_msg))
+            if (!half_layer_object && !validate_extrusion_width(object->config(), "line_width", layer_height, err_msg))
             	return {err_msg, object, "line_width"};
             if (object->has_support() || object->has_raft()) {
-                if (!validate_extrusion_width(object->config(), "support_line_width", layer_height, err_msg))
+                if (!half_layer_object && !validate_extrusion_width(object->config(), "support_line_width", layer_height, err_msg))
                     return {err_msg, object, "support_line_width"};
             }
             for (const char *opt_key : { "inner_wall_line_width", "outer_wall_line_width", "sparse_infill_line_width", "internal_solid_infill_line_width", "top_surface_line_width","skin_infill_line_width" ,"skeleton_infill_line_width"})
 				for (const PrintRegion &region : object->all_regions())
-                    if (!validate_extrusion_width(region.config(), opt_key, layer_height, err_msg))
+                    if (!half_layer_object && !validate_extrusion_width(region.config(), opt_key, layer_height, err_msg))
 		            	return  {err_msg, object, opt_key};
 
             const bool allow_thin_bridge_width = object->config().thick_bridges && object->config().thick_internal_bridges;
@@ -2655,7 +2752,8 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                         err_msg = L("Bridge line width must not exceed nozzle diameter");
                         return { err_msg, object, "bridge_line_width" };
                     }
-                    if (!allow_thin_bridge_width && bridge_width <= layer_height) {
+                    // MAGPIE: an H/2 object is checked against its tallest layer.
+                    if (!allow_thin_bridge_width && bridge_width <= (half_layer_object ? max_height_mm : layer_height)) {
                         err_msg = L("Line width too small");
                         return { err_msg, object, "bridge_line_width" };
                     }

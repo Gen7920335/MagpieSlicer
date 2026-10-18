@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cctype>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -481,4 +482,116 @@ TEST_CASE("Loaded STL geometry preserves mixed-nozzle wall routing",
         const std::string output = slice({ probe }, config);
         CHECK(tools_for_role(output, "perimeter") == std::set<int>{ 0, 1 });
     }
+}
+
+// MAGPIE: line 1 (Beta 7) routing safety, on the detail tool chooser itself. Filament n is on
+// toolhead n; nozzle sizes 0.6, 0.4, 0.2 and 0.15 mm.
+namespace {
+PrintConfig four_nozzle_print_config(const std::vector<std::string> &colours, const std::vector<std::string> &types)
+{
+    DynamicPrintConfig config = multifilament_config(4);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.6, 0.4, 0.2, 0.15 });
+    config.set_key_value("filament_colour", new ConfigOptionStrings(colours));
+    config.set_key_value("filament_type", new ConfigOptionStrings(types));
+    config.set_key_value("filament_soluble", new ConfigOptionBools{ false, false, false, false });
+    PrintConfig print_config;
+    print_config.apply(config, true);
+    return print_config;
+}
+PrintRegionConfig detail_region_config(int detail_toolhead)
+{
+    PrintRegionConfig region;
+    region.use_smaller_nozzles_in_crisp_corners.value = true;
+    region.crisp_corner_detail_toolhead.value         = detail_toolhead;
+    return region;
+}
+} // namespace
+
+TEST_CASE("Automatic detail walls do not substitute a different material", "[MultiNozzleWalls]")
+{
+    using ModHost::MultiNozzleWalls::detail_tool;
+    // Same colour everywhere; filament 1 prints the walls on the 0.6 mm nozzle.
+    PrintConfig config = four_nozzle_print_config({ "#FF0000", "#FF0000", "#FF0000", "#FF0000" }, { "PLA", "PETG", "PVA", "PLA" });
+    // 0.15 mm (filament 4) is the same material: chosen.
+    CHECK(detail_tool(config, detail_region_config(0), 1).filament_1based == 4);
+    config.filament_type.values[3] = "PETG";
+    // Filament 4 is now PETG and 3 is PVA: neither is PLA, so no detail nozzle is chosen automatically.
+    CHECK(detail_tool(config, detail_region_config(0), 1).filament_1based == 1);
+    // A chosen crisp-corner toolhead stays available for intentional combinations.
+    CHECK(detail_tool(config, detail_region_config(4), 1).filament_1based == 4);
+    config.filament_type.values[2] = "PLA";
+    config.filament_soluble.values[2] = true;
+    // A soluble filament is not a stand-in for the wall filament even with the same type name.
+    CHECK(detail_tool(config, detail_region_config(0), 1).filament_1based == 1);
+}
+
+TEST_CASE("Detail routing applies colour priority then the chosen toolhead", "[MultiNozzleWalls]")
+{
+    using ModHost::MultiNozzleWalls::detail_tool;
+    SECTION("a smaller nozzle with the wall colour wins over the chosen toolhead") {
+        const PrintConfig config = four_nozzle_print_config({ "#0000FF", "#FF0000", "#00FF00", "#0000FF" }, { "PLA", "PLA", "PLA", "PLA" });
+        CHECK(detail_tool(config, detail_region_config(2), 1).filament_1based == 4);
+    }
+    SECTION("the chosen toolhead is used when no smaller nozzle has the wall colour") {
+        const PrintConfig config = four_nozzle_print_config({ "#0000FF", "#FF0000", "#00FF00", "#FFFF00" }, { "PLA", "PLA", "PLA", "PLA" });
+        CHECK(detail_tool(config, detail_region_config(2), 1).filament_1based == 2);
+    }
+}
+
+// MAGPIE: line 1 (Beta 7). In a by-object print, the detail nozzle of one object must be registered as
+// a tool even though the other object never uses it.
+TEST_CASE("Sequential detail walls register tools from every object", "[MultiNozzleWalls]")
+{
+    const char  *wall_generator = GENERATE("classic", "arachne");
+    const size_t detail_object  = GENERATE(size_t(0), size_t(1));
+    CAPTURE(wall_generator, detail_object);
+    DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, wall_generator, true);
+    config.set_deserialize_strict({ { "print_sequence", "by object" }, { "use_smaller_nozzles_in_crisp_corners", false }, { "gcode_comments", true } });
+    Print print;
+    Model model;
+    init_print({ cube(6), cube(6) }, print, model, config);
+    model.objects[detail_object]->config.set_key_value("use_smaller_nozzles_in_crisp_corners", new ConfigOptionBool(true));
+    print.apply(model, config);
+    REQUIRE_NOTHROW(print.process());
+    const std::string output = Slic3r::Test::gcode(print);
+    CHECK(tools_for_role(output, "perimeter") == std::set<int>{ 0, 1 });
+    CHECK(tools_for_role(output, "infill") == std::set<int>{ 0 });
+}
+
+// MAGPIE: line 1 (Beta 7). Changing the detail nozzle's diameter reslices the same Print to what a
+// fresh Print gives.
+TEST_CASE("Nozzle edits reslice the same Print like a fresh Print", "[MultiNozzleWalls]")
+{
+    const bool half_height = GENERATE(false, true);
+    CAPTURE(half_height);
+    DynamicPrintConfig config = two_nozzle_config(0.4, 0.4, 1, "arachne", true);
+    config.set_deserialize_strict({ { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 },
+                                    { "crisp_corner_detail_toolhead", 2 }, { "outer_wall_half_layer_height", half_height } });
+    Print print;
+    Model model;
+    init_print({ cube(8) }, print, model, config);
+    print.process();
+    // Edit the config the Print was set up with (init_print adds its own test settings).
+    config = print.full_print_config();
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.4, 0.15 }); // mm
+    print.apply(model, config);
+    REQUIRE_FALSE(print.objects().front()->is_step_done(posPerimeters));
+    print.process();
+    // Moves only: comments carry times and other run-dependent text.
+    auto moves = [](const std::string &gcode) {
+        std::string out;
+        std::istringstream in(gcode);
+        for (std::string line; std::getline(in, line);)
+            if (! line.empty() && line[0] != ';')
+                out += line + '\n';
+        return out;
+    };
+    const std::string edited = moves(Slic3r::Test::gcode(print));
+
+    Print fresh;
+    fresh.apply(model, config);
+    fresh.process();
+    const std::string expected = moves(Slic3r::Test::gcode(fresh));
+    CHECK(edited.size() == expected.size());
+    CHECK(edited == expected);
 }

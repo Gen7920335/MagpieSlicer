@@ -703,3 +703,27 @@ TEST_CASE("Support wall loops add walls to normal and tree support", "[SupportMa
         CHECK(three > 1.2 * one);
     }
 }
+
+// MAGPIE: line 1 (Beta 7). Whether support base and interface may merge compares the object's filament
+// with the support filaments in one index domain.
+TEST_CASE("Support merge eligibility compares material IDs in the same domain", "[SupportMaterial][SupportMapping]")
+{
+    const int  model_material    = GENERATE(1, 2);
+    const int  explicit_material = GENERATE(1, 2);
+    const bool interface_is_auto = GENERATE(false, true);
+    CAPTURE(model_material, explicit_material, interface_is_auto);
+    auto config = Slic3r::Test::multifilament_config(2);
+    for (const char *key : {"outer_wall_filament_id", "inner_wall_filament_id", "sparse_infill_filament_id",
+                            "internal_solid_filament_id", "top_surface_filament_id", "bottom_surface_filament_id"})
+        config.set_key_value(key, new ConfigOptionInt(model_material));
+    config.set_key_value("support_filament", new ConfigOptionInt(interface_is_auto ? explicit_material : 0));
+    config.set_key_value("support_interface_filament", new ConfigOptionInt(interface_is_auto ? 0 : explicit_material));
+    Print print;
+    Model model;
+    const std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{{{"extruder", model_material}}};
+    Slic3r::Test::init_print(std::vector<TriangleMesh>{make_cube(10., 10., 10.)}, print, model, config, &overrides);
+    const auto &object = *print.objects().front();
+    REQUIRE(object.object_extruders() == std::vector<unsigned>{unsigned(model_material - 1)});
+    const SupportParameters parameters(object);
+    CHECK(parameters.can_merge_support_regions == (model_material == explicit_material));
+}
