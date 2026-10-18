@@ -3935,14 +3935,30 @@ void organic_draw_branches(
     mesh_slicing_params.mode = MeshSlicingParams::SlicingMode::Positive;
 
     MAGPIE_STAGE_PHASE(phase, "fn.tree3d_p2_tubes");
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, trees.size(), 1),
-        [&trees, &volumes, &config, &slicing_params, &move_bounds, &mesh_slicing_params, &interface_placer, &throw_on_cancel](const tbb::blocked_range<size_t> &range) {
+    // MAGPIE: each branch is meshed and sliced as its own task, then the branches are merged into
+    // their trees in branch order. One task per tree ran a print with one large tree on a single
+    // thread; merging in the original order keeps roof recovery and polygon order as before.
+    struct BranchSlices {
+        bool                  valid { false };
+        LayerIndex            layer_begin { 0 };
+        std::vector<Polygons> slices;
+        std::vector<Polygons> bottom_contacts;
+    };
+    // (tree index, branch index), sorted by tree.
+    std::vector<std::pair<size_t, size_t>> branch_ids;
+    for (size_t tree_id = 0; tree_id < trees.size(); ++ tree_id)
+        for (size_t branch_id = 0; branch_id < trees[tree_id].branches.size(); ++ branch_id)
+            branch_ids.emplace_back(tree_id, branch_id);
+    std::vector<BranchSlices> branch_slices(branch_ids.size());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, branch_ids.size(), 1),
+        [&trees, &volumes, &config, &slicing_params, &move_bounds, &mesh_slicing_params, &branch_ids, &branch_slices, &throw_on_cancel](const tbb::blocked_range<size_t> &range) {
             indexed_triangle_set    partial_mesh;
             std::vector<float>      slice_z;
-            std::vector<Polygons>   bottom_contacts;
-            for (size_t tree_id = range.begin(); tree_id < range.end(); ++ tree_id) {
-                Tree &tree = trees[tree_id];
-                for (const Branch &branch : tree.branches) {
+            for (size_t flat_id = range.begin(); flat_id < range.end(); ++ flat_id) {
+                {
+                    const Branch          &branch          = trees[branch_ids[flat_id].first].branches[branch_ids[flat_id].second];
+                    BranchSlices          &out             = branch_slices[flat_id];
+                    std::vector<Polygons> &bottom_contacts = out.bottom_contacts;
                     // Triangulate the tube.
                     partial_mesh.clear();
                     std::pair<float, float> zspan = extrude_branch(branch.path, config, slicing_params, move_bounds, branch.has_root, partial_mesh);
@@ -3969,7 +3985,6 @@ void organic_draw_branches(
                     if (slices.empty())
                         continue;
 
-                    bottom_contacts.clear();
                     // ORCA: trim tiny fragments to reduce degenerate polygon booleans.
                     const double tiny_area = tiny_area_threshold();
                     //FIXME parallelize?
@@ -4153,6 +4168,28 @@ void organic_draw_branches(
 
                     }
                     // ORCA: bottom contacts provide the footprint; interface layers are built later.
+
+                    out.valid       = true;
+                    out.layer_begin = layer_begin;
+                    out.slices      = std::move(slices);
+                }
+            }
+        });
+
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, trees.size(), 1),
+        [&trees, &interface_placer, &branch_ids, &branch_slices](const tbb::blocked_range<size_t> &range) {
+            for (size_t tree_id = range.begin(); tree_id < range.end(); ++ tree_id) {
+                Tree &tree = trees[tree_id];
+                for (size_t flat_id = std::lower_bound(branch_ids.begin(), branch_ids.end(), std::make_pair(tree_id, size_t(0))) - branch_ids.begin();
+                     flat_id < branch_ids.size() && branch_ids[flat_id].first == tree_id; ++ flat_id) {
+                    BranchSlices &branch_result = branch_slices[flat_id];
+                    if (! branch_result.valid)
+                        continue;
+                    const Branch          &branch          = tree.branches[branch_ids[flat_id].second];
+                    LayerIndex             layer_begin     = branch_result.layer_begin;
+                    LayerIndex             layer_end;
+                    std::vector<Polygons> &slices          = branch_result.slices;
+                    std::vector<Polygons> &bottom_contacts = branch_result.bottom_contacts;
 
                     recover_pending_branch_roofs(interface_placer, branch.path, layer_begin, slices);
 
