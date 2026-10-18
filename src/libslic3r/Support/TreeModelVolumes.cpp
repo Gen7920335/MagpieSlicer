@@ -471,6 +471,7 @@ void TreeModelVolumes::calculateCollision(const std::vector<RadiusLayerPair> &ke
             const LayerIndex radius        = keys[ikey].first;
             const size_t     max_layer_idx = keys[ikey].second;
             // recursive call to parallel_for.
+            MAGPIE_STAGE_TIMER("fn.tree3d_collision_radius");
             calculateCollision(radius, max_layer_idx, throw_on_cancel);
         }
     });
@@ -723,6 +724,7 @@ void TreeModelVolumes::calculateAvoidance(const std::vector<RadiusLayerPair> &ke
         [this, &avoidance_tasks, &throw_on_cancel](const tbb::blocked_range<size_t> &range) {
         for (size_t task_idx = range.begin(); task_idx < range.end(); ++ task_idx) {
             const AvoidanceTask &task = avoidance_tasks[task_idx];
+            MAGPIE_STAGE_TIMER("fn.tree3d_avoidance_task");
             assert(! task.holefree() || task.radius < m_increase_until_radius + m_current_min_xy_dist_delta);
             if (task.to_model)
                 // ensuring Placeableareas are calculated
