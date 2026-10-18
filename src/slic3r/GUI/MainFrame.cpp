@@ -3055,6 +3055,10 @@ void MainFrame::init_menubar_as_editor()
         append_menu_item(import_menu, wxID_ANY, _L("Import Configs") + dots /*+ "\t" + ctrl + "I"*/, _L("Load configs"),
             [this](wxCommandEvent&) { load_config_file(); }, "menu_import", nullptr,
             [](){return true; }, this);
+        append_menu_item(import_menu, wxID_ANY, _L("Import OrcaSlicer User Presets") + dots,
+            _L("Import user presets without overwriting local presets"),
+            [this](wxCommandEvent&) { import_orcaslicer_user_presets(); }, "menu_import", nullptr,
+            [this](){return true; }, this);
 
         append_submenu(fileMenu, import_menu, wxID_ANY, _L("Import"), "");
 
@@ -3964,6 +3968,30 @@ void MainFrame::export_config()
         } catch (const std::exception &ex) {
             show_error(this, ex.what());
         }
+    }
+}
+
+void MainFrame::import_orcaslicer_user_presets()
+{
+    const boost::filesystem::path default_source = boost::filesystem::path(data_dir()).parent_path() / "OrcaSlicer";
+    wxDirDialog dialog(this, _L("Select OrcaSlicer data directory"), from_path(default_source),
+                       wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
+    if (dialog.ShowModal() != wxID_OK)
+        return;
+
+    const boost::filesystem::path source = into_path(dialog.GetPath());
+    if (!boost::filesystem::is_directory(source / PRESET_USER_DIR)) {
+        show_error(this, _L("The selected directory does not contain an OrcaSlicer user preset directory."));
+        return;
+    }
+    try {
+        const auto result = wxGetApp().preset_bundle->import_user_presets_from(source.string());
+        const wxString message = format_wxstr(
+            _L("Imported %1% user preset files.\nSkipped %2% existing files.\nFailed to copy %3% files.\nRestart the slicer to load imported presets."),
+            result.copied, result.skipped, result.failed);
+        MessageDialog(this, message, _L("OrcaSlicer User Presets"), wxOK | wxICON_INFORMATION).ShowModal();
+    } catch (const std::exception &error) {
+        show_error(this, error.what());
     }
 }
 

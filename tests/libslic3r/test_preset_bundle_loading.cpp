@@ -8399,3 +8399,40 @@ TEST_CASE("An empty choice list in a G-code's settings keeps the value it had be
     CHECK(config.opt_serialize("nozzle_volume_type") == "High Flow");
     CHECK(config.option<ConfigOptionStrings>("filament_multi_colour")->values.empty());
 }
+
+// MAGPIE: carry user presets over from a stock OrcaSlicer data directory.
+TEST_CASE("Importing OrcaSlicer user presets copies new files and keeps local ones", "[PresetBundle]")
+{
+    ScopedPresetDataDir local;
+    ScopedTemporaryDir  orca{"orca-user-preset-source"};
+
+    const auto write = [](const fs::path &path, const std::string &text) {
+        fs::create_directories(path.parent_path());
+        boost::nowide::ofstream(path.string()) << text;
+    };
+    const auto read = [](const fs::path &path) {
+        boost::nowide::ifstream in(path.string());
+        return std::string(std::istreambuf_iterator<char>(in), {});
+    };
+
+    const fs::path orca_user  = orca.path() / PRESET_USER_DIR / DEFAULT_USER_FOLDER_NAME;
+    const fs::path local_user = local.tmp.path() / PRESET_USER_DIR / DEFAULT_USER_FOLDER_NAME;
+    write(orca_user / PRESET_PRINT_NAME / "new.json", "orca new");
+    write(orca_user / PRESET_FILAMENT_NAME / "shared.json", "orca shared");
+    write(local_user / PRESET_FILAMENT_NAME / "shared.json", "local shared");
+
+    PresetBundle bundle;
+    const auto   first = bundle.import_user_presets_from(orca.path().string());
+    CHECK(first.copied == 1);
+    CHECK(first.skipped == 1);
+    CHECK(first.failed == 0);
+    CHECK(read(local_user / PRESET_PRINT_NAME / "new.json") == "orca new");
+    CHECK(read(local_user / PRESET_FILAMENT_NAME / "shared.json") == "local shared");
+
+    // Running it again changes nothing: every file now exists locally.
+    const auto second = bundle.import_user_presets_from(orca.path().string());
+    CHECK(second.copied == 0);
+    CHECK(second.skipped == 2);
+
+    CHECK_THROWS_AS(bundle.import_user_presets_from((orca.path() / "missing").string()), RuntimeError);
+}

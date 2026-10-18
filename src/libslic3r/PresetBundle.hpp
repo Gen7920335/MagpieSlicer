@@ -262,6 +262,17 @@ public:
     void            setup_directories();
     void            copy_files(const std::string& from);
 
+    struct UserPresetImportResult {
+        size_t copied  { 0 };
+        size_t skipped { 0 };
+        size_t failed  { 0 };
+    };
+
+    // Magpie: copies the user presets of another slicer's data directory (stock OrcaSlicer)
+    // into this data directory. Local files always win, so it is safe to run again.
+    // Throws RuntimeError when source_data_dir has no "user" directory.
+    UserPresetImportResult import_user_presets_from(const std::string &source_data_dir);
+
     struct PresetPreferences {
         std::string printer_model_id;// name of a preferred printer model
         std::string printer_variant; // name of a preferred printer variant

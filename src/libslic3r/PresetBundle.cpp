@@ -861,6 +861,48 @@ static void copy_dir(const boost::filesystem::path& from_dir, const boost::files
     }
 }
 
+static void copy_user_presets_without_overwrite(const boost::filesystem::path        &source,
+                                                const boost::filesystem::path        &destination,
+                                                PresetBundle::UserPresetImportResult &result)
+{
+    namespace fs = boost::filesystem;
+    if (!fs::exists(destination))
+        fs::create_directories(destination);
+
+    for (fs::directory_iterator it(source), end; it != end; ++it) {
+        const fs::path target = destination / it->path().filename();
+        try {
+            if (fs::is_symlink(it->path())) {
+                ++result.skipped;
+            } else if (fs::is_directory(it->path())) {
+                copy_user_presets_without_overwrite(it->path(), target, result);
+            } else if (fs::is_regular_file(it->path())) {
+                if (fs::exists(target)) {
+                    ++result.skipped;
+                } else {
+                    fs::copy_file(it->path(), target);
+                    ++result.copied;
+                }
+            }
+        } catch (const fs::filesystem_error &error) {
+            ++result.failed;
+            BOOST_LOG_TRIVIAL(error) << "Failed to import user preset: " << error.what();
+        }
+    }
+}
+
+PresetBundle::UserPresetImportResult PresetBundle::import_user_presets_from(const std::string &source_data_dir)
+{
+    namespace fs = boost::filesystem;
+    const fs::path source = fs::path(source_data_dir) / PRESET_USER_DIR;
+    if (!fs::is_directory(source))
+        throw RuntimeError("The selected directory does not contain an OrcaSlicer user preset directory.");
+
+    UserPresetImportResult result;
+    copy_user_presets_without_overwrite(source, fs::path(Slic3r::data_dir()) / PRESET_USER_DIR, result);
+    return result;
+}
+
 void PresetBundle::copy_files(const std::string& from)
 {
     boost::filesystem::path data_dir = boost::filesystem::path(Slic3r::data_dir());

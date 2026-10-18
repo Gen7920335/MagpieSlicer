@@ -3403,6 +3403,36 @@ bool GUI_App::on_init_inner()
     // supplied as argument to --datadir; in that case we should still run the wizard
     preset_bundle->setup_directories();
 
+    // Magpie: the data directory is separate from stock OrcaSlicer's, so carry its user
+    // presets over once. Existing files always win, so a failed run is retried next start.
+    if (is_editor() && std::string(SLIC3R_APP_KEY) != "OrcaSlicer" &&
+        app_config->get("orcaslicer_user_presets_import_version") != "1") {
+        namespace fs = boost::filesystem;
+        const fs::path current_data_dir = fs::path(data_dir());
+        const fs::path source_candidates[] {
+            current_data_dir.parent_path() / "OrcaSlicer",
+            fs::path(wxStandardPaths::Get().GetUserConfigDir().ToUTF8().data()) / "OrcaSlicer",
+        };
+        for (const fs::path &source_data_dir : source_candidates) {
+            boost::system::error_code ec;
+            if (fs::equivalent(source_data_dir, current_data_dir, ec) || !fs::is_directory(source_data_dir / PRESET_USER_DIR))
+                continue;
+            try {
+                const auto result = preset_bundle->import_user_presets_from(source_data_dir.string());
+                BOOST_LOG_TRIVIAL(info) << "Automatic OrcaSlicer user preset import from " << source_data_dir
+                                        << ": copied=" << result.copied << ", skipped=" << result.skipped
+                                        << ", failed=" << result.failed;
+                if (result.failed == 0) {
+                    app_config->set("orcaslicer_user_presets_import_version", "1");
+                    app_config->save();
+                }
+            } catch (const std::exception &error) {
+                BOOST_LOG_TRIVIAL(error) << "Automatic OrcaSlicer user preset import failed: " << error.what();
+            }
+            break;
+        }
+    }
+
 
     if (m_init_app_config_from_older)
         copy_older_config();
