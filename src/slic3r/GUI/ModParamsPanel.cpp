@@ -1,5 +1,6 @@
 #include "ModParamsPanel.hpp"
 
+#include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "I18N.hpp"
 #include "libslic3r/PrintConfig.hpp"
@@ -69,7 +70,8 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
             if (p.scope != m_scope)
                 continue;
             const std::string key   = mod.id + "." + p.name;
-            const wxString    label = wxString::FromUTF8(p.label.empty() ? key : p.label);
+            const std::string language = into_u8(wxGetApp().current_language_code_safe());
+            const wxString    label = wxString::FromUTF8(ModHost::localized_text(p.labels, language, p.label.empty() ? key : p.label));
             auto *text = new wxStaticText(this, wxID_ANY, label);
             text->SetToolTip(wxString::FromUTF8(key + "  (" + (mod.name.empty() ? mod.id : mod.name) + " " + mod.version + ")"));
             grid->Add(text, 0, wxALIGN_CENTER_VERTICAL);

@@ -5,14 +5,14 @@
     // With selective merge the reachable part of an island goes to normal support and the rest to
     // tree support. Orca's support settings apply to both kinds of support.
     "id": "mixed_support",
-    "name": "Mixed support",
+    "name": "Mixed support", "name_ko": "혼합 서포트",
     "version": "1.0.0",
     "params": {
-        "enable":             { "type": "bool",   "default": false,     "label": "Use mixed support" },
-        "normal_generator":   { "type": "string", "default": "orca",    "label": "Normal support generator (orca or cura)" },
-        "tree_style":         { "type": "string", "default": "organic", "label": "Tree style (organic, tree_slim, tree_strong or tree_hybrid)" },
-        "coverage_threshold": { "type": "float",  "default": 100,       "unit": "%", "label": "Normal support coverage threshold" },
-        "selective_merge":    { "type": "bool",   "default": false,     "label": "Selective merge" }
+        "enable":             { "type": "bool",   "default": false,     "label": "Use mixed support", "label_ko": "혼합 서포트 사용" },
+        "normal_generator":   { "type": "string", "default": "orca",    "label": "Normal support generator (orca or cura)", "label_ko": "일반 서포트 생성기 (orca 또는 cura)" },
+        "tree_style":         { "type": "string", "default": "organic", "label": "Tree style (organic, tree_slim, tree_strong or tree_hybrid)", "label_ko": "트리 스타일 (organic, tree_slim, tree_strong 또는 tree_hybrid)" },
+        "coverage_threshold": { "type": "float",  "default": 100,       "unit": "%", "label": "Normal support coverage threshold", "label_ko": "일반 서포트 커버 퍼센테이지 역치" },
+        "selective_merge":    { "type": "bool",   "default": false,     "label": "Selective merge", "label_ko": "셀렉티브 머지" }
     },
     "rules": [
         // Priority 2 puts this rule above cura_support (0) and resin_support (1): with mixed support

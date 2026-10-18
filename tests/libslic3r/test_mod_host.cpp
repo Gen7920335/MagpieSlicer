@@ -340,3 +340,18 @@ TEST_CASE("A registered support generator replaces one of the same name", "[ModH
         listed |= s->name == "test_gen";
     CHECK(listed);
 }
+
+TEST_CASE("Mod names and parameter labels carry their own translations", "[ModHost]")
+{
+    const ModHost::Mod mod = ModHost::ModSet::parse_mod(R"({
+        "id": "demo", "name": "Demo", "name_ko": "데모", "version": "1.0.0",
+        "params": { "speed": { "type": "float", "default": 1, "label": "Speed", "label_ko": "속도", "label_pt_BR": "Velocidade" } }
+    })");
+    REQUIRE(mod.params.size() == 1);
+    const ModHost::ModParam &param = mod.params.front();
+    CHECK(ModHost::localized_text(param.labels, "ko_KR", param.label) == "속도"); // language part of a locale
+    CHECK(ModHost::localized_text(param.labels, "ko", param.label) == "속도");
+    CHECK(ModHost::localized_text(param.labels, "pt_BR", param.label) == "Velocidade"); // exact locale
+    CHECK(ModHost::localized_text(param.labels, "de_DE", param.label) == "Speed");    // no translation: the label
+    CHECK(ModHost::localized_text(mod.names, "ko_KR", mod.name) == "데모");
+}

@@ -255,6 +255,27 @@ std::shared_ptr<const ModSet> g_active;
 
 } // namespace
 
+// "<prefix><language>": "<text>" entries of a JSON object, by language.
+static std::map<std::string, std::string> translations(const nlohmann::json &j, const std::string &prefix)
+{
+    std::map<std::string, std::string> out;
+    for (auto &[key, value] : j.items())
+        if (key.size() > prefix.size() && key.compare(0, prefix.size(), prefix) == 0 && value.is_string())
+            out[key.substr(prefix.size())] = value.get<std::string>();
+    return out;
+}
+
+const std::string &localized_text(const std::map<std::string, std::string> &translations, const std::string &language,
+                                  const std::string &fallback)
+{
+    if (auto it = translations.find(language); it != translations.end())
+        return it->second;
+    if (language.size() > 2)
+        if (auto it = translations.find(language.substr(0, 2)); it != translations.end())
+            return it->second;
+    return fallback;
+}
+
 Mod ModSet::parse_mod(const std::string &json_text)
 {
     json j;
@@ -271,6 +292,7 @@ Mod ModSet::parse_mod(const std::string &json_text)
     if (!is_identifier(mod.id))
         mod_fail(mod.id, "id must use only a-z, 0-9 and _ and not start with a digit");
     mod.name    = optional_string(j, "name");
+    mod.names   = translations(j, "name_");
     mod.version = required_string(j, "version", mod.id);
 
     if (auto it = j.find("params"); it != j.end()) {
@@ -293,6 +315,7 @@ Mod ModSet::parse_mod(const std::string &json_text)
             if (p.scope != "process" && p.scope != "printer" && p.scope != "filament")
                 throw ModError(where + ": scope must be process, printer or filament");
             p.label         = optional_string(def, "label");
+            p.labels        = translations(def, "label_");
             p.unit          = optional_string(def, "unit");
             p.page          = optional_string(def, "page");
             if (auto inv = def.find("invalidates"); inv != def.end()) {

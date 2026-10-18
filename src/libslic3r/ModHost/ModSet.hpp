@@ -25,6 +25,11 @@ public:
 };
 
 // A variable a mod adds, addressed in expressions as "<mod id>.<name>".
+// The text for `language` (a locale such as "ko_KR"): its exact entry, else its first two letters,
+// else `fallback`. Mods translate their own names and labels this way, since gettext only sees the app.
+const std::string &localized_text(const std::map<std::string, std::string> &translations, const std::string &language,
+                                  const std::string &fallback);
+
 struct ModParam
 {
     std::string              name;
@@ -34,6 +39,8 @@ struct ModParam
     std::string              scope = "process";
     ExprValue                default_value;
     std::string              label;
+    // Translations of the label: "label_<language>" keys, by language ("ko", "pt_BR", ...).
+    std::map<std::string, std::string> labels;
     std::string              unit;
     std::string              page;
     std::vector<std::string> invalidates; // slicing steps to redo when the value changes
@@ -55,6 +62,8 @@ struct Mod
 {
     std::string           id;
     std::string           name;
+    // Translations of the name: "name_<language>" keys.
+    std::map<std::string, std::string> names;
     std::string           version;
     std::vector<ModParam> params;
     std::vector<ModRule>  rules;

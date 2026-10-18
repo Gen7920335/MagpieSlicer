@@ -4,11 +4,11 @@
     // Half-height outer walls always bring half-height support with them (PrintObject owns that rule).
     // The defaults change nothing.
     "id": "half_layer",
-    "name": "Half-height outer walls and support",
+    "name": "Half-height outer walls and support", "name_ko": "절반 높이 외벽과 서포트",
     "version": "1.0.0",
     "params": {
-        "outer_walls": { "type": "bool", "default": false, "label": "Half-height outer walls" },
-        "support":     { "type": "bool", "default": false, "label": "Half-height support" }
+        "outer_walls": { "type": "bool", "default": false, "label": "Half-height outer walls", "label_ko": "절반 높이 외벽" },
+        "support":     { "type": "bool", "default": false, "label": "Half-height support", "label_ko": "절반 높이 서포트" }
     },
     "rules": [
         { "target": "outer_wall_half_layer_height", "value": "half_layer.outer_walls" },

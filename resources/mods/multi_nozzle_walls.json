@@ -4,16 +4,16 @@
     // material and colour; the rest of the walls stay on the island's own nozzle. Also prints chosen
     // layer ranges' walls with one toolhead (large nozzle override).
     "id": "multi_nozzle_walls",
-    "name": "Multi-nozzle walls",
+    "name": "Multi-nozzle walls", "name_ko": "다중 노즐 벽",
     "version": "1.0.0",
     "params": {
-        "enable":            { "type": "bool",   "default": false, "label": "Use smaller nozzles in crisp corners" },
-        "small_wall_count":  { "type": "int",    "default": 1,     "label": "Small nozzle wall count" },
-        "wall_overlap":      { "type": "float",  "default": 15,    "unit": "%",    "label": "Small/large nozzle wall overlap" },
-        "interlock":         { "type": "bool",   "default": false, "label": "Multi-nozzle interlocking layers" },
-        "detail_toolhead":   { "type": "int",    "default": 0,     "label": "Crisp corner toolhead (0 = auto)" },
-        "small_wall_speed":  { "type": "float",  "default": 0,     "unit": "mm/s", "label": "Small nozzle wall speed (0 = wall speed)" },
-        "override_regions":  { "type": "string", "default": "",    "label": "Large nozzle override: first:last:toolhead, separated by ;" }
+        "enable":            { "type": "bool",   "default": false, "label": "Use smaller nozzles in crisp corners", "label_ko": "날카로운 모서리에 작은 노즐 사용" },
+        "small_wall_count":  { "type": "int",    "default": 1,     "label": "Small nozzle wall count", "label_ko": "작은 노즐 벽 수" },
+        "wall_overlap":      { "type": "float",  "default": 15,    "unit": "%",    "label": "Small/large nozzle wall overlap", "label_ko": "작은/큰 노즐 벽 겹침" },
+        "interlock":         { "type": "bool",   "default": false, "label": "Multi-nozzle interlocking layers", "label_ko": "다중 노즐 레이어 엇갈림" },
+        "detail_toolhead":   { "type": "int",    "default": 0,     "label": "Crisp corner toolhead (0 = auto)", "label_ko": "모서리 세부 툴헤드 (0 = 자동)" },
+        "small_wall_speed":  { "type": "float",  "default": 0,     "unit": "mm/s", "label": "Small nozzle wall speed (0 = wall speed)", "label_ko": "작은 노즐 벽 속도 (0 = 벽 속도)" },
+        "override_regions":  { "type": "string", "default": "",    "label": "Large nozzle override: first:last:toolhead, separated by ;", "label_ko": "큰 노즐 지정 구간: 시작:끝:툴헤드, ;로 구분" }
     },
     "rules": [
         { "target": "wall_planner", "value": "\"multi_nozzle\"", "when": "multi_nozzle_walls.enable or multi_nozzle_walls.override_regions != \"\"" },
