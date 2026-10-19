@@ -15,6 +15,9 @@ class Layer;
 class PrintConfig;
 struct PerExtruderAdjustments;
 
+// Seconds a "G4 ..." dwell line waits: S in seconds, else P in milliseconds, read before any comment; 0 without either.
+float g4_dwell_seconds(const std::string &line);
+
 // A standalone G-code filter, to control cooling of the print.
 // The G-code is processed per layer. Once a layer is collected, fan start / stop commands are edited
 // and the print is modified to stretch over a minimum layer time.

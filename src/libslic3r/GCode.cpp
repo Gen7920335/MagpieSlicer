@@ -10968,8 +10968,12 @@ std::string GCode::finish_low_temperature_interface()
         gcode += "; low-temperature support interface end\n";
         // Heat toward the filament temperature without waiting for it, then dwell for the heating time.
         gcode += m_writer.set_temperature(m_low_temperature_interface_normal, false, m_low_temperature_interface_filament);
-        if (m_low_temperature_interface_heating_time > 0.)
-            gcode += "G4 S" + std::to_string(m_low_temperature_interface_heating_time) + " ; heat before next layer\n";
+        if (m_low_temperature_interface_heating_time > 0.) {
+            // Klipper's G4 reads only P (milliseconds); wait_command writes the dwell each flavor honours.
+            std::string dwell = wait_command(m_config.gcode_flavor.value, float(m_low_temperature_interface_heating_time));
+            dwell.pop_back();
+            gcode += dwell + " ; heat before next layer\n";
+        }
     }
     m_low_temperature_interface_active       = false;
     m_low_temperature_interface_target       = 0;

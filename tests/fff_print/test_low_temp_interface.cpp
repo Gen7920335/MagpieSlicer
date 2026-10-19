@@ -208,6 +208,23 @@ TEST_CASE("The low temperature interface mod drives the same G-code as the core 
     }
 }
 
+TEST_CASE("Low temperature interface reheat dwell uses the flavor's dwell command", "[LowTemperatureInterface]")
+{
+    // Klipper's G4 reads only P (milliseconds): "G4 S5" would not wait at all on a Klipper printer such as the U1.
+    const auto [flavor, expected] = GENERATE(table<std::string, std::string>({
+        { "klipper", "G4 P5000 ; heat before next layer" },
+        { "marlin2", "G4 S5.000 ; heat before next layer" },
+    }));
+    DYNAMIC_SECTION(flavor) {
+        DynamicPrintConfig config = low_temperature_config(true);
+        config.set_deserialize_strict({ { "gcode_flavor", flavor }, { "support_interface_heating_time", 5.0 } });
+        const std::string gcode = slice({ TestMesh::overhang }, config);
+        REQUIRE(gcode.find(end_marker) != std::string::npos);
+        CHECK(gcode.find(expected) != std::string::npos);
+        CHECK(gcode.find("G4 S5.000000") == std::string::npos);
+    }
+}
+
 TEST_CASE("Low temperature interface targets stay within extrudable filament limits", "[LowTemperatureInterface]")
 {
     auto validate = [](bool enabled, int interface_c) {

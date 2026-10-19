@@ -2983,7 +2983,16 @@ void PerimeterGenerator::process_arachne()
                 const Polygons inner_region        = to_polygons(offset_ex(clip_walls_over_top ? infill_contour
                                                                                                : diff_ex(infill_contour, top_expolygons),
                                                                           wall_0_inset));
-                Arachne::WallToolPaths inner_wall_tool_paths(inner_region, perimeter_spacing, perimeter_spacing, coord_t(inner_loop_number + 1), 0, layer_height, input_params_tmp);
+                // MAGPIE: the inner walls start at depth single_pass_walls. The single pass's fixed outer wall profile
+                // (detail nozzle spacing at depth 0) is not theirs: their first bead would take the detail width while
+                // its depth, and so its tool, is a large wall. Only the H/2 depths they hold carry a profile.
+                Arachne::WallToolPathsParams inner_params = input_params;
+                for (int depth = single_pass_walls; depth < full_pass_walls && is_half_layer_outer_wall(size_t(depth), half_layer_outer_walls); ++depth) {
+                    inner_params.fixed_outer_wall_spacings.push_back(wall_flow_at_depth(size_t(depth)).scaled_spacing());
+                    inner_params.fixed_outer_wall_overlaps.push_back(
+                        half_layer_wall_boundary_overlap(*this, wall_plan, depth + 1, this->detail_wall_count));
+                }
+                Arachne::WallToolPaths inner_wall_tool_paths(inner_region, perimeter_spacing, perimeter_spacing, coord_t(inner_loop_number + 1), 0, layer_height, inner_params);
                 std::vector<Arachne::VariableWidthLines> inner_perimeters = inner_wall_tool_paths.getToolPaths();
 
                 if (clip_walls_over_top) {
