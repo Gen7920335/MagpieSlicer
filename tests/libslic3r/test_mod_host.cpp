@@ -355,3 +355,91 @@ TEST_CASE("Mod names and parameter labels carry their own translations", "[ModHo
     CHECK(ModHost::localized_text(param.labels, "de_DE", param.label) == "Speed");    // no translation: the label
     CHECK(ModHost::localized_text(mod.names, "ko_KR", mod.name) == "데모");
 }
+
+TEST_CASE("A string parameter with options is a dropdown that takes only its options", "[ModHost]")
+{
+    const Mod mod = ModSet::parse_mod(R"({"id": "demo", "version": "1",
+        "params": {"kind": {"type": "string", "default": "off",
+            "options": [{"value": "off", "label": "Off", "label_ko": "끔"}, "linear"]}}})");
+    REQUIRE(mod.params.size() == 1);
+    const ModParam &p = mod.params.front();
+    REQUIRE(p.options.size() == 2);
+    CHECK(p.options[0].value == "off");
+    CHECK(localized_text(p.options[0].labels, "ko_KR", p.options[0].label) == "끔");
+    CHECK(p.options[1].label == "linear"); // a plain string option is its own label
+    CHECK(param_allows(p, std::string("linear")));
+    CHECK_FALSE(param_allows(p, std::string("log")));
+
+    CHECK_THROWS_WITH(ModSet::parse_mod(R"({"id": "m", "version": "1",
+        "params": {"k": {"type": "string", "default": "x", "options": ["a", "b"]}}})"), ContainsSubstring("not one of the options"));
+    CHECK_THROWS_WITH(ModSet::parse_mod(R"({"id": "m", "version": "1",
+        "params": {"k": {"type": "int", "default": 1, "options": ["1"]}}})"), ContainsSubstring("only for a string"));
+    CHECK_THROWS_WITH(ModSet::parse_mod(R"({"id": "m", "version": "1",
+        "params": {"k": {"type": "string", "default": "a", "options": ["a", "a"]}}})"), ContainsSubstring("twice"));
+    CHECK_THROWS_AS(ModSet::parse_mod(R"({"id": "m", "version": "1",
+        "params": {"k": {"type": "string", "default": "a", "options": []}}})"), ModError);
+}
+
+TEST_CASE("A stored value outside a parameter's options is reported and not applied", "[ModHost]")
+{
+    DynamicPrintConfig config = full_config();
+    config.set_key_value("wall_sequence", new ConfigOptionEnum<WallSequence>(WallSequence::InnerOuter));
+    const ModSet mods = build_one(R"json({"id": "demo", "version": "1",
+        "params": {"order": {"type": "string", "default": "inner", "options": ["inner", "outer"]}},
+        "rules": [{"target": "wall_sequence", "value": "if(demo.order == \"outer\", \"outer wall/inner wall\", \"inner wall/outer wall\")"}]})json");
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"demo.order": "outer"})"));
+    REQUIRE(mods.resolve(config).empty());
+    CHECK(config.opt_enum<WallSequence>("wall_sequence") == WallSequence::OuterInner);
+
+    config.set_key_value("wall_sequence", new ConfigOptionEnum<WallSequence>(WallSequence::InnerOuter));
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"demo.order": "sideways"})"));
+    const std::vector<std::string> errors = mods.resolve(config);
+    REQUIRE_FALSE(errors.empty());
+    CHECK_THAT(errors.front(), ContainsSubstring("not one of its options"));
+    CHECK(config.opt_enum<WallSequence>("wall_sequence") == WallSequence::InnerOuter);
+}
+
+TEST_CASE("A visible condition reads parameters and leaves slicing alone", "[ModHost]")
+{
+    const char *def = R"json({"id": "demo", "version": "1",
+        "params": {
+            "kind": {"type": "string", "default": "off", "options": ["off", "linear", "log"]},
+            "gap":  {"type": "float", "default": 5, "visible": "demo.kind == \"linear\""}},
+        "rules": [{"target": "wall_loops", "value": "round(demo.gap)"}]})json";
+    const ModSet mods = build_one(def);
+    // Parameters keep the file's order.
+    const ModParam &gap = mods.mods().front().params[1];
+    REQUIRE(gap.name == "gap");
+    REQUIRE(gap.visible.has_value());
+    auto lookup_kind = [](const std::string &kind) {
+        return ExprLookup([kind](const std::string &name, std::optional<size_t>) -> std::optional<ExprValue> {
+            if (name == "demo.kind")
+                return kind;
+            return std::nullopt;
+        });
+    };
+    CHECK(param_visible(gap, lookup_kind("linear")));
+    CHECK_FALSE(param_visible(gap, lookup_kind("log")));
+    // A condition that cannot be evaluated shows the row.
+    CHECK(param_visible(gap, [](const std::string &, std::optional<size_t>) { return std::optional<ExprValue>(); }));
+    // The rule reads the hidden parameter's stored value all the same.
+    DynamicPrintConfig config = full_config();
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"demo.kind": "off", "demo.gap": 3})"));
+    REQUIRE(mods.resolve(config).empty());
+    CHECK(config.opt_int("wall_loops") == 3);
+
+    CHECK_THROWS_WITH(build_one(R"({"id": "m", "version": "1",
+        "params": {"g": {"type": "float", "default": 1, "visible": "layer_height > 0.1"}}})"), ContainsSubstring("not a mod parameter"));
+    CHECK_THROWS_AS(ModSet::parse_mod(R"({"id": "m", "version": "1",
+        "params": {"g": {"type": "float", "default": 1, "visible": "m.g >"}}})"), ModError);
+}
+
+TEST_CASE("Mod parameters keep the order of the definition", "[ModHost]")
+{
+    const Mod mod = ModSet::parse_mod(R"json({"id": "demo", "version": "1",
+        "params": {"zeta": {"type": "bool", "default": false}, "alpha": {"type": "int", "default": 1}, "mid": {"type": "float", "default": 2}}})json");
+    REQUIRE(mod.params.size() == 3);
+    CHECK(mod.params[0].name == "zeta");
+    CHECK(mod.params[1].name == "alpha");
+    CHECK(mod.params[2].name == "mid");
+}

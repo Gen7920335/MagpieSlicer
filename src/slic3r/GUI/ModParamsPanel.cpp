@@ -3,15 +3,18 @@
 #include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "I18N.hpp"
+#include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/PrintConfig.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <wx/checkbox.h>
+#include <wx/choice.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 
@@ -79,7 +82,14 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
             grid->Add(text, 0, wxALIGN_CENTER_VERTICAL);
 
             wxWindow *control = nullptr;
-            if (p.type == "bool") {
+            if (!p.options.empty()) {
+                wxArrayString choices;
+                for (const ModHost::ModParamOption &o : p.options)
+                    choices.Add(wxString::FromUTF8(ModHost::localized_text(o.labels, language, o.label)));
+                auto *choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(100), -1), choices);
+                choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { commit(); });
+                control = choice;
+            } else if (p.type == "bool") {
                 auto *cb = new wxCheckBox(this, wxID_ANY, wxEmptyString);
                 cb->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &) { commit(); });
                 control = cb;
@@ -90,8 +100,9 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
                 control = tc;
             }
             grid->Add(control, 0, wxALIGN_CENTER_VERTICAL);
-            grid->Add(new wxStaticText(this, wxID_ANY, wxString::FromUTF8(p.unit)), 0, wxALIGN_CENTER_VERTICAL);
-            m_rows.push_back({key, &p, control});
+            auto *unit = new wxStaticText(this, wxID_ANY, wxString::FromUTF8(p.unit));
+            grid->Add(unit, 0, wxALIGN_CENTER_VERTICAL);
+            m_rows.push_back({key, &p, control, {text, control, unit}});
         }
     auto *outer = new wxBoxSizer(wxVERTICAL);
     outer->Add(grid, 0, wxEXPAND | wxALL, FromDIP(4));
@@ -124,7 +135,14 @@ void ModParamsPanel::load_from_config(const DynamicPrintConfig &config)
     const json stored = parse_object(m_loaded_json);
     m_loading         = true;
     for (Row &row : m_rows) {
-        if (auto *cb = dynamic_cast<wxCheckBox *>(row.control)) {
+        if (auto *choice = dynamic_cast<wxChoice *>(row.control)) {
+            auto        it    = stored.find(row.key);
+            std::string value = it != stored.end() && it->is_string() ? it->get<std::string>() : std::get<std::string>(row.param->default_value);
+            const auto &opts  = row.param->options;
+            auto        found = std::find_if(opts.begin(), opts.end(), [&value](const ModHost::ModParamOption &o) { return o.value == value; });
+            // A stored value outside the options (slicing reports it) shows as no selection.
+            choice->SetSelection(found == opts.end() ? wxNOT_FOUND : int(found - opts.begin()));
+        } else if (auto *cb = dynamic_cast<wxCheckBox *>(row.control)) {
             auto it = stored.find(row.key);
             cb->SetValue(it != stored.end() && it->is_boolean() ? it->get<bool>() : std::get<bool>(row.param->default_value));
         } else if (auto *tc = dynamic_cast<wxTextCtrl *>(row.control)) {
@@ -132,6 +150,7 @@ void ModParamsPanel::load_from_config(const DynamicPrintConfig &config)
         }
     }
     m_loading = false;
+    update_visibility();
 }
 
 void ModParamsPanel::commit()
@@ -142,7 +161,12 @@ void ModParamsPanel::commit()
     for (Row &row : m_rows) {
         const ModHost::ModParam &p = *row.param;
         json                     value;
-        if (auto *cb = dynamic_cast<wxCheckBox *>(row.control)) {
+        if (auto *choice = dynamic_cast<wxChoice *>(row.control)) {
+            const int sel = choice->GetSelection();
+            if (sel == wxNOT_FOUND)
+                continue; // nothing chosen: keep what is stored
+            value = p.options[size_t(sel)].value;
+        } else if (auto *cb = dynamic_cast<wxCheckBox *>(row.control)) {
             value = cb->GetValue();
         } else if (auto *tc = dynamic_cast<wxTextCtrl *>(row.control)) {
             const std::string text = tc->GetValue().ToUTF8().data();
@@ -166,11 +190,66 @@ void ModParamsPanel::commit()
             stored[row.key] = value;
     }
     const std::string text = stored.empty() ? std::string() : stored.dump();
+    update_visibility();
     if (text == m_loaded_json)
         return;
     m_loaded_json = text;
     if (on_change)
         on_change(text);
+}
+
+std::optional<ModHost::ExprValue> ModParamsPanel::row_value(const Row &row) const
+{
+    if (auto *choice = dynamic_cast<wxChoice *>(row.control)) {
+        const int sel = choice->GetSelection();
+        return sel == wxNOT_FOUND ? std::nullopt : std::optional<ModHost::ExprValue>(row.param->options[size_t(sel)].value);
+    }
+    if (auto *cb = dynamic_cast<wxCheckBox *>(row.control))
+        return ModHost::ExprValue(cb->GetValue());
+    if (auto *tc = dynamic_cast<wxTextCtrl *>(row.control)) {
+        if (row.param->type == "string")
+            return ModHost::ExprValue(std::string(tc->GetValue().ToUTF8().data()));
+        double v = 0.;
+        if (tc->GetValue().ToCDouble(&v))
+            return ModHost::ExprValue(v);
+    }
+    return std::nullopt;
+}
+
+void ModParamsPanel::update_visibility()
+{
+    // This tab's rows read from their controls, so a condition follows an edit not yet committed;
+    // parameters of other tabs come from the presets being edited there.
+    std::optional<DynamicPrintConfig> others;
+    const ModHost::ExprLookup lookup = [this, &others](const std::string &name, std::optional<size_t> index) -> std::optional<ModHost::ExprValue> {
+        if (index)
+            return std::nullopt; // filament parameters are per filament; a condition cannot pick one
+        for (const Row &row : m_rows)
+            if (row.key == name)
+                return row_value(row);
+        if (!others) {
+            if (wxGetApp().preset_bundle == nullptr)
+                return std::nullopt;
+            others = wxGetApp().preset_bundle->full_config();
+        }
+        return ModHost::param_value(*others, name);
+    };
+    bool changed = false;
+    for (const Row &row : m_rows) {
+        if (!row.param->visible)
+            continue;
+        const bool show = ModHost::param_visible(*row.param, lookup);
+        for (wxWindow *w : row.windows)
+            if (w->IsShown() != show) {
+                w->Show(show);
+                changed = true;
+            }
+    }
+    if (changed) {
+        Layout();
+        if (wxWindow *parent = GetParent())
+            parent->Layout();
+    }
 }
 
 } // namespace GUI

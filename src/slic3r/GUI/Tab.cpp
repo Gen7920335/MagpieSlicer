@@ -7692,6 +7692,10 @@ void Tab::add_mods_page(const std::string& scope)
                 m_config->set_key_value(key, new ConfigOptionString(text));
             update_dirty();
             on_value_change(key, text);
+            // A row on another tab can be shown or hidden by the value just changed.
+            for (Tab* tab : wxGetApp().tabs_list)
+                if (tab != this && tab->m_mod_params_panel != nullptr)
+                    tab->m_mod_params_panel->update_visibility();
         };
         auto* sizer = new wxBoxSizer(wxHORIZONTAL);
         sizer->Add(m_mod_params_panel, 1, wxEXPAND);

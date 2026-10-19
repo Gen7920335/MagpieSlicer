@@ -35,6 +35,12 @@ slicing. A file that fails to load is logged and left out; the others still load
   `mod_settings`), `printer` (`printer_mod_settings`) or `filament` (`filament_mod_settings`,
   one value per filament, read as `<id>.<name>[i]`). `label`, `unit` and `page` are display
   text; `invalidates` lists the slicing steps a change redoes.
+- A `string` parameter with **options** is a dropdown: each option is a value, or an object
+  `{"value": ..., "label": ..., "label_ko": ...}`. The default must be one of them, and a stored
+  value outside them is reported like a value of the wrong type.
+- **visible** is an expression over mod parameters; the row is shown only while it holds (a
+  condition that cannot be evaluated shows it). It is display only: a hidden row keeps its
+  stored value and rules read it as usual, so a mod gates behaviour in its rules, not here.
 - **rules** set `target` (any print, printer or filament setting) to the expression `value`,
   when the optional `when` holds. `index` writes one element of a list setting. A higher
   `priority` is applied later and wins; two rules on one setting with the same priority do not

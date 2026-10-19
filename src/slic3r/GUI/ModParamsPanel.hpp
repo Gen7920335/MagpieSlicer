@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,9 @@ public:
     void load_from_config(const DynamicPrintConfig &config);
     // Called with the new JSON text after the user changes a value.
     std::function<void(const std::string &json_text)> on_change;
+    // Shows and hides rows by their "visible" conditions. A condition may read a parameter another
+    // tab stores, so the tabs call this on each other after a change.
+    void update_visibility();
 
 private:
     struct Row
@@ -43,9 +47,12 @@ private:
         std::string            key; // "<mod id>.<name>"
         const ModHost::ModParam *param;
         wxWindow               *control;
+        std::vector<wxWindow *> windows; // label, control and unit, shown and hidden together
     };
 
     void commit();
+    // The value a row's control shows, as the parameter's type.
+    std::optional<ModHost::ExprValue> row_value(const Row &row) const;
 
     std::shared_ptr<const ModHost::ModSet> m_mods;
     std::string                            m_scope;

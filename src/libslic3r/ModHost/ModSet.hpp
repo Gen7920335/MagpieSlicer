@@ -30,6 +30,14 @@ public:
 const std::string &localized_text(const std::map<std::string, std::string> &translations, const std::string &language,
                                   const std::string &fallback);
 
+// One choice of a string parameter's dropdown.
+struct ModParamOption
+{
+    std::string                        value;
+    std::string                        label; // the value itself when the mod gives none
+    std::map<std::string, std::string> labels;
+};
+
 struct ModParam
 {
     std::string              name;
@@ -44,7 +52,19 @@ struct ModParam
     std::string              unit;
     std::string              page;
     std::vector<std::string> invalidates; // slicing steps to redo when the value changes
+    // A string parameter with options is a dropdown and takes only these values; a stored value
+    // outside them is an error, like a value of the wrong type.
+    std::vector<ModParamOption> options;
+    // The settings tab shows the row only while this holds. Display only: rules read the value
+    // whether or not the row is shown, and a hidden row keeps its stored value.
+    std::optional<Expr>      visible;
 };
+
+// Whether a parameter's row is shown, reading other parameters through `lookup`. A condition that
+// cannot be evaluated shows the row, so a broken condition never hides a setting.
+bool param_visible(const ModParam &param, const ExprLookup &lookup);
+// Whether `value` is allowed for `param`: any value without options, else one of them.
+bool param_allows(const ModParam &param, const ExprValue &value);
 
 // "Set <target> to <value> when <when> holds." Rules sit in the mod-rule layer: above the printer,
 // filament and process presets, below a value the user changed in a preset.

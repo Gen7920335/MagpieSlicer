@@ -298,7 +298,13 @@ Mod ModSet::parse_mod(const std::string &json_text)
     if (auto it = j.find("params"); it != j.end()) {
         if (!it->is_object())
             mod_fail(mod.id, "\"params\" must be an object");
-        for (auto &[name, def] : it->items()) {
+        // Parameters keep the order the file gives them, which is the order of their rows in the settings tab.
+        std::vector<std::string>   names;
+        const nlohmann::ordered_json ordered = nlohmann::ordered_json::parse(json_text, nullptr, true, true);
+        for (auto &[name, def] : ordered.at("params").items())
+            names.push_back(name);
+        for (const std::string &name : names) {
+            const json &def = (*it)[name];
             const std::string where = "mod '" + mod.id + "' param '" + name + "'";
             if (!is_identifier(name))
                 throw ModError(where + ": name must use only a-z, 0-9 and _");
@@ -324,6 +330,34 @@ Mod ModSet::parse_mod(const std::string &json_text)
                 for (const auto &step : *inv)
                     p.invalidates.push_back(step.get<std::string>());
             }
+            if (auto opts = def.find("options"); opts != def.end()) {
+                if (p.type != "string")
+                    throw ModError(where + ": \"options\" is only for a string parameter");
+                if (!opts->is_array() || opts->empty())
+                    throw ModError(where + ": \"options\" must be a non-empty list");
+                for (const auto &o : *opts) {
+                    ModParamOption option;
+                    if (o.is_string()) {
+                        option.value = o.get<std::string>();
+                    } else if (o.is_object()) {
+                        option.value  = optional_string(o, "value");
+                        option.label  = optional_string(o, "label");
+                        option.labels = translations(o, "label_");
+                    }
+                    if (option.value.empty())
+                        throw ModError(where + ": each option must be a non-empty string or an object with a \"value\"");
+                    for (const ModParamOption &seen : p.options)
+                        if (seen.value == option.value)
+                            throw ModError(where + ": option \"" + option.value + "\" is listed twice");
+                    if (option.label.empty())
+                        option.label = option.value;
+                    p.options.push_back(std::move(option));
+                }
+                if (!param_allows(p, p.default_value))
+                    throw ModError(where + ": \"default\" is not one of the options");
+            }
+            if (std::string visible = optional_string(def, "visible"); !visible.empty())
+                p.visible = parse_expr(visible, where + " visible");
             mod.params.push_back(std::move(p));
         }
     }
@@ -371,6 +405,14 @@ ModSet ModSet::build(std::vector<Mod> mods)
         for (size_t p = 0; p < mod.params.size(); ++p)
             set.m_params[mod.id + "." + mod.params[p].name] = {m, p};
     }
+
+    // A visibility condition reads parameters only: the settings tab has no full print config.
+    for (const Mod &mod : set.m_mods)
+        for (const ModParam &p : mod.params)
+            if (p.visible)
+                for (const std::string &name : p.visible->names())
+                    if (set.m_params.count(name) == 0)
+                        mod_fail(mod.id, "param '" + p.name + "' visible: \"" + name + "\" is not a mod parameter");
 
     // Check every rule, and group the rules by the setting they write.
     std::map<std::string, std::vector<Ref>> by_target;
@@ -530,8 +572,13 @@ std::vector<std::string> ModSet::resolve(DynamicPrintConfig &config, const std::
             return it->get<double>();
         if (p.type == "bool" && it->is_boolean())
             return it->get<bool>();
-        if (p.type == "string" && it->is_string())
-            return it->get<std::string>();
+        if (p.type == "string" && it->is_string()) {
+            const std::string value = it->get<std::string>();
+            if (param_allows(p, value))
+                return value;
+            errors.push_back("stored value \"" + value + "\" of mod parameter " + name + " is not one of its options");
+            return std::nullopt;
+        }
         errors.push_back("stored value of mod parameter " + name + " is not a " + p.type);
         return std::nullopt;
     };
@@ -613,12 +660,32 @@ std::optional<ExprValue> param_value(const DynamicPrintConfig &config, const std
                 return it->get<double>();
             if (p.type == "bool" && it->is_boolean())
                 return it->get<bool>();
-            if (p.type == "string" && it->is_string())
+            if (p.type == "string" && it->is_string() && param_allows(p, it->get<std::string>()))
                 return it->get<std::string>();
             return std::nullopt;
         }
     }
     return std::nullopt;
+}
+
+bool param_visible(const ModParam &param, const ExprLookup &lookup)
+{
+    if (!param.visible)
+        return true;
+    try {
+        return expr_truthy(param.visible->evaluate(lookup));
+    } catch (const ExprError &) {
+        return true;
+    }
+}
+
+bool param_allows(const ModParam &param, const ExprValue &value)
+{
+    if (param.options.empty())
+        return true;
+    const std::string *s = std::get_if<std::string>(&value);
+    return s != nullptr && std::any_of(param.options.begin(), param.options.end(),
+                                       [s](const ModParamOption &o) { return o.value == *s; });
 }
 
 void load_active_mods_from_data_dir()
