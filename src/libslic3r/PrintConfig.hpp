@@ -1993,6 +1993,8 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionFloats,              layer_time_blend_tower_y))
     ((ConfigOptionFloat,               layer_time_blend_park_x))
     ((ConfigOptionFloat,               layer_time_blend_park_y))
+    ((ConfigOptionFloat,               layer_time_blend_heat_rate))
+    ((ConfigOptionFloat,               layer_time_blend_cool_rate))
 
     // Build plate tilt for off-axis gravity support generation (printer-level setting).
     ((ConfigOptionFloat,               build_plate_tilt_x))

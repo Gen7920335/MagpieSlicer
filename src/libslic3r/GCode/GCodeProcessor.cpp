@@ -3013,6 +3013,12 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
 {
     m_parser.apply_config(config);
 
+    // MAGPIE: temperature waits count only for layer time blending around the low temperature interface,
+    // which is where they vary between layers.
+    m_estimate_temperature_waits = !config.layer_time_planner.value.empty() && config.single_nozzle_low_temperature_interface.value;
+    m_heat_rate = float(std::max(0.1, config.layer_time_blend_heat_rate.value));
+    m_cool_rate = float(std::max(0.1, config.layer_time_blend_cool_rate.value));
+
     m_flavor = config.gcode_flavor;
     m_printer_model = config.printer_model.value;
 
@@ -3696,6 +3702,9 @@ void GCodeProcessor::reset()
     m_g1_line_id = 0;
     m_layer_id = 0;
     m_wait_sites.clear();
+    m_wait_uncertain = false;
+    m_estimate_temperature_waits = false;
+    m_nozzle_temperatures.clear();
     m_cp_color.reset();
     m_mass_locator = nullptr;
 
@@ -3917,7 +3926,7 @@ std::vector<GCodeProcessor::WaitSiteTime> GCodeProcessor::wait_site_times() cons
         // Bookings come in block order, and sites in G-code order, so one forward pass sums them.
         while (booked_next < booked.size() && booked[booked_next].first <= site.g1_line_id)
             booked_sum += double(booked[booked_next++].second);
-        out.push_back({ elapsed - booked_sum + site.requested_additional_time, site.layer_id, site.kind });
+        out.push_back({ elapsed - booked_sum + site.requested_additional_time, site.layer_id, site.kind, site.uncertain });
     }
     return out;
 }
@@ -4459,7 +4468,9 @@ void GCodeProcessor::process_tags(const std::string_view comment, bool producers
         if (kind != WaitMarkKind(-1)) {
             m_wait_sites.push_back({ m_g1_line_id, m_layer_id,
                                      m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].requested_additional_time,
-                                     kind });
+                                     kind, kind == WaitMarkKind::Site && m_wait_uncertain });
+            if (kind == WaitMarkKind::Site)
+                m_wait_uncertain = false;
             return;
         }
     }
@@ -6457,12 +6468,32 @@ void GCodeProcessor::process_M83(const GCodeReader::GCodeLine& line)
     m_e_local_positioning_type = EPositioningType::Relative;
 }
 
+GCodeProcessor::NozzleTemperature &GCodeProcessor::nozzle_temperature_at(size_t filament_id, double now)
+{
+    if (filament_id >= m_nozzle_temperatures.size())
+        m_nozzle_temperatures.resize(filament_id + 1);
+    NozzleTemperature &t = m_nozzle_temperatures[filament_id];
+    if (now > t.time_s) {
+        const float step = float(now - t.time_s) * (t.target > t.current ? m_heat_rate : m_cool_rate); // degC
+        t.current        = t.target > t.current ? std::min(t.target, t.current + step) : std::max(t.target, t.current - step);
+        t.time_s         = now;
+    }
+    return t;
+}
+
 void GCodeProcessor::process_M104(const GCodeReader::GCodeLine& line)
 {
     int filament_id = get_filament_id();
     float new_temp;
-    if (line.has_value('S', new_temp))
+    if (line.has_value('S', new_temp)) {
         m_extruder_temps[filament_id] = new_temp;
+        if (m_estimate_temperature_waits) {
+            // The time is that of the moves already estimated, a few moves behind; close enough for a
+            // temperature that changes over seconds.
+            const double now = m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].time;
+            nozzle_temperature_at(size_t(filament_id), now).target = new_temp;
+        }
+    }
 }
 
 void GCodeProcessor::process_VM104(const GCodeReader::GCodeLine& line)
@@ -6550,6 +6581,28 @@ void GCodeProcessor::process_M109(const GCodeReader::GCodeLine& line)
     }
     else if (line.has_value('S', new_temp))
         m_extruder_temps[filament_id] = new_temp;
+
+    float target = 0.f;
+    const bool both_ways = line.has_value('R', target);
+    if (m_estimate_temperature_waits && (both_ways || line.has_value('S', target))) {
+        // The firmware finishes the moves, then waits until the nozzle reaches the target (M109 S waits
+        // only while heating on Marlin; R both ways).
+        size_t id = size_t(filament_id);
+        if (float val; both_ways && line.has_value('T', val))
+            id = size_t(val);
+        simulate_st_synchronize(0.f);
+        const double       now  = m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].time;
+        NozzleTemperature &t    = nozzle_temperature_at(id, now);
+        const bool         wait = both_ways || target > t.current;
+        t.target                = target;
+        if (wait && std::abs(target - t.current) > 0.f) {
+            const float seconds = std::abs(target - t.current) / (target > t.current ? m_heat_rate : m_cool_rate);
+            t.current           = target;
+            t.time_s            = now + seconds;
+            simulate_st_synchronize(seconds);
+            m_wait_uncertain = true;
+        }
+    }
 }
 
 void GCodeProcessor::process_VM109(const GCodeReader::GCodeLine& line)
@@ -7229,6 +7282,7 @@ void GCodeProcessor::process_filament_change(int id, int nozzle_id)
     }
 
     simulate_st_synchronize(extra_time, EMoveType::Tool_change);
+    m_wait_uncertain = true; // MAGPIE: a tool change's time is the configured guess
 
     m_machine_config_idx = get_machine_config_idx();
 }
@@ -7353,6 +7407,7 @@ void GCodeProcessor::process_filament_change(int id)
     }
 
     simulate_st_synchronize(extra_time, EMoveType::Tool_change);
+    m_wait_uncertain = true; // MAGPIE: a tool change's time is the configured guess
 
     m_machine_config_idx = get_machine_config_idx();
 }

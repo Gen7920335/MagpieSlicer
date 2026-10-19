@@ -1315,8 +1315,24 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
             unsigned int layer_id;
             double       requested_additional_time;
             GCodeWaitMarkKind kind;
+            bool         uncertain;
         };
         std::vector<WaitSiteMark> m_wait_sites;
+        bool                      m_wait_uncertain { false };
+        // MAGPIE: nozzle temperature waits. Orca counts an M109 as no time; while layer time blending plans
+        // around the low temperature interface the estimate follows each nozzle's temperature instead: it
+        // moves towards the last target at these rates (degC/s) from the time it was last known.
+        struct NozzleTemperature
+        {
+            float  target  = 0.f; // degC
+            float  current = 0.f; // degC, at time_s
+            double time_s  = 0.;
+        };
+        bool                           m_estimate_temperature_waits { false };
+        float                          m_heat_rate { 2.f }, m_cool_rate { 1.f };
+        std::vector<NozzleTemperature> m_nozzle_temperatures;
+        // The nozzle's temperature model brought up to `now`.
+        NozzleTemperature &nozzle_temperature_at(size_t filament_id, double now);
         float m_preheat_time;
         int m_preheat_steps;
         bool m_disable_m73;
@@ -1431,6 +1447,8 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
             double       time_s;   // estimated (Normal mode) time from the start of the print to the mark, s
             unsigned int layer_id; // the processor's layer counter at the mark (1 = the first layer)
             WaitMarkKind kind;
+            // Since the previous site the estimate guessed: a temperature wait or a tool change.
+            bool         uncertain;
         };
         // The marks in G-code order. Valid after finalize().
         std::vector<WaitSiteTime> wait_site_times() const;

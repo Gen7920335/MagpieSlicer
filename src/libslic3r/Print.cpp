@@ -210,6 +210,8 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "layer_time_blend_tower_y",
         "layer_time_blend_park_x",
         "layer_time_blend_park_y",
+        "layer_time_blend_heat_rate",
+        "layer_time_blend_cool_rate",
         "reduce_crossing_wall",
         "max_travel_detour_distance",
         "printable_area",

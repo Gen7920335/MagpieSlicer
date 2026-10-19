@@ -7617,6 +7617,25 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloat(-1.));
 
+    // Rates the time estimate uses for a nozzle temperature wait (M109) while layer time blending plans
+    // around the low temperature support interface, degC/s. Slow on purpose: an estimate that is too short
+    // makes the layers around an interface look shorter than they print.
+    def = this->add("layer_time_blend_heat_rate", coFloat);
+    def->label = L("Nozzle heating rate");
+    def->tooltip = L("How fast the nozzle heats, for estimating temperature waits when layer times are blended.");
+    def->sidetext = L("°C/s");
+    def->min = 0.1;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(2.));
+
+    def = this->add("layer_time_blend_cool_rate", coFloat);
+    def->label = L("Nozzle cooling rate");
+    def->tooltip = L("How fast the nozzle cools, for estimating temperature waits when layer times are blended.");
+    def->sidetext = L("°C/s");
+    def->min = 0.1;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(1.));
+
     // MAGPIE: Snapmaker U1 start G-code guard (Magpie line 1), driven by resources/mods/snapmaker_u1.json.
     def = this->add("snapmaker_u1_start_guard", coBool);
     def->label = L("Guard the Snapmaker U1 start G-code");

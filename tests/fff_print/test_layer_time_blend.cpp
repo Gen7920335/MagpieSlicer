@@ -370,3 +370,57 @@ TEST_CASE("The bundled mod loads and drives the planner", "[LayerTimeBlend]")
     config.set_key_value("mod_settings", new ConfigOptionString(R"json({"layer_time_blend.blend_type": "off"})json"));
     CHECK(count_lines_starting(slice_mesh(pillar_with_slab(), config), site_tag) == 0);
 }
+
+namespace {
+
+// Estimated time of a hand-written G-code, s, with layer time blending around the low temperature interface
+// on or off.
+double estimated_time(const std::string &gcode, bool blending, std::vector<GCodeProcessor::WaitSiteTime> *marks = nullptr)
+{
+    PrintConfig config;
+    config.single_nozzle_low_temperature_interface.value = blending;
+    config.layer_time_planner.value                      = blending ? "blend" : "";
+    config.layer_time_blend_heat_rate.value              = 2.; // degC/s
+    config.layer_time_blend_cool_rate.value              = 1.; // degC/s
+    GCodeProcessor processor;
+    processor.reset();
+    processor.initialize_result_moves();
+    processor.apply_config(config);
+    processor.initialize("estimate.gcode");
+    processor.process_buffer(gcode);
+    processor.finalize(false);
+    if (marks)
+        *marks = processor.wait_site_times();
+    return processor.get_time(PrintEstimatedStatistics::ETimeMode::Normal);
+}
+
+} // namespace
+
+TEST_CASE("Temperature waits count while blending around the low temperature interface", "[LayerTimeBlend]")
+{
+    // Heat to 200 degC (100 s at 2 degC/s), set 170 degC and move for 10 s (the nozzle cools 10 degC at
+    // 1 degC/s), then wait for 170 degC: 20 s more.
+    const std::string gcode = "G90\nM83\nG1 X0 Y0 F600\nM109 S200\nM104 S170\nG1 X100 F600\n;MAGPIE_WAIT_SITE\nM109 R170\n"
+                              "G1 X0 F600\n;MAGPIE_WAIT_SITE\n";
+    const double off = estimated_time(gcode, false);
+    std::vector<GCodeProcessor::WaitSiteTime> marks;
+    const double on = estimated_time(gcode, true, &marks);
+    // The moves alone: 100 mm and back at 10 mm/s, plus acceleration; Orca counts M109 as no time.
+    CHECK(off < 25.);
+    CHECK_THAT(on - off, WithinAbs(100. + 20., 0.5));
+    // The first site comes after the heat-up; the second after the 20 s cool-down, which it is flagged for.
+    REQUIRE(marks.size() == 2);
+    CHECK(marks[0].uncertain);
+    CHECK(marks[1].uncertain);
+    // Between them: the move back (half the moves' time) and the 20 s wait.
+    CHECK_THAT(marks[1].time_s - marks[0].time_s, WithinAbs(20. + off / 2., 0.5));
+}
+
+TEST_CASE("Under H/2 a wait site starts each full layer only", "[LayerTimeBlend]")
+{
+    DynamicPrintConfig config = blend_config("blend", 1e6);
+    config.set_deserialize_strict({{"outer_wall_half_layer_height", "1"}});
+    const std::string out = slice_mesh(pillar_with_slab(), config);
+    // The 53 layers of the plain slice: half-height passes are no layers of their own.
+    CHECK(count_lines_starting(out, site_tag) == 53);
+}

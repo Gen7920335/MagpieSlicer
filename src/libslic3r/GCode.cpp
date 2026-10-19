@@ -3662,6 +3662,7 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
     struct SiteTimes
     {
         std::vector<double> site, begin, end;
+        std::vector<bool>   uncertain;
     };
     auto site_times = [](const std::vector<Mark> &marks) {
         SiteTimes out;
@@ -3671,6 +3672,7 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
                 begin = mark.time_s;
             else if (mark.kind == MarkKind::Site) {
                 out.site.push_back(mark.time_s);
+                out.uncertain.push_back(mark.uncertain);
                 out.begin.push_back(begin);
                 out.end.push_back(std::numeric_limits<double>::quiet_NaN());
                 begin = std::numeric_limits<double>::quiet_NaN();
@@ -3706,6 +3708,7 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
             sites[k].interval_s       = interval[k];
             sites[k].constraint_break = written.constraint_break;
             sites[k].park_trip_s      = written.can_park ? written.park_trip_s : 0.;
+            sites[k].uncertain        = times.uncertain[k];
             if (std::isfinite(times.begin[k]) && std::isfinite(times.end[k])) {
                 sites[k].tower_pre_s   = times.site[k] - times.begin[k];
                 sites[k].tower_block_s = times.end[k] - times.begin[k];
@@ -7747,7 +7750,9 @@ LayerResult GCode::process_layer(
     // MAGPIE: layer time blending wait site, before the layer's fan change so a wait belongs to the layer
     // below. Only layers with an object layer: a support-only layer of its own height adds to the interval
     // it falls in.
-    if (m_layer_time_planner != nullptr && object_layer != nullptr)
+    // A full layer only: an object layer at this very height (under H/2 a half pass is a task inside the
+    // frame of its layer, and a half-height support band has no object layer).
+    if (m_layer_time_planner != nullptr && object_layer != nullptr && std::abs(object_layer->print_z - print_z) < EPSILON)
         gcode += this->layer_time_wait_site(print, print_z);
 
     //BBS: set layer time fan speed after layer change gcode
@@ -9780,6 +9785,8 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "layer_time_blend_tower_y"sv,
         "layer_time_blend_park_x"sv,
         "layer_time_blend_park_y"sv,
+        "layer_time_blend_heat_rate"sv,
+        "layer_time_blend_cool_rate"sv,
         "printer_mod_settings"sv,
         "support_generator"sv,
         // The fast-purge / prime-volume-mode keys are new static-member registrations. Excluding them from
