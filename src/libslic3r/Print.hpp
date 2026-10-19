@@ -596,7 +596,8 @@ public:
     // If ! m_slicing_params.valid, recalculate.
     void                    update_slicing_parameters();
 
-    static PrintObjectConfig object_config_from_model_object(const PrintObjectConfig &default_object_config, const ModelObject &object, size_t num_extruders, std::vector<int>& variant_index);
+    // line_width_reference_mm: see scale_absolute_line_widths(); 0 leaves absolute widths as set.
+    static PrintObjectConfig object_config_from_model_object(const PrintObjectConfig &default_object_config, const ModelObject &object, size_t num_extruders, std::vector<int>& variant_index, double line_width_reference_mm = 0.);
 
 private:
     void make_perimeters();
@@ -1155,6 +1156,8 @@ public:
     void                auto_assign_extruders(ModelObject* model_object) const;
 
     const PrintConfig&          config() const { return m_config; }
+    // MAGPIE: the nozzle absolute line widths are scaled from on a printer with mixed nozzle sizes, mm; 0 otherwise.
+    double                      line_width_reference_mm() const { return m_line_width_reference_mm; }
     const PrintObjectConfig&    default_object_config() const { return m_default_object_config; }
     const PrintRegionConfig& default_region_config() const { return m_default_region_config; }
     ConstPrintObjectPtrsAdaptor objects() const { return ConstPrintObjectPtrsAdaptor(&m_objects); }
@@ -1483,6 +1486,9 @@ private:
     // MAGPIE: errors of mod rules that could not be evaluated by the last apply(); validate()
     // reports the first, so nothing is sliced with a rule silently left out.
     std::vector<std::string> m_mod_rule_errors;
+    // MAGPIE: the nozzle absolute line widths are scaled from (absolute_line_width_reference_nozzle), mm,
+    // as of the last apply(); 0 on a printer with one nozzle size.
+    double                   m_line_width_reference_mm { 0. };
 
     //BBS
     static StringObjectException check_multi_filament_valid(const Print &print);

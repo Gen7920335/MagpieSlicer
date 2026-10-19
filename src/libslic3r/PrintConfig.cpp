@@ -145,6 +145,51 @@ double nozzle_diameter_for_filament(const PrintConfig& config, int filament_id, 
     return config.nozzle_diameter.get_at(extruder - 1);
 }
 
+double absolute_line_width_reference_nozzle(const DynamicPrintConfig &config)
+{
+    const auto *nozzles = config.option<ConfigOptionFloats>("nozzle_diameter");
+    if (nozzles == nullptr || nozzles->values.empty())
+        return 0.;
+    const auto [min_it, max_it] = std::minmax_element(nozzles->values.begin(), nozzles->values.end());
+    // Nozzle diameters closer than this are one size, mm.
+    if (*max_it - *min_it <= EPSILON)
+        return 0.;
+    // A variant name such as "0.4" names the nozzle the process profile was made for, when the printer has it.
+    if (const auto *variant = config.option<ConfigOptionString>("printer_variant"); variant != nullptr && !variant->value.empty()) {
+        char        *end        = nullptr;
+        const double variant_mm = std::strtod(variant->value.c_str(), &end);
+        if (end == variant->value.c_str() + variant->value.size() &&
+            std::any_of(nozzles->values.begin(), nozzles->values.end(), [variant_mm](double d) { return std::abs(d - variant_mm) <= EPSILON; }))
+            return variant_mm;
+    }
+    return *max_it;
+}
+
+void scale_absolute_line_widths(ConfigBase &config, double reference_mm)
+{
+    if (reference_mm <= 0.)
+        return;
+    for (const auto &[key, def] : print_config_def.options) {
+        if (def.type != coFloatOrPercent || def.ratio_over != "nozzle_diameter" || !boost::ends_with(key, "line_width"))
+            continue;
+        auto *width = config.option<ConfigOptionFloatOrPercent>(key);
+        // Zero is the automatic width, which already follows each nozzle.
+        if (width == nullptr || width->percent || width->value <= 0.)
+            continue;
+        width->value   = 100. * width->value / reference_mm;
+        width->percent = true;
+    }
+}
+
+void scale_absolute_line_widths_to_nozzles(DynamicPrintConfig &config)
+{
+    // MAGPIE: an absolute line width belongs to the nozzle its process profile was made for. On a printer
+    // whose nozzles differ in size, Orca printed that width on every nozzle (0.42 mm from a 0.15 mm nozzle).
+    // Restated as a percentage of the reference nozzle, each extrusion resolves it on its own nozzle, the
+    // way percentage widths already work. Printers with one nozzle size are left untouched.
+    scale_absolute_line_widths(config, absolute_line_width_reference_nozzle(config));
+}
+
 
 // Orca: input shaping values types by flavor
 std::vector<std::string> get_shaper_type_values_for_flavor(GCodeFlavor flavor)

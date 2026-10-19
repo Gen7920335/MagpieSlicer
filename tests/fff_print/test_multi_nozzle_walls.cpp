@@ -719,3 +719,76 @@ TEST_CASE("Every detail wall prints at the detail nozzle's width", "[MultiNozzle
         CHECK(detail_max < 0.5 * large_min);
     }
 }
+
+TEST_CASE("Absolute line widths keep detail walls on every layer at the detail nozzle's width", "[MultiNozzleWalls][Regression]")
+{
+    // Before: an absolute 0.42 mm outer wall width was used as is on the 0.15 mm nozzle. The planner then
+    // saw no gain over the 0.4 mm nozzle (both beads 0.42 mm) and dropped the detail walls above the
+    // first layer, and the first layer's detail walls printed 0.42 mm wide from the 0.15 mm nozzle.
+    const char *wall_generator = GENERATE("classic", "arachne");
+    DYNAMIC_SECTION(wall_generator) {
+        DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, wall_generator, true);
+        config.set_deserialize_strict({
+            { "layer_height", 0.12 },               // mm
+            { "initial_layer_print_height", 0.12 }, // mm
+            { "line_width", "0.45" },               // mm
+            { "outer_wall_line_width", "0.42" },    // mm
+            { "inner_wall_line_width", "0.45" },    // mm
+            { "initial_layer_line_width", "0.5" },  // mm
+        });
+        Print print;
+        Model model;
+        init_print({ cube(20) }, print, model, config);
+        print.process();
+        const PrintObject &object = *print.objects().front();
+        REQUIRE(object.layers().size() > 20); // 20 mm / 0.12 mm
+        size_t layers_without_detail = 0;
+        double detail_max = 0., large_min = 1e9; // mm
+        for (const Layer *layer : object.layers()) {
+            size_t detail_count = 0;
+            for (const ExtrusionEntity *wall : walls_of(*layer->regions().front())) {
+                std::vector<double> widths;
+                if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(wall))
+                    for (const ExtrusionPath &p : loop->paths) widths.push_back(p.width);
+                else if (const auto *multi = dynamic_cast<const ExtrusionMultiPath *>(wall))
+                    for (const ExtrusionPath &p : multi->paths) widths.push_back(p.width);
+                else if (const auto *path = dynamic_cast<const ExtrusionPath *>(wall))
+                    widths.push_back(path->width);
+                for (double w : widths) {
+                    if (wall->tool_hint == ExtrusionToolHint::DetailWall) {
+                        ++detail_count;
+                        if (layer->id() > 0)
+                            detail_max = std::max(detail_max, w);
+                    } else if (wall->tool_hint == ExtrusionToolHint::LargeWall && layer->id() > 0) {
+                        large_min = std::min(large_min, w);
+                    }
+                }
+            }
+            if (detail_count == 0)
+                ++layers_without_detail;
+        }
+        CHECK(layers_without_detail == 0);
+        // 0.42 mm x 0.15 / 0.4 = 0.1575 mm; Arachne may narrow a bead, never widen it past this.
+        CHECK(detail_max > 0.);
+        CHECK(detail_max < 0.17);
+        CHECK(large_min > 0.3);
+    }
+}
+
+TEST_CASE("An absolute width set on the object follows each nozzle like the print's own widths", "[MultiNozzleWalls][Regression]")
+{
+    // Walls on filament 2, the 0.15 mm nozzle; the print sets percentages, the object an absolute 0.42 mm.
+    DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 2, "arachne", false);
+    config.set_deserialize_strict({ { "layer_height", 0.1 }, { "initial_layer_print_height", 0.1 }, // mm
+                                    { "outer_wall_line_width", "100%" }, { "printer_variant", "0.4" } });
+    Print print;
+    Model model;
+    init_print({ cube(10) }, print, model, config);
+    model.objects.front()->config.set_key_value("outer_wall_line_width", new ConfigOptionFloatOrPercent(0.42, false)); // mm
+    print.apply(model, print.full_print_config());
+    REQUIRE(print.objects().size() == 1);
+    const PrintRegion &region = print.objects().front()->printing_region(0);
+    REQUIRE(region.config().outer_wall_line_width.percent);
+    // 0.42 mm x 0.15 / 0.4 = 0.1575 mm, on the region's own 0.15 mm nozzle.
+    CHECK_THAT(region.flow(*print.objects().front(), frExternalPerimeter, 0.1, false).width(), Catch::Matchers::WithinAbs(0.1575, 1e-6));
+}
