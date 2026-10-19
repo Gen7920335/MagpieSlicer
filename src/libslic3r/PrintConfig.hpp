@@ -2765,6 +2765,16 @@ size_t get_extruder_index(const GCodeConfig& config, unsigned int filament_id);
 
 double nozzle_diameter_for_filament(const PrintConfig& config, int filament_id, bool is_bbl_printer);
 
+// MAGPIE: the nozzle an absolute line width was set for (printer_variant when it is one of the printer's
+// nozzle diameters, else the largest nozzle), in mm; 0 when every nozzle has the same diameter.
+double absolute_line_width_reference_nozzle(const DynamicPrintConfig &config);
+// MAGPIE: restates the absolute line widths of `config` as a percentage of reference_mm (mm); nothing
+// when reference_mm is 0. Used for the print config and for per-object, part and layer range overrides.
+void scale_absolute_line_widths(ConfigBase &config, double reference_mm);
+// MAGPIE: on a printer with nozzles of different diameters, restates absolute line widths (keys whose
+// percentage is over nozzle_diameter) as a percentage of the reference nozzle. Does nothing otherwise.
+void scale_absolute_line_widths_to_nozzles(DynamicPrintConfig &config);
+
 } // namespace Slic3r
 
 // Serialization through the Cereal library

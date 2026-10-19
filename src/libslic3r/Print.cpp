@@ -1879,6 +1879,18 @@ StringObjectException Print::check_multi_filament_valid(const Print& print)
     return ret;
 }
 
+// MAGPIE: on a printer with nozzles of different sizes absolute line widths are scaled from a reference
+// nozzle (scale_absolute_line_widths_to_nozzles), so a width error there says so and names that nozzle (mm).
+static std::string line_width_error(bool too_small, double reference_mm)
+{
+    if (reference_mm <= 0.)
+        return too_small ? L("Line width too small") : L("Line width too large");
+    return (boost::format(too_small ?
+        L("Line width too small. On a printer with nozzles of different sizes, an absolute line width is the width for the %1% mm nozzle and is scaled to the other nozzles. Enter a percentage to set the width relative to each nozzle.") :
+        L("Line width too large. On a printer with nozzles of different sizes, an absolute line width is the width for the %1% mm nozzle and is scaled to the other nozzles. Enter a percentage to set the width relative to each nozzle.")) %
+            reference_mm).str();
+}
+
 // MAGPIE (Magpie line 1): half-height (H/2) outer walls and support print their roles at half the
 // layer height, so each role is checked against the nozzle of the filament that prints it at the
 // height it actually prints at, instead of the full layer against the smallest nozzle. Skirt, brim
@@ -1907,9 +1919,9 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
             role_width = config.line_width;
         const double width_mm = role_width.get_abs_value(nozzle_mm);
         if (width_mm != 0. && width_mm <= height_mm)
-            error = {L("Line width too small"), &object, width_key};
+            error = {line_width_error(true, print.line_width_reference_mm()), &object, width_key};
         else if (width_mm > nozzle_mm * MAX_LINE_WIDTH_MULTIPLIER)
-            error = {L("Line width too large"), &object, width_key};
+            error = {line_width_error(false, print.line_width_reference_mm()), &object, width_key};
     };
     const int outer_count = config.outer_wall_half_layer_height.value ? 2 : 1; // walls printed at half height
     for (const bool first : { true, false }) {
@@ -2655,16 +2667,16 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                 return {L("One or more object were assigned an extruder that the printer does not have.")};
 #endif
 
-        auto validate_extrusion_width = [min_nozzle_diameter, max_nozzle_diameter](const ConfigBase &config, const char *opt_key, double layer_height, std::string &err_msg) -> bool {
+        auto validate_extrusion_width = [min_nozzle_diameter, max_nozzle_diameter, reference_mm = m_line_width_reference_mm](const ConfigBase &config, const char *opt_key, double layer_height, std::string &err_msg) -> bool {
             double extrusion_width_min = config.get_abs_value(opt_key, min_nozzle_diameter);
             double extrusion_width_max = config.get_abs_value(opt_key, max_nozzle_diameter);
             if (extrusion_width_min == 0) {
                 // Default "auto-generated" extrusion width is always valid.
             } else if (extrusion_width_min <= layer_height) {
-                    err_msg = L("Line width too small");
+                    err_msg = line_width_error(true, reference_mm);
                     return false;
                 } else if (extrusion_width_max > max_nozzle_diameter * MAX_LINE_WIDTH_MULTIPLIER) {
-                err_msg = L("Line width too large");
+                err_msg = line_width_error(false, reference_mm);
 				return false;
 			}
 			return true;
@@ -2801,7 +2813,7 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                     }
                     // MAGPIE: an H/2 object is checked against its tallest layer.
                     if (!allow_thin_bridge_width && bridge_width <= (half_layer_object ? max_height_mm : layer_height)) {
-                        err_msg = L("Line width too small");
+                        err_msg = line_width_error(true, m_line_width_reference_mm);
                         return { err_msg, object, "bridge_line_width" };
                     }
                 }

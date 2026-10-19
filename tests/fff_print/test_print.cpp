@@ -1861,6 +1861,9 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
     config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.15, 0.4}); // mm
     config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
     config.set_key_value("max_layer_height", new ConfigOptionFloats{0.4, 0.4});   // mm
+    // Widths for the 0.15 mm nozzle are given as a percentage of it: on this mixed printer an absolute
+    // width belongs to the 0.4 mm reference nozzle (scale_absolute_line_widths_to_nozzles).
+    config.set_deserialize_strict({{"outer_wall_line_width", "100%"}});
     // Scenario 6 asks for full-height support under half-height outer walls; that combination is
     // forced to half-height support, so it validates like scenario 5.
     const bool should_pass = scenario == 0 || scenario == 5 || scenario == 6 || scenario == 8;
@@ -1875,7 +1878,7 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
         config.set("support_filament", 1);
         config.set("support_interface_filament", 1);
         config.set("support_half_layer_height", scenario == 5);
-        config.set("support_line_width", 0.15);
+        config.set_deserialize_strict({{"support_line_width", "100%"}});
     }
     if (scenario == 7 || scenario == 8) {
         config.set("outer_wall_filament_id", 2);
@@ -1907,4 +1910,33 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
     const auto error = print.validate();
     CAPTURE(engine, scenario, error.string, error.opt_key);
     CHECK(error.string.empty() == should_pass);
+}
+
+TEST_CASE("A line width error on a mixed-nozzle printer names the nozzle absolute widths are scaled from", "[Print][validate]")
+{
+    const bool mixed = GENERATE(false, true);
+    CAPTURE(mixed);
+    auto config = multifilament_config(2, {
+        {"layer_height", 0.1}, {"initial_layer_print_height", 0.1}, // mm
+        {"outer_wall_filament_id", 2}, {"inner_wall_filament_id", 2},
+        {"sparse_infill_filament_id", 2}, {"internal_solid_filament_id", 2},
+        {"top_surface_filament_id", 2}, {"bottom_surface_filament_id", 2},
+        {"enable_support", true}, {"support_filament", 1}, {"support_interface_filament", 1},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}, {"enable_prime_tower", false},
+    });
+    // 0.05 mm is below the 0.1 mm layer on a single size; on the mixed printer 0.15 mm is meant for the
+    // 0.15 mm nozzle but is scaled from the 0.4 mm one: 0.15 x 0.15 / 0.4 = 0.056 mm, also below 0.1 mm.
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{mixed ? 0.15 : 0.4, 0.4}); // mm
+    config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(mixed ? 0.15 : 0.05, false)); // mm
+    config.set_key_value("printer_variant", new ConfigOptionString("0.4"));
+    Model model;
+    Print print;
+    build_cubes(model, print, config, 1, false);
+    const auto error = print.validate();
+    CAPTURE(error.string);
+    CHECK(error.opt_key == "support_line_width");
+    if (mixed)
+        CHECK(error.string.find("0.4 mm nozzle") != std::string::npos);
+    else
+        CHECK(error.string == "Line width too small");
 }

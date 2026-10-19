@@ -1665,3 +1665,60 @@ TEST_CASE("Default options of enum lists get their definition's keys map", "[Con
     }
     CHECK(enum_lists > 0);
 }
+
+TEST_CASE("Absolute line widths follow each nozzle on a printer with mixed nozzle sizes", "[Config]")
+{
+    using Catch::Matchers::WithinAbs;
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.15, 0.4 }); // mm
+    config.set_key_value("outer_wall_line_width", new ConfigOptionFloatOrPercent(0.42, false)); // mm
+    config.set_key_value("inner_wall_line_width", new ConfigOptionFloatOrPercent(110., true));
+    config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(0., false)); // auto
+    config.set_key_value("spiral_mode_max_xy_smoothing", new ConfigOptionFloatOrPercent(0.3, false)); // mm, not a width
+    const std::string variant = GENERATE(std::string(), std::string("0.4"), std::string("0.4 HF"));
+    CAPTURE(variant);
+    config.set_key_value("printer_variant", new ConfigOptionString(variant));
+
+    // The empty and non-numeric variants fall back to the largest nozzle, which is also 0.4 mm here.
+    CHECK_THAT(absolute_line_width_reference_nozzle(config), WithinAbs(0.4, 1e-12));
+    scale_absolute_line_widths_to_nozzles(config);
+    const auto &outer = *config.option<ConfigOptionFloatOrPercent>("outer_wall_line_width");
+    CHECK(outer.percent);
+    CHECK_THAT(outer.get_abs_value(0.15), WithinAbs(0.1575, 1e-9)); // 0.42 x 0.15 / 0.4, mm
+    CHECK_THAT(outer.get_abs_value(0.4), WithinAbs(0.42, 1e-9));
+    CHECK(*config.option("inner_wall_line_width") == ConfigOptionFloatOrPercent(110., true));
+    CHECK(*config.option("support_line_width") == ConfigOptionFloatOrPercent(0., false));
+    CHECK(*config.option("spiral_mode_max_xy_smoothing") == ConfigOptionFloatOrPercent(0.3, false));
+}
+
+TEST_CASE("The printer variant names the reference nozzle only when the printer has that nozzle", "[Config]")
+{
+    using Catch::Matchers::WithinAbs;
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.15, 0.4, 0.6 }); // mm
+    config.set_key_value("line_width", new ConfigOptionFloatOrPercent(0.42, false)); // mm
+    SECTION("variant 0.4 is one of the nozzles") {
+        config.set_key_value("printer_variant", new ConfigOptionString("0.4"));
+        CHECK_THAT(absolute_line_width_reference_nozzle(config), WithinAbs(0.4, 1e-12));
+        scale_absolute_line_widths_to_nozzles(config);
+        CHECK_THAT(config.option<ConfigOptionFloatOrPercent>("line_width")->get_abs_value(0.6), WithinAbs(0.63, 1e-9)); // 0.42 x 0.6 / 0.4
+    }
+    SECTION("variant 0.25 is not, so the largest nozzle is the reference") {
+        config.set_key_value("printer_variant", new ConfigOptionString("0.25"));
+        CHECK_THAT(absolute_line_width_reference_nozzle(config), WithinAbs(0.6, 1e-12));
+        scale_absolute_line_widths_to_nozzles(config);
+        CHECK_THAT(config.option<ConfigOptionFloatOrPercent>("line_width")->get_abs_value(0.6), WithinAbs(0.42, 1e-9));
+    }
+}
+
+TEST_CASE("Line widths are left as set on a printer with one nozzle size", "[Config]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.4, 0.4, 0.4, 0.4 }); // mm
+    config.set_key_value("printer_variant", new ConfigOptionString("0.6"));
+    config.set_key_value("outer_wall_line_width", new ConfigOptionFloatOrPercent(0.42, false)); // mm
+    const DynamicPrintConfig before = config;
+    CHECK(absolute_line_width_reference_nozzle(config) == 0.);
+    scale_absolute_line_widths_to_nozzles(config);
+    CHECK(config.diff(before).empty());
+}
