@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-19 12:22+0900\n"
+"POT-Creation-Date: 2026-10-19 15:35+0900\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -2200,6 +2200,18 @@ msgid ""
 "Please note, application settings will be lost, but printer profiles will not be affected."
 msgstr ""
 
+msgid "The current project has unsaved changes. Would you like to save before continuing?"
+msgstr ""
+
+msgid "Save"
+msgstr ""
+
+msgid "The installed mod is used from the next start of the application."
+msgstr ""
+
+msgid "Get Mods"
+msgstr ""
+
 msgid "Loading mods"
 msgstr ""
 
@@ -4334,9 +4346,6 @@ msgid "Next"
 msgstr ""
 
 msgid "Calibration completed. Please find the most uniform extrusion line on your hot bed like the picture below, and fill the value on its left side into the factor K input box."
-msgstr ""
-
-msgid "Save"
 msgstr ""
 
 msgctxt "Navigation"
@@ -6558,9 +6567,6 @@ msgid "Show outline around selected object in 3D scene."
 msgstr ""
 
 msgid "Preferences"
-msgstr ""
-
-msgid "Get Mods"
 msgstr ""
 
 msgid "Search the mod index and install mods"
@@ -8967,9 +8973,6 @@ msgid "Unable to add models in preview mode"
 msgstr ""
 
 msgid "All objects will be removed, continue?"
-msgstr ""
-
-msgid "The current project has unsaved changes. Would you like to save before continuing?"
 msgstr ""
 
 msgid "Number of copies:"
@@ -31163,6 +31166,9 @@ msgstr ""
 msgid "Install"
 msgstr ""
 
+msgid "Reading the mod index..."
+msgstr ""
+
 #, possible-c-format
 msgid "%zu mods in %s"
 msgstr ""
@@ -31172,6 +31178,10 @@ msgstr ""
 
 #, possible-c-format, possible-boost-format
 msgid "\"%s\" is a community mod that the index has not checked. Install it?"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid "Installing %s..."
 msgstr ""
 
 #, possible-c-format, possible-boost-format

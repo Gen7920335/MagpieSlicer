@@ -1809,17 +1809,22 @@ void generate_support_toolpaths(
                     else if (layer->layer_type == SupporLayerType::BottomInterface) { bottom_interface[idx] = 1; bottom_source[idx] = layer->half_layer_source_id; }
                 }
         // Top interfaces count down from their contact; bottom interfaces count up from theirs. A band of the same
-        // H/2 source layer as the previous one keeps its number.
+        // H/2 source layer as the previous one keeps its number. A generator without contact layers (Cura) makes
+        // the outermost interface layer of each stack its contact (1), as line 1's Cura port printed one.
+        const bool any_top_contact    = std::find(top_contact.begin(), top_contact.end(), 1) != top_contact.end();
+        const bool any_bottom_contact = std::find(bottom_contact.begin(), bottom_contact.end(), 1) != bottom_contact.end();
         for (int idx = int(support_layers.size()) - 1, n = 0; idx >= 0; --idx) {
             const bool same_source = top_interface[idx] && idx + 1 < int(support_layers.size()) && top_interface[idx + 1] &&
                                      top_source[idx] != size_t(-1) && top_source[idx] == top_source[idx + 1];
-            n = top_contact[idx] ? 1 : top_interface[idx] && n > 0 ? (same_source ? n : n + 1) : 0;
+            n = top_contact[idx] ? 1 : top_interface[idx] && n > 0 ? (same_source ? n : n + 1) :
+                top_interface[idx] && !any_top_contact ? 1 : 0;
             top_interface_numbers[idx] = top_interface[idx] ? n : 0;
         }
         for (size_t idx = 0, n = 0; idx < support_layers.size(); ++idx) {
             const bool same_source = bottom_interface[idx] && idx > 0 && bottom_interface[idx - 1] &&
                                      bottom_source[idx] != size_t(-1) && bottom_source[idx] == bottom_source[idx - 1];
-            n = bottom_contact[idx] ? 1 : bottom_interface[idx] && n > 0 ? (same_source ? n : n + 1) : 0;
+            n = bottom_contact[idx] ? 1 : bottom_interface[idx] && n > 0 ? (same_source ? n : n + 1) :
+                bottom_interface[idx] && !any_bottom_contact ? 1 : 0;
             bottom_interface_numbers[idx] = bottom_interface[idx] ? int(n) : 0;
         }
     }

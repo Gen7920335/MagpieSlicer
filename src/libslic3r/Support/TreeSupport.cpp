@@ -1571,7 +1571,9 @@ void TreeSupport::generate_toolpaths()
     coordf_t support_extrusion_width = m_support_params.support_extrusion_width;
     coordf_t nozzle_diameter = nozzle_diameter_for_filament(*m_print_config, object_config.support_filament, m_object->print()->is_BBL_printer());
     coordf_t layer_height = object_config.layer_height.value;
-    const size_t wall_count = object_config.tree_support_wall_count.value;
+    // MAGPIE: support_extras' tree wall count (0-10) replaces Orca's when set (-1 keeps it), as in line 1.
+    const size_t wall_count = m_support_params.tree_wall_loops >= 0 ? size_t(std::clamp(m_support_params.tree_wall_loops, 0, 10)) :
+                                                                       size_t(object_config.tree_support_wall_count.value);
 
     // Check if set to zero, use default if so.
     if (support_extrusion_width <= 0.0)
@@ -1725,6 +1727,47 @@ void TreeSupport::generate_toolpaths()
                 std::shared_ptr<Fill> filler_interface = std::shared_ptr<Fill>(Fill::new_from_type(m_support_params.contact_fill_pattern));
                 std::shared_ptr<Fill> filler_Roof1stLayer = std::shared_ptr<Fill>(Fill::new_from_type(ipRectilinear));
                 filler_interface->set_bounding_box(bbox_object);
+                // MAGPIE: the interface sublayer (support_extras mod), as for the other generators (line 1).
+                std::shared_ptr<Fill> filler_sublayer = m_support_params.sublayer_enabled() ?
+                    std::shared_ptr<Fill>(Fill::new_from_type(m_support_params.sublayer_pattern)) : nullptr;
+                if (filler_sublayer)
+                    filler_sublayer->set_bounding_box(bbox_object);
+                // Interface paths of a roof or floor: the sublayer's own pattern, angle and (marked) temperature
+                // on the layers it covers, counted from the contact (1); triangles keep the line spacing per
+                // direction, unanchored.
+                auto extrude_interface = [&](ExPolygons &areas, FillParams fill_params, bool interface_as_base, const Flow &flow,
+                                             int interface_number, int interface_total) {
+                    const bool use_sublayer = filler_sublayer && !interface_as_base &&
+                        support_interface_sublayer_selected(true, m_support_params.sublayer_start, m_support_params.sublayer_end,
+                                                            interface_number, interface_total);
+                    Fill *filler = filler_interface.get();
+                    if (use_sublayer) {
+                        filler              = filler_sublayer.get();
+                        filler->spacing     = filler_interface->spacing;
+                        filler->angle       = m_support_params.sublayer_angle;
+                        filler->fixed_angle = true;
+                        filler->layer_id    = size_t(-1);
+                    }
+                    const InfillPattern pattern = use_sublayer ? m_support_params.sublayer_pattern : m_support_params.contact_fill_pattern;
+                    if (!interface_as_base && pattern == ipTriangles && (use_sublayer || m_support_params.interface_pattern_override)) {
+                        fill_params.multiline             = 1;
+                        fill_params.density_per_direction = true;
+                        fill_params.anchor_length         = 0.f;
+                        fill_params.anchor_length_max     = 0.f;
+                    }
+                    const ExtrusionRole role = interface_as_base ? erSupportMaterial : erSupportMaterialInterface;
+                    if (use_sublayer && m_support_params.sublayer_temperature > 0) {
+                        auto *sublayer = new ExtrusionEntityCollection();
+                        sublayer->interface_sublayer = true;
+                        fill_expolygons_generate_paths(sublayer->entities, areas, filler, fill_params, role, flow);
+                        if (sublayer->entities.empty())
+                            delete sublayer;
+                        else
+                            ts_layer->support_fills.entities.push_back(sublayer);
+                    } else {
+                        fill_expolygons_generate_paths(ts_layer->support_fills.entities, areas, filler, fill_params, role, flow);
+                    }
+                };
                 filler_Roof1stLayer->set_bounding_box(bbox_object);
 
                 for (auto& area_group : ts_layer->area_groups) {
@@ -1792,9 +1835,8 @@ void TreeSupport::generate_toolpaths()
                                                         m_object_config->support_interface_pattern == smipRectilinear);
 
                         Flow interface_base_flow = interface_as_base ? support_flow : interface_flow;
-                        ExtrusionRole interface_role = interface_as_base ? erSupportMaterial : erSupportMaterialInterface;
-                        fill_expolygons_generate_paths(ts_layer->support_fills.entities, polys,
-                            filler_interface.get(), fill_params, interface_role, interface_base_flow);
+                        extrude_interface(polys, fill_params, interface_as_base, interface_base_flow, area_group.interface_number,
+                                          int(m_support_params.num_bottom_interface_layers));
                     } else if (area_group.type == SupportLayer::RoofType) {
                         // roof_areas
                         bool interface_as_base = area_group.interface_as_base;
@@ -1808,9 +1850,8 @@ void TreeSupport::generate_toolpaths()
                                                         m_object_config->support_interface_pattern == smipRectilinear);
 
                         Flow interface_base_flow = interface_as_base ? support_flow : interface_flow;
-                        ExtrusionRole interface_role = interface_as_base ? erSupportMaterial : erSupportMaterialInterface;
-                        fill_expolygons_generate_paths(ts_layer->support_fills.entities, polys, filler_interface.get(), fill_params, interface_role,
-                                                       interface_base_flow);
+                        extrude_interface(polys, fill_params, interface_as_base, interface_base_flow, area_group.interface_number,
+                                          int(m_support_params.num_top_interface_layers));
                     }
                     else {
                         // base_areas
@@ -1854,7 +1895,7 @@ void TreeSupport::generate_toolpaths()
                             }
                             else {
                                 SupportParameters support_params = m_support_params;
-                                if (area_group.need_extra_wall && object_config.tree_support_wall_count.value == 0)
+                                if (area_group.need_extra_wall && wall_count == 0)
                                     support_params.tree_branch_diameter_double_wall_area_scaled = 0.1;
                                 tree_supports_generate_paths(base_dst, loops, flow, support_params);
                             }
@@ -2686,6 +2727,32 @@ void TreeSupport::draw_circles()
 
             if (has_floor_interface)
                 ++floor_interface_id;
+        }
+
+        // MAGPIE: number each layer of a roof stack from its contact (top, 1) down, and of a floor stack from
+        // its contact (bottom, 1) up, for the interface sublayer. interface_id keeps Orca's meaning (angles).
+        if (m_support_params.sublayer_enabled()) {
+            auto layer_has = [this](size_t layer_nr, auto pred) {
+                const SupportLayer *ts_layer = m_object->get_support_layer(layer_nr + m_raft_layers);
+                return ts_layer != nullptr && std::any_of(ts_layer->area_groups.begin(), ts_layer->area_groups.end(), pred);
+            };
+            const auto is_roof  = [](const SupportLayer::AreaGroup &g) { return g.type == SupportLayer::RoofType || g.type == SupportLayer::Roof1stLayer; };
+            const auto is_floor = [](const SupportLayer::AreaGroup &g) { return g.type == SupportLayer::FloorType; };
+            const size_t layer_count = m_ts_data->layer_heights.size();
+            for (size_t i = layer_count, n = 0; i-- > 0;) {
+                n = layer_has(i, is_roof) ? n + 1 : 0;
+                if (SupportLayer *ts_layer = m_object->get_support_layer(i + m_raft_layers); ts_layer != nullptr && n > 0)
+                    for (auto &area_group : ts_layer->area_groups)
+                        if (is_roof(area_group))
+                            area_group.interface_number = area_group.type == SupportLayer::Roof1stLayer ? 1 : int(n);
+            }
+            for (size_t i = 0, n = 0; i < layer_count; ++i) {
+                n = layer_has(i, is_floor) ? n + 1 : 0;
+                if (SupportLayer *ts_layer = m_object->get_support_layer(i + m_raft_layers); ts_layer != nullptr && n > 0)
+                    for (auto &area_group : ts_layer->area_groups)
+                        if (is_floor(area_group))
+                            area_group.interface_number = int(n);
+            }
         }
 
         if (with_lightning_infill)

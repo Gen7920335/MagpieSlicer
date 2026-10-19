@@ -16,6 +16,7 @@
 #include <wx/utils.h>
 
 #include <algorithm>
+#include <thread>
 
 namespace Slic3r {
 namespace GUI {
@@ -82,7 +83,14 @@ ModBrowserDialog::ModBrowserDialog(wxWindow *parent, const std::vector<std::stri
     m_list->Bind(wxEVT_LIST_ITEM_DESELECTED, [this](wxListEvent &) { m_install->Enable(false); });
     m_list->Bind(wxEVT_LIST_ITEM_ACTIVATED, [this](wxListEvent &) { install_selected(); });
     m_install->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { install_selected(); });
-    close->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_CLOSE); });
+    close->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { if (!m_busy) EndModal(wxID_CLOSE); });
+    // ESC and the close box end the dialog too; not while an install is writing files.
+    Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent &e) {
+        if (m_busy && e.CanVeto())
+            e.Veto();
+        else
+            e.Skip();
+    });
     m_install->Enable(false);
 
     SetSizerAndFit(top);
@@ -91,22 +99,49 @@ ModBrowserDialog::ModBrowserDialog(wxWindow *parent, const std::vector<std::stri
     load_index();
 }
 
+ModBrowserDialog::~ModBrowserDialog()
+{
+    m_alive->store(false);
+}
+
+void ModBrowserDialog::set_busy(bool busy)
+{
+    m_busy = busy;
+    m_list->Enable(!busy);
+    m_search->Enable(!busy);
+    m_install->Enable(!busy && m_list->GetSelectedItemCount() > 0);
+}
+
+// The index is downloaded on a worker thread (up to the HTTP timeout), so the app stays responsive.
 void ModBrowserDialog::load_index()
 {
-    wxBusyCursor busy;
     const std::string url = index_url();
-    try {
-        m_entries = fetch_mod_index(url);
-        m_status->SetLabel(wxString::Format(_L("%zu mods in %s"), m_entries.size(), from_u8(url)));
-    } catch (const std::exception &e) {
-        m_entries.clear();
-        m_status->SetLabel(_L("Could not read the mod index:") + " " + from_u8(e.what()));
-    }
-    // Mods the project needs go first.
-    std::stable_partition(m_entries.begin(), m_entries.end(), [this](const ModHost::ModIndexEntry &e) {
-        return std::find(m_wanted.begin(), m_wanted.end(), e.id) != m_wanted.end();
-    });
-    refresh_list();
+    m_status->SetLabel(_L("Reading the mod index..."));
+    set_busy(true);
+    std::thread([this, alive = m_alive, url]() {
+        std::vector<ModHost::ModIndexEntry> entries;
+        std::string                         error;
+        try {
+            entries = fetch_mod_index(url);
+        } catch (const std::exception &e) {
+            error = e.what();
+        }
+        wxGetApp().CallAfter([this, alive, url, entries = std::move(entries), error]() mutable {
+            if (!alive->load())
+                return;
+            set_busy(false);
+            m_entries = std::move(entries);
+            if (error.empty())
+                m_status->SetLabel(wxString::Format(_L("%zu mods in %s"), m_entries.size(), from_u8(url)));
+            else
+                m_status->SetLabel(_L("Could not read the mod index:") + " " + from_u8(error));
+            // Mods the project needs go first.
+            std::stable_partition(m_entries.begin(), m_entries.end(), [this](const ModHost::ModIndexEntry &e) {
+                return std::find(m_wanted.begin(), m_wanted.end(), e.id) != m_wanted.end();
+            });
+            refresh_list();
+        });
+    }).detach();
 }
 
 void ModBrowserDialog::refresh_list()
@@ -140,15 +175,28 @@ void ModBrowserDialog::install_selected()
         if (ask.ShowModal() != wxID_YES)
             return;
     }
-    wxBusyCursor busy;
-    try {
-        download_and_install_mod(entry);
-        m_installed_any = true;
-        m_status->SetLabel(wxString::Format(_L("Installed %s %s."), from_u8(entry.id), from_u8(entry.version)));
-    } catch (const std::exception &e) {
-        m_status->SetLabel(_L("Could not install the mod:") + " " + from_u8(e.what()));
-    }
-    refresh_list();
+    m_status->SetLabel(wxString::Format(_L("Installing %s..."), from_u8(entry.name.empty() ? entry.id : entry.name)));
+    set_busy(true);
+    std::thread([this, alive = m_alive, entry]() {
+        std::string error;
+        try {
+            download_and_install_mod(entry);
+        } catch (const std::exception &e) {
+            error = e.what();
+        }
+        wxGetApp().CallAfter([this, alive, entry, error]() {
+            if (!alive->load())
+                return;
+            set_busy(false);
+            if (error.empty()) {
+                m_installed_any = true;
+                m_status->SetLabel(wxString::Format(_L("Installed %s %s."), from_u8(entry.id), from_u8(entry.version)));
+            } else {
+                m_status->SetLabel(_L("Could not install the mod:") + " " + from_u8(error));
+            }
+            refresh_list();
+        });
+    }).detach();
 }
 
 } // namespace GUI

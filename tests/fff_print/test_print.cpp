@@ -1846,7 +1846,7 @@ TEST_CASE("Height ranges and modifiers count for the filament shrinkage compensa
 TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle", "[Print][validate][HalfLayer]")
 {
     const char *engine   = GENERATE("classic", "arachne");
-    const int   scenario = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+    const int   scenario = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
     auto config = multifilament_config(2, {
         {"layer_height", 0.16}, {"initial_layer_print_height", 0.16},
         {"wall_generator", engine}, {"wall_loops", 4},
@@ -1868,7 +1868,7 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
     if (scenario == 2) config.set("inner_wall_filament_id", 1);
     if (scenario == 3) config.set("sparse_infill_filament_id", 1);
     if (scenario == 4) config.set("initial_layer_print_height", 0.32);
-    if (scenario == 5 || scenario == 6) {
+    if (scenario == 5 || scenario == 6 || scenario == 12) {
         config.set("enable_support", true);
         config.set("outer_wall_filament_id", 2);
         config.set("outer_wall_line_width", 0.4);
@@ -1889,6 +1889,10 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
         config.set("skirt_height", 2);
     }
     if (scenario == 11) config.set("bridge_line_width", 0.2);
+    // 12: the raft is not split by H/2, so its 0.16 mm first band is too tall for the 0.15 mm support nozzle (line 1).
+    if (scenario == 12) config.set("raft_layers", 2);
+    // 13: skin infill (internal solid filament, 0.4 mm nozzle) wider than 5 x the nozzle (MAX_LINE_WIDTH_MULTIPLIER).
+    if (scenario == 13) config.set_deserialize_strict({{"skin_infill_line_width", "2.5"}});
     Model model;
     Print print;
     build_cubes(model, print, config, 1, false);

@@ -785,6 +785,27 @@ TEST_CASE("Interface sublayers print at their own temperature and the model at t
         CHECK(temperature_c == 220);
 }
 
+TEST_CASE("Interface sublayers apply to Cura and to slim and hybrid tree support", "[LowTemperatureInterface][Sublayer][SupportExtras]")
+{
+    // Before: Cura emits no contact layers, so no interface was ever numbered and none became a sublayer;
+    // the slim and hybrid tree toolpaths did not know the sublayer at all. Line 1 applied it to every generator.
+    const auto [support_type, support_style, generator] = GENERATE(table<const char *, const char *, const char *>({
+        { "normal(auto)", "default", "cura" },
+        { "tree(auto)", "tree_slim", "" },
+        { "tree(auto)", "tree_hybrid", "" },
+    }));
+    CAPTURE(support_type, support_style, generator);
+    DynamicPrintConfig config = sublayer_temperature_config(false, 185);
+    config.set_deserialize_strict({ { "support_type", support_type }, { "support_style", support_style }, { "support_generator", generator } });
+    Print print;
+    init_and_process_print({ TestMesh::overhang }, print, config);
+    const TemperatureTrace trace = trace_temperatures(Slic3r::Test::gcode(print), config);
+    CHECK(std::count(trace.targets.begin(), trace.targets.end(), 185) > 0);
+    REQUIRE_FALSE(trace.model_temperatures.empty());
+    for (const int temperature_c : trace.model_temperatures)
+        CHECK(temperature_c == 220);
+}
+
 
 // MAGPIE: line 1 (Beta 7) temperature drop tower tests for printers with several physical tools.
 TEST_CASE("Tower placement intersects only participating physical tool areas", "[LowTemperatureInterface][TemperatureDropTower]")

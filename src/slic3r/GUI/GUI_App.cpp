@@ -4905,8 +4905,22 @@ void GUI_App::open_mod_browser(const std::vector<std::string>& wanted_ids)
 {
     ModBrowserDialog dlg(mainframe, wanted_ids);
     dlg.ShowModal();
-    if (dlg.installed_any())
-        recreate_GUI(_L("Loading mods"));
+    if (!dlg.installed_any())
+        return;
+    // Rebuilding the window drops the open project, so offer to save it first (as a language switch does).
+    if (plater() != nullptr && plater()->is_project_dirty()) {
+        const int answer = MessageDialog(mainframe, _L("The current project has unsaved changes. Would you like to save before continuing\?"),
+                                         wxString(SLIC3R_APP_FULL_NAME) + " - " + _L("Save"), wxYES_NO | wxCANCEL | wxYES_DEFAULT | wxCENTRE)
+                               .ShowModal();
+        if (answer == wxID_CANCEL) {
+            MessageDialog(mainframe, _L("The installed mod is used from the next start of the application."), _L("Get Mods"),
+                          wxOK | wxICON_INFORMATION).ShowModal();
+            return;
+        }
+        if (answer == wxID_YES && plater()->save_project() == wxID_CANCEL)
+            return;
+    }
+    recreate_GUI(_L("Loading mods"));
 }
 
 void GUI_App::recreate_GUI(const wxString &msg_name)

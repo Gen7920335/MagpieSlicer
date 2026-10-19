@@ -36,6 +36,7 @@
 #include <memory>
 #include "FilamentGroupUtils.hpp"
 #include "MultiNozzleUtils.hpp"
+#include "ModHost/Builtin/MultiNozzleWalls.hpp"
 #include <chrono>
 #include <optional>
 #include "GCode/GCodeProcessor.hpp"
@@ -1901,19 +1902,35 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
             const int outer = std::max(1, rc.outer_wall_filament_id.value);
             const int inner = rc.inner_wall_filament_id.value > 0 ? rc.inner_wall_filament_id.value : outer;
             if (rc.wall_loops.value > 0) {
+                const bool detail_walls = rc.use_smaller_nozzles_in_crisp_corners.value;
                 check(outer, rc.outer_wall_line_width, outer_mm, first, "outer_wall_line_width");
-                if (rc.wall_loops.value > outer_count)
+                // With detail walls the large nozzle prints the inner walls even when the wall count is small.
+                if (rc.wall_loops.value > outer_count || detail_walls)
                     check(inner, rc.inner_wall_line_width, full_mm, first, "inner_wall_line_width");
-                // Multi-nozzle detail walls: the detail toolhead prints the outer walls; walls beyond the
-                // half-height ones print at full height.
-                if (rc.use_smaller_nozzles_in_crisp_corners.value && rc.crisp_corner_detail_toolhead.value > 0)
-                    check(rc.crisp_corner_detail_toolhead.value, rc.outer_wall_line_width,
-                          rc.crisp_corner_small_nozzle_wall_count.value > outer_count ? full_mm : outer_mm, first, "outer_wall_line_width");
+                // Multi-nozzle detail walls: the detail tool (the planner's own choice) prints the outer
+                // walls; walls beyond the half-height ones print at full height.
+                if (detail_walls)
+                    if (const auto detail = ModHost::MultiNozzleWalls::detail_tool(pc, rc, unsigned(outer)); detail)
+                        check(int(detail.filament_1based), rc.outer_wall_line_width,
+                              rc.crisp_corner_small_nozzle_wall_count.value > outer_count ? full_mm : outer_mm, first, "outer_wall_line_width");
+                // Large-nozzle override ranges print every wall of their layers with one toolhead (line 1).
+                for (const std::string &text : rc.crisp_corner_large_nozzle_override_regions.values)
+                    if (const auto range = ModHost::MultiNozzleWalls::parse_override_range(text); range && range->toolhead_1based > 0) {
+                        const auto tool = ModHost::MultiNozzleWalls::tool_for_filament(pc, range->toolhead_1based);
+                        if (! tool)
+                            continue;
+                        check(int(tool.filament_1based), rc.outer_wall_line_width, outer_mm, first, "outer_wall_line_width");
+                        if (rc.wall_loops.value > outer_count)
+                            check(int(tool.filament_1based), rc.inner_wall_line_width, full_mm, first, "inner_wall_line_width");
+                    }
             }
             if (rc.sparse_infill_density.value > 0.)
                 check(rc.sparse_infill_filament_id.value, rc.sparse_infill_line_width, full_mm, first, "sparse_infill_line_width");
-            if (rc.sparse_infill_density.value > 0. || rc.top_shell_layers.value > 0 || rc.bottom_shell_layers.value > 0)
+            if (rc.sparse_infill_density.value > 0. || rc.top_shell_layers.value > 0 || rc.bottom_shell_layers.value > 0) {
                 check(rc.internal_solid_filament_id.value, rc.internal_solid_infill_line_width, full_mm, first, "internal_solid_infill_line_width");
+                check(rc.internal_solid_filament_id.value, rc.skin_infill_line_width, full_mm, first, "skin_infill_line_width");
+                check(rc.internal_solid_filament_id.value, rc.skeleton_infill_line_width, full_mm, first, "skeleton_infill_line_width");
+            }
             if (rc.top_shell_layers.value > 0)
                 check(rc.top_surface_filament_id.value, rc.top_surface_line_width, full_mm, first, "top_surface_line_width");
             if (rc.bottom_shell_layers.value > 0)
@@ -1928,8 +1945,19 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
                 else
                     for (const unsigned int extruder : object.object_extruders())
                         candidates.push_back(int(extruder) + 1);
-                for (const int candidate : candidates)
+                for (const int candidate : candidates) {
                     check(candidate, config.support_line_width, support_mm, first, "support_line_width");
+                    // Raft bands are not split by H/2: they print at their own, full heights (line 1).
+                    if (object.has_raft()) {
+                        const SlicingParameters &sp = object.slicing_parameters();
+                        const double raft_mm = std::max({ sp.first_print_layer_height, sp.base_raft_layer_height,
+                                                          sp.interface_raft_layer_height, sp.contact_raft_layer_height });
+                        check(candidate, config.support_line_width, raft_mm, true, "support_line_width");
+                    }
+                    // The temperature drop tower prints full layers with the interface filament (line 1).
+                    if (config.single_nozzle_low_temperature_interface.value && config.support_interface_temperature_drop_tower.value)
+                        check(candidate, config.support_line_width, full_mm, first, "support_line_width");
+                }
             }
         }
     }

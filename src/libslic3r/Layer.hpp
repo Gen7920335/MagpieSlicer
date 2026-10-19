@@ -360,6 +360,9 @@ protected:
         ExPolygon *area;
         int        type;
         int interface_id = 0;
+        // MAGPIE: the layer's place in its interface stack, counted from the contact (1); 0 when not
+        // numbered. Set only for the interface sublayer (classic tree support).
+        int interface_number = 0;
         bool interface_as_base = false;
         coordf_t   dist_to_top; // mm dist to top
         bool need_infill = false;
