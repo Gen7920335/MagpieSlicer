@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include "libslic3r/GCode/CoolingBuffer.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/TriangleMesh.hpp"
@@ -26,6 +27,19 @@ TEST_CASE("Fan is held off for the initial layers", "[Cooling]")
         { "close_fan_the_first_x_layers", 5 },
     });
     CHECK(gcode.find("M106 S0") != std::string::npos);
+}
+
+// A dwell counts toward the layer time in either form: S in seconds, P in milliseconds (Klipper's only form).
+TEST_CASE("Dwell lines count their wait in seconds or milliseconds", "[Cooling]")
+{
+    using Catch::Matchers::WithinAbs;
+    CHECK_THAT(g4_dwell_seconds("G4 S5"), WithinAbs(5., 1e-6));
+    CHECK_THAT(g4_dwell_seconds("G4 S1.500"), WithinAbs(1.5, 1e-6));
+    CHECK_THAT(g4_dwell_seconds("G4 P5000"), WithinAbs(5., 1e-6));
+    CHECK_THAT(g4_dwell_seconds("G4 P5000 ; heat before next layer"), WithinAbs(5., 1e-6));
+    // A letter in the comment is not a parameter.
+    CHECK_THAT(g4_dwell_seconds("G4 P250 ; Slow"), WithinAbs(0.25, 1e-6));
+    CHECK_THAT(g4_dwell_seconds("G4 ; nothing"), WithinAbs(0., 1e-6));
 }
 
 // The cooling pass resolves and strips its internal speed placeholders; none leak into

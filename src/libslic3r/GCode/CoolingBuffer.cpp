@@ -359,6 +359,18 @@ std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, b
 
 // Parse the layer G-code for the moves, which could be adjusted.
 // Return the list of parsed lines, bucketed by an extruder.
+// MAGPIE: Orca compared the size_t positions with "> 0", which npos also passes, so a "G4 P<ms>" line (Klipper's
+// only dwell form) read its time from the start of the line and counted 0 s.
+float g4_dwell_seconds(const std::string &line)
+{
+    const std::string command = line.substr(0, line.find(';'));
+    if (const size_t pos_S = command.find('S', 3); pos_S != std::string::npos)
+        return float(atof_decimal_point(command.c_str() + pos_S + 1));
+    if (const size_t pos_P = command.find('P', 3); pos_P != std::string::npos)
+        return float(atof_decimal_point(command.c_str() + pos_P + 1) * 0.001);
+    return 0.f;
+}
+
 std::vector<PerExtruderAdjustments> CoolingBuffer::parse_layer_gcode(const std::string &gcode, std::vector<float> &current_pos) const
 {
     std::vector<PerExtruderAdjustments> per_extruder_adjustments(m_extruder_ids.size());
@@ -562,11 +574,7 @@ std::vector<PerExtruderAdjustments> CoolingBuffer::parse_layer_gcode(const std::
         } else if (boost::starts_with(sline, "G4 ")) {
             // Parse the wait time.
             line.type = CoolingLine::TYPE_G4;
-            size_t pos_S = sline.find('S', 3);
-            size_t pos_P = sline.find('P', 3);
-            line.time = line.time_max = float(
-                (pos_S > 0) ? atof_decimal_point(sline.c_str() + pos_S + 1) :
-                (pos_P > 0) ? atof_decimal_point(sline.c_str() + pos_P + 1) * 0.001 : 0.);
+            line.time = line.time_max = g4_dwell_seconds(sline);
         } else if (boost::starts_with(sline, ";_FORCE_RESUME_FAN_SPEED")) {
             line.type = CoolingLine::TYPE_FORCE_RESUME_FAN;
         }
