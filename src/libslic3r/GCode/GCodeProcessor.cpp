@@ -6467,6 +6467,19 @@ void GCodeProcessor::process_M83(const GCodeReader::GCodeLine& line)
     m_e_local_positioning_type = EPositioningType::Relative;
 }
 
+double GCodeProcessor::estimated_now() const
+{
+    // The time machine computes blocks only once a few are queued, so its time lags the G-code; the queued
+    // blocks (at their current speed profile) and the extra time waiting to be booked make up the rest.
+    const TimeMachine &machine = m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)];
+    double now = machine.time;
+    for (const TimeBlock &block : machine.blocks)
+        now += double(block.time());
+    for (const auto &extra : machine.m_additional_time_buffer)
+        now += double(extra.second);
+    return now;
+}
+
 GCodeProcessor::NozzleTemperature &GCodeProcessor::nozzle_temperature_at(size_t filament_id, double now)
 {
     if (filament_id >= m_nozzle_temperatures.size())
@@ -6487,10 +6500,7 @@ void GCodeProcessor::process_M104(const GCodeReader::GCodeLine& line)
     if (line.has_value('S', new_temp)) {
         m_extruder_temps[filament_id] = new_temp;
         if (m_estimate_temperature_waits) {
-            // The time is that of the moves already estimated, a few moves behind; close enough for a
-            // temperature that changes over seconds.
-            const double now = m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].time;
-            nozzle_temperature_at(size_t(filament_id), now).target = new_temp;
+            nozzle_temperature_at(size_t(filament_id), estimated_now()).target = new_temp;
         }
     }
 }
@@ -6590,7 +6600,7 @@ void GCodeProcessor::process_M109(const GCodeReader::GCodeLine& line)
         if (float val; both_ways && line.has_value('T', val))
             id = size_t(val);
         simulate_st_synchronize(0.f);
-        const double       now  = m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].time;
+        const double       now  = estimated_now();
         NozzleTemperature &t    = nozzle_temperature_at(id, now);
         const bool         wait = both_ways || target > t.current;
         t.target                = target;

@@ -1347,6 +1347,8 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
         bool                           m_estimate_temperature_waits { false };
         float                          m_heat_rate { 2.f }, m_cool_rate { 1.f };
         std::vector<NozzleTemperature> m_nozzle_temperatures;
+        // The estimated time of the G-code processed so far, s.
+        double estimated_now() const;
         // The nozzle's temperature model brought up to `now`.
         NozzleTemperature &nozzle_temperature_at(size_t filament_id, double now);
         float m_preheat_time;
