@@ -74,6 +74,8 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
             const wxString    label = wxString::FromUTF8(ModHost::localized_text(p.labels, language, p.label.empty() ? key : p.label));
             auto *text = new wxStaticText(this, wxID_ANY, label);
             text->SetToolTip(wxString::FromUTF8(key + "  (" + (mod.name.empty() ? mod.id : mod.name) + " " + mod.version + ")"));
+            // Long labels wrap; otherwise the widest one pushed every value off the side of the sidebar.
+            text->Wrap(FromDIP(170));
             grid->Add(text, 0, wxALIGN_CENTER_VERTICAL);
 
             wxWindow *control = nullptr;
@@ -82,7 +84,7 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
                 cb->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &) { commit(); });
                 control = cb;
             } else {
-                auto *tc = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(120), -1), wxTE_PROCESS_ENTER);
+                auto *tc = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(100), -1), wxTE_PROCESS_ENTER);
                 tc->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent &) { commit(); });
                 tc->Bind(wxEVT_KILL_FOCUS, [this](wxFocusEvent &e) { commit(); e.Skip(); });
                 control = tc;

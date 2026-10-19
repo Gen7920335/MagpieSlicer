@@ -1346,16 +1346,13 @@ void GCodeViewer::update_by_mode(ConfigOptionMode mode)
     view_type_items.push_back(libvgcode::EViewType::Temperature);
 // ORCA: Add Pressure Advance visualization support
     view_type_items.push_back(libvgcode::EViewType::PressureAdvance);
-    //if (mode == ConfigOptionMode::comDevelop) {
-    //    view_type_items.push_back(EViewType::Tool);
-    //}
+    // MAGPIE: the Tool view is listed (Orca kept it only for first layer inspection). With nozzles of
+    // different sizes it colours each toolhead apart (line 1's "Nozzle used" view, tool_view_colors).
+    view_type_items.push_back(libvgcode::EViewType::Tool);
 
     for (int i = 0; i < view_type_items.size(); i++) {
         view_type_items_str.push_back(get_view_type_string(view_type_items[i]));
     }
-
-    // BBS for first layer inspection
-    view_type_items.push_back(libvgcode::EViewType::Tool);
 
     options_items.push_back(EMoveType::Travel);
     options_items.push_back(EMoveType::Retract);
@@ -1460,6 +1457,9 @@ void GCodeViewer::load_as_gcode(const GCodeProcessorResult& gcode_result, const 
             tools_colors.emplace_back(libvgcode::convert(color));
         }
         m_viewer.set_tool_colors(tools_colors);
+        m_filament_colors.clear();
+        for (const std::string &color : str_tool_colors)
+            m_filament_colors.emplace_back(libvgcode::convert(color));
 
         // collect color print colors
         libvgcode::Palette color_print_colors;
@@ -1600,6 +1600,9 @@ void GCodeViewer::load_as_gcode(const GCodeProcessorResult& gcode_result, const 
     }
     // MAGPIE: the Filament view keeps the filament colours (convert() falls back to the tool colours for it
     // when there are no colour print colours), the Tool view takes tool_view_colors().
+    m_filament_colors.clear();
+    for (const std::string &color : str_tool_colors)
+        m_filament_colors.emplace_back(libvgcode::convert(color));
     libvgcode::GCodeInputData data = libvgcode::convert(gcode_result, tool_view_colors(str_tool_colors),
         str_color_print_colors.empty() ? str_tool_colors : str_color_print_colors, m_viewer,
         apply_belt ? &belt_inv : nullptr);
@@ -5022,7 +5025,8 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
         // shows only extruders actually used
         size_t i = 0;
         const std::vector<uint8_t>& used_extruders_ids = m_viewer.get_used_extruders_ids();
-        auto tool_colors = m_viewer.get_tool_colors();
+        // MAGPIE: the filament colours, not the Tool view palette.
+        auto tool_colors = m_filament_colors.size() >= m_viewer.get_tool_colors().size() ? m_filament_colors : m_viewer.get_tool_colors();
         for (auto extruder_idx : used_extruders_ids) {
             if (i < model_used_filaments_m.size() && i < model_used_filaments_g.size()) {
                 std::vector<std::pair<std::string, float>> columns_offsets;
@@ -5179,7 +5183,7 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
             const size_t extruders_count = get_extruders_count();
             std::vector<ColorRGBA> last_color(extruders_count);
             for (size_t i = 0; i < extruders_count; ++i) {
-                last_color[i] = libvgcode::convert(m_viewer.get_tool_colors()[i]);
+                last_color[i] = libvgcode::convert((i < m_filament_colors.size() ? m_filament_colors[i] : m_viewer.get_tool_colors()[i]));
             }
             int last_extruder_id = 1;
             int color_change_idx = 0;

@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Orca Slicer\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-19 07:27+0900\n"
+"POT-Creation-Date: 2026-10-19 12:22+0900\n"
 "PO-Revision-Date: 2025-06-02 17:12+0900\n"
 "Last-Translator: crwusiz <crwusiz@gmail.com>\n"
 "Language-Team: \n"
@@ -37378,6 +37378,93 @@ msgstr "예상 시간:"
 # AI Translated
 msgid "Remaining time:"
 msgstr "남은 시간:"
+
+# AI Translated
+msgid "Mixed support met an extrusion it cannot merge."
+msgstr "혼합 서포트가 병합할 수 없는 압출을 만났습니다."
+
+# AI Translated
+msgid "Mixed support does not support belt printers yet."
+msgstr "혼합 서포트는 아직 벨트 프린터를 지원하지 않습니다."
+
+# AI Translated
+msgid "Mixed support: analyzing overhangs"
+msgstr "혼합 서포트: 오버행 분석 중"
+
+# AI Translated
+msgid "Mixed support: classifying normal and tree regions"
+msgstr "혼합 서포트: 일반·트리 영역 나누는 중"
+
+# AI Translated
+msgid "Some areas painted for normal support are not reachable from the build plate and were assigned to tree support."
+msgstr "일반 서포트로 칠한 영역 중 일부는 베드에서 닿을 수 없어 트리 서포트로 지정했습니다."
+
+# AI Translated
+msgid "Mixed support: generating normal support"
+msgstr "혼합 서포트: 일반 서포트 생성 중"
+
+# AI Translated
+msgid "Mixed support: generating tree support"
+msgstr "혼합 서포트: 트리 서포트 생성 중"
+
+# AI Translated
+msgid "Mixed support could not generate a printable route for the assigned support demand."
+msgstr "혼합 서포트가 지정된 서포트 영역에 출력 가능한 경로를 만들지 못했습니다."
+
+# AI Translated
+msgid "Tree support could not route the assigned Mixed support demand. Normal support was retried, but some areas may remain unsupported. Check the preview before printing."
+msgstr "트리 서포트가 지정된 혼합 서포트 영역의 경로를 만들지 못했습니다. 일반 서포트로 다시 시도했지만 일부 영역은 지지되지 않을 수 있습니다. 출력 전에 미리보기를 확인하세요."
+
+# AI Translated
+msgid "Mixed support: merging support channels"
+msgstr "혼합 서포트: 서포트 채널 병합 중"
+
+# AI Translated
+msgid "Official"
+msgstr "공식"
+
+# AI Translated
+msgid "Verified"
+msgstr "검증됨"
+
+# AI Translated
+msgid "Community"
+msgstr "커뮤니티"
+
+# AI Translated
+msgid "Trust"
+msgstr "신뢰도"
+
+# AI Translated
+msgid "Installed"
+msgstr "설치됨"
+
+# AI Translated
+msgid "Install"
+msgstr "설치"
+
+# AI Translated
+#, c-format
+msgid "%zu mods in %s"
+msgstr "모드 %zu개 (%s)"
+
+# AI Translated
+msgid "Could not read the mod index:"
+msgstr "모드 목록을 읽지 못했습니다:"
+
+# AI Translated
+#, c-format, boost-format
+msgid "\"%s\" is a community mod that the index has not checked. Install it?"
+msgstr "\"%s\"은(는) 목록에서 검사하지 않은 커뮤니티 모드입니다. 설치할까요?"
+
+# AI Translated
+#, c-format, boost-format
+msgid "Installed %s %s."
+msgstr "%s %s을(를) 설치했습니다."
+
+# AI Translated
+msgid "Could not install the mod:"
+msgstr "모드를 설치하지 못했습니다:"
 
 #: resources/data/hints.ini: [hint:Precise wall]
 msgid ""

@@ -109,7 +109,7 @@ ReleaseNoteDialog::ReleaseNoteDialog(Plater *plater /*= nullptr*/)
 
     m_sizer_body->Add(0, 0, 0, wxLEFT, FromDIP(38));
 
-    auto sm = create_scaled_bitmap("MagpieSlicer", nullptr,  70);
+    auto sm = create_scaled_bitmap("MagpieSlicer_192px.png", nullptr,  70);
     auto brand = new wxStaticBitmap(this, wxID_ANY, sm, wxDefaultPosition, wxSize(FromDIP(70), FromDIP(70)));
 
     m_sizer_body->Add(brand, 0, wxALL, 0);
@@ -176,7 +176,7 @@ UpdatePluginDialog::UpdatePluginDialog(wxWindow* parent /*= nullptr*/)
 
 
 
-    auto sm = create_scaled_bitmap("MagpieSlicer", nullptr, 55);
+    auto sm = create_scaled_bitmap("MagpieSlicer_192px.png", nullptr, 55);
     auto brand = new wxStaticBitmap(this, wxID_ANY, sm, wxDefaultPosition, wxSize(FromDIP(55), FromDIP(55)));
 
     wxBoxSizer* m_sizer_right = new wxBoxSizer(wxVERTICAL);
@@ -307,7 +307,7 @@ UpdateVersionDialog::UpdateVersionDialog(wxWindow *parent)
     wxBoxSizer *m_sizer_top  = new wxBoxSizer(wxHORIZONTAL);
     wxBoxSizer *m_sizer_desc = new wxBoxSizer(wxVERTICAL);
 
-    auto sm    = create_scaled_bitmap("MagpieSlicer", nullptr, 64);
+    auto sm    = create_scaled_bitmap("MagpieSlicer_192px.png", nullptr, 64);
     m_brand = new wxStaticBitmap(this, wxID_ANY, sm, wxDefaultPosition, FromDIP(wxSize(64, 64)));
 
     m_text_up_info = new Label(this, Label::Head_14, wxEmptyString, LB_AUTO_WRAP);

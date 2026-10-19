@@ -204,6 +204,9 @@ private:
     std::vector<int> m_plater_extruder;
     bool m_gl_data_initialized{ false };
     unsigned int m_last_result_id{ 0 };
+    // MAGPIE: the filament colours, per filament. The viewer's tool colours may be the Tool view's own palette
+    // (tool_view_colors), so the Filament view's legend reads these instead.
+    libvgcode::Palette m_filament_colors;
     // Belt printers: the view the loaded result was converted for (see load_as_gcode).
     bool m_last_belt_show_designed{ true };
     // Belt printers: the print Z of each viewer layer, in the viewer's layer numbering.

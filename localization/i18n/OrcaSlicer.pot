@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-19 07:27+0900\n"
+"POT-Creation-Date: 2026-10-19 12:22+0900\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -31113,6 +31113,72 @@ msgid "Estimated time:"
 msgstr ""
 
 msgid "Remaining time:"
+msgstr ""
+
+msgid "Mixed support met an extrusion it cannot merge."
+msgstr ""
+
+msgid "Mixed support does not support belt printers yet."
+msgstr ""
+
+msgid "Mixed support: analyzing overhangs"
+msgstr ""
+
+msgid "Mixed support: classifying normal and tree regions"
+msgstr ""
+
+msgid "Some areas painted for normal support are not reachable from the build plate and were assigned to tree support."
+msgstr ""
+
+msgid "Mixed support: generating normal support"
+msgstr ""
+
+msgid "Mixed support: generating tree support"
+msgstr ""
+
+msgid "Mixed support could not generate a printable route for the assigned support demand."
+msgstr ""
+
+msgid "Tree support could not route the assigned Mixed support demand. Normal support was retried, but some areas may remain unsupported. Check the preview before printing."
+msgstr ""
+
+msgid "Mixed support: merging support channels"
+msgstr ""
+
+msgid "Official"
+msgstr ""
+
+msgid "Verified"
+msgstr ""
+
+msgid "Community"
+msgstr ""
+
+msgid "Trust"
+msgstr ""
+
+msgid "Installed"
+msgstr ""
+
+msgid "Install"
+msgstr ""
+
+#, possible-c-format
+msgid "%zu mods in %s"
+msgstr ""
+
+msgid "Could not read the mod index:"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid "\"%s\" is a community mod that the index has not checked. Install it?"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid "Installed %s %s."
+msgstr ""
+
+msgid "Could not install the mod:"
 msgstr ""
 
 #: resources/data/hints.ini: [hint:Precise wall]

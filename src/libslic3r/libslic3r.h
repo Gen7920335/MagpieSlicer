@@ -8,7 +8,8 @@
 #include <initializer_list>
 #include <limits>
 #include <utility>
-#define SLIC3R_APP_FULL_NAME "Orca Slicer"
+// MAGPIE: dialog titles and messages name this build (SLIC3R_APP_NAME, from version.inc).
+#define SLIC3R_APP_FULL_NAME SLIC3R_APP_NAME
 #define GCODEVIEWER_APP_NAME "OrcaSlicer G-code Viewer"
 #define GCODEVIEWER_APP_KEY  "OrcaSlicerGcodeViewer"
 #define GCODEVIEWER_BUILD_ID std::string("OrcaSlicer G-code Viewer-") + std::string(SLIC3R_VERSION) + std::string("-RC")

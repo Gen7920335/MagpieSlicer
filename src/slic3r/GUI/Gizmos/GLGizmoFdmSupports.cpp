@@ -470,15 +470,18 @@ void GLGizmoFdmSupports::on_render_input_window(float x, float y, float bottom_l
         ImGui::AlignTextToFramePadding();
         m_imgui->text(_L("Paint support as"));
         ImGui::SameLine();
+        // The style's check mark is white, invisible on the light panel: the dot takes the channel colour.
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.95f, 0.45f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.2f, 0.75f, 0.3f, 1.f));
         if (m_imgui->radio_button(_L("Normal"), m_mixed_paint_state == MixedNormalState))
             m_mixed_paint_state = MixedNormalState;
-        ImGui::PopStyleColor();
+        ImGui::PopStyleColor(2);
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.65f, 1.f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.25f, 0.5f, 0.95f, 1.f));
         if (m_imgui->radio_button(_L("Tree"), m_mixed_paint_state == MixedTreeState))
             m_mixed_paint_state = MixedTreeState;
-        ImGui::PopStyleColor();
+        ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered())
             m_imgui->tooltip(_L("Left-click paints the selected Mixed support channel. Right-click blocks support. Shift+left-click returns the area to automatic assignment."),
                              m_imgui->scaled(20.f));
