@@ -85,6 +85,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <array>
 #include <limits>
 #include <map>
 #include <math.h>
@@ -3324,47 +3325,74 @@ static void stream_file(const std::string &path, GCodeProcessor &processor, cons
         processor.process_buffer(chunk);
 }
 
-// How a site waits in place: not at all, a bare G4, or lifted off the part around the G4.
-enum class WaitForm { None, Dwell, Lifted };
+// How a site waits: not at all, a bare G4, lifted off the part around the G4, or parked.
+enum class WaitForm { None, Dwell, Lifted, Parked };
 
 // Shortest wait that lifts the nozzle, s. A shorter one rests the nozzle no longer than Orca's own layer
 // change does, and the lift moves alone would take a good part of it (0.2 s or more).
 constexpr double lifted_wait_min_s = 1.;
 
-// Copies `src` to `dst`, writing each site's wait before its tag: for a lifted one the lift, the G4 for
-// dwell_ms[k] (left out when 0) and the way back down. Each move carries its own feed rate, and every
-// line that follows a site in Orca's output sets its own, so the block changes no modal state that matters.
+// Copies `src` to `dst`, writing each site's wait before its tag and leaving out the tower blocks of the
+// sites from tower_end on. A lifted wait lifts, waits dwell_ms[k] (no G4 for 0) and comes back down; a
+// parked one also travels to the park position and back between the lift and the descent. Each move
+// carries its own feed rate, and every line that follows a site in Orca's output sets its own, so the
+// blocks change no modal state that matters. A tower block starts and ends retracted, with the same
+// pending lift, at the layer's Z, so leaving it out leaves the moves after it valid.
 static void write_waits(const std::string &src, const std::string &dst, const std::vector<LayerTimeWaitSite> &sites,
-                        const std::vector<WaitForm> &form, const std::vector<long long> &dwell_ms)
+                        const std::vector<WaitForm> &form, const std::vector<long long> &dwell_ms, size_t tower_end)
 {
     boost::nowide::ifstream in(src, std::ios::binary);
     boost::nowide::ofstream out(dst, std::ios::binary | std::ios::trunc);
     if (!in || !out)
         throw Slic3r::RuntimeError("Layer time blending: cannot rewrite " + src);
-    const std::string tag = ";" + GCodeProcessor::wait_site_tag();
-    size_t            k   = 0;
+    const std::string tag       = ";" + GCodeProcessor::wait_site_tag();
+    const std::string begin_tag = ";" + GCodeProcessor::wait_tower_begin_tag();
+    const std::string end_tag   = ";" + GCodeProcessor::wait_tower_end_tag();
+    size_t            k         = 0;
+    bool              skipping  = false;
     std::string       line;
+    auto z_move = [&out](double z, double speed) {
+        GCodeG1Formatter w;
+        w.emit_z(z);
+        w.emit_f(speed * 60.);
+        out << w.string();
+    };
+    auto xy_move = [&out](double x, double y, double speed) {
+        GCodeG1Formatter w;
+        w.emit_xy(Vec2d(x, y));
+        w.emit_f(speed * 60.);
+        out << w.string();
+    };
     while (std::getline(in, line)) {
+        const bool newline = !in.eof();
+        if (skipping) {
+            if (line == tag)
+                ++k;
+            else if (line == end_tag)
+                skipping = false;
+            continue;
+        }
+        if (line == begin_tag && k >= tower_end) {
+            skipping = true;
+            continue;
+        }
         if (line == tag && k < sites.size()) {
             const LayerTimeWaitSite &site = sites[k];
-            if (form[k] == WaitForm::Lifted) {
-                GCodeG1Formatter up;
-                up.emit_z(site.lift_z);
-                up.emit_f(site.z_speed * 60.);
-                out << up.string();
-            }
-            if (form[k] != WaitForm::None && dwell_ms[k] > 0)
+            const WaitForm           f    = form[k];
+            if (f == WaitForm::Lifted || f == WaitForm::Parked)
+                z_move(site.lift_z, site.z_speed);
+            if (f == WaitForm::Parked)
+                xy_move(site.park_x, site.park_y, site.travel_speed);
+            if (f != WaitForm::None && dwell_ms[k] > 0)
                 out << "G4 P" << dwell_ms[k] << "\n";
-            if (form[k] == WaitForm::Lifted) {
-                GCodeG1Formatter down;
-                down.emit_z(site.z);
-                down.emit_f(site.z_speed * 60.);
-                out << down.string();
-            }
+            if (f == WaitForm::Parked)
+                xy_move(site.x, site.y, site.travel_speed);
+            if (f == WaitForm::Lifted || f == WaitForm::Parked)
+                z_move(site.z, site.z_speed);
             ++k;
         }
         out << line;
-        if (!in.eof())
+        if (newline)
             out << '\n';
     }
     out.close();
@@ -3372,7 +3400,183 @@ static void write_waits(const std::string &src, const std::string &dst, const st
         throw Slic3r::RuntimeError("Layer time blending: cannot write " + dst);
 }
 
+// Time of a straight move from rest to rest, s: trapezoidal speed profile with feed rate `speed` (mm/s)
+// and acceleration `accel` (mm/s^2) over `distance` (mm). An estimate for choosing between parking and
+// waiting in place; the G4 itself is set from the re-estimate of the written G-code.
+static double rest_to_rest_time(double distance, double speed, double accel)
+{
+    if (distance <= 0. || speed <= 0.)
+        return 0.;
+    if (accel <= 0.)
+        return distance / speed;
+    return distance >= speed * speed / accel ? distance / speed + speed / accel : 2. * std::sqrt(distance / accel);
+}
+
 } // namespace LayerTimeBlendExport
+
+std::optional<Vec2d> GCode::layer_time_park_position(const Print &print, coordf_t print_z)
+{
+    const std::vector<Vec2d> &area = m_config.printable_area.values;
+    if (area.size() < 3)
+        return std::nullopt;
+    BoundingBoxf bed; // mm, plate coordinates
+    for (const Vec2d &p : area)
+        bed.merge(p);
+    // Over a purge tower while it is being printed: the ooze falls on the tower.
+    if (m_layer_time_wait_at == LayerTimeWaitAt::PurgeTower) {
+        if (this->temperature_drop_tower_enabled() && m_temperature_drop_tower_path_initialized &&
+            print_z <= this->top_support_interface_z() + EPSILON) {
+            // The corner of the L, where both arms meet.
+            const double band = TEMPERATURE_DROP_TOWER_LINE_COUNT * m_temperature_drop_tower_spacing; // mm
+            return Vec2d(m_temperature_drop_tower_left + 0.5 * band, m_temperature_drop_tower_rear - 0.5 * band);
+        }
+        if (m_wipe_tower && print.has_wipe_tower() && std::abs(m_config.wipe_tower_rotation_angle.value) < EPSILON &&
+            print_z <= double(print.wipe_tower_data().height) + EPSILON) {
+            const size_t plate = size_t(std::max(0, print.get_plate_index()));
+            const Vec2d  corner(m_config.wipe_tower_x.get_at(plate), m_config.wipe_tower_y.get_at(plate));
+            return corner + 0.5 * Vec2d(print.wipe_tower_data().width, print.wipe_tower_data().depth);
+        }
+    }
+    const Vec2d configured(m_config.layer_time_blend_park_x.value, m_config.layer_time_blend_park_y.value);
+    // An automatic park position keeps this far from the printable area's edge, mm.
+    constexpr double park_margin = 5.;
+    Vec2d position = configured.x() >= 0. && configured.y() >= 0. ? configured :
+                                                                   Vec2d(bed.min.x() + park_margin, bed.max.y() - park_margin);
+    Polygon bed_polygon;
+    for (const Vec2d &p : area)
+        bed_polygon.points.emplace_back(Point::new_scale(p.x(), p.y()));
+    if (!bed_polygon.contains(Point::new_scale(position.x(), position.y())))
+        return std::nullopt;
+    return position;
+}
+
+bool GCode::place_layer_time_tower(const Print &print)
+{
+    m_layer_time_tower_placed = true; // tried once; m_layer_time_tower_side stays 0 when it does not fit
+    const std::vector<Vec2d> &area = m_config.printable_area.values;
+    if (area.size() < 3 || m_writer.filament() == nullptr)
+        return false;
+    BoundingBoxf bed; // mm, plate coordinates
+    Polygon      bed_polygon;
+    for (const Vec2d &p : area) {
+        bed.merge(p);
+        bed_polygon.points.emplace_back(Point::new_scale(p.x(), p.y()));
+    }
+    const double nozzle  = m_config.nozzle_diameter.get_at(this->cur_extruder_index()); // mm
+    const double spacing = Flow(Flow::auto_extrusion_width(frPerimeter, float(nozzle)), float(nozzle * 0.5), float(nozzle)).spacing();
+    const double brim    = TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT * spacing; // mm
+    const double side    = m_config.layer_time_blend_tower_size.value;       // mm
+    const double foot    = side + 2. * brim;                                 // mm
+
+    // What the tower must stay clear of, in plate coordinates (mm): every object instance's footprint grown by
+    // its skirt, brim and a margin, and the prime tower.
+    // Clearance from objects, mm, besides their skirt and brim: room for the nozzle and the part fan's air.
+    constexpr double object_clearance = 5.;
+    const double     skirt = m_config.skirt_loops.value > 0 ? m_config.skirt_distance.value + m_config.skirt_loops.value * spacing : 0.;
+    std::vector<BoundingBoxf> keep_out;
+    BoundingBoxf              objects;
+    for (const PrintObject *object : print.objects()) {
+        const double grow = object_clearance + skirt + std::max(0., object->config().brim_width.value);
+        for (const PrintInstance &instance : object->instances()) {
+            BoundingBox  box = object->bounding_box();
+            box.translate(instance.shift);
+            BoundingBoxf boxf(unscale(box.min), unscale(box.max));
+            objects.merge(boxf);
+            boxf.min -= Vec2d(grow, grow);
+            boxf.max += Vec2d(grow, grow);
+            keep_out.push_back(boxf);
+        }
+    }
+    if (m_wipe_tower && print.has_wipe_tower()) {
+        const size_t plate = size_t(std::max(0, print.get_plate_index()));
+        const Vec2d  corner(m_config.wipe_tower_x.get_at(plate), m_config.wipe_tower_y.get_at(plate));
+        // Prime tower clearance, mm: its brim plus room to pass, both ways since it may be rotated.
+        const double reach = std::max(print.wipe_tower_data().width, print.wipe_tower_data().depth) + print.wipe_tower_data().brim_width + object_clearance;
+        keep_out.emplace_back(corner - Vec2d(reach, reach), corner + Vec2d(2. * reach, 2. * reach));
+    }
+    auto fits = [&](const Vec2d &origin) {
+        const BoundingBoxf box(origin, origin + Vec2d(foot, foot));
+        for (const Vec2d &corner : { box.min, box.max, Vec2d(box.min.x(), box.max.y()), Vec2d(box.max.x(), box.min.y()) })
+            if (!bed_polygon.contains(Point::new_scale(corner.x(), corner.y())))
+                return false;
+        if (box.min.x() < bed.min.x() + TEMPERATURE_DROP_TOWER_BED_MARGIN || box.min.y() < bed.min.y() + TEMPERATURE_DROP_TOWER_BED_MARGIN ||
+            box.max.x() > bed.max.x() - TEMPERATURE_DROP_TOWER_BED_MARGIN || box.max.y() > bed.max.y() - TEMPERATURE_DROP_TOWER_BED_MARGIN)
+            return false;
+        return std::none_of(keep_out.begin(), keep_out.end(), [&box](const BoundingBoxf &k) {
+            return box.min.x() < k.max.x() && k.min.x() < box.max.x() && box.min.y() < k.max.y() && k.min.y() < box.max.y();
+        });
+    };
+
+    const size_t plate        = size_t(std::max(0, print.get_plate_index()));
+    const double configured_x = temperature_drop_tower_position_at(&m_config.layer_time_blend_tower_x, plate);
+    const double configured_y = temperature_drop_tower_position_at(&m_config.layer_time_blend_tower_y, plate);
+    std::optional<Vec2d> origin;
+    if (configured_x >= 0. && configured_y >= 0.) {
+        // A position the user chose is kept as given, only clamped onto the bed.
+        if (std::optional<TemperatureDropTowerPlacement> placement = place_temperature_drop_tower(bed, configured_x, configured_y, side, brim);
+            placement && placement->tower_size >= side - EPSILON)
+            origin = Vec2d(placement->origin_x, placement->origin_y);
+    } else if (objects.defined) {
+        // Next to the objects, where the part fan's air still reaches the parts while the nozzle waits: this far
+        // from their bounding box, mm. Right, left, behind, in front, at the middle of that side first.
+        constexpr double gap = 20.;
+        const Vec2d      mid = objects.center() - Vec2d(0.5 * foot, 0.5 * foot);
+        const std::array<Vec2d, 4> candidates = { Vec2d(objects.max.x() + gap, mid.y()), Vec2d(objects.min.x() - gap - foot, mid.y()),
+                                                  Vec2d(mid.x(), objects.max.y() + gap), Vec2d(mid.x(), objects.min.y() - gap - foot) };
+        for (const Vec2d &candidate : candidates)
+            if (fits(candidate)) {
+                origin = candidate;
+                break;
+            }
+    }
+    if (!origin || !fits(*origin)) {
+        // PERMANENT DIAGNOSTIC: no room for the tower; the waits park instead.
+        BOOST_LOG_TRIVIAL(warning) << "Layer time blending: the tower (" << foot << " mm with its brim) does not fit; bed " << bed.min.transpose()
+                                   << " to " << bed.max.transpose() << ", objects " << objects.min.transpose() << " to " << objects.max.transpose()
+                                   << "; waiting at the park position instead";
+        return false;
+    }
+    m_layer_time_tower_origin = *origin;
+    m_layer_time_tower_side   = side;
+    m_layer_time_tower_brim   = brim;
+    return true;
+}
+
+std::string GCode::extrude_layer_time_tower(coordf_t print_z)
+{
+    // Tower speed, mm/s: slow, so its line re-primes the nozzle after the wait.
+    constexpr double tower_speed = 30.;
+    const double nozzle = m_config.nozzle_diameter.get_at(this->cur_extruder_index()); // mm
+    // The tower's layer is as tall as the step since its last one (a support-only layer between adds to it).
+    const double height = print_z - m_layer_time_tower_last_z; // mm
+    if (height <= EPSILON)
+        return {};
+    const Flow flow(Flow::auto_extrusion_width(frPerimeter, float(nozzle)), float(height), float(nozzle));
+    auto to_point = [this](const Vec2d &p) { return Point(scaled<coord_t>(Vec2d(p - m_origin))); };
+    // A square's outline inset by half a line, starting at its lower left corner.
+    auto square = [&](double left, double bottom, double size) {
+        Polyline polyline;
+        polyline.points = { to_point(Vec2d(left, bottom)), to_point(Vec2d(left + size, bottom)), to_point(Vec2d(left + size, bottom + size)),
+                            to_point(Vec2d(left, bottom + size)), to_point(Vec2d(left, bottom)) };
+        ExtrusionPath path(erWipeTower, flow.mm3_per_mm(), flow.width(), float(height));
+        path.polyline = Polyline3(std::move(polyline));
+        return path;
+    };
+    const double half    = 0.5 * flow.width();
+    const double left    = m_layer_time_tower_origin.x() + m_layer_time_tower_brim;
+    const double bottom  = m_layer_time_tower_origin.y() + m_layer_time_tower_brim;
+    std::string  gcode;
+    if (!m_layer_time_tower_brim_done) {
+        for (int line = TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT; line >= 1; --line) {
+            const double offset = line * double(flow.spacing()) - half; // mm, outward from the tower's outline
+            gcode += this->_extrude(square(left - offset, bottom - offset, m_layer_time_tower_side + 2. * offset), "layer time tower brim", tower_speed);
+        }
+        m_layer_time_tower_brim_done = true;
+    }
+    gcode += this->_extrude(square(left + half, bottom + half, m_layer_time_tower_side - 2. * half), "layer time tower", tower_speed);
+    m_layer_time_tower_last_z = print_z;
+    return gcode;
+}
 
 std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
 {
@@ -3389,8 +3593,52 @@ std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
     site.print_z = print_z;
     // A layer below the previous site's starts the next object of a by-object print.
     site.constraint_break = !m_layer_time_sites.empty() && print_z < m_layer_time_sites.back().print_z - EPSILON;
+
+    std::string gcode;
+    if (m_layer_time_wait_at == LayerTimeWaitAt::Tower && !m_layer_time_tower_placed && !this->place_layer_time_tower(print))
+        m_layer_time_wait_at = LayerTimeWaitAt::Park;
+    const Vec2f writer_offset = m_writer.get_xy_offset();
+    auto emitted = [&writer_offset](const Vec2d &p) { return Vec2d(p.x() - writer_offset.x(), p.y() - writer_offset.y()); };
+    if (m_layer_time_wait_at == LayerTimeWaitAt::Tower) {
+        // A block that starts and ends retracted, at the layer's Z, with the same pending lift: the export
+        // can leave it out above the last wait that needs the tower.
+        gcode += this->retract();
+        gcode += m_writer.travel_to_z(m_nominal_z, "layer time tower: up to the layer", true);
+        m_need_change_layer_lift_z = false;
+        gcode += this->retract();
+        gcode += ";" + GCodeProcessor::wait_tower_begin_tag() + "\n";
+        const Vec2d center = m_layer_time_tower_origin + Vec2d(0.5, 0.5) * (m_layer_time_tower_side + 2. * m_layer_time_tower_brim);
+        gcode += this->travel_to(Point(scaled<coord_t>(Vec2d(center - m_origin))), erWipeTower, "travel to the layer time tower");
+        site.at_tower = true;
+        site.z        = m_writer.get_position().z();
+        const Vec2d at = emitted(center);
+        site.x = at.x();
+        site.y = at.y();
+        gcode += ";" + GCodeProcessor::wait_site_tag() + "\n";
+        gcode += this->extrude_layer_time_tower(print_z);
+        gcode += this->retract();
+        gcode += ";" + GCodeProcessor::wait_tower_end_tag() + "\n";
+    } else {
+        if ((m_layer_time_wait_at == LayerTimeWaitAt::Park || m_layer_time_wait_at == LayerTimeWaitAt::PurgeTower) && m_last_pos_defined) {
+            if (std::optional<Vec2d> park = this->layer_time_park_position(print, print_z)) {
+                const Vec2d here = emitted(this->point_to_gcode(this->last_pos()));
+                const Vec2d there = emitted(*park);
+                site.can_park     = true;
+                site.x            = here.x();
+                site.y            = here.y();
+                site.park_x       = there.x();
+                site.park_y       = there.y();
+                site.travel_speed = EXTRUDER_CONFIG(travel_speed);
+                double accel      = m_config.travel_acceleration.get_at(this->cur_extruder_index());
+                if (accel <= 0.)
+                    accel = m_config.default_acceleration.get_at(this->cur_extruder_index());
+                site.park_trip_s = 2. * LayerTimeBlendExport::rest_to_rest_time((there - here).norm(), site.travel_speed, accel);
+            }
+        }
+        gcode += ";" + GCodeProcessor::wait_site_tag() + "\n";
+    }
     m_layer_time_sites.push_back(site);
-    return ";" + GCodeProcessor::wait_site_tag() + "\n";
+    return gcode;
 }
 
 void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
@@ -3408,62 +3656,110 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
         processor.initialize(path);
     };
     const std::function<void()> throw_if_canceled = [&print]() { print.throw_if_canceled(); };
-    auto intervals = [](const std::vector<GCodeProcessor::WaitSiteTime> &times) {
+    using Mark     = GCodeProcessor::WaitSiteTime;
+    using MarkKind = GCodeProcessor::WaitMarkKind;
+    // Site times, and for each site its tower block's start and end times (NaN without a block).
+    struct SiteTimes
+    {
+        std::vector<double> site, begin, end;
+    };
+    auto site_times = [](const std::vector<Mark> &marks) {
+        SiteTimes out;
+        double    begin = std::numeric_limits<double>::quiet_NaN();
+        for (const Mark &mark : marks) {
+            if (mark.kind == MarkKind::TowerBegin)
+                begin = mark.time_s;
+            else if (mark.kind == MarkKind::Site) {
+                out.site.push_back(mark.time_s);
+                out.begin.push_back(begin);
+                out.end.push_back(std::numeric_limits<double>::quiet_NaN());
+                begin = std::numeric_limits<double>::quiet_NaN();
+            } else if (mark.kind == MarkKind::TowerEnd && !out.end.empty())
+                out.end.back() = mark.time_s;
+        }
+        return out;
+    };
+    auto intervals = [](const std::vector<double> &times) {
         std::vector<double> out(times.size());
         for (size_t k = 0; k < times.size(); ++k)
-            out[k] = k == 0 ? times[0].time_s : times[k].time_s - times[k - 1].time_s;
+            out[k] = k == 0 ? times[0] : times[k] - times[k - 1];
         return out;
     };
 
     m_processor.finalize(false);
-    const std::vector<GCodeProcessor::WaitSiteTime> times = m_processor.wait_site_times();
-    const double print_time_s = m_processor.get_time(PrintEstimatedStatistics::ETimeMode::Normal);
+    const SiteTimes times        = site_times(m_processor.wait_site_times());
+    const double    print_time_s = m_processor.get_time(PrintEstimatedStatistics::ETimeMode::Normal);
     using LayerTimeBlendExport::WaitForm;
     std::vector<WaitForm>  form(n, WaitForm::None);
     std::vector<long long> dwell_ms(n, 0);
     ModHost::WaitPlan      plan;
-    if (times.size() != n) {
+    plan.tower_end = n;
+    if (times.site.size() != n) {
         // PERMANENT DIAGNOSTIC: the processor saw a different number of sites than the export wrote, so the
         // times cannot be matched to sites; the G-code is left without waits.
-        BOOST_LOG_TRIVIAL(error) << "Layer time blending: " << n << " wait sites written, " << times.size() << " seen; no waits added";
+        BOOST_LOG_TRIVIAL(error) << "Layer time blending: " << n << " wait sites written, " << times.site.size() << " seen; no waits added";
     } else {
-        const std::vector<double>     interval = intervals(times);
+        const std::vector<double>      interval = intervals(times.site);
         std::vector<ModHost::WaitSite> sites(n);
         for (size_t k = 0; k < n; ++k) {
+            const LayerTimeWaitSite &written = m_layer_time_sites[k];
             sites[k].interval_s       = interval[k];
-            sites[k].layer_id         = times[k].layer_id >= 2 ? times[k].layer_id - 2 : 0;
-            sites[k].constraint_break = m_layer_time_sites[k].constraint_break;
+            sites[k].constraint_break = written.constraint_break;
+            sites[k].park_trip_s      = written.can_park ? written.park_trip_s : 0.;
+            if (std::isfinite(times.begin[k]) && std::isfinite(times.end[k])) {
+                sites[k].tower_pre_s   = times.site[k] - times.begin[k];
+                sites[k].tower_block_s = times.end[k] - times.begin[k];
+            }
+        }
+        {
+            const std::vector<Mark> marks = m_processor.wait_site_times();
+            size_t                  k     = 0;
+            for (const Mark &mark : marks)
+                if (mark.kind == MarkKind::Site && k < n)
+                    sites[k++].layer_id = mark.layer_id >= 2 ? mark.layer_id - 2 : 0;
         }
         plan = m_layer_time_planner->plan(sites, print.config(), print_time_s);
+        // Leaving tower blocks out shifts the E axis when it is absolute, so then the tower stays whole.
+        if (!m_config.use_relative_e_distances.value)
+            plan.tower_end = n;
         for (size_t k = 0; k < n && k < plan.dwell_s.size(); ++k) {
             dwell_ms[k] = std::llround(plan.dwell_s[k] * 1000.);
-            if (plan.added_s[k] > 0.)
-                form[k] = plan.added_s[k] >= LayerTimeBlendExport::lifted_wait_min_s ? WaitForm::Lifted : WaitForm::Dwell;
+            if (plan.added_s[k] <= 0.)
+                continue;
+            if (plan.use_park[k])
+                form[k] = WaitForm::Parked;
+            else if (m_layer_time_sites[k].at_tower || plan.added_s[k] < LayerTimeBlendExport::lifted_wait_min_s)
+                form[k] = WaitForm::Dwell;
+            else
+                form[k] = WaitForm::Lifted;
         }
     }
     print.throw_if_canceled();
 
-    if (std::any_of(form.begin(), form.end(), [](WaitForm f) { return f != WaitForm::None; })) {
+    const bool any_wait = std::any_of(form.begin(), form.end(), [](WaitForm f) { return f != WaitForm::None; });
+    if (any_wait || plan.tower_end < n) {
         const std::string path_filled = path_tmp + ".ltb";
-        LayerTimeBlendExport::write_waits(path_tmp, path_filled, m_layer_time_sites, form, dwell_ms);
-        // Check and correct once. A wait adds pure time, so a site's error after filling (the lift moves,
-        // the stop the G4 forces) is the same for any G4 value: one correction is exact up to the
-        // estimator's resolution (its per-move times are floats, a few ms late in a long print).
+        LayerTimeBlendExport::write_waits(path_tmp, path_filled, m_layer_time_sites, form, dwell_ms, plan.tower_end);
+        // Check and correct once. A wait adds pure time, so a site's error after filling (the lift and park
+        // moves, the stop the G4 forces) is the same for any G4 value: one correction is exact up to the
+        // estimator's resolution (its per-move times are floats, a few ms late in a long print). Sites in
+        // tower blocks that were left out are gone from the filled G-code.
         GCodeProcessor check;
         setup(check, path_filled);
         LayerTimeBlendExport::stream_file(path_filled, check, throw_if_canceled);
         check.finalize(false);
-        const std::vector<GCodeProcessor::WaitSiteTime> measured = check.wait_site_times();
-        bool corrected = false;
-        if (measured.size() == n) {
+        const std::vector<double> measured = site_times(check.wait_site_times()).site;
+        const size_t              kept     = std::min(n, plan.tower_end);
+        bool                      corrected = false;
+        if (measured.size() == kept) {
             const std::vector<double> interval = intervals(measured);
-            for (size_t k = 1; k < n; ++k) {
+            for (size_t k = 1; k < kept; ++k) {
                 if (form[k] == WaitForm::None)
                     continue;
                 const long long error_ms = std::llround((interval[k] - plan.target_s[k]) * 1000.);
                 if (error_ms == 0)
                     continue;
-                corrected            = true;
+                corrected             = true;
                 const long long dwell = dwell_ms[k] - error_ms;
                 if (dwell >= 0) {
                     dwell_ms[k] = dwell;
@@ -3478,10 +3774,10 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
             }
         } else {
             // PERMANENT DIAGNOSTIC: the filled G-code lost or gained a site; its waits stay uncorrected.
-            BOOST_LOG_TRIVIAL(error) << "Layer time blending: " << measured.size() << " sites after filling, " << n << " before";
+            BOOST_LOG_TRIVIAL(error) << "Layer time blending: " << measured.size() << " sites after filling, " << kept << " expected";
         }
         if (corrected)
-            LayerTimeBlendExport::write_waits(path_tmp, path_filled, m_layer_time_sites, form, dwell_ms);
+            LayerTimeBlendExport::write_waits(path_tmp, path_filled, m_layer_time_sites, form, dwell_ms, plan.tower_end);
         print.throw_if_canceled();
         boost::nowide::remove(path_tmp.c_str());
         if (std::error_code ec = rename_file(path_filled, path_tmp))
@@ -3784,6 +4080,16 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         else if (print.config().spiral_mode.value || m_writer.has_axis_remap())
             m_layer_time_planner = nullptr;
     }
+    // Where the waits happen. A tower is not printed in a by-object print, where the head would hit it.
+    const std::string &wait_at = print.config().layer_time_blend_wait_at.value;
+    m_layer_time_wait_at = wait_at == "tower" ? LayerTimeWaitAt::Tower : wait_at == "park" ? LayerTimeWaitAt::Park :
+                           wait_at == "purge_tower" ? LayerTimeWaitAt::PurgeTower : LayerTimeWaitAt::InPlace;
+    if (m_layer_time_wait_at == LayerTimeWaitAt::Tower && print.config().print_sequence.value == PrintSequence::ByObject)
+        m_layer_time_wait_at = LayerTimeWaitAt::Park;
+    m_layer_time_tower_placed    = false;
+    m_layer_time_tower_side      = 0.;
+    m_layer_time_tower_last_z    = 0.;
+    m_layer_time_tower_brim_done = false;
 
     if (print.config().max_volumetric_extrusion_rate_slope.value > 0){
     		m_pressure_equalizer = make_unique<PressureEqualizer>(print.config());
@@ -9467,6 +9773,13 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "layer_time_blend_wait_cap"sv,
         "layer_time_blend_warn_total"sv,
         "layer_time_blend_warn_single"sv,
+        "layer_time_blend_wait_at"sv,
+        "layer_time_blend_in_place_max"sv,
+        "layer_time_blend_tower_size"sv,
+        "layer_time_blend_tower_x"sv,
+        "layer_time_blend_tower_y"sv,
+        "layer_time_blend_park_x"sv,
+        "layer_time_blend_park_y"sv,
         "printer_mod_settings"sv,
         "support_generator"sv,
         // The fast-purge / prime-volume-mode keys are new static-member registrations. Excluding them from

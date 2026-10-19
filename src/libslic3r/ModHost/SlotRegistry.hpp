@@ -75,6 +75,10 @@ struct WaitSite
     // time, and no constraint links the layers on either side of it.
     bool   constraint_break = false;
     bool   uncertain = false;        // the interval holds time the estimator only guesses (heating waits, tool changes)
+    // A layer time tower block around the site: the time from the block's start to the site, and the whole
+    // block's time, s (0 when there is none). Dropping the blocks from some site on shortens the layers there.
+    double tower_pre_s   = 0.;
+    double tower_block_s = 0.;
 };
 
 struct WaitWarning
@@ -94,6 +98,9 @@ struct WaitPlan
     std::vector<double>      added_s;  // time added per site, s (dwell plus park trip)
     std::vector<double>      target_s; // planned layer time per site, s (interval_s + added_s)
     std::vector<WaitWarning> warnings;
+    // The first site whose tower block is left out (no wait at or after it needs the tower); the number of
+    // sites keeps every block.
+    size_t                   tower_end = 0;
 };
 
 struct TimePlanner

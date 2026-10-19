@@ -1871,16 +1871,6 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,               support_interface_brush_speed))
     // MAGPIE: Snapmaker U1 start G-code guard.
     ((ConfigOptionBool,                snapmaker_u1_start_guard))
-    // MAGPIE: layer time blending (resources/mods/layer_time_blend.json, slot gcode.time_plan).
-    ((ConfigOptionString,              layer_time_planner))
-    ((ConfigOptionBool,                layer_time_blend_log))
-    ((ConfigOptionFloat,               layer_time_blend_max_diff))
-    ((ConfigOptionFloat,               layer_time_blend_max_ratio))
-    ((ConfigOptionInt,                 layer_time_blend_ease_layers))
-    ((ConfigOptionInt,                 layer_time_blend_start_layer))
-    ((ConfigOptionFloat,               layer_time_blend_wait_cap))
-    ((ConfigOptionFloat,               layer_time_blend_warn_total))
-    ((ConfigOptionFloat,               layer_time_blend_warn_single))
     ((ConfigOptionEnum<FanDirection>,  fan_direction))
     ((ConfigOptionBool,                support_air_filtration))
     ((ConfigOptionBool,                support_cooling_filter))
@@ -1985,6 +1975,24 @@ PRINT_CONFIG_CLASS_DEFINE(
 PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     PrintConfig,
     (MachineEnvelopeConfig, GCodeConfig),
+
+    // MAGPIE: layer time blending (resources/mods/layer_time_blend.json, slot gcode.time_plan).
+    ((ConfigOptionString,              layer_time_planner))
+    ((ConfigOptionBool,                layer_time_blend_log))
+    ((ConfigOptionFloat,               layer_time_blend_max_diff))
+    ((ConfigOptionFloat,               layer_time_blend_max_ratio))
+    ((ConfigOptionInt,                 layer_time_blend_ease_layers))
+    ((ConfigOptionInt,                 layer_time_blend_start_layer))
+    ((ConfigOptionFloat,               layer_time_blend_wait_cap))
+    ((ConfigOptionFloat,               layer_time_blend_warn_total))
+    ((ConfigOptionFloat,               layer_time_blend_warn_single))
+    ((ConfigOptionString,              layer_time_blend_wait_at))
+    ((ConfigOptionFloat,               layer_time_blend_in_place_max))
+    ((ConfigOptionFloat,               layer_time_blend_tower_size))
+    ((ConfigOptionFloats,              layer_time_blend_tower_x))
+    ((ConfigOptionFloats,              layer_time_blend_tower_y))
+    ((ConfigOptionFloat,               layer_time_blend_park_x))
+    ((ConfigOptionFloat,               layer_time_blend_park_y))
 
     // Build plate tilt for off-axis gravity support generation (printer-level setting).
     ((ConfigOptionFloat,               build_plate_tilt_x))

@@ -547,6 +547,9 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
     };
 
 
+    // MAGPIE: a layer time blending mark in the G-code (GCodeProcessor::wait_site_times()).
+    enum class GCodeWaitMarkKind { Site, TowerBegin, TowerEnd };
+
     class GCodeProcessor
     {
         static const std::vector<std::string> Reserved_Tags;
@@ -1311,6 +1314,7 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
             unsigned int g1_line_id;
             unsigned int layer_id;
             double       requested_additional_time;
+            GCodeWaitMarkKind kind;
         };
         std::vector<WaitSiteMark> m_wait_sites;
         float m_preheat_time;
@@ -1416,14 +1420,19 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
         void set_xy_offset(double x, double y) { m_x_offset = x; m_y_offset = y; }
         Vec2d xy_offset() const { return { m_x_offset, m_y_offset }; }
 
-        // MAGPIE: layer time blending wait sites. The comment line that marks one (without the ';').
+        // MAGPIE: layer time blending. The comment lines (without the ';') that mark a wait site and the start
+        // and end of a layer time tower block.
         static const std::string &wait_site_tag();
+        static const std::string &wait_tower_begin_tag();
+        static const std::string &wait_tower_end_tag();
+        using WaitMarkKind = GCodeWaitMarkKind;
         struct WaitSiteTime
         {
-            double       time_s;   // estimated (Normal mode) time from the start of the print to the site, s
-            unsigned int layer_id; // the processor's layer counter at the site (1 = the first layer)
+            double       time_s;   // estimated (Normal mode) time from the start of the print to the mark, s
+            unsigned int layer_id; // the processor's layer counter at the mark (1 = the first layer)
+            WaitMarkKind kind;
         };
-        // The marked sites in G-code order. Valid after finalize().
+        // The marks in G-code order. Valid after finalize().
         std::vector<WaitSiteTime> wait_site_times() const;
 
         // Orca: if true, only change new layer if ETags::Layer_Change occurs

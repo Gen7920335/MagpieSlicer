@@ -7569,6 +7569,54 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloat(60.));
 
+    def = this->add("layer_time_blend_wait_at", coString);
+    def->label = L("Wait position");
+    def->tooltip = L("Where the nozzle waits: in_place (lifted over the part), tower (on a small tower printed "
+                     "every layer), park (at the park position) or purge_tower (over the prime tower or the "
+                     "temperature drop tower while they are printed).");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionString("in_place"));
+
+    def = this->add("layer_time_blend_in_place_max", coFloat);
+    def->label = L("Longest wait in place");
+    def->tooltip = L("When parking, waits shorter than this, or shorter than the trip to the park position, wait in place.");
+    def->sidetext = L("s");
+    def->min = 0;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(2.));
+
+    def = this->add("layer_time_blend_tower_size", coFloat);
+    def->label = L("Layer time tower size");
+    def->tooltip = L("Side of the hollow square tower the nozzle waits over.");
+    def->sidetext = L("mm");
+    def->min = 5;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(15.));
+
+    // Per plate tower position (the tower's lower left corner, brim included), mm; negative places it next
+    // to the objects.
+    def = this->add("layer_time_blend_tower_x", coFloats);
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloats{ -1.0 });
+
+    def = this->add("layer_time_blend_tower_y", coFloats);
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloats{ -1.0 });
+
+    def = this->add("layer_time_blend_park_x", coFloat);
+    def->label = L("Park position X");
+    def->tooltip = L("X of the position the nozzle waits at when it parks. Negative: the rear left corner of the bed.");
+    def->sidetext = L("mm");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(-1.));
+
+    def = this->add("layer_time_blend_park_y", coFloat);
+    def->label = L("Park position Y");
+    def->tooltip = L("Y of the position the nozzle waits at when it parks. Negative: the rear left corner of the bed.");
+    def->sidetext = L("mm");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(-1.));
+
     // MAGPIE: Snapmaker U1 start G-code guard (Magpie line 1), driven by resources/mods/snapmaker_u1.json.
     def = this->add("snapmaker_u1_start_guard", coBool);
     def->label = L("Guard the Snapmaker U1 start G-code");

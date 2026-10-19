@@ -162,7 +162,7 @@ WaitPlan plan(const std::vector<WaitSite> &sites, const Settings &settings, doub
             added = 0.;
         out.added_s[k]  = added;
         out.target_s[k] = site.interval_s + added;
-        if (settings.park_min_s > 0. && site.park_trip_s > 0. && added >= std::max(settings.park_min_s, site.park_trip_s)) {
+        if (settings.park && site.park_trip_s > 0. && added >= std::max(settings.park_min_s, site.park_trip_s)) {
             out.use_park[k] = true;
             out.dwell_s[k]  = added - site.park_trip_s;
         } else {
@@ -190,6 +190,37 @@ WaitPlan plan(const std::vector<WaitSite> &sites, const Settings &settings, doub
             w.source_site = b + 1;
         return w;
     };
+    // Tower blocks: keep them up to the last wait and as far above it as dropping them would break a limit.
+    // Dropping the blocks from site K on takes the tower out of the layers from K: layer K ends where its
+    // block would have started, and every later layer loses the block before it.
+    out.tower_end = n;
+    if (std::any_of(sites.begin(), sites.end(), [](const WaitSite &s) { return s.tower_block_s > 0.; })) {
+        size_t last_wait = n;
+        for (size_t k = 0; k < n; ++k)
+            if (out.added_s[k] > 0.)
+                last_wait = k;
+        const double limit = settings.log ? std::log1p(std::max(0., settings.max_ratio_pct) / 100.) : std::max(0., settings.max_diff_s);
+        auto within = [&](double a, double b) {
+            if (settings.log)
+                return std::abs(std::log(std::max(a, min_log_time_s)) - std::log(std::max(b, min_log_time_s))) <= limit + 1e-9;
+            return std::abs(a - b) <= limit + 1e-9; // tolerance, s: far below a millisecond
+        };
+        auto without_tower = [&](size_t k, size_t cut) {
+            const double t = sites[k].interval_s - sites[k].tower_pre_s;
+            return k == cut ? t : t + sites[k - 1].tower_pre_s - sites[k - 1].tower_block_s;
+        };
+        for (size_t cut = last_wait == n ? 0 : last_wait + 1; cut < n; ++cut) {
+            bool ok = true;
+            for (size_t k = std::max<size_t>(cut, 1); ok && k < n; ++k)
+                if (linked[k])
+                    ok = within(k - 1 < cut ? out.target_s[k - 1] : without_tower(k - 1, cut), without_tower(k, cut));
+            if (ok) {
+                out.tower_end = cut;
+                break;
+            }
+        }
+    }
+
     double total   = 0.;
     size_t longest = n;
     for (size_t k = 0; k < n; ++k) {
@@ -237,6 +268,8 @@ Settings settings_from(const PrintConfig &config)
     s.wait_cap_s     = config.layer_time_blend_wait_cap.value;
     s.warn_total_pct = config.layer_time_blend_warn_total.value;
     s.warn_single_s  = config.layer_time_blend_warn_single.value;
+    s.park           = config.layer_time_blend_wait_at.value == "park" || config.layer_time_blend_wait_at.value == "purge_tower";
+    s.park_min_s     = config.layer_time_blend_in_place_max.value;
     return s;
 }
 

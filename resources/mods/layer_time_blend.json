@@ -24,7 +24,25 @@
         "warn_total_pct": { "type": "float", "default": 15, "unit": "%", "visible": "layer_time_blend.blend_type != \"off\"",
                             "label": "Warn when waits exceed this share of the print time", "label_ko": "대기 합계가 출력 시간의 이 비율을 넘으면 경고" },
         "warn_single":    { "type": "float", "default": 60, "unit": "s", "visible": "layer_time_blend.blend_type != \"off\"",
-                            "label": "Warn when one wait exceeds", "label_ko": "단일 대기가 이 시간을 넘으면 경고" }
+                            "label": "Warn when one wait exceeds", "label_ko": "단일 대기가 이 시간을 넘으면 경고" },
+        "wait_at":        { "type": "string", "default": "tower", "visible": "layer_time_blend.blend_type != \"off\"",
+                            "options": [ { "value": "tower",       "label": "Layer time tower", "label_ko": "레이어 타임 균일화 타워" },
+                                         { "value": "purge_tower", "label": "Over the purge tower", "label_ko": "퍼지 타워 위" },
+                                         { "value": "park",        "label": "Park position",    "label_ko": "파킹 위치" },
+                                         { "value": "in_place",    "label": "In place",         "label_ko": "제자리" } ],
+                            "label": "Wait position", "label_ko": "대기 위치" },
+        "tower_size":     { "type": "float", "default": 15, "unit": "mm",
+                            "visible": "layer_time_blend.blend_type != \"off\" and layer_time_blend.wait_at == \"tower\"",
+                            "label": "Tower size", "label_ko": "타워 크기" },
+        "in_place_max":   { "type": "float", "default": 2,  "unit": "s",
+                            "visible": "layer_time_blend.blend_type != \"off\" and (layer_time_blend.wait_at == \"park\" or layer_time_blend.wait_at == \"purge_tower\")",
+                            "label": "Shorter waits stay in place", "label_ko": "이보다 짧은 대기는 제자리에서" },
+        "park_x":         { "type": "float", "default": -1, "unit": "mm", "scope": "printer",
+                            "visible": "layer_time_blend.wait_at == \"park\" or layer_time_blend.wait_at == \"purge_tower\"",
+                            "label": "Layer time park position X (-1 = rear left)", "label_ko": "레이어 타임 파킹 위치 X (-1 = 왼쪽 뒤)" },
+        "park_y":         { "type": "float", "default": -1, "unit": "mm", "scope": "printer",
+                            "visible": "layer_time_blend.wait_at == \"park\" or layer_time_blend.wait_at == \"purge_tower\"",
+                            "label": "Layer time park position Y (-1 = rear left)", "label_ko": "레이어 타임 파킹 위치 Y (-1 = 왼쪽 뒤)" }
     },
     "rules": [
         { "target": "layer_time_planner",           "value": "if(layer_time_blend.blend_type == \"off\", \"\", \"blend\")" },
@@ -35,6 +53,11 @@
         { "target": "layer_time_blend_start_layer", "value": "layer_time_blend.start_layer" },
         { "target": "layer_time_blend_wait_cap",    "value": "layer_time_blend.wait_cap" },
         { "target": "layer_time_blend_warn_total",  "value": "layer_time_blend.warn_total_pct" },
-        { "target": "layer_time_blend_warn_single", "value": "layer_time_blend.warn_single" }
+        { "target": "layer_time_blend_warn_single", "value": "layer_time_blend.warn_single" },
+        { "target": "layer_time_blend_wait_at",     "value": "layer_time_blend.wait_at" },
+        { "target": "layer_time_blend_tower_size",  "value": "layer_time_blend.tower_size" },
+        { "target": "layer_time_blend_in_place_max","value": "layer_time_blend.in_place_max" },
+        { "target": "layer_time_blend_park_x",      "value": "layer_time_blend.park_x" },
+        { "target": "layer_time_blend_park_y",      "value": "layer_time_blend.park_y" }
     ]
 }

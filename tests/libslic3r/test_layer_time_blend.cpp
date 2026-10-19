@@ -250,6 +250,7 @@ TEST_CASE("A long wait parks only where the park trip fits in it", "[LayerTimeBl
     for (WaitSite &site : sites)
         site.park_trip_s = 4.;
     LayerTimeBlend::Settings s = linear(5.);
+    s.park                     = true;
     s.park_min_s               = 15.; // waits from 15 s park; the trip (4 s) is shorter than that
     const WaitPlan plan        = LayerTimeBlend::plan(sites, s, 1000.);
     // Waits: layer 2 -> 20 s, layer 3 -> 25 s, layer 5 -> 25 s; layer 1 is below start_layer.
@@ -357,4 +358,33 @@ TEST_CASE("Each object of a by-object print is blended on its own from its own s
     CHECK_THAT(plan.added_s[6], WithinAbs(30. - 20., 1e-9)); // 20 -> 30, then 35, then 40
     CHECK_THAT(plan.added_s[7], WithinAbs(35. - 10., 1e-9));
     CHECK(plan.added_s[8] == 0.);
+}
+
+TEST_CASE("Tower blocks are kept up to where leaving them out keeps every limit", "[LayerTimeBlend]")
+{
+    // Layers 1..10, 20 s each except layer 4 (40 s); every site has a tower block of 4 s whose site comes 1 s in.
+    std::vector<double> layers(10, 20.);
+    layers[3] = 40.;
+    std::vector<WaitSite> sites = sites_from(layers);
+    for (WaitSite &site : sites) {
+        site.tower_pre_s   = 1.;
+        site.tower_block_s = 4.;
+    }
+    const WaitPlan plan = LayerTimeBlend::plan(sites, linear(5.), 10000.);
+    // D = 5 s around the 40 s layer (site 4): sites 2, 3 -> 30, 35 s; 5, 6, 7 -> 35, 30, 25 s; site 8 keeps 20 s.
+    CHECK_THAT(plan.added_s[7], WithinAbs(5., 1e-9));
+    CHECK(plan.added_s[8] == 0.);
+    // Without the tower from site 8, layer 8 ends 1 s early (19 s) next to layer 7's 25 s: 6 s apart, too far.
+    // From site 9: layer 8 keeps 20 s, layer 9 takes 19 s, layer 10 20 - 1 + 1 - 4 = 16 s: within 5 s.
+    CHECK(plan.tower_end == 9);
+
+    // No wait at all: no tower.
+    std::vector<WaitSite> even = sites_from(std::vector<double>(6, 20.));
+    for (WaitSite &site : even) {
+        site.tower_pre_s   = 1.;
+        site.tower_block_s = 4.;
+    }
+    CHECK(LayerTimeBlend::plan(even, linear(5.), 1000.).tower_end == 0);
+    // Without tower blocks every site keeps everything.
+    CHECK(LayerTimeBlend::plan(sites_from(layers), linear(5.), 1000.).tower_end == 11);
 }

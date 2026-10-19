@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -56,11 +57,16 @@ DynamicPrintConfig blend_config(const std::string &planner, double max_diff_s)
     return config;
 }
 
+// Slices `mesh` placed at the middle of the default 200 x 200 mm bed (not arranged, which would centre it
+// on the origin, half off the bed), so there is room for a tower and a park position around it.
 std::string slice_mesh(TriangleMesh mesh, const DynamicPrintConfig &config)
 {
     Print print;
     Model model;
-    init_print({std::move(mesh)}, print, model, config);
+    mesh.translate(100.f, 100.f, 0.f);
+    std::vector<TriangleMesh> meshes;
+    meshes.push_back(std::move(mesh));
+    init_print(std::move(meshes), print, model, config, nullptr, /*arrange=*/false);
     return gcode(print);
 }
 
@@ -76,9 +82,13 @@ std::vector<double> measured_intervals(const std::string &gcode)
     GCodeProcessor processor;
     processor.process_file(file.string());
     const std::vector<GCodeProcessor::WaitSiteTime> times = processor.wait_site_times();
+    std::vector<double> sites;
+    for (const GCodeProcessor::WaitSiteTime &mark : times)
+        if (mark.kind == GCodeProcessor::WaitMarkKind::Site)
+            sites.push_back(mark.time_s);
     std::vector<double> out;
-    for (size_t k = 1; k < times.size(); ++k)
-        out.push_back(times[k].time_s - times[k - 1].time_s);
+    for (size_t k = 1; k < sites.size(); ++k)
+        out.push_back(sites[k] - sites[k - 1]);
     return out;
 }
 
@@ -204,4 +214,159 @@ TEST_CASE("An in-place wait lifts the nozzle and returns it to the same height",
         ++checked;
     }
     CHECK(checked > 0);
+}
+
+namespace {
+
+DynamicPrintConfig wait_at_config(const std::string &wait_at, double max_diff_s)
+{
+    DynamicPrintConfig config = blend_config("blend", max_diff_s);
+    config.set_deserialize_strict({{"layer_time_blend_wait_at", wait_at}, {"use_relative_e_distances", "1"}});
+    return config;
+}
+
+// The G-code's lines without the progress lines (M73) the post-processor puts wherever the time crosses a
+// minute or a percent, inside wait blocks too.
+std::vector<std::string> lines_of(const std::string &gcode)
+{
+    std::vector<std::string> out;
+    std::istringstream       in(gcode);
+    std::string              line;
+    while (std::getline(in, line))
+        if (line.rfind("M73", 0) != 0)
+            out.push_back(line);
+    return out;
+}
+
+// The value after " <axis>" in a G0/G1 line, or nothing.
+std::optional<double> axis_value(const std::string &line, char axis)
+{
+    if (line.rfind("G1 ", 0) != 0 && line.rfind("G0 ", 0) != 0)
+        return std::nullopt;
+    const size_t comment = line.find(';');
+    const size_t at      = line.find(std::string(" ") + axis);
+    if (at == std::string::npos || at > comment)
+        return std::nullopt;
+    return std::stod(line.substr(at + 2));
+}
+
+void check_blended(const std::vector<double> &T, double max_diff_s)
+{
+    // Layer 1 (interval 0) is below start_layer; from layer 2 on neighbours stay within the limit, s.
+    for (size_t i = 2; i < T.size(); ++i)
+        CHECK(std::abs(T[i] - T[i - 1]) <= max_diff_s + 0.05);
+}
+
+} // namespace
+
+TEST_CASE("Tower waits happen over the tower, which stops above the last wait", "[LayerTimeBlend]")
+{
+    // 10 s: the waits ramp down from the slab's ~140 s layers within about 14 layers (4 mm), well below the
+    // pillar's top, so the tower can stop there.
+    const double              max_diff_s = 10.;
+    const std::string         out        = slice_mesh(pillar_with_slab(), wait_at_config("tower", max_diff_s));
+    const std::vector<std::string> lines = lines_of(out);
+    const std::string begin_tag = ";MAGPIE_WAIT_TOWER_BEGIN", end_tag = ";MAGPIE_WAIT_TOWER_END";
+    size_t blocks = 0, sites = 0, last_wait_site = 0, last_block_site = 0;
+    bool   in_block = false;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const std::string &line = lines[i];
+        if (line == begin_tag) {
+            CHECK_FALSE(in_block);
+            in_block = true;
+            ++blocks;
+            // Blocks come one per layer from the first, without a gap.
+            CHECK(blocks == sites + 1);
+        } else if (line == end_tag) {
+            CHECK(in_block);
+            in_block = false;
+        } else if (line == site_tag) {
+            if (in_block)
+                last_block_site = sites;
+            if (lines[i - 1].rfind("G4 P", 0) == 0) {
+                // The wait is over the tower: inside the block, right after the travel there, not lifted.
+                CHECK(in_block);
+                CHECK(lines[i - 2].rfind("G1 Z", 0) != 0);
+                last_wait_site = sites;
+            }
+            ++sites;
+        }
+    }
+    CHECK_FALSE(in_block);
+    // 53 layers; the waits stop before the top, and so does the tower, but not below its last wait.
+    REQUIRE(blocks > 0);
+    CHECK(blocks < 53);
+    CHECK(last_block_site >= last_wait_site);
+    CHECK(count_lines_starting(out, "G4 P") > 0);
+    check_blended(measured_intervals(out), max_diff_s);
+
+    // Every extrusion is at its layer's height: leaving the blocks out kept the moves after them valid.
+    double z = 0., layer_z = 0.;
+    size_t extrusions = 0;
+    for (const std::string &line : lines) {
+        if (line.rfind(";Z:", 0) == 0)
+            layer_z = std::stod(line.substr(3));
+        if (std::optional<double> v = axis_value(line, 'Z'))
+            z = *v;
+        if (axis_value(line, 'E') && *axis_value(line, 'E') > 0. && (axis_value(line, 'X') || axis_value(line, 'Y'))) {
+            CHECK_THAT(z, WithinAbs(layer_z, 1e-6));
+            ++extrusions;
+        }
+    }
+    CHECK(extrusions > 0);
+}
+
+TEST_CASE("Parked waits go to the park position and come back to where they left", "[LayerTimeBlend]")
+{
+    const double       max_diff_s = 2.;
+    DynamicPrintConfig config     = wait_at_config("park", max_diff_s);
+    config.set_deserialize_strict({{"layer_time_blend_park_x", "10"}, {"layer_time_blend_park_y", "190"}, {"layer_time_blend_in_place_max", "2"}});
+    const std::string              out   = slice_mesh(pillar_with_slab(), config);
+    const std::vector<std::string> lines = lines_of(out);
+    double x = 0., y = 0.;
+    size_t parked = 0;
+    for (size_t i = 0; i + 4 < lines.size(); ++i) {
+        if (std::optional<double> v = axis_value(lines[i], 'X'))
+            x = *v;
+        if (std::optional<double> v = axis_value(lines[i], 'Y'))
+            y = *v;
+        // lift, out, G4, back, down, site
+        if (lines[i].rfind("G1 Z", 0) != 0 || lines[i + 2].rfind("G4 P", 0) != 0 || !axis_value(lines[i + 1], 'X'))
+            continue;
+        CHECK_THAT(*axis_value(lines[i + 1], 'X'), WithinAbs(10., 1e-3));
+        CHECK_THAT(*axis_value(lines[i + 1], 'Y'), WithinAbs(190., 1e-3));
+        CHECK_THAT(*axis_value(lines[i + 3], 'X'), WithinAbs(x, 1e-3));
+        CHECK_THAT(*axis_value(lines[i + 3], 'Y'), WithinAbs(y, 1e-3));
+        CHECK(lines[i + 5] == site_tag);
+        ++parked;
+    }
+    CHECK(parked > 0);
+    check_blended(measured_intervals(out), max_diff_s);
+}
+
+TEST_CASE("Waiting at a purge tower without one parks", "[LayerTimeBlend]")
+{
+    DynamicPrintConfig config = wait_at_config("purge_tower", 2.);
+    config.set_deserialize_strict({{"layer_time_blend_park_x", "10"}, {"layer_time_blend_park_y", "190"}});
+    const std::string out = slice_mesh(pillar_with_slab(), config);
+    CHECK(out.find("G1 X10 Y190") != std::string::npos);
+    check_blended(measured_intervals(out), 2.);
+}
+
+TEST_CASE("The bundled mod loads and drives the planner", "[LayerTimeBlend]")
+{
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    DynamicPrintConfig config = blend_config("", 2.);
+    // Through the mod: linear, D = 2 s, waiting in place.
+    config.set_key_value("mod_settings", new ConfigOptionString(
+        R"json({"layer_time_blend.blend_type": "linear", "layer_time_blend.max_diff": 2, "layer_time_blend.wait_at": "in_place",
+                "layer_time_blend.warn_total_pct": 0, "layer_time_blend.warn_single": 0})json"));
+    const std::string out = slice_mesh(pillar_with_slab(), config);
+    CHECK(count_lines_starting(out, site_tag) == 53);
+    CHECK(count_lines_starting(out, "G4 P") > 0);
+    check_blended(measured_intervals(out), 2.);
+    // Off through the mod: nothing.
+    config.set_key_value("mod_settings", new ConfigOptionString(R"json({"layer_time_blend.blend_type": "off"})json"));
+    CHECK(count_lines_starting(slice_mesh(pillar_with_slab(), config), site_tag) == 0);
 }

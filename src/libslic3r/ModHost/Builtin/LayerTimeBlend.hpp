@@ -21,8 +21,9 @@ struct Settings
     // blended; the constraint to the layer below it is cut, and layers below it get no wait.
     int    start_layer   = 2;
     double wait_cap_s    = 0.;    // largest single wait, s; 0 = no cap
-    // A wait at least this long (s) and at least the site's park trip parks the head instead of waiting
-    // in place; 0 never parks. Only sites with a park trip can park.
+    // Whether waits may park: a wait at least park_min_s long (s) and at least the site's park trip parks
+    // the head instead of waiting in place. Only sites with a park trip can park.
+    bool   park          = false;
     double park_min_s    = 0.;
     double warn_total_pct = 15.;  // warn when the waits add more than this share of the print time, %
     double warn_single_s  = 60.;  // warn when one wait is longer than this, s

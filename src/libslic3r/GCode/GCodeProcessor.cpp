@@ -3886,6 +3886,18 @@ const std::string &GCodeProcessor::wait_site_tag()
     return tag;
 }
 
+const std::string &GCodeProcessor::wait_tower_begin_tag()
+{
+    static const std::string tag = "MAGPIE_WAIT_TOWER_BEGIN";
+    return tag;
+}
+
+const std::string &GCodeProcessor::wait_tower_end_tag()
+{
+    static const std::string tag = "MAGPIE_WAIT_TOWER_END";
+    return tag;
+}
+
 std::vector<GCodeProcessor::WaitSiteTime> GCodeProcessor::wait_site_times() const
 {
     // The time at a site is the time of the moves up to the last G1 before it plus all extra time (dwells,
@@ -3905,7 +3917,7 @@ std::vector<GCodeProcessor::WaitSiteTime> GCodeProcessor::wait_site_times() cons
         // Bookings come in block order, and sites in G-code order, so one forward pass sums them.
         while (booked_next < booked.size() && booked[booked_next].first <= site.g1_line_id)
             booked_sum += double(booked[booked_next++].second);
-        out.push_back({ elapsed - booked_sum + site.requested_additional_time, site.layer_id });
+        out.push_back({ elapsed - booked_sum + site.requested_additional_time, site.layer_id, site.kind });
     }
     return out;
 }
@@ -4440,10 +4452,16 @@ void GCodeProcessor::process_tags(const std::string_view comment, bool producers
         return;
 
     // MAGPIE: a layer time blending wait site. Written only while a layer time planner is chosen.
-    if (comment == wait_site_tag()) {
-        m_wait_sites.push_back({ m_g1_line_id, m_layer_id,
-                                 m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].requested_additional_time });
-        return;
+    if (boost::starts_with(comment, "MAGPIE_WAIT_")) {
+        const WaitMarkKind kind = comment == wait_site_tag()        ? WaitMarkKind::Site :
+                                  comment == wait_tower_begin_tag() ? WaitMarkKind::TowerBegin :
+                                  comment == wait_tower_end_tag()   ? WaitMarkKind::TowerEnd : WaitMarkKind(-1);
+        if (kind != WaitMarkKind(-1)) {
+            m_wait_sites.push_back({ m_g1_line_id, m_layer_id,
+                                     m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].requested_additional_time,
+                                     kind });
+            return;
+        }
     }
 
     // extrusion role tag
