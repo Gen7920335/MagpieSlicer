@@ -2,6 +2,7 @@
 
 #include "libslic3r/Print.hpp"
 #include "Builtin/CuraSupport.hpp"
+#include "Builtin/LayerTimeBlend.hpp"
 #include "Builtin/MixedSupport.hpp"
 #include "Builtin/MultiNozzleWalls.hpp"
 #include "Builtin/ResinSupport.hpp"
@@ -20,6 +21,7 @@ struct Registry
     std::mutex                              mutex;
     std::map<std::string, SupportGenerator> support_generators;
     std::map<std::string, WallPlanner>      wall_planners;
+    std::map<std::string, TimePlanner>      time_planners;
 };
 
 void register_builtin_modules(Registry &registry)
@@ -37,6 +39,8 @@ void register_builtin_modules(Registry &registry)
     registry.support_generators["mixed"] = {"mixed", "Mixed", [](PrintObject &object) { MixedSupport::generate(object); }};
     // Multi-nozzle walls (resources/mods/multi_nozzle_walls.json).
     registry.wall_planners["multi_nozzle"] = MultiNozzleWalls::make_planner();
+    // Layer time blending (resources/mods/layer_time_blend.json).
+    registry.time_planners["blend"] = LayerTimeBlend::make_planner();
 }
 
 Registry &registry()
@@ -84,6 +88,22 @@ void register_wall_planner(WallPlanner planner)
     std::lock_guard<std::mutex> lock(r.mutex);
     std::string                 name = planner.name;
     r.wall_planners[name]            = std::move(planner);
+}
+
+const TimePlanner *find_time_planner(const std::string &name)
+{
+    Registry                   &r = registry();
+    std::lock_guard<std::mutex> lock(r.mutex);
+    auto                        it = r.time_planners.find(name);
+    return it == r.time_planners.end() ? nullptr : &it->second;
+}
+
+void register_time_planner(TimePlanner planner)
+{
+    Registry                   &r = registry();
+    std::lock_guard<std::mutex> lock(r.mutex);
+    std::string                 name = planner.name;
+    r.time_planners[name]            = std::move(planner);
 }
 
 void register_support_generator(SupportGenerator generator)

@@ -7501,6 +7501,74 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionPoint(Vec2d(-1.0, -1.0)));
 
+    // MAGPIE: layer time blending, driven by resources/mods/layer_time_blend.json. Hidden; the defaults
+    // mark no wait sites and leave the G-code as it is.
+    def = this->add("layer_time_planner", coString);
+    def->label = L("Layer time planner");
+    def->tooltip = L("Module that adds waits between layers so neighbouring layer times stay close. Empty adds none.");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionString(""));
+
+    def = this->add("layer_time_blend_log", coBool);
+    def->label = L("Blend layer times by ratio");
+    def->tooltip = L("Limit the ratio of neighbouring layer times instead of their difference.");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("layer_time_blend_max_diff", coFloat);
+    def->label = L("Maximum layer time difference");
+    def->tooltip = L("Largest difference between the times of neighbouring layers.");
+    def->sidetext = L("s");
+    def->min = 0;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(5.));
+
+    def = this->add("layer_time_blend_max_ratio", coFloat);
+    def->label = L("Maximum layer time change");
+    def->tooltip = L("Largest increase from the shorter to the longer of two neighbouring layer times.");
+    def->sidetext = "%";
+    def->min = 0;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(20.));
+
+    def = this->add("layer_time_blend_ease_layers", coInt);
+    def->label = L("Transition easing layers");
+    def->tooltip = L("Number of layers over which a change in layer time starts and stops gradually. 0 changes it at once.");
+    def->min = 0;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("layer_time_blend_start_layer", coInt);
+    def->label = L("First blended layer");
+    def->tooltip = L("Layers below this one get no wait and do not limit its time.");
+    def->min = 1;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionInt(2));
+
+    def = this->add("layer_time_blend_wait_cap", coFloat);
+    def->label = L("Maximum wait per layer");
+    def->tooltip = L("Longest wait added to one layer. 0 sets no limit.");
+    def->sidetext = L("s");
+    def->min = 0;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(0.));
+
+    def = this->add("layer_time_blend_warn_total", coFloat);
+    def->label = L("Warn when waits exceed");
+    def->tooltip = L("Warn when the added waits are more than this share of the print time. 0 never warns.");
+    def->sidetext = "%";
+    def->min = 0;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(15.));
+
+    def = this->add("layer_time_blend_warn_single", coFloat);
+    def->label = L("Warn when one wait exceeds");
+    def->tooltip = L("Warn when a single added wait is longer than this. 0 never warns.");
+    def->sidetext = L("s");
+    def->min = 0;
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionFloat(60.));
+
     // MAGPIE: Snapmaker U1 start G-code guard (Magpie line 1), driven by resources/mods/snapmaker_u1.json.
     def = this->add("snapmaker_u1_start_guard", coBool);
     def->label = L("Guard the Snapmaker U1 start G-code");

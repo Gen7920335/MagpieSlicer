@@ -119,6 +119,8 @@ set(lisbslic3r_sources
     ModHost/Builtin/MixedSupport.hpp
     ModHost/Builtin/MultiNozzleWalls.cpp
     ModHost/Builtin/MultiNozzleWalls.hpp
+    ModHost/Builtin/LayerTimeBlend.cpp
+    ModHost/Builtin/LayerTimeBlend.hpp
     ModHost/Builtin/ResinSupport.cpp
     ModHost/Builtin/ResinSupport.hpp
     ModHost/Expr.cpp

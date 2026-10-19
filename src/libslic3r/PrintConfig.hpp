@@ -1871,6 +1871,16 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,               support_interface_brush_speed))
     // MAGPIE: Snapmaker U1 start G-code guard.
     ((ConfigOptionBool,                snapmaker_u1_start_guard))
+    // MAGPIE: layer time blending (resources/mods/layer_time_blend.json, slot gcode.time_plan).
+    ((ConfigOptionString,              layer_time_planner))
+    ((ConfigOptionBool,                layer_time_blend_log))
+    ((ConfigOptionFloat,               layer_time_blend_max_diff))
+    ((ConfigOptionFloat,               layer_time_blend_max_ratio))
+    ((ConfigOptionInt,                 layer_time_blend_ease_layers))
+    ((ConfigOptionInt,                 layer_time_blend_start_layer))
+    ((ConfigOptionFloat,               layer_time_blend_wait_cap))
+    ((ConfigOptionFloat,               layer_time_blend_warn_total))
+    ((ConfigOptionFloat,               layer_time_blend_warn_single))
     ((ConfigOptionEnum<FanDirection>,  fan_direction))
     ((ConfigOptionBool,                support_air_filtration))
     ((ConfigOptionBool,                support_cooling_filter))
