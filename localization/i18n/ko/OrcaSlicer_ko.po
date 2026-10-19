@@ -42929,3 +42929,154 @@ msgstr ""
 #~ "유효한 값을 입력하십시오:\n"
 #~ "시작 > 10 단계 >= 0\n"
 #~ "끝 > 시작 + 단계)"
+# AI Translated
+#, boost-format
+msgid "Layer time blending adds %1% of waits, %2% of the print time. Layer %3% takes longest; the waits it causes run from layer %4% to layer %5%."
+msgstr "레이어 타임 블렌딩이 대기 %1%를 추가합니다(출력 시간의 %2%). 가장 긴 레이어는 %3%이며, 이 레이어 때문에 생긴 대기는 %4% 레이어부터 %5% 레이어까지입니다."
+
+# AI Translated
+#, boost-format
+msgid "Layer time blending waits %1% at one layer. Layer %2% takes longest; the waits it causes run from layer %3% to layer %4%."
+msgstr "레이어 타임 블렌딩이 한 레이어에서 %1% 동안 대기합니다. 가장 긴 레이어는 %2%이며, 이 레이어 때문에 생긴 대기는 %3% 레이어부터 %4% 레이어까지입니다."
+
+# AI Translated
+#, boost-format
+msgid "Layer time blending: layers %1% to %2% include temperature waits or tool changes whose time is only estimated, so the waits near them may be off."
+msgstr "레이어 타임 블렌딩: %1% 레이어부터 %2% 레이어까지는 시간이 추정값뿐인 온도 대기나 툴 교체가 들어 있어, 그 주변의 대기가 맞지 않을 수 있습니다."
+
+# AI Translated
+#, boost-format
+msgid "Layer time blending waits: %1% in all, %2% at most per layer"
+msgstr "레이어 타임 블렌딩 대기: 합계 %1%, 레이어당 최대 %2%"
+
+# AI Translated
+msgid "Layer time planner"
+msgstr "레이어 시간 플래너"
+
+# AI Translated
+msgid "Module that adds waits between layers so neighbouring layer times stay close. Empty adds none."
+msgstr "이웃 레이어의 시간이 비슷하도록 레이어 사이에 대기를 넣는 모듈입니다. 비워 두면 아무것도 넣지 않습니다."
+
+# AI Translated
+msgid "Blend layer times by ratio"
+msgstr "레이어 시간을 비율로 블렌딩"
+
+# AI Translated
+msgid "Limit the ratio of neighbouring layer times instead of their difference."
+msgstr "이웃 레이어 시간의 차이 대신 비율을 제한합니다."
+
+# AI Translated
+msgid "Maximum layer time difference"
+msgstr "최대 레이어 시간 차이"
+
+# AI Translated
+msgid "Largest difference between the times of neighbouring layers."
+msgstr "이웃 레이어 시간 사이의 최대 차이입니다."
+
+# AI Translated
+msgid "Maximum layer time change"
+msgstr "최대 레이어 시간 변화율"
+
+# AI Translated
+msgid "Largest increase from the shorter to the longer of two neighbouring layer times."
+msgstr "이웃한 두 레이어 시간 중 짧은 쪽에서 긴 쪽으로의 최대 증가율입니다."
+
+# AI Translated
+msgid "Transition easing layers"
+msgstr "전환 완화 레이어 수"
+
+# AI Translated
+msgid "Number of layers over which a change in layer time starts and stops gradually. 0 changes it at once."
+msgstr "레이어 시간 변화가 서서히 시작하고 멈추는 레이어 수입니다. 0이면 바로 바뀝니다."
+
+# AI Translated
+msgid "First blended layer"
+msgstr "블렌딩 시작 레이어"
+
+# AI Translated
+msgid "Layers below this one get no wait and do not limit its time."
+msgstr "이 레이어 아래의 레이어는 대기가 없고 이 레이어의 시간을 제한하지 않습니다."
+
+# AI Translated
+msgid "Maximum wait per layer"
+msgstr "레이어당 최대 대기"
+
+# AI Translated
+msgid "Longest wait added to one layer. 0 sets no limit."
+msgstr "한 레이어에 추가되는 가장 긴 대기입니다. 0이면 제한이 없습니다."
+
+# AI Translated
+msgid "Warn when waits exceed"
+msgstr "대기 합계 경고 기준"
+
+# AI Translated
+msgid "Warn when the added waits are more than this share of the print time. 0 never warns."
+msgstr "추가된 대기가 출력 시간의 이 비율을 넘으면 경고합니다. 0이면 경고하지 않습니다."
+
+# AI Translated
+msgid "Warn when one wait exceeds"
+msgstr "단일 대기 경고 기준"
+
+# AI Translated
+msgid "Warn when a single added wait is longer than this. 0 never warns."
+msgstr "추가된 대기 하나가 이보다 길면 경고합니다. 0이면 경고하지 않습니다."
+
+# AI Translated
+msgid "Wait position"
+msgstr "대기 위치"
+
+# AI Translated
+msgid "Where the nozzle waits: in_place (lifted over the part), tower (on a small tower printed every layer), park (at the park position) or purge_tower (over the prime tower or the temperature drop tower while they are printed)."
+msgstr "노즐이 대기하는 곳: in_place(파트 위로 들어 올린 채), tower(매 레이어 출력하는 작은 타워 위), park(파킹 위치), purge_tower(프라임 타워나 온도 강하 타워가 출력되는 동안 그 위)."
+
+# AI Translated
+msgid "Longest wait in place"
+msgstr "제자리 대기 최대 시간"
+
+# AI Translated
+msgid "When parking, waits shorter than this, or shorter than the trip to the park position, wait in place."
+msgstr "파킹할 때 이보다 짧거나 파킹 위치 왕복보다 짧은 대기는 제자리에서 합니다."
+
+# AI Translated
+msgid "Layer time tower size"
+msgstr "레이어 타임 타워 크기"
+
+# AI Translated
+msgid "Side of the hollow square tower the nozzle waits over."
+msgstr "노즐이 위에서 대기하는 속 빈 사각 타워의 한 변 길이입니다."
+
+# AI Translated
+msgid "Park position X"
+msgstr "파킹 위치 X"
+
+# AI Translated
+msgid "X of the position the nozzle waits at when it parks. Negative: the rear left corner of the bed."
+msgstr "파킹할 때 노즐이 대기하는 위치의 X입니다. 음수이면 베드 왼쪽 뒤 모서리입니다."
+
+# AI Translated
+msgid "Park position Y"
+msgstr "파킹 위치 Y"
+
+# AI Translated
+msgid "Y of the position the nozzle waits at when it parks. Negative: the rear left corner of the bed."
+msgstr "파킹할 때 노즐이 대기하는 위치의 Y입니다. 음수이면 베드 왼쪽 뒤 모서리입니다."
+
+# AI Translated
+msgid "Nozzle heating rate"
+msgstr "노즐 가열 속도"
+
+# AI Translated
+msgid "How fast the nozzle heats, for estimating temperature waits when layer times are blended."
+msgstr "레이어 시간을 블렌딩할 때 온도 대기를 추정하는 데 쓰는 노즐 가열 속도입니다."
+
+# AI Translated
+msgid "°C/s"
+msgstr "°C/s"
+
+# AI Translated
+msgid "Nozzle cooling rate"
+msgstr "노즐 냉각 속도"
+
+# AI Translated
+msgid "How fast the nozzle cools, for estimating temperature waits when layer times are blended."
+msgstr "레이어 시간을 블렌딩할 때 온도 대기를 추정하는 데 쓰는 노즐 냉각 속도입니다."
