@@ -1365,7 +1365,8 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     const double line_width_reference_mm      = absolute_line_width_reference_nozzle(new_full_config);
     const bool   line_width_reference_changed = line_width_reference_mm != m_line_width_reference_mm;
     m_line_width_reference_mm                 = line_width_reference_mm;
-    scale_absolute_line_widths(new_full_config, line_width_reference_mm);
+    m_line_widths_as_set.clear();
+    m_line_widths_scaled                      = scale_absolute_line_widths(new_full_config, line_width_reference_mm, &m_line_widths_as_set) > 0;
 
     // BBS
     std::vector <unsigned int> used_filaments = this->extruders(true);

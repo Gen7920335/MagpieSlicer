@@ -14,6 +14,17 @@
 
 ## History
 
+### 2026-10-20 Hardening of the mixed-nozzle line width rule (after 15f976e3bf)
+
+- Raw reads fixed (a percentage read as mm; Orca bugs for every percentage profile too): TreeSupport3D.cpp line_width.value (105 % became 105 mm), ToolOrdering.cpp first-layer offsets at the initial_layer_line_width / line_width reads, TreeSupport.cpp support_line_width / 2, GCode.cpp outer wall volumetric speed resolved on the filament diameter, get_real_skirt_dist opt_float. Width heuristics that used nozzle_diameter[0] resolve on Print::shared_line_width_nozzle() (the reference nozzle on a mixed printer, which gives back the absolute width as set; nozzle 0 otherwise); tree support resolves on the support filament's nozzle. The ToolOrdering fix put tee_mn_* first-layer tool order back to its pre-15f976e3bf order (T2 start), confirming 15f976e3bf had read 125 % as 125 mm there. The wipe-tower type-1 cases (percentage widths) move travel/seam start points; cause ASSUMED to be the ToolOrdering.cpp line_width fix (not toggled).
+- Written-out values: Print::full_print_config_as_set() overlays the widths as the user set them; the G-code config block, post-processing scripts and plugin config queries use it. 3MF/presets are written from the GUI preset bundle and never saw the conversion. Skirt and brim keep the widths as set (vanilla output): their geometry is made before the printing tool is known.
+- Static guard: tests/libslic3r/test_config.cpp "Every read of a nozzle-relative line width key is in the reviewed table" counts source lines naming the 11 keys per file (src/libslic3r, src/slic3r/plugin). A new or grown count fails ctest; check the read resolves on the printing nozzle, then copy the printed table.
+- Output check: GCode::check_extrusion_width stops the slice when an extrusion is wider than max(2.6, 2.2 x widest configured width / nozzle) x its tool's nozzle (gap fill 3.5). Measured legit maxima over 108 corpus files: walls 1.99, gap fill 2.78, other roles <= 1.75. Brim/skirt only warn. It cannot judge narrow widths: a legitimate 0.18 mm fin prints 0.39 x, the T2 bug was 0.43 x.
+- Width harness: tests/fff_print/test_multi_nozzle_walls.cpp width_mismatches() checks every (layer, type, tool) mode width against the harness's own statement of the rule (not the slicer's converted config). Counterfactuals: conversion forced off -> the output check stops all 8 mixed cases, and with the output check also off the harness lists "Support T0 (0.15 mm nozzle): 0.42 mm, expected 0.1575"; 4c5b3af8ba reverted -> "layer 50 Inner wall T1 (0.4 mm nozzle): 0.182 mm, expected 0.45" (step 6.12, H/2).
+- GUI: a slice-time warning names the reference nozzle when absolute widths were scaled. Korean translations for it, the two width errors, the output-check error and the brim/skirt warning.
+- corpus_mixed_nozzle.json has 4 cases incl. a permuted nozzle order. Tests 2578/2578; golden off 15/15 identical to before 15f976e3bf, mods identical to vanilla.
+- Not done (Gen stopped the work here): per-nozzle line width fields; brim/skirt/prime tower following the printing nozzle; a BBL filament_map permutation case.
+
 ### 2026-10-19 Layer time blending (branch magpie-next-layer-time-blend)
 
 - Design and mod plan: `/mnt/project-files/layer-time-blending-design-20261019.md`, `layer-time-blending-mod-plan-20261019.md` (Gen approved). As built: `docs/HLSD/layer-time-blending.md`.

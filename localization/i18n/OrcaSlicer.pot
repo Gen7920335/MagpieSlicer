@@ -31338,3 +31338,23 @@ msgstr ""
 #: resources/data/hints.ini: [hint:Avoid warping]
 msgid "Avoid warping\nDid you know that when printing materials that are prone to warping such as ABS, appropriately increasing the heatbed temperature can reduce the probability of warping?"
 msgstr ""
+
+#, boost-format
+msgid "Line width too small. On a printer with nozzles of different sizes, an absolute line width is the width for the %1% mm nozzle and is scaled to the other nozzles. Enter a percentage to set the width relative to each nozzle."
+msgstr ""
+
+#, boost-format
+msgid "Line width too large. On a printer with nozzles of different sizes, an absolute line width is the width for the %1% mm nozzle and is scaled to the other nozzles. Enter a percentage to set the width relative to each nozzle."
+msgstr ""
+
+#, boost-format
+msgid "This printer has nozzles of different sizes, so absolute line widths are taken as widths for the %1% mm nozzle and scaled to each nozzle. Enter a percentage to set a width relative to each nozzle."
+msgstr ""
+
+#, boost-format
+msgid "Line width check failed: %1% at Z %2% mm is %3% mm wide, printed by the %4% mm nozzle of tool %5%. The width was likely resolved on another nozzle; please report this."
+msgstr ""
+
+#, boost-format
+msgid "%1% is printed %2% mm wide by the %3% mm nozzle of tool %4%: brim and skirt widths follow one filament's nozzle on a printer with nozzles of different sizes."
+msgstr ""

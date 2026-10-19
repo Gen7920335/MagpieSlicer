@@ -69,6 +69,7 @@
 #include <algorithm>
 #include <cctype>
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/format.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <boost/filesystem/path.hpp>
 #include <cfloat>
@@ -740,9 +741,11 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         float outer_wall_volumetric_speed = 0;
         float filament_max_volumetric_speed = config.filament_max_volumetric_speed.get_at(filament_variant_idx);
         const double filament_diameter = config.filament_diameter.get_at(filament_id);
-        float outer_wall_line_width = print.default_region_config().get_abs_value("outer_wall_line_width", filament_diameter);
+        // MAGPIE: a percentage width is a share of the nozzle, not of the filament.
+        const double nozzle_diameter = config.nozzle_diameter.get_at(extruder_id);
+        float outer_wall_line_width = print.default_region_config().get_abs_value("outer_wall_line_width", nozzle_diameter);
         if (outer_wall_line_width == 0.0) {
-            float default_line_width = print.default_object_config().get_abs_value("line_width", filament_diameter);
+            float default_line_width = print.default_object_config().get_abs_value("line_width", nozzle_diameter);
             outer_wall_line_width = default_line_width == 0.0 ? filament_diameter : default_line_width;
         }
         Flow outer_wall_flow = Flow(outer_wall_line_width, config.layer_height, config.nozzle_diameter.get_at(extruder_id));
@@ -2196,6 +2199,9 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
     const std::vector<std::string> ColorPrintColors::Colors = { "#C0392B", "#E67E22", "#F1C40F", "#27AE60", "#1ABC9C", "#2980B9", "#9B59B6" };
 
 #define EXTRUDER_CONFIG(OPT) m_config.OPT.get_at(m_writer.filament()->extruder_id())
+
+// MAGPIE: defined next to GCode::check_extrusion_width().
+static double widest_configured_width_ratio(const Print &print);
 #define FILAMENT_CONFIG(OPT) m_config.OPT.get_at(get_filament_config_index(m_writer.filament()->id()))
 #define NOZZLE_CONFIG(OPT) m_config.OPT.get_at(get_nozzle_config_index(m_writer.filament()->id()))
 
@@ -3998,6 +4004,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     // resets analyzer's tracking data
     m_last_height  = 0.f;
     m_last_layer_z = 0.f;
+    m_widest_configured_width_ratio = widest_configured_width_ratio(print);
+    m_extrusion_width_warned        = false;
     m_max_layer_z  = 0.f;
     m_last_width = 0.f;
     m_last_layer_accumulated_mass = 0.0;
@@ -9743,7 +9751,8 @@ void GCode::apply_print_config(const PrintConfig &print_config)
 
 void GCode::append_full_config(const Print &print, std::string &str)
 {
-    DynamicPrintConfig cfg = print.full_print_config();
+    // MAGPIE: the config block shows the line widths as the user set them.
+    DynamicPrintConfig cfg = print.full_print_config_as_set();
     { // correct the flush_volumes_matrix with flush_multiplier values
         // Fast purge mode uses flush_multiplier_fast; Default is inert.
         std::vector<double> temp_cfg_flush_multiplier = (print.config().prime_volume_mode == PrimeVolumeMode::pvmFast)
@@ -11364,9 +11373,73 @@ std::string GCode::finish_interface_sublayer_temperature()
     return normal.values.empty() ? std::string() : m_writer.set_temperature(normal.get_at(filament_id), false, filament_id);
 }
 
+// MAGPIE: the widest configured line width as a share of the nozzle: a percentage as set, an absolute width
+// over the largest nozzle. Deliberately not the reference nozzle of scale_absolute_line_widths_to_nozzles: the
+// check this bounds must not loosen when that conversion breaks.
+static double widest_configured_width_ratio(const Print &print)
+{
+    const std::vector<double> &nozzles     = print.config().nozzle_diameter.values;
+    const double               largest_mm  = nozzles.empty() ? 0. : *std::max_element(nozzles.begin(), nozzles.end());
+    double                     widest      = 0.;
+    auto visit = [&widest, largest_mm](const ConfigBase &config) {
+        for (const std::string &key : nozzle_relative_line_width_keys())
+            if (const auto *width = config.option<ConfigOptionFloatOrPercent>(key); width != nullptr && width->value > 0.)
+                widest = std::max(widest, width->percent ? 0.01 * width->value : largest_mm > 0. ? width->value / largest_mm : 0.);
+    };
+    visit(print.config());
+    visit(print.default_object_config());
+    visit(print.default_region_config());
+    for (const PrintObject *object : print.objects()) {
+        visit(object->config());
+        for (const PrintRegion &region : object->all_regions())
+            visit(region.config());
+    }
+    return widest;
+}
+
+bool extrusion_width_exceeds_nozzle_bound(ExtrusionRole role, double width_mm, double nozzle_mm, double widest_configured_width_ratio)
+{
+    // Widest width / nozzle legitimate output reached over the golden and feature corpora (108 files,
+    // 2026-10-20): walls 1.99, gap fill 2.78, every other role 1.75 or less (Arachne widens a bead to about
+    // twice its nominal width at most). A width resolved on the wrong nozzle is 2.8 (0.42 mm on 0.15 mm).
+    constexpr double bound_ratio          = 2.6; // width / nozzle
+    constexpr double gap_fill_bound_ratio = 3.5; // width / nozzle; gap fill follows the gap, not a setting
+    constexpr double configured_margin    = 2.2; // x the widest configured width / nozzle, for wide settings
+    if (nozzle_mm <= 0. || width_mm <= 0.)
+        return false;
+    const double bound = std::max(role == erGapFill ? gap_fill_bound_ratio : bound_ratio, configured_margin * widest_configured_width_ratio);
+    return width_mm > bound * nozzle_mm;
+}
+
+void GCode::check_extrusion_width(const ExtrusionPath &path)
+{
+    // MAGPIE: output invariant. Every extrusion is compared with the nozzle of the tool printing it, so a line
+    // width resolved on another nozzle (a 0.42 mm wall from a 0.15 mm nozzle) stops the slice instead of
+    // reaching the printer. Brim and skirt only warn: Orca sizes them on one filament's nozzle for every tool.
+    if (m_writer.filament() == nullptr)
+        return;
+    const double nozzle_mm = EXTRUDER_CONFIG(nozzle_diameter);
+    if (!extrusion_width_exceeds_nozzle_bound(path.role(), path.width, nozzle_mm, m_widest_configured_width_ratio))
+        return;
+    const std::string role = ExtrusionEntity::role_to_string(path.role());
+    const unsigned    tool = m_writer.filament()->id();
+    if (path.role() == erBrim || path.role() == erSkirt) {
+        if (!m_extrusion_width_warned && m_print != nullptr) {
+            m_extrusion_width_warned = true;
+            m_print->active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL,
+                (boost::format(_(L("%1% is printed %2% mm wide by the %3% mm nozzle of tool %4%: brim and skirt widths follow one filament's nozzle on a printer with nozzles of different sizes."))) %
+                 _(role) % path.width % nozzle_mm % (tool + 1)).str());
+        }
+        return;
+    }
+    throw Slic3r::SlicingError((boost::format(_(L("Line width check failed: %1% at Z %2% mm is %3% mm wide, printed by the %4% mm nozzle of tool %5%. The width was likely resolved on another nozzle; please report this."))) %
+                                _(role) % m_last_layer_z % path.width % nozzle_mm % (tool + 1)).str());
+}
+
 std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_description, double speed)
 {
     std::string gcode;
+    this->check_extrusion_width(path);
 
     // MAGPIE: low temperature support interface. Interface paths (and support ironing) print at the interface
     // temperature; the first other extrusion restores the filament temperature.

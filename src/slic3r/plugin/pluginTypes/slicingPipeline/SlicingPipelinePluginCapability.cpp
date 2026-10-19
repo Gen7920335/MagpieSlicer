@@ -81,7 +81,7 @@ void SlicingPipelinePluginCapability::RegisterBindings(py::module_& module) {
             // In-pipeline steps read the live Print's full config; at psGCodePostProcess (print == null)
             // fall back to the config the export path handed in.
             if (ctx.print != nullptr)
-                return config_value_or_none(ctx.print->full_print_config(), key);
+                return config_value_or_none(ctx.print->full_print_config_as_set(), key);
             if (ctx.full_config != nullptr)
                 return config_value_or_none(*ctx.full_config, key);
             return py::none();

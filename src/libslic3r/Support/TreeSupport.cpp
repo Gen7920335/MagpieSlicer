@@ -759,7 +759,8 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
     const PrintObjectConfig& config = m_object->config();
     SupportType stype = support_type;
     const coordf_t radius_sample_resolution = g_config_tree_support_collision_resolution;
-    const double nozzle_diameter = m_object->print()->config().nozzle_diameter.get_at(0);
+    // MAGPIE: widths resolve on the nozzle that prints the support.
+    const double nozzle_diameter = nozzle_diameter_for_filament(m_object->print()->config(), config.support_filament, m_object->print()->is_BBL_printer());
     const coordf_t extrusion_width = config.get_abs_value("line_width", nozzle_diameter);
     const coordf_t extrusion_width_scaled = scale_(extrusion_width);
     const coordf_t max_bridge_length = scale_(config.max_bridge_length.value);
@@ -2258,7 +2259,8 @@ void TreeSupport::draw_circles()
         int(m_support_params.num_top_base_interface_layers),
         top_interface_layers > 0 ? int(top_interface_layers) - 1 : 0);
     const size_t bottom_interface_layers = number_of_support_interface_bottom_layers(config);
-    const double nozzle_diameter = m_object->print()->config().nozzle_diameter.get_at(0);
+    // MAGPIE: widths resolve on the nozzle that prints the support.
+    const double nozzle_diameter = nozzle_diameter_for_filament(m_object->print()->config(), config.support_filament, m_object->print()->is_BBL_printer());
     const coordf_t line_width = config.get_abs_value("support_line_width", nozzle_diameter);
     const coordf_t line_width_scaled           = scale_(line_width);
     const bool with_lightning_infill = m_support_params.base_fill_pattern == ipLightning;
@@ -2266,7 +2268,8 @@ void TreeSupport::draw_circles()
     const float tree_brim_width = config.tree_support_brim_width.value;
     // Reinforce branches moving more than half a support-line width between layers.
     // Square the threshold for comparison with the squared XY movement below.
-    const double max_move_sq = sqr(double(scale_(m_object_config->support_line_width / 2)));
+    // MAGPIE: the resolved width above, not the stored number (a percentage on a mixed-nozzle printer).
+    const double max_move_sq = sqr(double(scale_(line_width / 2)));
     // Belt floor: the first object layer is not on a flat bed — it rests on the
     // tilted, moving belt. So the first-object-layer adhesion features (the tree
     // support brim, the hybrid first-layer base expansion) must be suppressed:

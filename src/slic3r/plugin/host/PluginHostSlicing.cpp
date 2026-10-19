@@ -357,7 +357,7 @@ void host_bindings::register_slicing(py::module_& host)
              "owned by another thread.")
         .def("config_keys", [](const Print& p) { return p.full_print_config().keys(); })
         .def("config_value", [](const Print& p, const std::string& key) {
-            return config_value_or_none(p.full_print_config(), key);
+            return config_value_or_none(p.full_print_config_as_set(), key);
         }, py::arg("key"),
            "Serialized value of the resolved (full) print config for this slice, or None.")
         .def("canceled", [](const Print& p) { return p.canceled(); },
