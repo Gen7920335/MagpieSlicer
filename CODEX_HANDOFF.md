@@ -14,6 +14,14 @@
 
 ## History
 
+### 2026-10-19 Feature audit fixes (report D:\claude\magpie-next-audit\AUDIT_KO.md)
+
+- Arachne single wall on top with a wall plan: the inner walls regenerated under a top surface took the single pass's fixed outer wall profile, so with H/2 the large nozzle printed detail-width walls (line 1's Hilda T2 0.17 mm report; same path here). They now take the base parameters plus only their own H/2 depths. Hilda slab: 0.4 mm toolhead walls at 0.169 mm 12,569 -> 0. Without H/2 the plan's boundary overlap had landed between two large walls; frog_mn_arachne/override move slightly. Still open: on single-wall-top layers the detail/large boundary overlap is not applied (before and after).
+- CoolingBuffer counted every `G4 P` dwell as 0 s (`npos > 0`); `g4_dwell_seconds()` fixes it (Orca bug, no golden case affected).
+- Low temperature interface reheat dwell was `G4 S5.000000` on every flavor; Klipper (U1) ignores S, so there was no wait. It uses `wait_command()` now.
+- Classic, H/2, interlocking on the same slab: 42 moves of a 0.4 mm toolhead outer wall at 0.17 mm on one layer, also with only_one_wall_top off. Cause UNKNOWN; settle it by logging Classic loop depth, tool hint and flow on that layer.
+- Tests 2566/2566; golden off 15/15 and mods 15/15 identical to vanilla; determinism identical; sweep seed 7 204/204 clean.
+
 ### 2026-10-17 P6 Beta 7 test port, final batch
 
 - Ported and passing: Arachne fixed outer bead widths, wall tools for different inner/outer materials under every half-layer mode (64 combinations), mixed-nozzle routing on line 1's geometry probe. Tried and dropped as Orca-behaviour changes: first-layer material order with a partial saved list (nightly orders {1,2,0} where line 1 gives {2,1,0}), legacy printer vector repair. Triage complete (no case left to review).
