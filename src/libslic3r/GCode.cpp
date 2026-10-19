@@ -113,6 +113,7 @@
 #include <boost/nowide/iostream.hpp>
 #include <boost/nowide/cstdio.hpp>
 #include <boost/nowide/cstdlib.hpp>
+#include <boost/nowide/fstream.hpp>
 
 #include "SVG.hpp"
 
@@ -2994,6 +2995,10 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
     }
 #endif
 
+    // MAGPIE: layer time blending fills in the waits and re-estimates the G-code before the statistics below.
+    if (m_layer_time_planner != nullptr && !m_layer_time_sites.empty())
+        this->apply_layer_time_plan(*print, path_tmp);
+
     BOOST_LOG_TRIVIAL(debug) << "Start processing gcode, " << log_memory_info();
     // Post-process the G-code to update time stamps.
 
@@ -3293,6 +3298,207 @@ namespace DoExport {
     }
 }
 
+// MAGPIE: layer time blending.
+namespace LayerTimeBlendExport {
+
+// Feeds a G-code file to a processor in line-aligned chunks, as the export streams it.
+static void stream_file(const std::string &path, GCodeProcessor &processor, const std::function<void()> &throw_if_canceled)
+{
+    boost::nowide::ifstream in(path, std::ios::binary);
+    if (!in)
+        throw Slic3r::RuntimeError("Layer time blending: cannot read " + path);
+    constexpr size_t chunk_bytes = size_t(1) << 20; // chunk size, bytes: large enough to amortize the parser call
+    std::string      chunk, line;
+    chunk.reserve(chunk_bytes + 4096);
+    while (std::getline(in, line)) {
+        chunk += line;
+        if (!in.eof())
+            chunk += '\n';
+        if (chunk.size() >= chunk_bytes) {
+            processor.process_buffer(chunk);
+            chunk.clear();
+            throw_if_canceled();
+        }
+    }
+    if (!chunk.empty())
+        processor.process_buffer(chunk);
+}
+
+// How a site waits in place: not at all, a bare G4, or lifted off the part around the G4.
+enum class WaitForm { None, Dwell, Lifted };
+
+// Shortest wait that lifts the nozzle, s. A shorter one rests the nozzle no longer than Orca's own layer
+// change does, and the lift moves alone would take a good part of it (0.2 s or more).
+constexpr double lifted_wait_min_s = 1.;
+
+// Copies `src` to `dst`, writing each site's wait before its tag: for a lifted one the lift, the G4 for
+// dwell_ms[k] (left out when 0) and the way back down. Each move carries its own feed rate, and every
+// line that follows a site in Orca's output sets its own, so the block changes no modal state that matters.
+static void write_waits(const std::string &src, const std::string &dst, const std::vector<LayerTimeWaitSite> &sites,
+                        const std::vector<WaitForm> &form, const std::vector<long long> &dwell_ms)
+{
+    boost::nowide::ifstream in(src, std::ios::binary);
+    boost::nowide::ofstream out(dst, std::ios::binary | std::ios::trunc);
+    if (!in || !out)
+        throw Slic3r::RuntimeError("Layer time blending: cannot rewrite " + src);
+    const std::string tag = ";" + GCodeProcessor::wait_site_tag();
+    size_t            k   = 0;
+    std::string       line;
+    while (std::getline(in, line)) {
+        if (line == tag && k < sites.size()) {
+            const LayerTimeWaitSite &site = sites[k];
+            if (form[k] == WaitForm::Lifted) {
+                GCodeG1Formatter up;
+                up.emit_z(site.lift_z);
+                up.emit_f(site.z_speed * 60.);
+                out << up.string();
+            }
+            if (form[k] != WaitForm::None && dwell_ms[k] > 0)
+                out << "G4 P" << dwell_ms[k] << "\n";
+            if (form[k] == WaitForm::Lifted) {
+                GCodeG1Formatter down;
+                down.emit_z(site.z);
+                down.emit_f(site.z_speed * 60.);
+                out << down.string();
+            }
+            ++k;
+        }
+        out << line;
+        if (!in.eof())
+            out << '\n';
+    }
+    out.close();
+    if (!out)
+        throw Slic3r::RuntimeError("Layer time blending: cannot write " + dst);
+}
+
+} // namespace LayerTimeBlendExport
+
+std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
+{
+    // An in-place wait lifts the nozzle by this much, mm, so the hot nozzle does not mark the layer it waits
+    // over: well above a layer height and a usual z-hop.
+    constexpr double in_place_lift_mm = 1.;
+    LayerTimeWaitSite site;
+    site.z      = m_writer.get_position().z();
+    site.lift_z = std::max(site.z, std::min(site.z + in_place_lift_mm, print.config().printable_height.value));
+    double speed = EXTRUDER_CONFIG(travel_speed_z);
+    if (speed <= 0.)
+        speed = EXTRUDER_CONFIG(travel_speed);
+    site.z_speed = speed;
+    site.print_z = print_z;
+    // A layer below the previous site's starts the next object of a by-object print.
+    site.constraint_break = !m_layer_time_sites.empty() && print_z < m_layer_time_sites.back().print_z - EPSILON;
+    m_layer_time_sites.push_back(site);
+    return ";" + GCodeProcessor::wait_site_tag() + "\n";
+}
+
+void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
+{
+    const size_t n = m_layer_time_sites.size();
+    // The seam totals are added to the result during the export, not read back from the G-code.
+    const auto seam_gap   = m_processor.result().print_statistics.total_seam_gap_distance;
+    const auto seam_scarf = m_processor.result().print_statistics.total_seam_scarf_distance;
+    const Vec2d offset    = m_processor.xy_offset();
+    auto setup = [&](GCodeProcessor &processor, const std::string &path) {
+        bool silent = false;
+        DoExport::init_gcode_processor(print.config(), processor, silent, print.get_layered_nozzle_group_result());
+        processor.set_print(&print);
+        processor.set_xy_offset(offset.x(), offset.y());
+        processor.initialize(path);
+    };
+    const std::function<void()> throw_if_canceled = [&print]() { print.throw_if_canceled(); };
+    auto intervals = [](const std::vector<GCodeProcessor::WaitSiteTime> &times) {
+        std::vector<double> out(times.size());
+        for (size_t k = 0; k < times.size(); ++k)
+            out[k] = k == 0 ? times[0].time_s : times[k].time_s - times[k - 1].time_s;
+        return out;
+    };
+
+    m_processor.finalize(false);
+    const std::vector<GCodeProcessor::WaitSiteTime> times = m_processor.wait_site_times();
+    const double print_time_s = m_processor.get_time(PrintEstimatedStatistics::ETimeMode::Normal);
+    using LayerTimeBlendExport::WaitForm;
+    std::vector<WaitForm>  form(n, WaitForm::None);
+    std::vector<long long> dwell_ms(n, 0);
+    ModHost::WaitPlan      plan;
+    if (times.size() != n) {
+        // PERMANENT DIAGNOSTIC: the processor saw a different number of sites than the export wrote, so the
+        // times cannot be matched to sites; the G-code is left without waits.
+        BOOST_LOG_TRIVIAL(error) << "Layer time blending: " << n << " wait sites written, " << times.size() << " seen; no waits added";
+    } else {
+        const std::vector<double>     interval = intervals(times);
+        std::vector<ModHost::WaitSite> sites(n);
+        for (size_t k = 0; k < n; ++k) {
+            sites[k].interval_s       = interval[k];
+            sites[k].layer_id         = times[k].layer_id >= 2 ? times[k].layer_id - 2 : 0;
+            sites[k].constraint_break = m_layer_time_sites[k].constraint_break;
+        }
+        plan = m_layer_time_planner->plan(sites, print.config(), print_time_s);
+        for (size_t k = 0; k < n && k < plan.dwell_s.size(); ++k) {
+            dwell_ms[k] = std::llround(plan.dwell_s[k] * 1000.);
+            if (plan.added_s[k] > 0.)
+                form[k] = plan.added_s[k] >= LayerTimeBlendExport::lifted_wait_min_s ? WaitForm::Lifted : WaitForm::Dwell;
+        }
+    }
+    print.throw_if_canceled();
+
+    if (std::any_of(form.begin(), form.end(), [](WaitForm f) { return f != WaitForm::None; })) {
+        const std::string path_filled = path_tmp + ".ltb";
+        LayerTimeBlendExport::write_waits(path_tmp, path_filled, m_layer_time_sites, form, dwell_ms);
+        // Check and correct once. A wait adds pure time, so a site's error after filling (the lift moves,
+        // the stop the G4 forces) is the same for any G4 value: one correction is exact up to the
+        // estimator's resolution (its per-move times are floats, a few ms late in a long print).
+        GCodeProcessor check;
+        setup(check, path_filled);
+        LayerTimeBlendExport::stream_file(path_filled, check, throw_if_canceled);
+        check.finalize(false);
+        const std::vector<GCodeProcessor::WaitSiteTime> measured = check.wait_site_times();
+        bool corrected = false;
+        if (measured.size() == n) {
+            const std::vector<double> interval = intervals(measured);
+            for (size_t k = 1; k < n; ++k) {
+                if (form[k] == WaitForm::None)
+                    continue;
+                const long long error_ms = std::llround((interval[k] - plan.target_s[k]) * 1000.);
+                if (error_ms == 0)
+                    continue;
+                corrected            = true;
+                const long long dwell = dwell_ms[k] - error_ms;
+                if (dwell >= 0) {
+                    dwell_ms[k] = dwell;
+                } else {
+                    // The block alone takes longer than the wait asked for: keep it without a G4, or leave the
+                    // site as it was, whichever ends nearer the planned time.
+                    const long long added_ms = std::llround(plan.added_s[k] * 1000.);
+                    dwell_ms[k] = 0;
+                    if (-dwell > added_ms)
+                        form[k] = WaitForm::None;
+                }
+            }
+        } else {
+            // PERMANENT DIAGNOSTIC: the filled G-code lost or gained a site; its waits stay uncorrected.
+            BOOST_LOG_TRIVIAL(error) << "Layer time blending: " << measured.size() << " sites after filling, " << n << " before";
+        }
+        if (corrected)
+            LayerTimeBlendExport::write_waits(path_tmp, path_filled, m_layer_time_sites, form, dwell_ms);
+        print.throw_if_canceled();
+        boost::nowide::remove(path_tmp.c_str());
+        if (std::error_code ec = rename_file(path_filled, path_tmp))
+            throw Slic3r::RuntimeError("Layer time blending: cannot replace " + path_tmp + ": " + ec.message());
+    }
+    for (const ModHost::WaitWarning &w : plan.warnings)
+        BOOST_LOG_TRIVIAL(warning) << "Layer time blending warning " << int(w.kind) << ": value " << w.value << ", source site "
+                                   << w.source_site << ", sites " << w.first_site << ".." << w.last_site;
+
+    // The final estimate, statistics and post-processing run over the G-code as written.
+    setup(m_processor, path_tmp);
+    set_mass_locator(m_processor, print);
+    LayerTimeBlendExport::stream_file(path_tmp, m_processor, throw_if_canceled);
+    m_processor.result().print_statistics.total_seam_gap_distance   = seam_gap;
+    m_processor.result().print_statistics.total_seam_scarf_distance = seam_scarf;
+}
+
 #if 0
 // Sort the PrintObjects by their increasing Z, likely useful for avoiding colisions on Deltas during sequential prints.
 static inline std::vector<const PrintInstance*> sort_object_instances_by_max_z(const Print &print)
@@ -3566,6 +3772,18 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
 
     if (print.config().spiral_mode.value)
         m_spiral_vase = make_unique<SpiralVase>(print.config());
+
+    // MAGPIE: layer time blending. Off in spiral vase mode (no layer boundary to wait at) and on printers with
+    // an axis remap (belt printers), where the in-place lift would not be a plain Z move.
+    m_layer_time_sites.clear();
+    m_layer_time_planner = nullptr;
+    if (const std::string &planner = print.config().layer_time_planner.value; !planner.empty()) {
+        m_layer_time_planner = ModHost::find_time_planner(planner);
+        if (m_layer_time_planner == nullptr)
+            BOOST_LOG_TRIVIAL(error) << "Unknown layer time planner \"" << planner << "\"; no waits added";
+        else if (print.config().spiral_mode.value || m_writer.has_axis_remap())
+            m_layer_time_planner = nullptr;
+    }
 
     if (print.config().max_volumetric_extrusion_rate_slope.value > 0){
     		m_pressure_equalizer = make_unique<PressureEqualizer>(print.config());
@@ -7220,6 +7438,12 @@ LayerResult GCode::process_layer(
         config.set_key_value("max_layer_z", new ConfigOptionFloat(m_max_layer_z));
     }
     
+    // MAGPIE: layer time blending wait site, before the layer's fan change so a wait belongs to the layer
+    // below. Only layers with an object layer: a support-only layer of its own height adds to the interval
+    // it falls in.
+    if (m_layer_time_planner != nullptr && object_layer != nullptr)
+        gcode += this->layer_time_wait_site(print, print_z);
+
     //BBS: set layer time fan speed after layer change gcode
     gcode += ";_SET_FAN_SPEED_CHANGING_LAYER\n";
 

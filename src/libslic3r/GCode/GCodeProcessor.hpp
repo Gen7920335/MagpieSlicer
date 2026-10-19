@@ -819,6 +819,12 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
             using AdditionalBufferBlock = std::pair<EMoveType, float>;
             using AdditionalBuffer      = std::vector<AdditionalBufferBlock>;
             AdditionalBuffer m_additional_time_buffer;
+            // MAGPIE: extra time (dwells, tool changes) is booked on the oldest queued block, which can lie well
+            // before the command that asked for it, so the elapsed time at a G1 does not tell when a later command
+            // happened. Layer time blending reads these instead: the extra time asked for so far, in G-code order
+            // (s), and each booking with the G1 line of the block that took it. Bookkeeping only.
+            double requested_additional_time { 0. };
+            std::vector<std::pair<unsigned int, float>> additional_time_by_g1_line;
 
             void reset();
 
@@ -1298,6 +1304,15 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
         bool m_measure_g29_time {false};
         bool m_g29_time_added {false};
         bool m_single_extruder_multi_material;
+        // MAGPIE: per wait site tag, the last G1 line before it, the layer counter and the extra time asked
+        // for before it (Normal mode, s).
+        struct WaitSiteMark
+        {
+            unsigned int g1_line_id;
+            unsigned int layer_id;
+            double       requested_additional_time;
+        };
+        std::vector<WaitSiteMark> m_wait_sites;
         float m_preheat_time;
         int m_preheat_steps;
         bool m_disable_m73;
@@ -1399,6 +1414,17 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
 
         //BBS: set offset for gcode writer
         void set_xy_offset(double x, double y) { m_x_offset = x; m_y_offset = y; }
+        Vec2d xy_offset() const { return { m_x_offset, m_y_offset }; }
+
+        // MAGPIE: layer time blending wait sites. The comment line that marks one (without the ';').
+        static const std::string &wait_site_tag();
+        struct WaitSiteTime
+        {
+            double       time_s;   // estimated (Normal mode) time from the start of the print to the site, s
+            unsigned int layer_id; // the processor's layer counter at the site (1 = the first layer)
+        };
+        // The marked sites in G-code order. Valid after finalize().
+        std::vector<WaitSiteTime> wait_site_times() const;
 
         // Orca: if true, only change new layer if ETags::Layer_Change occurs
         // otherwise when we got a lift of z during extrusion, a new layer will be added

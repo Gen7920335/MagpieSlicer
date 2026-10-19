@@ -389,6 +389,8 @@ void GCodeProcessor::TimeMachine::reset()
     first_layer_time = 0.0f;
     prepare_time = 0.0f;
     m_additional_time_buffer.clear();
+    requested_additional_time = 0.;
+    additional_time_by_g1_line.clear();
 }
 
 static void planner_forward_pass_kernel(const GCodeProcessor::TimeBlock& prev, GCodeProcessor::TimeBlock& curr)
@@ -503,6 +505,8 @@ void GCodeProcessor::TimeMachine::calculate_time(GCodeProcessorResult& result, P
     // exists to attribute it on. Every other pass keeps the original >= 2 requirement,
     // and an empty buffer keeps today's early-return unchanged (no behavior change).
     const bool drain_final = is_final && !m_additional_time_buffer.empty();
+    if (additional_time > 0.0f)
+        requested_additional_time += double(additional_time);
     if (blocks.size() < 2 && !drain_final) {
         // Not enough blocks to attribute the extra time to yet; buffer it so it is
         // applied on a later pass instead of being dropped.
@@ -542,6 +546,7 @@ void GCodeProcessor::TimeMachine::calculate_time(GCodeProcessorResult& result, P
             const EMoveType buf_move_type = additional_buffer[additional_buffer_idx].first;
             if (buf_move_type == EMoveType::Noop || buf_move_type == block.move_type) {
                 block_time += additional_buffer[additional_buffer_idx].second;
+                additional_time_by_g1_line.emplace_back(block.g1_line_id, additional_buffer[additional_buffer_idx].second);
                 ++additional_buffer_idx;
             }
         }
@@ -3690,6 +3695,7 @@ void GCodeProcessor::reset()
     m_in_config_block = false;
     m_g1_line_id = 0;
     m_layer_id = 0;
+    m_wait_sites.clear();
     m_cp_color.reset();
     m_mass_locator = nullptr;
 
@@ -3872,6 +3878,36 @@ void GCodeProcessor::finalize(bool post_process)
     }
     //BBS: update slice warning
     update_slice_warnings();
+}
+
+const std::string &GCodeProcessor::wait_site_tag()
+{
+    static const std::string tag = "MAGPIE_WAIT_SITE";
+    return tag;
+}
+
+std::vector<GCodeProcessor::WaitSiteTime> GCodeProcessor::wait_site_times() const
+{
+    // The time at a site is the time of the moves up to the last G1 before it plus all extra time (dwells,
+    // tool changes) asked for before it. The elapsed time cached at that G1 holds the extra time booked on
+    // blocks up to it, which need not be the extra time asked for before the site, so it is taken out.
+    const TimeMachine &machine = m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)];
+    const std::vector<TimeMachine::G1LinesCacheItem> &cache = machine.g1_times_cache;
+    const auto &booked = machine.additional_time_by_g1_line;
+    std::vector<WaitSiteTime> out;
+    out.reserve(m_wait_sites.size());
+    double booked_sum  = 0.; // extra time booked on blocks up to the current site's G1, s
+    size_t booked_next = 0;
+    for (const WaitSiteMark &site : m_wait_sites) {
+        auto it = std::upper_bound(cache.begin(), cache.end(), site.g1_line_id,
+                                   [](unsigned int id, const TimeMachine::G1LinesCacheItem &item) { return id < item.id; });
+        const double elapsed = it == cache.begin() ? 0. : double(std::prev(it)->elapsed_time);
+        // Bookings come in block order, and sites in G-code order, so one forward pass sums them.
+        while (booked_next < booked.size() && booked[booked_next].first <= site.g1_line_id)
+            booked_sum += double(booked[booked_next++].second);
+        out.push_back({ elapsed - booked_sum + site.requested_additional_time, site.layer_id });
+    }
+    return out;
 }
 
 float GCodeProcessor::get_time(PrintEstimatedStatistics::ETimeMode mode) const
@@ -4402,6 +4438,13 @@ void GCodeProcessor::process_tags(const std::string_view comment, bool producers
     // producers tags
     if (producers_enabled && process_producers_tags(comment))
         return;
+
+    // MAGPIE: a layer time blending wait site. Written only while a layer time planner is chosen.
+    if (comment == wait_site_tag()) {
+        m_wait_sites.push_back({ m_g1_line_id, m_layer_id,
+                                 m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].requested_additional_time });
+        return;
+    }
 
     // extrusion role tag
     if (boost::starts_with(comment, reserved_tag(ETags::Role))) {

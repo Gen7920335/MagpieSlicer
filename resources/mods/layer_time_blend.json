@@ -1,0 +1,40 @@
+{
+    // Layer time blending: waits after short layers so neighbouring layer times stay close, which keeps the
+    // cooling of each layer even. The waits are planned after the G-code is written, from the estimated
+    // layer times; the layers before a long layer wait too, so the times ramp up to it. Off changes nothing.
+    "id": "layer_time_blend",
+    "name": "Layer time blending", "name_ko": "레이어 타임 블렌딩",
+    "version": "1.0.0",
+    "params": {
+        "blend_type":     { "type": "string", "default": "off",
+                            "options": [ { "value": "off",    "label": "Off",    "label_ko": "끔" },
+                                         { "value": "linear", "label": "Linear", "label_ko": "선형" },
+                                         { "value": "log",    "label": "Log",    "label_ko": "로그" } ],
+                            "label": "Layer time blending", "label_ko": "레이어 타임 블렌딩" },
+        "max_diff":       { "type": "float", "default": 5,  "unit": "s", "visible": "layer_time_blend.blend_type == \"linear\"",
+                            "label": "Maximum layer time difference", "label_ko": "최대 레이어 시간 차이" },
+        "max_ratio":      { "type": "float", "default": 20, "unit": "%", "visible": "layer_time_blend.blend_type == \"log\"",
+                            "label": "Maximum layer time change", "label_ko": "최대 레이어 시간 변화율" },
+        "ease_layers":    { "type": "int",   "default": 0,               "visible": "layer_time_blend.blend_type != \"off\"",
+                            "label": "Transition easing layers", "label_ko": "전환 완화 레이어 수" },
+        "start_layer":    { "type": "int",   "default": 2,               "visible": "layer_time_blend.blend_type != \"off\"",
+                            "label": "First blended layer", "label_ko": "블렌딩 시작 레이어" },
+        "wait_cap":       { "type": "float", "default": 0,  "unit": "s", "visible": "layer_time_blend.blend_type != \"off\"",
+                            "label": "Maximum wait per layer (0 = no limit)", "label_ko": "레이어당 최대 대기 (0 = 제한 없음)" },
+        "warn_total_pct": { "type": "float", "default": 15, "unit": "%", "visible": "layer_time_blend.blend_type != \"off\"",
+                            "label": "Warn when waits exceed this share of the print time", "label_ko": "대기 합계가 출력 시간의 이 비율을 넘으면 경고" },
+        "warn_single":    { "type": "float", "default": 60, "unit": "s", "visible": "layer_time_blend.blend_type != \"off\"",
+                            "label": "Warn when one wait exceeds", "label_ko": "단일 대기가 이 시간을 넘으면 경고" }
+    },
+    "rules": [
+        { "target": "layer_time_planner",           "value": "if(layer_time_blend.blend_type == \"off\", \"\", \"blend\")" },
+        { "target": "layer_time_blend_log",         "value": "layer_time_blend.blend_type == \"log\"" },
+        { "target": "layer_time_blend_max_diff",    "value": "layer_time_blend.max_diff" },
+        { "target": "layer_time_blend_max_ratio",   "value": "layer_time_blend.max_ratio" },
+        { "target": "layer_time_blend_ease_layers", "value": "layer_time_blend.ease_layers" },
+        { "target": "layer_time_blend_start_layer", "value": "layer_time_blend.start_layer" },
+        { "target": "layer_time_blend_wait_cap",    "value": "layer_time_blend.wait_cap" },
+        { "target": "layer_time_blend_warn_total",  "value": "layer_time_blend.warn_total_pct" },
+        { "target": "layer_time_blend_warn_single", "value": "layer_time_blend.warn_single" }
+    ]
+}

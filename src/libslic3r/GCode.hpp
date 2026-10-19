@@ -61,8 +61,22 @@ class GCode;
 struct WipeInwardSupport;
 
 namespace CustomGCode{ struct Item; }
+namespace ModHost { struct TimePlanner; }
 struct PrintInstance;
 class ConstPrintObjectPtrsAdaptor;
+
+// MAGPIE: a layer time blending wait site as the export wrote it: where the nozzle is and how an in-place
+// wait lifts it.
+struct LayerTimeWaitSite
+{
+    // The layer's nominal Z at the site, mm (G-code coordinates). The lazy layer raise has not moved the
+    // nozzle yet, so it is at or below this; an in-place wait returns here, doing the raise early.
+    double z;
+    double lift_z;           // Z an in-place wait lifts to, mm
+    double z_speed;          // feed rate of the lift, mm/s
+    double print_z;          // the layer's print Z, mm
+    bool   constraint_break; // the first layer of the next object of a by-object print
+};
 
 class OozePrevention {
 public:
@@ -555,6 +569,10 @@ protected:
     std::string     preamble();
     // BBS
     std::string     change_layer(coordf_t print_z);
+    // MAGPIE: layer time blending. Marks a wait site at the start of a layer (a comment only); the waits
+    // are filled in after the export, from the estimated times of the sites.
+    std::string     layer_time_wait_site(const Print &print, coordf_t print_z);
+    void            apply_layer_time_plan(Print &print, const std::string &path_tmp);
     // Bedslinger model: derive the Y-axis acceleration limit from the machine force/bed-mass config
     // and the mass already printed. Yields the min machine Y acceleration when the A2L config keys are
     // unset (i.e. every existing printer), so it is inert for them.
@@ -896,6 +914,10 @@ protected:
     // Bedslinger mass model: cumulative printed mass at the previous layer, used to derive
     // the current layer mass for the per-layer Y acceleration limit (curr_y_acceleration_limit).
     double                              m_last_layer_accumulated_mass{ 0.0 };
+    // MAGPIE: layer time blending. The planner chosen by layer_time_planner, or nullptr, and the wait
+    // sites written so far in G-code order.
+    const ModHost::TimePlanner         *m_layer_time_planner{ nullptr };
+    std::vector<LayerTimeWaitSite>      m_layer_time_sites;
 
     // Always check gcode placeholders when building in debug mode.
 #if !defined(NDEBUG)
