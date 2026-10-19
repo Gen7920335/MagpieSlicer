@@ -5,6 +5,7 @@
 #include "libslic3r/ExtrusionEntity.hpp"
 #include "libslic3r/ExtrusionEntityCollection.hpp"
 #include "libslic3r/GCodeReader.hpp"
+#include "libslic3r/HalfLayerSources.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/ModHost/Builtin/MultiNozzleWalls.hpp"
 #include "libslic3r/Print.hpp"
@@ -397,6 +398,81 @@ TEST_CASE("Single wall on top surfaces keeps the planned walls below the top", "
         const auto walls = walls_of(*object.layers()[10]->regions().front());
         CHECK(walls.size() == size_t(detail_walls + 3));
         CHECK(std::count_if(walls.begin(), walls.end(), [](const ExtrusionEntity *e) { return e->tool_hint == ExtrusionToolHint::DetailWall; }) == detail_walls);
+    }
+}
+
+TEST_CASE("Single wall on top surfaces gives no large nozzle wall a detail nozzle width", "[MultiNozzleWalls][Arachne][HalfLayer]")
+{
+    // Line 1 Hilda report (0.15/0.4 U1): Arachne's inner pass under a top surface took the single pass's
+    // detail-nozzle profile, so its first bead got the 0.15 mm nozzle's width while its depth routed it to
+    // the 0.4 mm nozzle. The last layer below the step of a 20 mm box carrying a 10 mm box has a top surface
+    // ring; the step height picks an odd (one detail wall, interlocking) or even (two detail walls) layer.
+    const double step_mm = GENERATE(6.0, 6.12);
+    const bool   h2      = GENERATE(false, true);
+    DYNAMIC_SECTION("step " << step_mm << " mm, H/2 " << h2) {
+        DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "arachne", true);
+        config.set_deserialize_strict({
+            { "wall_loops", 2 },
+            { "layer_height", 0.12 },
+            { "initial_layer_print_height", 0.12 },
+            { "top_shell_layers", 3 },
+            { "only_one_wall_top", true },
+            { "crisp_corner_small_nozzle_wall_count", 2 },
+            { "crisp_corner_interlace_small_nozzle_walls", true },
+            { "outer_wall_half_layer_height", h2 },
+        });
+        TriangleMesh mesh = make_cube(20., 20., step_mm);
+        TriangleMesh top  = make_cube(10., 10., 3.);
+        top.translate(5.f, 5.f, float(step_mm));
+        mesh.merge(top);
+        Print print;
+        Model model;
+        init_print({ mesh }, print, model, config);
+        print.process();
+        const PrintObject &object = *print.objects().front();
+        // Last layer below the step, by print height in mm.
+        const Layer *step_layer = nullptr;
+        for (const Layer *layer : object.layers())
+            if (layer->print_z < step_mm + EPSILON)
+                step_layer = layer;
+        REQUIRE(step_layer != nullptr);
+        CAPTURE(step_layer->id());
+
+        // Length of large wall beads by width, mm. A 0.4 mm nozzle bead narrower than 0.25 mm is a detail
+        // nozzle width (0.15 mm nozzle beads are below 0.2 mm here, 0.4 mm nozzle beads above 0.4 mm).
+        double large_mm = 0., narrow_large_mm = 0., detail_mm = 0.;
+        auto   add_path = [&](const ExtrusionPath &path, ExtrusionToolHint hint) {
+            const double length = unscale<double>(path.polyline.length());
+            if (hint == ExtrusionToolHint::DetailWall)
+                detail_mm += length;
+            if (hint != ExtrusionToolHint::LargeWall)
+                return;
+            large_mm += length;
+            if (path.width < 0.25f)
+                narrow_large_mm += length;
+        };
+        // H/2 keeps the half-height outer walls on the two phase layers of the parent layer.
+        std::vector<const ExtrusionEntity *> walls = walls_of(*step_layer->regions().front());
+        if (const HalfLayerSourceLayers *sources = object.half_layer_sources())
+            for (const auto &phase : sources->phases)
+                if (step_layer->id() < phase.size())
+                    for (const ExtrusionEntity *wall : walls_of(*phase[step_layer->id()]->regions().front()))
+                        walls.push_back(wall);
+        for (const ExtrusionEntity *wall : walls) {
+            if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(wall))
+                for (const ExtrusionPath &path : loop->paths)
+                    add_path(path, wall->tool_hint);
+            else if (const auto *multi = dynamic_cast<const ExtrusionMultiPath *>(wall))
+                for (const ExtrusionPath &path : multi->paths)
+                    add_path(path, wall->tool_hint);
+            else if (const auto *path = dynamic_cast<const ExtrusionPath *>(wall))
+                add_path(*path, wall->tool_hint);
+        }
+        // The layer has detail walls and large walls under the top ring.
+        REQUIRE(detail_mm > 0.);
+        REQUIRE(large_mm > 0.);
+        // Measured with H/2 before the fix: 36.3 of 178.3 mm (odd layer) and 71.3 of 71.3 mm (even layer).
+        CHECK(narrow_large_mm < 0.01 * large_mm);
     }
 }
 
