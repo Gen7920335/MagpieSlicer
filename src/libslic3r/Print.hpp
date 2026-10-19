@@ -1158,6 +1158,21 @@ public:
     const PrintConfig&          config() const { return m_config; }
     // MAGPIE: the nozzle absolute line widths are scaled from on a printer with mixed nozzle sizes, mm; 0 otherwise.
     double                      line_width_reference_mm() const { return m_line_width_reference_mm; }
+    // MAGPIE: the nozzle (mm) a line width read for no particular extrusion is resolved on: the reference
+    // nozzle on a printer with mixed nozzle sizes, which gives back an absolute width as set; else nozzle 0.
+    double                      shared_line_width_nozzle() const
+    {
+        return m_line_width_reference_mm > 0. ? m_line_width_reference_mm : m_config.nozzle_diameter.get_at(0);
+    }
+    // MAGPIE: full_print_config() with the line widths as the user set them, before
+    // scale_absolute_line_widths_to_nozzles. Use it for anything written out or shown: the G-code config
+    // block, post-processing scripts, plugins.
+    DynamicPrintConfig          full_print_config_as_set() const
+    {
+        DynamicPrintConfig config = this->full_print_config();
+        config.apply(m_line_widths_as_set);
+        return config;
+    }
     const PrintObjectConfig&    default_object_config() const { return m_default_object_config; }
     const PrintRegionConfig& default_region_config() const { return m_default_region_config; }
     ConstPrintObjectPtrsAdaptor objects() const { return ConstPrintObjectPtrsAdaptor(&m_objects); }
@@ -1489,6 +1504,10 @@ private:
     // MAGPIE: the nozzle absolute line widths are scaled from (absolute_line_width_reference_nozzle), mm,
     // as of the last apply(); 0 on a printer with one nozzle size.
     double                   m_line_width_reference_mm { 0. };
+    // MAGPIE: whether the last apply() restated any absolute line width of the print config, and those
+    // widths as the user set them (everything written out shows these, see full_print_config_as_set()).
+    bool                     m_line_widths_scaled { false };
+    DynamicPrintConfig       m_line_widths_as_set;
 
     //BBS
     static StringObjectException check_multi_filament_valid(const Print &print);

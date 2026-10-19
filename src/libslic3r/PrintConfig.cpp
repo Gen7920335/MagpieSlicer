@@ -165,20 +165,36 @@ double absolute_line_width_reference_nozzle(const DynamicPrintConfig &config)
     return *max_it;
 }
 
-void scale_absolute_line_widths(ConfigBase &config, double reference_mm)
+const std::vector<std::string> &nozzle_relative_line_width_keys()
 {
+    static const std::vector<std::string> keys = [] {
+        std::vector<std::string> out;
+        for (const auto &[key, def] : print_config_def.options)
+            if (def.type == coFloatOrPercent && def.ratio_over == "nozzle_diameter" && boost::ends_with(key, "line_width"))
+                out.push_back(key);
+        std::sort(out.begin(), out.end());
+        return out;
+    }();
+    return keys;
+}
+
+size_t scale_absolute_line_widths(ConfigBase &config, double reference_mm, DynamicConfig *as_set)
+{
+    size_t scaled = 0;
     if (reference_mm <= 0.)
-        return;
-    for (const auto &[key, def] : print_config_def.options) {
-        if (def.type != coFloatOrPercent || def.ratio_over != "nozzle_diameter" || !boost::ends_with(key, "line_width"))
-            continue;
+        return scaled;
+    for (const std::string &key : nozzle_relative_line_width_keys()) {
         auto *width = config.option<ConfigOptionFloatOrPercent>(key);
         // Zero is the automatic width, which already follows each nozzle.
         if (width == nullptr || width->percent || width->value <= 0.)
             continue;
+        if (as_set != nullptr)
+            as_set->set_key_value(key, width->clone());
         width->value   = 100. * width->value / reference_mm;
         width->percent = true;
+        ++scaled;
     }
+    return scaled;
 }
 
 void scale_absolute_line_widths_to_nozzles(DynamicPrintConfig &config)
@@ -14104,9 +14120,16 @@ float get_real_skirt_dist(const DynamicPrintConfig& cfg) {
         loops = 1;
     }
 
-    float width = cfg.opt_float("initial_layer_line_width");
+    // MAGPIE: a percentage width is resolved on the largest nozzle instead of reading its number as mm.
+    const auto  *nozzles     = cfg.opt<ConfigOptionFloats>("nozzle_diameter");
+    const double max_nozzle  = nozzles && !nozzles->values.empty() ? *std::max_element(nozzles->values.begin(), nozzles->values.end()) : 0.4;
+    auto         width_of    = [&cfg, max_nozzle](const char *key) {
+        const auto *opt = cfg.option<ConfigOptionFloatOrPercent>(key);
+        return opt ? float(opt->get_abs_value(max_nozzle)) : 0.f;
+    };
+    float width = width_of("initial_layer_line_width");
     if (width <= 0.f) {
-        width = cfg.opt_float("line_width");
+        width = width_of("line_width");
     }
     if (width <= 0.f) {
         auto* nd = cfg.opt<ConfigOptionFloats>("nozzle_diameter");

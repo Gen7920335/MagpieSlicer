@@ -23,6 +23,8 @@
 #include <initializer_list>
 #include <memory>
 #include <map>
+#include <cctype>
+#include <boost/filesystem.hpp>
 #include <iterator>
 #include <nlohmann/json.hpp>
 
@@ -1721,4 +1723,80 @@ TEST_CASE("Line widths are left as set on a printer with one nozzle size", "[Con
     CHECK(absolute_line_width_reference_nozzle(config) == 0.);
     scale_absolute_line_widths_to_nozzles(config);
     CHECK(config.diff(before).empty());
+}
+
+// MAGPIE: on a printer with nozzles of different sizes the slicing config holds absolute line widths as
+// percentages (scale_absolute_line_widths_to_nozzles), so code that takes the stored number of one of these
+// keys as millimetres prints the wrong width. Every source line naming a key is counted per file; a file
+// that is new here or names the keys more often fails until its reads were checked. A read is fine when it
+// resolves the width on the nozzle that prints it (Flow::new_from_config_width, get_abs_value(nozzle),
+// Print::shared_line_width_nozzle()) or only tests > 0. Then set the count printed below. Lower counts fail
+// too, to keep the table exact. Lines starting with // are not counted.
+TEST_CASE("Every read of a nozzle-relative line width key is in the reviewed table", "[Config]")
+{
+    static const std::map<std::string, size_t> reviewed {
+        { "src/libslic3r/Config.cpp", 1 },
+        { "src/libslic3r/Fill/Fill.cpp", 2 },
+        { "src/libslic3r/Fill/FillAdaptive.cpp", 1 },
+        { "src/libslic3r/Fill/Lightning/Generator.cpp", 6 },
+        { "src/libslic3r/Flow.cpp", 20 },
+        { "src/libslic3r/GCode.cpp", 6 },
+        { "src/libslic3r/GCode/ToolOrdering.cpp", 4 },
+        { "src/libslic3r/Layer.cpp", 2 },
+        { "src/libslic3r/LayerRegion.cpp", 5 },
+        { "src/libslic3r/ModHost/Builtin/CuraSupport.cpp", 4 },
+        { "src/libslic3r/ModHost/Builtin/MultiNozzleWalls.cpp", 1 },
+        { "src/libslic3r/MultiMaterialSegmentation.cpp", 2 },
+        { "src/libslic3r/PerimeterGenerator.cpp", 2 },
+        { "src/libslic3r/PlaceholderParser.cpp", 4 },
+        { "src/libslic3r/Preset.cpp", 11 },
+        { "src/libslic3r/Print.cpp", 34 },
+        { "src/libslic3r/PrintConfig.cpp", 32 },
+        { "src/libslic3r/PrintObject.cpp", 13 },
+        { "src/libslic3r/PrintObjectSlice.cpp", 1 },
+        { "src/libslic3r/PrintRegion.cpp", 8 },
+        { "src/libslic3r/Support/SupportMaterial.cpp", 1 },
+        { "src/libslic3r/Support/SupportParameters.hpp", 2 },
+        { "src/libslic3r/Support/TreeSupport.cpp", 2 },
+        { "src/libslic3r/Support/TreeSupport3D.cpp", 15 },
+        { "src/libslic3r/Support/TreeSupportCommon.hpp", 3 },
+        { "src/libslic3r/calib.cpp", 6 },
+        { "src/libslic3r/calib.hpp", 2 },
+    };
+    const boost::filesystem::path root = boost::filesystem::path(std::string(TEST_DATA_DIR)).parent_path().parent_path();
+    const std::vector<std::string> &keys = nozzle_relative_line_width_keys();
+    REQUIRE(keys.size() == 11);
+    auto ident = [](char c) { return std::isalnum((unsigned char) c) || c == '_'; };
+    auto names_key = [&](const std::string &line) {
+        const size_t first = line.find_first_not_of(" \t");
+        if (first != std::string::npos && (line.compare(first, 2, "//") == 0 || line[first] == '*'))
+            return false;
+        for (const std::string &key : keys)
+            for (size_t i = line.find(key); i != std::string::npos; i = line.find(key, i + 1)) {
+                const size_t j      = i + key.size();
+                const char   before = i > 0 ? line[i - 1] : ' ';
+                const char   after  = j < line.size() ? line[j] : ' ';
+                if (! ident(after) && (before == '.' || (before == '>' && i > 1 && line[i - 2] == '-') || (before == '"' && after == '"')))
+                    return true;
+            }
+        return false;
+    };
+    std::map<std::string, size_t> found;
+    for (const char *dir : { "src/libslic3r", "src/slic3r/plugin" })
+        for (boost::filesystem::recursive_directory_iterator it(root / dir), end; it != end; ++it) {
+            const std::string ext = it->path().extension().string();
+            if (! boost::filesystem::is_regular_file(it->path()) || (ext != ".cpp" && ext != ".hpp" && ext != ".h"))
+                continue;
+            boost::nowide::ifstream in(it->path().string());
+            size_t count = 0;
+            for (std::string line; std::getline(in, line);)
+                count += names_key(line) ? 1 : 0;
+            if (count > 0)
+                found[boost::filesystem::relative(it->path(), root).generic_string()] = count;
+        }
+    std::string table;
+    for (const auto &[file, count] : found)
+        table += "        { \"" + file + "\", " + std::to_string(count) + " },\n";
+    INFO("Current table, after checking every changed read:\n" << table);
+    CHECK(found == reviewed);
 }

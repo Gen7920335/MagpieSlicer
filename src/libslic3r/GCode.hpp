@@ -58,6 +58,10 @@ namespace Slic3r {
 
 // Forward declarations.
 class GCode;
+
+// MAGPIE: whether an extrusion width_mm printed by a nozzle_mm nozzle is wider than legitimate output gets
+// (GCode::check_extrusion_width); widest_configured_width_ratio is the widest configured line width / its nozzle.
+bool extrusion_width_exceeds_nozzle_bound(ExtrusionRole role, double width_mm, double nozzle_mm, double widest_configured_width_ratio);
 struct WipeInwardSupport;
 
 namespace CustomGCode{ struct Item; }
@@ -1003,6 +1007,10 @@ protected:
 
     double      calc_max_volumetric_speed(const double layer_height, const double line_width, const std::string co_str);
     std::string _extrude(const ExtrusionPath &path, const std::string &path_description = "", double speed = -1);
+    // MAGPIE: output invariant, see check_extrusion_width() in GCode.cpp.
+    void check_extrusion_width(const ExtrusionPath &path);
+    double m_widest_configured_width_ratio { 0. }; // widest configured line width / its nozzle
+    bool   m_extrusion_width_warned { false };
     bool _needSAFC(const ExtrusionPath &path);
     void print_machine_envelope(GCodeOutputStream& file, Print& print);
     void _print_first_layer_bed_temperature(GCodeOutputStream &file, Print &print, const std::string &gcode, unsigned int first_printing_extruder_id, bool wait);

@@ -4,6 +4,7 @@
 
 #include "libslic3r/ExtrusionEntity.hpp"
 #include "libslic3r/ExtrusionEntityCollection.hpp"
+#include "libslic3r/Flow.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/HalfLayerSources.hpp"
 #include "libslic3r/Layer.hpp"
@@ -15,6 +16,9 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <map>
+#include <tuple>
 #include <cctype>
 #include <set>
 #include <sstream>
@@ -791,4 +795,192 @@ TEST_CASE("An absolute width set on the object follows each nozzle like the prin
     REQUIRE(region.config().outer_wall_line_width.percent);
     // 0.42 mm x 0.15 / 0.4 = 0.1575 mm, on the region's own 0.15 mm nozzle.
     CHECK_THAT(region.flow(*print.objects().front(), frExternalPerimeter, 0.1, false).width(), Catch::Matchers::WithinAbs(0.1575, 1e-6));
+}
+
+namespace {
+
+// MAGPIE: width harness. For every (layer, ;TYPE, tool) the length-weighted most common ;WIDTH must be the width
+// the user's setting means on the nozzle of the tool printing it. The expectation is the harness's own statement
+// of the rule, not the slicer's converted config: a percentage of that nozzle; an absolute width as set on a
+// printer with one nozzle size, else scaled by nozzle / reference nozzle (printer_variant when the printer has
+// that diameter, else the largest nozzle); 0 falls back to line_width, then to the automatic width (rounded by
+// Flow::new_from_config_width like the slicer). Support prints exactly that width. Walls and fills
+// legitimately differ from it, so they get bands measured over the golden and feature corpora (2026-10-20):
+// walls 1.0-1.25 x (Arachne keeps the nominal width on long walls, spiral vase 1.245, interlocking 1.04), fills
+// 0.61-1.29 x (narrow strips, area fitting). A width resolved on another nozzle is 2.7 x or 0.4 x. Geometry
+// narrower than a nozzle gives walls below the band (a 0.18 mm fin prints 0.39 x), so the harness runs on
+// shapes without such features. Returns one line per mismatch.
+std::vector<std::string> width_mismatches(const Print &print, const std::string &gcode)
+{
+    struct RoleWidths
+    {
+        std::vector<std::pair<const char *, FlowRole>> keys;
+        std::pair<double, double>                      band;          // x nominal width
+        double                                         min_length_mm; // shorter groups are not judged
+    };
+    const std::pair<double, double> exact { 1., 1. };
+    const std::pair<double, double> wall_band { 0.9, 1.3 };
+    const std::pair<double, double> fill_band { 0.55, 1.35 };
+    const double tolerance_mm = 0.0015; // ;WIDTH has 3 decimals
+    const std::vector<std::pair<const char *, FlowRole>> walls { { "outer_wall_line_width", frExternalPerimeter },
+                                                                 { "inner_wall_line_width", frPerimeter } };
+    const std::map<std::string, RoleWidths> roles {
+        { "Outer wall", { walls, wall_band, 5. } },
+        { "Inner wall", { walls, wall_band, 5. } },
+        { "Sparse infill", { { { "sparse_infill_line_width", frInfill } }, fill_band, 50. } },
+        { "Internal solid infill", { { { "internal_solid_infill_line_width", frSolidInfill }, { "skin_infill_line_width", frSolidInfill },
+                                       { "skeleton_infill_line_width", frSolidInfill } }, fill_band, 50. } },
+        { "Top surface", { { { "top_surface_line_width", frTopSolidInfill } }, fill_band, 50. } },
+        { "Bottom surface", { { { "internal_solid_infill_line_width", frSolidInfill }, { "top_surface_line_width", frTopSolidInfill } }, fill_band, 50. } },
+        { "Support", { { { "support_line_width", frSupportMaterial } }, exact, 5. } },
+        { "Support interface", { { { "support_line_width", frSupportMaterial } }, exact, 5. } },
+    };
+    const DynamicPrintConfig  config  = print.full_print_config_as_set();
+    const std::vector<double> nozzles = config.option<ConfigOptionFloats>("nozzle_diameter")->values; // mm
+    const double largest_mm = *std::max_element(nozzles.begin(), nozzles.end());
+    const bool   mixed      = largest_mm - *std::min_element(nozzles.begin(), nozzles.end()) > EPSILON;
+    double       reference_mm = largest_mm;
+    if (const auto *variant = config.option<ConfigOptionString>("printer_variant"); variant != nullptr && !variant->value.empty())
+        for (double d : nozzles)
+            if (std::abs(d - std::atof(variant->value.c_str())) <= EPSILON)
+                reference_mm = d;
+    auto resolve = [&](const char *key, FlowRole role, double nozzle_mm) {
+        ConfigOptionFloatOrPercent width = *config.option<ConfigOptionFloatOrPercent>(key);
+        if (width.value == 0.)
+            width = *config.option<ConfigOptionFloatOrPercent>("line_width");
+        if (mixed && !width.percent && width.value > 0.)
+            width.value *= nozzle_mm / reference_mm;
+        return double(Flow::new_from_config_width(role, width, float(nozzle_mm), 0.1f).width());
+    };
+
+    std::map<std::tuple<int, std::string, int>, std::map<double, double>> groups; // -> width mm -> length mm
+    int         layer = -1, tool = 0;
+    double      width = 0.;
+    std::string role;
+    GCodeReader reader;
+    reader.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw());
+        const std::string cmd(line.cmd());
+        if (raw == ";LAYER_CHANGE")
+            ++layer;
+        else if (raw.rfind(";TYPE:", 0) == 0)
+            role = raw.substr(6);
+        else if (raw.rfind(";WIDTH:", 0) == 0)
+            width = std::round(std::stod(raw.substr(7)) * 1000.) / 1000.;
+        else if (cmd.size() >= 2 && cmd[0] == 'T' && std::isdigit((unsigned char) cmd[1]))
+            tool = std::stoi(cmd.substr(1));
+        else if (layer >= 0 && width > 0. && roles.count(role) && line.extruding(self) && line.dist_XY(self) > 0)
+            groups[{ layer, role, tool }][width] += line.dist_XY(self);
+    });
+
+    std::vector<std::string> mismatches;
+    for (const auto &[group, widths] : groups) {
+        const int          layer_id = std::get<0>(group);
+        const std::string &type     = std::get<1>(group);
+        const int          tool_id  = std::get<2>(group);
+        const RoleWidths  &expected = roles.at(type);
+        double length_mm = 0., mode_mm = 0., mode_length = -1.;
+        for (const auto &[w, l] : widths) {
+            length_mm += l;
+            if (l > mode_length) {
+                mode_mm     = w;
+                mode_length = l;
+            }
+        }
+        if (length_mm < expected.min_length_mm)
+            continue;
+        const double nozzle_mm = nozzle_diameter_for_filament(print.config(), tool_id + 1, print.is_BBL_printer());
+        std::vector<double> nominal;
+        for (const auto &[key, flow_role] : expected.keys)
+            nominal.push_back(resolve(key, flow_role, nozzle_mm));
+        if (layer_id == 0 && config.option<ConfigOptionFloatOrPercent>("initial_layer_line_width")->value > 0.)
+            nominal.push_back(resolve("initial_layer_line_width", frPerimeter, nozzle_mm));
+        const bool ok = std::any_of(nominal.begin(), nominal.end(), [&](double n) {
+            return mode_mm >= expected.band.first * n - tolerance_mm && mode_mm <= expected.band.second * n + tolerance_mm;
+        });
+        if (!ok) {
+            std::ostringstream out;
+            out << "layer " << layer_id << " " << type << " T" << tool_id << " (" << nozzle_mm << " mm nozzle): " << mode_mm << " mm, expected";
+            for (double n : nominal)
+                out << " " << n;
+            mismatches.push_back(out.str());
+        }
+    }
+    return mismatches;
+}
+
+std::string join_lines(const std::vector<std::string> &lines)
+{
+    std::string out;
+    for (const std::string &line : lines)
+        out += line + "\n";
+    return out;
+}
+
+} // namespace
+
+TEST_CASE("Every role on a mixed-nozzle printer prints the width resolved on its own nozzle", "[MultiNozzleWalls][Widths]")
+{
+    // Support on the 0.15 mm nozzle, everything else on the 0.4 mm one, with the stock U1 absolute widths of a
+    // 0.4 mm process. The nozzle order is also swapped, so a nozzle looked up by the wrong index shows.
+    const bool  small_first    = GENERATE(true, false);
+    const char *wall_generator = GENERATE("classic", "arachne");
+    const bool  detail_walls   = GENERATE(false, true);
+    DYNAMIC_SECTION((small_first ? "0.15/0.4 " : "0.4/0.15 ") << wall_generator << (detail_walls ? " detail walls" : "")) {
+        const int small = small_first ? 1 : 2, large = small_first ? 2 : 1; // filaments, 1-based
+        DynamicPrintConfig config = two_nozzle_config(small_first ? 0.15 : 0.4, small_first ? 0.4 : 0.15, large, wall_generator, detail_walls);
+        config.set_deserialize_strict({
+            { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+            { "printer_variant", "0.4" },
+            { "line_width", "0.42" }, { "outer_wall_line_width", "0.42" }, { "inner_wall_line_width", "0.45" },
+            { "sparse_infill_line_width", "0.45" }, { "internal_solid_infill_line_width", "0.42" },
+            { "top_surface_line_width", "0.42" }, { "support_line_width", "0.42" }, { "initial_layer_line_width", "0.5" }, // mm
+            { "enable_support", true }, { "support_type", "normal(auto)" }, { "support_on_build_plate_only", true },
+            { "support_filament", small }, { "support_interface_filament", small },
+            { "top_shell_layers", 3 }, { "bottom_shell_layers", 3 },
+        });
+        // A 20 mm table on a 10 mm leg: the top overhangs 5 mm on every side.
+        TriangleMesh mesh = make_cube(10., 10., 6.);
+        mesh.translate(5.f, 5.f, 0.f);
+        TriangleMesh top = make_cube(20., 20., 3.);
+        top.translate(0.f, 0.f, 6.f);
+        mesh.merge(top);
+        Print print;
+        Model model;
+        init_print({ mesh }, print, model, config);
+        const std::string gcode = Slic3r::Test::gcode(print);
+        REQUIRE(tools_for_type(gcode, "Support") == std::set<int>{ small - 1 });
+        const std::vector<std::string> mismatches = width_mismatches(print, gcode);
+        INFO(join_lines(mismatches));
+        CHECK(mismatches.empty());
+    }
+}
+
+TEST_CASE("Detail and large walls under a single top wall print their own nozzle's width", "[MultiNozzleWalls][Widths][HalfLayer]")
+{
+    // The geometry of "Single wall on top surfaces gives no large nozzle wall a detail nozzle width", judged by
+    // the width harness over the whole G-code instead of one layer's extrusion entities. The step height picks
+    // an odd (one detail wall) or even (two detail walls) layer below the step.
+    const double step_mm = GENERATE(6.0, 6.12);
+    const bool   h2      = GENERATE(false, true);
+    DYNAMIC_SECTION("step " << step_mm << " mm, H/2 " << h2) {
+        DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "arachne", true);
+        config.set_deserialize_strict({
+            { "wall_loops", 2 }, { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+            { "top_shell_layers", 3 }, { "only_one_wall_top", true },
+            { "crisp_corner_small_nozzle_wall_count", 2 }, { "crisp_corner_interlace_small_nozzle_walls", true },
+            { "outer_wall_half_layer_height", h2 },
+        });
+        TriangleMesh mesh = make_cube(20., 20., step_mm);
+        TriangleMesh top  = make_cube(10., 10., 3.);
+        top.translate(5.f, 5.f, float(step_mm));
+        mesh.merge(top);
+        Print print;
+        Model model;
+        init_print({ mesh }, print, model, config);
+        const std::string gcode = Slic3r::Test::gcode(print);
+        const std::vector<std::string> mismatches = width_mismatches(print, gcode);
+        INFO(join_lines(mismatches));
+        CHECK(mismatches.empty());
+    }
 }

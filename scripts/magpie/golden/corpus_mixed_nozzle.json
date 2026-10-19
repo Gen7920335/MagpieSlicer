@@ -146,6 +146,53 @@
     "--filament-colour",
     "#F2754E;#F2754E;#F2754E;#F2754E"
    ]
+  },
+  {
+   "name": "mixed_support_on_small_permuted",
+   "printer": "u1mixed",
+   "model": "tests/data/overhang.obj",
+   "machine": {
+    "nozzle_diameter": [
+     "0.4",
+     "0.15",
+     "0.4",
+     "0.15"
+    ],
+    "max_layer_height": [
+     "0.32",
+     "0.12",
+     "0.32",
+     "0.12"
+    ],
+    "min_layer_height": [
+     "0.08",
+     "0.04",
+     "0.08",
+     "0.04"
+    ]
+   },
+   "process": {
+    "outer_wall_filament_id": "1",
+    "inner_wall_filament_id": "1",
+    "sparse_infill_filament_id": "1",
+    "internal_solid_filament_id": "1",
+    "top_surface_filament_id": "1",
+    "bottom_surface_filament_id": "1",
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_filament": "2",
+    "support_interface_filament": "2",
+    "layer_height": "0.12",
+    "initial_layer_print_height": "0.12",
+    "brim_type": "outer_only",
+    "brim_width": "3",
+    "skirt_loops": "1",
+    "bridge_line_width": "0"
+   },
+   "cli_args": [
+    "--filament-colour",
+    "#F2754E;#F2754E;#F2754E;#F2754E"
+   ]
   }
  ]
 }

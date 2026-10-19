@@ -2750,7 +2750,13 @@ double nozzle_diameter_for_filament(const PrintConfig& config, int filament_id, 
 double absolute_line_width_reference_nozzle(const DynamicPrintConfig &config);
 // MAGPIE: restates the absolute line widths of `config` as a percentage of reference_mm (mm); nothing
 // when reference_mm is 0. Used for the print config and for per-object, part and layer range overrides.
-void scale_absolute_line_widths(ConfigBase &config, double reference_mm);
+// Returns the number of widths restated; their values as set are copied to `as_set` when given.
+size_t scale_absolute_line_widths(ConfigBase &config, double reference_mm, DynamicConfig *as_set = nullptr);
+// MAGPIE: the line width keys whose percentage is over nozzle_diameter, sorted: the keys
+// scale_absolute_line_widths() may restate. Code that reads them must resolve a percentage on the nozzle
+// that prints the role (Flow::new_from_config_width, get_abs_value(nozzle)), never use the stored number
+// as millimetres; tests/libslic3r/test_line_width_reads.cpp holds every file that names them.
+const std::vector<std::string> &nozzle_relative_line_width_keys();
 // MAGPIE: on a printer with nozzles of different diameters, restates absolute line widths (keys whose
 // percentage is over nozzle_diameter) as a percentage of the reference nozzle. Does nothing otherwise.
 void scale_absolute_line_widths_to_nozzles(DynamicPrintConfig &config);

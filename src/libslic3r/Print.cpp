@@ -2023,6 +2023,27 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
     if (!m_mod_rule_errors.empty())
         return { m_mod_rule_errors.front() };
 
+    // MAGPIE: say when absolute line widths were scaled to each nozzle (scale_absolute_line_widths_to_nozzles),
+    // from the print config or an object, part or layer range override.
+    if (m_line_width_reference_mm > 0.) {
+        auto has_absolute_width = [this](const DynamicPrintConfig &config) {
+            DynamicPrintConfig copy = config;
+            return scale_absolute_line_widths(copy, m_line_width_reference_mm) > 0;
+        };
+        bool scaled = m_line_widths_scaled;
+        for (const PrintObject *object : m_objects) {
+            const ModelObject &model_object = *object->model_object();
+            scaled = scaled || has_absolute_width(model_object.config.get());
+            for (const ModelVolume *volume : model_object.volumes)
+                scaled = scaled || has_absolute_width(volume->config.get());
+            for (const auto &[range, range_config] : model_object.layer_config_ranges)
+                scaled = scaled || has_absolute_width(range_config.get());
+        }
+        if (scaled)
+            warn((boost::format(L("This printer has nozzles of different sizes, so absolute line widths are taken as widths for the %1% mm nozzle and scaled to each nozzle. Enter a percentage to set a width relative to each nozzle.")) %
+                  m_line_width_reference_mm).str(), "line_width");
+    }
+
     std::vector<unsigned int> extruders = this->extruders();
     unsigned int nozzles = m_config.nozzle_diameter.size();
 
@@ -3146,13 +3167,25 @@ double Print::skirt_first_layer_height() const
     return m_config.initial_layer_print_height.value;
 }
 
+// MAGPIE: brim and skirt geometry is made before the tool printing it is known, and Orca sizes it on one
+// filament's nozzle. Their widths stay as the user set them (an absolute width is not scaled to that nozzle by
+// scale_absolute_line_widths_to_nozzles), which is vanilla Orca's output; GCode::check_extrusion_width warns
+// when that width does not suit the nozzle printing it.
+static ConfigOptionFloatOrPercent brim_skirt_width_as_set(const DynamicPrintConfig &as_set, const DynamicPrintConfig &full,
+                                                          const char *key, const ConfigOptionFloatOrPercent &width)
+{
+    const auto *original  = as_set.option<ConfigOptionFloatOrPercent>(key);
+    const auto *converted = full.option<ConfigOptionFloatOrPercent>(key);
+    return original != nullptr && converted != nullptr && *converted == width ? *original : width;
+}
+
 Flow Print::brim_flow() const
 {
-    ConfigOptionFloatOrPercent width = m_config.initial_layer_line_width;
+    ConfigOptionFloatOrPercent width = brim_skirt_width_as_set(m_line_widths_as_set, m_full_print_config, "initial_layer_line_width", m_config.initial_layer_line_width);
     if (width.value <= 0)
-        width = m_print_regions.front()->config().inner_wall_line_width;
+        width = brim_skirt_width_as_set(m_line_widths_as_set, m_full_print_config, "inner_wall_line_width", m_print_regions.front()->config().inner_wall_line_width);
     if (width.value <= 0)
-        width = m_objects.front()->config().line_width;
+        width = brim_skirt_width_as_set(m_line_widths_as_set, m_full_print_config, "line_width", m_objects.front()->config().line_width);
 
     /* We currently use a random region's perimeter extruder.
        While this works for most cases, we should probably consider all of the perimeter
@@ -3171,9 +3204,9 @@ Flow Print::skirt_flow() const
 {
 
     // Orca: fall back to m_config if no objects are present
-    ConfigOptionFloatOrPercent width = m_config.initial_layer_line_width;
+    ConfigOptionFloatOrPercent width = brim_skirt_width_as_set(m_line_widths_as_set, m_full_print_config, "initial_layer_line_width", m_config.initial_layer_line_width);
     if (width.value <= 0)
-        width = m_objects.empty() ? m_config.initial_layer_line_width : m_objects.front()->config().line_width;
+        width = m_objects.empty() ? width : brim_skirt_width_as_set(m_line_widths_as_set, m_full_print_config, "line_width", m_objects.front()->config().line_width);
 
     /* We currently use a random object's support material extruder.
        While this works for most cases, we should probably consider all of the support material

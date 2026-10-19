@@ -996,7 +996,7 @@ static const float g_min_overhang_percent_for_lift = 0.3f;
 void PrintObject::detect_overhangs_for_lift()
 {
     if (this->set_started(posDetectOverhangsForLift)) {
-        const double nozzle_diameter = m_print->config().nozzle_diameter.get_at(0);
+        const double nozzle_diameter = m_print->shared_line_width_nozzle();
         const coordf_t line_width = this->config().get_abs_value("line_width", nozzle_diameter);
 
         const float min_overlap = line_width * g_min_overhang_percent_for_lift;

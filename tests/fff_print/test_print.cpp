@@ -40,6 +40,7 @@
 #include <map>
 #include "libslic3r/Polygon.hpp"
 #include "libslic3r/Model.hpp"
+#include "libslic3r/GCode.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/Exception.hpp"
@@ -1939,4 +1940,75 @@ TEST_CASE("A line width error on a mixed-nozzle printer names the nozzle absolut
         CHECK(error.string.find("0.4 mm nozzle") != std::string::npos);
     else
         CHECK(error.string == "Line width too small");
+}
+
+TEST_CASE("A mixed-nozzle printer warns when absolute line widths are scaled to each nozzle", "[Print][validate]")
+{
+    const int scenario = GENERATE(0, 1, 2, 3); // 0 mixed absolute, 1 mixed percent, 2 one size, 3 mixed percent + object override
+    CAPTURE(scenario);
+    auto config = multifilament_config(2, {
+        {"layer_height", 0.1}, {"initial_layer_print_height", 0.1}, // mm
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}, {"enable_prime_tower", false},
+    });
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{scenario == 2 ? 0.4 : 0.15, 0.4}); // mm
+    config.set_key_value("printer_variant", new ConfigOptionString("0.4"));
+    for (const char *key : {"line_width", "outer_wall_line_width", "inner_wall_line_width", "sparse_infill_line_width",
+                            "internal_solid_infill_line_width", "top_surface_line_width", "support_line_width",
+                            "initial_layer_line_width", "skin_infill_line_width", "skeleton_infill_line_width"})
+        config.set_key_value(key, scenario == 1 || scenario == 3 ? new ConfigOptionFloatOrPercent(105., true) :
+                                                                    new ConfigOptionFloatOrPercent(0.42, false)); // mm
+    Model model;
+    Print print;
+    build_cubes(model, print, config, 1, false);
+    if (scenario == 3) {
+        model.objects.front()->config.set_key_value("outer_wall_line_width", new ConfigOptionFloatOrPercent(0.42, false)); // mm
+        print.apply(model, print.full_print_config());
+    }
+    std::vector<StringObjectException> warnings;
+    print.validate(&warnings);
+    const bool warned = std::any_of(warnings.begin(), warnings.end(),
+                                    [](const StringObjectException &w) { return w.string.find("for the 0.4 mm nozzle") != std::string::npos; });
+    CHECK(warned == (scenario == 0 || scenario == 3));
+}
+
+TEST_CASE("Line widths are written out as set while a mixed-nozzle print slices them per nozzle", "[Print][Regression]")
+{
+    auto config = multifilament_config(2, {
+        {"layer_height", 0.1}, {"initial_layer_print_height", 0.1}, // mm
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}, {"enable_prime_tower", false},
+        {"outer_wall_filament_id", 2}, {"inner_wall_filament_id", 2},
+    });
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.4, 0.15}); // mm
+    config.set_key_value("printer_variant", new ConfigOptionString("0.4"));
+    config.set_key_value("outer_wall_line_width", new ConfigOptionFloatOrPercent(0.42, false)); // mm
+    const DynamicPrintConfig as_set = config;
+    Model model;
+    Print print;
+    build_cubes(model, print, config, 1, false);
+    model.objects.front()->config.set_key_value("inner_wall_line_width", new ConfigOptionFloatOrPercent(0.45, false)); // mm
+    print.apply(model, config);
+    // The caller's config and model keep the absolute widths; the print slices percentages of 0.4 mm.
+    CHECK(config.diff(as_set).empty());
+    CHECK(*model.objects.front()->config.option("inner_wall_line_width") == ConfigOptionFloatOrPercent(0.45, false));
+    CHECK(print.full_print_config().option<ConfigOptionFloatOrPercent>("outer_wall_line_width")->percent);
+    CHECK(*print.full_print_config_as_set().option("outer_wall_line_width") == ConfigOptionFloatOrPercent(0.42, false));
+    // The G-code config block shows the widths as set.
+    const std::string gcode = Slic3r::Test::gcode(print);
+    CHECK(gcode.find("; outer_wall_line_width = 0.42\n") != std::string::npos);
+    CHECK(gcode.find("; outer_wall_line_width = 105%") == std::string::npos);
+}
+
+TEST_CASE("The extrusion width check rejects a width resolved on another nozzle and nothing narrower", "[Print][GCode]")
+{
+    // A 0.42 mm wall from a 0.15 mm nozzle (a width resolved on the 0.4 mm nozzle): 2.8 x the nozzle.
+    CHECK(extrusion_width_exceeds_nozzle_bound(erExternalPerimeter, 0.42, 0.15, 1.05));
+    CHECK(extrusion_width_exceeds_nozzle_bound(erSupportMaterial, 0.5, 0.15, 1.25));
+    // Widest legitimate output measured over the corpora: walls 1.99 x, gap fill 2.78 x the nozzle.
+    CHECK_FALSE(extrusion_width_exceeds_nozzle_bound(erPerimeter, 1.99 * 0.4, 0.4, 1.125));
+    CHECK_FALSE(extrusion_width_exceeds_nozzle_bound(erGapFill, 2.78 * 0.4, 0.4, 1.125));
+    // A setting of 3 x the nozzle widens the bound with it.
+    CHECK_FALSE(extrusion_width_exceeds_nozzle_bound(erInternalInfill, 1.2, 0.4, 3.));
+    // Narrow beads are not judged: a 0.17 mm wall on a 0.4 mm nozzle (0.43 x) is as narrow as a legitimate
+    // 0.18 mm fin (0.39 x), so that defect class is guarded by the planner tests instead.
+    CHECK_FALSE(extrusion_width_exceeds_nozzle_bound(erExternalPerimeter, 0.17, 0.4, 1.05));
 }

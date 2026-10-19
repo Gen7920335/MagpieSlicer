@@ -289,7 +289,7 @@ void BackgroundSlicingProcess::process_fff()
         // the preview re-reads its moves and line offsets from the edited file. The rest of m_gcode_result,
         // including nozzle_group_result (consumed by the H2C print-dispatch nozzle mapping), is kept.
         if (m_fff_print->is_BBL_printer()) {
-            if (run_post_process_scripts(m_temp_output_path, false, "File", m_temp_output_path, m_fff_print->full_print_config()))
+            if (run_post_process_scripts(m_temp_output_path, false, "File", m_temp_output_path, m_fff_print->full_print_config_as_set()))
                 m_fff_print->reload_gcode_moves(m_gcode_result);
         }
 
@@ -854,7 +854,7 @@ void BackgroundSlicingProcess::finalize_gcode()
     // export_path may be changed by the post-processing script as well if the post processing script decides so, see GH #6042.
     // Runs both post-processing scripts and plugins on a single .pp copy of the G-code (make_copy = true),
     // so neither touches the original file the G-code viewer keeps memory-mapped.
-    bool post_processed = run_post_process_scripts(output_path, true, "File", export_path, m_fff_print->full_print_config());
+    bool post_processed = run_post_process_scripts(output_path, true, "File", export_path, m_fff_print->full_print_config_as_set());
 
     auto remove_post_processed_temp_file = [post_processed, &output_path]() {
         if (post_processed)
@@ -1001,7 +1001,7 @@ void BackgroundSlicingProcess::prepare_upload()
                 // source_path_str is already a dedicated copy of the temp G-code (see copy_file above), not the
                 // memory-mapped original, so scripts and plugins can modify it in place (make_copy = false).
                 bool post_process = run_post_process_scripts(source_path_str, false, m_upload_job.printhost->get_name(), output_name_str,
-                                             m_fff_print->full_print_config());
+                                             m_fff_print->full_print_config_as_set());
                 if (post_process)
                     m_upload_job.upload_data.upload_path = output_name_str;
             }
