@@ -2634,6 +2634,7 @@ void GCodeProcessorResult::reset() {
     printer_extruder_id.clear();
     // SKIPPABLE per-type accumulated time.
     skippable_part_time.clear();
+    layer_time_blend = {};
 
     //BBS: add mutex for protection of gcode result
     unlock();
@@ -3013,9 +3014,7 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
 {
     m_parser.apply_config(config);
 
-    // MAGPIE: temperature waits count only for layer time blending around the low temperature interface,
-    // which is where they vary between layers.
-    m_estimate_temperature_waits = !config.layer_time_planner.value.empty() && config.single_nozzle_low_temperature_interface.value;
+    // MAGPIE: rates for the temperature wait estimate (set_temperature_wait_estimate switches it on).
     m_heat_rate = float(std::max(0.1, config.layer_time_blend_heat_rate.value));
     m_cool_rate = float(std::max(0.1, config.layer_time_blend_cool_rate.value));
 

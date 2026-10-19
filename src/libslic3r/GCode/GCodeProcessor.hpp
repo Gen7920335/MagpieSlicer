@@ -388,6 +388,21 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
         // widely, so this is typically populated (stTimelapse) on most slices.
         std::unordered_map<SkipType, float> skippable_part_time;
 
+        // MAGPIE: what layer time blending did, for the preview: per G-code layer (0-based) that waited, its
+        // estimated time before the wait and the wait, s; and all the waits together, s. Empty when it was off.
+        struct LayerTimeBlendLayer
+        {
+            unsigned int layer_id;
+            float        original_s;
+            float        added_s;
+        };
+        struct LayerTimeBlendInfo
+        {
+            std::vector<LayerTimeBlendLayer> layers;
+            float                            added_total_s = 0.f;
+            bool                             active        = false;
+        } layer_time_blend;
+
         BedType bed_type = BedType::btCount;
         void reset();
         // Split a logical layer into physical preview bands when its extrusion
@@ -447,6 +462,7 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
             filament_change_count_map = std::forward<Other>(other).filament_change_count_map;
             // Keep the SKIPPABLE per-type time on a copied result.
             skippable_part_time = std::forward<Other>(other).skippable_part_time;
+            layer_time_blend = std::forward<Other>(other).layer_time_blend;
             initial_layer_time = std::forward<Other>(other).initial_layer_time;
             belt_tilt_angle = std::forward<Other>(other).belt_tilt_angle;
             belt_z_origin = std::forward<Other>(other).belt_z_origin;
@@ -1439,6 +1455,8 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
         // MAGPIE: layer time blending. The comment lines (without the ';') that mark a wait site and the start
         // and end of a layer time tower block.
         static const std::string &wait_site_tag();
+        // Counts M109 temperature waits as time (see m_estimate_temperature_waits). Off after reset().
+        void set_temperature_wait_estimate(bool on) { m_estimate_temperature_waits = on; }
         static const std::string &wait_tower_begin_tag();
         static const std::string &wait_tower_end_tag();
         using WaitMarkKind = GCodeWaitMarkKind;

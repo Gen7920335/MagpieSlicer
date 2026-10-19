@@ -4963,8 +4963,22 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
     case libvgcode::EViewType::Temperature:              { append_range(m_viewer.get_color_range(libvgcode::EViewType::Temperature), 0); break; }
 // ORCA: Add Pressure Advance visualization support
     case libvgcode::EViewType::PressureAdvance:          { append_range(m_viewer.get_color_range(libvgcode::EViewType::PressureAdvance), 3); break; }
-    case libvgcode::EViewType::LayerTimeLinear:          { append_range(m_viewer.get_color_range(libvgcode::EViewType::LayerTimeLinear), true); break; }
-    case libvgcode::EViewType::LayerTimeLogarithmic:     { append_range(m_viewer.get_color_range(libvgcode::EViewType::LayerTimeLogarithmic), true); break; }
+    case libvgcode::EViewType::LayerTimeLinear:
+    case libvgcode::EViewType::LayerTimeLogarithmic: {
+        append_range(m_viewer.get_color_range(curr_view_type), true);
+        // MAGPIE: layer time blending's waits are part of these layer times; say how much of them.
+        if (m_gcode_result != nullptr && m_gcode_result->layer_time_blend.active) {
+            const GCodeProcessorResult::LayerTimeBlendInfo &blend = m_gcode_result->layer_time_blend;
+            float longest = 0.f;
+            for (const GCodeProcessorResult::LayerTimeBlendLayer &layer : blend.layers)
+                longest = std::max(longest, layer.added_s);
+            ImGui::Spacing();
+            // TRN Preview legend, Layer Time view. %1% and %2% are durations.
+            imgui.text(format(_u8L("Layer time blending waits: %1% in all, %2% at most per layer"),
+                              get_time_dhms(blend.added_total_s), get_time_dhms(longest)));
+        }
+        break;
+    }
     case libvgcode::EViewType::VolumetricFlowRate:       { append_range(m_viewer.get_color_range(libvgcode::EViewType::VolumetricFlowRate), 2); break; }
     case libvgcode::EViewType::ActualVolumetricFlowRate: { append_range(m_viewer.get_color_range(libvgcode::EViewType::ActualVolumetricFlowRate), 2); break; }
     case libvgcode::EViewType::Tool:

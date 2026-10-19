@@ -85,6 +85,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <numeric>
 #include <array>
 #include <limits>
 #include <map>
@@ -3300,6 +3301,15 @@ namespace DoExport {
 }
 
 // MAGPIE: layer time blending.
+// The estimate counts temperature waits while layer times are blended around the low temperature support
+// interface, where those waits vary between layers. Elsewhere it stays Orca's.
+static bool layer_time_blend_estimates_temperature_waits(const Print &print)
+{
+    return !print.config().layer_time_planner.value.empty() &&
+           std::any_of(print.objects().begin(), print.objects().end(),
+                       [](const PrintObject *object) { return object->config().single_nozzle_low_temperature_interface.value; });
+}
+
 namespace LayerTimeBlendExport {
 
 // Feeds a G-code file to a processor in line-aligned chunks, as the export streams it.
@@ -3653,6 +3663,7 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
         DoExport::init_gcode_processor(print.config(), processor, silent, print.get_layered_nozzle_group_result());
         processor.set_print(&print);
         processor.set_xy_offset(offset.x(), offset.y());
+        processor.set_temperature_wait_estimate(layer_time_blend_estimates_temperature_waits(print));
         processor.initialize(path);
     };
     const std::function<void()> throw_if_canceled = [&print]() { print.throw_if_canceled(); };
@@ -3786,9 +3797,39 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
         if (std::error_code ec = rename_file(path_filled, path_tmp))
             throw Slic3r::RuntimeError("Layer time blending: cannot replace " + path_tmp + ": " + ec.message());
     }
-    for (const ModHost::WaitWarning &w : plan.warnings)
-        BOOST_LOG_TRIVIAL(warning) << "Layer time blending warning " << int(w.kind) << ": value " << w.value << ", source site "
-                                   << w.source_site << ", sites " << w.first_site << ".." << w.last_site;
+    // Layers are named as the user counts them: site k's interval is the time of the G-code layer before it.
+    std::vector<unsigned int> layer_of(n, 0);
+    {
+        size_t k = 0;
+        for (const Mark &mark : m_processor.wait_site_times())
+            if (mark.kind == MarkKind::Site && k < n)
+                layer_of[k++] = mark.layer_id >= 2 ? mark.layer_id - 1 : 1;
+    }
+    for (const ModHost::WaitWarning &w : plan.warnings) {
+        if (w.source_site >= n || w.first_site >= n || w.last_site >= n)
+            continue;
+        std::string message;
+        switch (w.kind) {
+        case ModHost::WaitWarning::Kind::TotalShare:
+            // TRN Layer time blending warning. %1% is a duration, %2% a share of the print time like "18%", %3% to %5% are layer numbers.
+            message = Slic3r::format(_u8L("Layer time blending adds %1% of waits, %2% of the print time. Layer %3% takes longest; the waits it causes run from layer %4% to layer %5%."),
+                                     get_time_dhms(float(std::accumulate(plan.added_s.begin(), plan.added_s.end(), 0.))),
+                                     std::to_string(int(std::lround(w.value))) + "%", layer_of[w.source_site], layer_of[w.first_site], layer_of[w.last_site]);
+            break;
+        case ModHost::WaitWarning::Kind::SingleWait:
+            // TRN Layer time blending warning. %1% is a duration, %2% to %4% are layer numbers.
+            message = Slic3r::format(_u8L("Layer time blending waits %1% at one layer. Layer %2% takes longest; the waits it causes run from layer %3% to layer %4%."),
+                                     get_time_dhms(float(w.value)), layer_of[w.source_site], layer_of[w.first_site], layer_of[w.last_site]);
+            break;
+        case ModHost::WaitWarning::Kind::Uncertain:
+            // TRN Layer time blending warning. %1% and %2% are layer numbers.
+            message = Slic3r::format(_u8L("Layer time blending: layers %1% to %2% include temperature waits or tool changes whose time is only estimated, so the waits near them may be off."),
+                                     layer_of[w.first_site], layer_of[w.last_site]);
+            break;
+        }
+        BOOST_LOG_TRIVIAL(warning) << message;
+        print.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL, message);
+    }
 
     // The final estimate, statistics and post-processing run over the G-code as written.
     setup(m_processor, path_tmp);
@@ -3796,6 +3837,13 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
     LayerTimeBlendExport::stream_file(path_tmp, m_processor, throw_if_canceled);
     m_processor.result().print_statistics.total_seam_gap_distance   = seam_gap;
     m_processor.result().print_statistics.total_seam_scarf_distance = seam_scarf;
+    GCodeProcessorResult::LayerTimeBlendInfo &info = m_processor.result().layer_time_blend;
+    info.active = true;
+    for (size_t k = 0; k < n && k < plan.added_s.size(); ++k)
+        if (form[k] != WaitForm::None && k < plan.tower_end) {
+            info.layers.push_back({ layer_of[k] - 1, float(plan.target_s[k] - plan.added_s[k]), float(plan.added_s[k]) });
+            info.added_total_s += float(plan.added_s[k]);
+        }
 }
 
 #if 0
@@ -3929,6 +3977,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     DoExport::init_gcode_processor(print.config(), m_processor, m_silent_time_estimator_enabled,
                                    print.get_layered_nozzle_group_result());
     set_mass_locator(m_processor, print);
+    m_processor.set_temperature_wait_estimate(layer_time_blend_estimates_temperature_waits(print));
     const bool is_bbl_printers = print.is_BBL_printer();
     const bool skip_config_block = print.config().gcode_skip_config_block;
     const WipeTowerType wipe_tower_type = print.wipe_tower_type();

@@ -378,7 +378,6 @@ namespace {
 double estimated_time(const std::string &gcode, bool blending, std::vector<GCodeProcessor::WaitSiteTime> *marks = nullptr)
 {
     PrintConfig config;
-    config.single_nozzle_low_temperature_interface.value = blending;
     config.layer_time_planner.value                      = blending ? "blend" : "";
     config.layer_time_blend_heat_rate.value              = 2.; // degC/s
     config.layer_time_blend_cool_rate.value              = 1.; // degC/s
@@ -386,6 +385,7 @@ double estimated_time(const std::string &gcode, bool blending, std::vector<GCode
     processor.reset();
     processor.initialize_result_moves();
     processor.apply_config(config);
+    processor.set_temperature_wait_estimate(blending);
     processor.initialize("estimate.gcode");
     processor.process_buffer(gcode);
     processor.finalize(false);
