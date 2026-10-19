@@ -552,7 +552,7 @@ void GLGizmoFdmSupports::render_tooltip_button(float x, float y) {
     GLGizmoUtils::render_tooltip_button(m_imgui, m_parent, shortcuts, x, y);
 }
 
-bool GLGizmoFdmSupports::is_mixed_mode() const
+bool GLGizmoFdmSupports::read_mixed_mode() const
 {
     const auto *sel_info = m_c->selection_info();
     if (sel_info == nullptr || sel_info->model_object() == nullptr)
@@ -696,7 +696,8 @@ void GLGizmoFdmSupports::update_from_model_object(bool first_update)
     m_channel_timestamps.clear();
 
     int volume_id = -1;
-    const bool mixed_mode = is_mixed_mode();
+    m_mixed_mode          = read_mixed_mode();
+    const bool mixed_mode = m_mixed_mode;
     std::vector<ColorRGBA> ebt_colors;
     ebt_colors.push_back(GLVolume::NEUTRAL_COLOR);
     // With Mixed support, plain enforcers (automatic channel) show yellow, normal green, tree blue.

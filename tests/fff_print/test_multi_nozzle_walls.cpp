@@ -595,3 +595,51 @@ TEST_CASE("Nozzle edits reslice the same Print like a fresh Print", "[MultiNozzl
     CHECK(edited.size() == expected.size());
     CHECK(edited == expected);
 }
+
+TEST_CASE("Every detail wall prints at the detail nozzle's width", "[MultiNozzleWalls][Classic]")
+{
+    // Before: Classic gave the inner detail walls (depth 1 and deeper) the large nozzle's width,
+    // so the 0.15 mm nozzle printed them at about 0.45 mm. Line 1 used the detail flow for every
+    // detail wall, as Arachne already does here.
+    const char *wall_generator = GENERATE("classic", "arachne");
+    DYNAMIC_SECTION(wall_generator) {
+        DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, wall_generator, true);
+        config.set_deserialize_strict({
+            { "wall_loops", 3 },
+            { "layer_height", 0.2 },
+            { "initial_layer_print_height", 0.2 },
+            { "crisp_corner_small_nozzle_wall_count", 2 },
+        });
+        Print print;
+        Model model;
+        init_print({ cube(20) }, print, model, config);
+        print.process();
+        const PrintObject &object = *print.objects().front();
+        REQUIRE(object.layers().size() > 20);
+        auto widths = [](const ExtrusionEntity *e) {
+            std::vector<double> out;
+            if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(e))
+                for (const ExtrusionPath &p : loop->paths) out.push_back(p.width);
+            else if (const auto *multi = dynamic_cast<const ExtrusionMultiPath *>(e))
+                for (const ExtrusionPath &p : multi->paths) out.push_back(p.width);
+            else if (const auto *path = dynamic_cast<const ExtrusionPath *>(e))
+                out.push_back(path->width);
+            return out;
+        };
+        double detail_max = 0., large_min = 1e9; // mm
+        size_t detail_count = 0;
+        for (const ExtrusionEntity *wall : walls_of(*object.layers()[10]->regions().front())) {
+            for (double w : widths(wall)) {
+                if (wall->tool_hint == ExtrusionToolHint::DetailWall) {
+                    detail_max = std::max(detail_max, w);
+                    ++detail_count;
+                } else if (wall->tool_hint == ExtrusionToolHint::LargeWall) {
+                    large_min = std::min(large_min, w);
+                }
+            }
+        }
+        REQUIRE(detail_count > 0);
+        // The 0.15 mm nozzle's walls stay narrower than half the 0.4 mm nozzle's walls.
+        CHECK(detail_max < 0.5 * large_min);
+    }
+}

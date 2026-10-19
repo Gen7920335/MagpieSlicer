@@ -664,6 +664,8 @@ protected:
     bool            low_temperature_interface_enabled() const;
     bool            has_configured_low_temperature_nozzle_wiper() const;
     bool            temperature_drop_tower_enabled() const;
+    bool            read_temperature_drop_tower_enabled() const;
+    double          top_support_interface_z() const;
     bool            build_temperature_drop_tower_path(ExtrusionPath &path);
     bool            build_temperature_drop_tower_brim_paths(std::vector<ExtrusionPath> &paths);
     std::string     extrude_temperature_drop_tower(const ExtrusionPath &path, bool cooling_transition);
@@ -766,6 +768,11 @@ protected:
     // MAGPIE: the temperature drop tower, one path per layer in plate coordinates (mm), placed on first use.
     coordf_t                            m_temperature_drop_tower_last_print_z { -std::numeric_limits<coordf_t>::max() };
     bool                                m_temperature_drop_tower_path_initialized { false };
+    // Decided once per export: m_config holds the last processed object's settings, so asking it on
+    // every layer could switch the tower off and on between layers.
+    mutable std::optional<bool>         m_temperature_drop_tower_enabled;
+    // The highest support layer with interface paths (mm, object frame), found once per export.
+    mutable std::optional<double>       m_top_support_interface_z;
     bool                                m_temperature_drop_tower_brim_printed { false };
     std::vector<Vec2d>                  m_temperature_drop_tower_plate_path;
     double                              m_temperature_drop_tower_left { 0.0 };    // mm

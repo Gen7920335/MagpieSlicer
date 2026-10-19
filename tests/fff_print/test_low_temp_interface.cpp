@@ -86,7 +86,7 @@ std::vector<LayerTrace> trace_layers(const std::string &gcode)
             return;
         }
         float temperature = 0.f;
-        if ((line.cmd_is("M104") || line.cmd_is("M109")) && line.has_value('S', temperature))
+        if ((line.cmd_is("M104") || line.cmd_is("M109")) && (line.has_value('S', temperature) || line.has_value('R', temperature)))
             layers.back().temperatures.push_back(int(temperature));
         else if (line.extruding(self) && line.dist_XY(self) > 0 && (layers.back().roles.empty() || layers.back().roles.back() != role))
             layers.back().roles.push_back(role);
@@ -435,7 +435,8 @@ TEST_CASE("Temperature drop tower scales and slows only its final 10 mm", "[LowT
 
         // Cooling: M104 (no wait) to the interface temperature, the cooling pass, then the interface; no M109 wait.
         const std::string set_temperature  = "M104 S" + std::to_string(settings.interface_temperature);
-        const std::string wait_temperature = "M109 S" + std::to_string(settings.interface_temperature);
+        // Marlin waits for a lower temperature with M109 R (M109 S only waits while heating).
+        const std::string wait_temperature = "M109 R" + std::to_string(settings.interface_temperature);
         const size_t      begin            = output.find("low-temperature support interface begin");
         const size_t      nonblocking      = output.find(set_temperature, begin);
         const size_t      brim_end         = output.find("temperature drop tower brim end");
@@ -521,7 +522,8 @@ TEST_CASE("Temperature drop tower honors every activation guard", "[LowTemperatu
     TowerSettings wiper_fallback;
     wiper_fallback.configured_wiper = true;
     const std::string fallback      = tower_gcode(wiper_fallback);
-    CHECK(fallback.find("M109 S170") != std::string::npos);
+    // The fallback waits in place; on Marlin a wait for a lower temperature is M109 R.
+    CHECK(fallback.find("M109 R170") != std::string::npos);
     CHECK(fallback.find("temperature drop tower") == std::string::npos);
 }
 
@@ -739,7 +741,7 @@ TemperatureTrace trace_temperatures(const std::string &gcode, const DynamicPrint
         if (raw.rfind(";TYPE:", 0) == 0)
             role = raw.substr(6);
         float target;
-        if ((line.cmd_is("M104") || line.cmd_is("M109")) && line.has_value('S', target)) {
+        if ((line.cmd_is("M104") || line.cmd_is("M109")) && (line.has_value('S', target) || line.has_value('R', target))) {
             temperature = int(std::lround(target));
             trace.targets.push_back(temperature);
         }
@@ -921,4 +923,45 @@ TEST_CASE("Temperature drop tower placement clamps into the bed and refuses what
     CHECK(clamped->origin_y == Catch::Approx(3.0));
     // A bed too small for the shortest (8 mm) tower gives nothing.
     CHECK_FALSE(place_temperature_drop_tower(BoundingBoxf(Vec2d(0., 0.), Vec2d(15., 15.)), -1., -1., 80., brim));
+}
+
+TEST_CASE("Waiting for the lower interface temperature uses M109 R on Marlin only", "[LowTempInterface]")
+{
+    // Marlin's M109 S does not wait while the nozzle cools, so the interface printed hot. Klipper and the
+    // other firmwares wait in both directions with their usual command.
+    TowerSettings settings;
+    settings.configured_wiper = true; // no tower: the nozzle waits in place
+    const auto [flavor, expected, unexpected] = GENERATE(table<const char *, const char *, const char *>({
+        { "marlin", "M109 R170", "M109 S170" },
+        { "marlin2", "M109 R170", "M109 S170" },
+        { "klipper", "M109 S170", "M109 R170" },
+    }));
+    CAPTURE(flavor);
+    DynamicPrintConfig config = tower_config(settings);
+    config.set_deserialize_strict({ { "gcode_flavor", flavor } });
+    const std::string output = slice({ TestMesh::overhang }, config);
+    CHECK(output.find(expected) != std::string::npos);
+    CHECK(output.find(unexpected) == std::string::npos);
+}
+
+TEST_CASE("The temperature drop tower stops at the last support interface", "[LowTempInterface][TemperatureDropTower]")
+{
+    // Before: the tower grew on every layer up to the top of the print, which on a tall part with low
+    // support added hours. Above the last interface no layer cools down, so no tower layer is needed.
+    const std::string output = tower_gcode(TowerSettings{});
+    double last_interface_z = 0., last_tower_z = 0., z = 0., top_z = 0.; // mm
+    std::istringstream lines(output);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.rfind(";Z:", 0) == 0)
+            z = std::stod(line.substr(3));
+        top_z = std::max(top_z, z);
+        if (line.find("low-temperature support interface begin") != std::string::npos)
+            last_interface_z = z;
+        if (line.find("temperature drop tower layer") != std::string::npos || line.find("temperature drop tower cooling pass") != std::string::npos)
+            last_tower_z = z;
+    }
+    REQUIRE(last_interface_z > 0.);
+    CHECK(top_z > last_interface_z + 1.);    // the overhang model goes on above its support
+    CHECK(last_tower_z <= last_interface_z + EPSILON);
+    CHECK(last_tower_z > 0.);
 }

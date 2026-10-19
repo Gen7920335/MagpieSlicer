@@ -92,7 +92,11 @@ private:
     // normal or tree support. The painting keeps the states below in one selector and splits them
     // into supported_facets and support_channel_facets when it is stored.
     EnforcerBlockerType get_left_button_state_type() const override;
-    bool                is_mixed_mode() const;
+    // Whether the selectors were built for Mixed painting: read once in update_from_model_object, so
+    // painting, colours and storing always agree with the selectors (and no config copy per call).
+    bool                is_mixed_mode() const { return m_mixed_mode; }
+    bool                read_mixed_mode() const;
+    bool                m_mixed_mode = false;
     static constexpr EnforcerBlockerType MixedNormalState = EnforcerBlockerType::Extruder3;
     static constexpr EnforcerBlockerType MixedTreeState   = EnforcerBlockerType::Extruder4;
     EnforcerBlockerType                  m_mixed_paint_state = MixedNormalState;

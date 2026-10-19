@@ -3663,9 +3663,10 @@ bool GUI_App::on_init_inner()
             // If there are substitutions in system profiles, then a "reconfigure" event shall be triggered, which will force
             // installation of a compatible system preset, thus nullifying the system preset substitutions.
             if (scrn) { scrn->SetText(_L("Loading printer & filament profiles") + dots, 30); wxYield(); }
-            init_params->preset_substitutions = preset_bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSystemSilent);
-            // MAGPIE: the mods in <data_dir>/mods join slicing from here on.
+            // MAGPIE: the mods in <data_dir>/mods join slicing from here on. Loaded before the presets, so
+            // line 1 settings in them migrate to the mods' parameters (LegacySettings needs the mods).
             ModHost::load_active_mods_from_data_dir();
+            init_params->preset_substitutions = preset_bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSystemSilent);
         }
         catch (const std::exception& ex) {
             show_error(nullptr, ex.what());

@@ -2082,8 +2082,10 @@ void GLCanvas3D::toggle_model_objects_visibility(bool visible, const ModelObject
     std::vector<std::shared_ptr<SceneRaycasterItem>>* raycasters = get_raycasters_for_picking(SceneRaycaster::EType::Volume);
     for (GLVolume* vol : m_volumes.volumes) {
         // BBS: add partplate logic
-        if (vol->composite_id.object_id >= 1000 &&
-            vol->composite_id.object_id < 1000 + wxGetApp().plater()->get_partplate_list().get_plate_count()) { // wipe tower
+        // MAGPIE: also the temperature drop towers (2000 + plate), which are no model object either.
+        if ((vol->composite_id.object_id >= 1000 &&
+             vol->composite_id.object_id < 1000 + wxGetApp().plater()->get_partplate_list().get_plate_count()) ||
+            vol->composite_id.object_id >= TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE) { // wipe tower
             vol->is_active = (visible && mo == nullptr);
         }
         else {

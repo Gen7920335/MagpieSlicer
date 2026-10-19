@@ -178,6 +178,21 @@ bool stash_legacy_setting(std::string &opt_key, std::string &value, std::map<std
     return false;
 }
 
+// Whether the active mods define `param` ("<mod>.<name>").
+static bool mod_param_loaded(const std::string &param)
+{
+    const auto   mods = active_mods();
+    const size_t dot  = param.find('.');
+    if (!mods || dot == std::string::npos)
+        return false;
+    for (const Mod &mod : mods->mods())
+        if (mod.id == param.substr(0, dot))
+            for (const ModParam &p : mod.params)
+                if (p.name == param.substr(dot + 1))
+                    return true;
+    return false;
+}
+
 LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std::string, std::string> &stash)
 {
     LegacyMigration result;
@@ -190,8 +205,30 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
             params[param] = *v;
     };
     for (const auto &[key, value] : stash) {
-        if (const LegacyKey *k = find_key(key))
+        if (const LegacyKey *k = find_key(key)) {
+            if (k->owned && mod_param_loaded(k->param)) {
+                // A key this build defines is written by the mod's rule from now on. Back to its
+                // default, it no longer counts as a user change, which would make the rule skip it
+                // and keep the feature on after the mod parameter is turned off. Its default value
+                // carries nothing to migrate (line 2 files save these keys too). Without the mod
+                // loaded (a test, a CLI without resources) the key keeps driving the feature.
+                const ConfigOptionDef *def = print_config_def.get(key);
+                if (def != nullptr && def->default_value) {
+                    const std::string default_value = def->default_value->serialize();
+                    if (ConfigOption *opt = config.option(key))
+                        opt->set(def->default_value.get());
+                    if (value == default_value)
+                        continue;
+                }
+            }
+            if (k->kind == Kind::Float && value.find('%') != std::string::npos) {
+                // Line 1 allowed a percentage here (of the wall speed); the parameter is mm/s, so
+                // reading "50%" as 50 mm/s would change the print. Report it instead.
+                result.dropped.push_back(key);
+                continue;
+            }
             set(k->param, convert(value, k->kind));
+        }
         else if (auto r = resin_param(key))
             set(r->first, convert(value, r->second));
         else if (in(unsupported_keys, key)) {

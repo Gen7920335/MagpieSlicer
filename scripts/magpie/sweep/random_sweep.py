@@ -198,8 +198,13 @@ def main():
                 report['nondeterministic'].append(name)
         else:
             code = r.get('exit')
-            # Orca's CLI returns small codes for settings it rejects; anything else is a crash.
-            if isinstance(code, int) and 0 < code < 256:
+            # Orca's CLI exits with a negative CLI_* code (Utils.hpp): -1..-63 reject the input or
+            # settings; -100..-102 are slicing errors and count as crashes, as does anything else.
+            # Windows reports the code as unsigned 32-bit, POSIX as its low byte.
+            signed = None
+            if isinstance(code, int):
+                signed = code - (1 << 32) if code >= (1 << 31) else code - 256 if 128 <= code < 256 else code
+            if signed is not None and -63 <= signed <= -1:
                 log = open(os.path.join(out, 'run1', name, 'cli.log'), encoding='utf-8', errors='replace').read()
                 report['rejected'].append({'case': name, 'exit': code, 'log_tail': log.strip().splitlines()[-3:]})
             else:

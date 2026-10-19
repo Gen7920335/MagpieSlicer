@@ -112,8 +112,40 @@ TEST_CASE("Line 1 feature settings become mod parameters and line 1 only keys ar
     CHECK(config.opt_serialize("support_interface_pattern") == "auto");
     CHECK_FALSE(config.has("cura_support_join_distance"));
     CHECK_FALSE(config.has("resin_branching_support_pillar_diameter"));
-    // A setting this build also defines is kept as written.
-    CHECK(config.opt_bool("outer_wall_half_layer_height"));
+    // A setting this build also defines goes back to its default: the mod's rule writes it from now on.
+    CHECK_FALSE(config.opt_bool("outer_wall_half_layer_height"));
+    CHECK_FALSE(config.opt_bool("single_nozzle_low_temperature_interface"));
+}
+
+TEST_CASE("A migrated line 1 feature turns off with its mod parameter", "[LegacySettings]")
+{
+    BundledMods mods;
+    // Before: the line 1 key kept its value 1, differed from the system preset, and so counted as a
+    // user change; the mod's rule skipped it and the feature stayed on with the parameter off.
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.apply(load({ { "single_nozzle_low_temperature_interface", "1" }, { "support_interface_temperature", "175" } }));
+    REQUIRE(mod_settings(config)["low_temp_interface.enable"] == true);
+    config.set_key_value("different_settings_to_system", new ConfigOptionStrings({ "", "", "" }));
+
+    DynamicPrintConfig on = config;
+    REQUIRE(ModHost::active_mods()->resolve(on).empty());
+    CHECK(on.opt_bool("single_nozzle_low_temperature_interface"));
+
+    nlohmann::json m = mod_settings(config);
+    m["low_temp_interface.enable"] = false;
+    config.set_key_value("mod_settings", new ConfigOptionString(m.dump()));
+    REQUIRE(ModHost::active_mods()->resolve(config).empty());
+    CHECK_FALSE(config.opt_bool("single_nozzle_low_temperature_interface"));
+}
+
+TEST_CASE("A line 2 file that stores a mod-owned key at its default adds no mod parameter", "[LegacySettings]")
+{
+    BundledMods mods;
+    // Line 2 saves these keys too; a default value carries nothing to migrate (crisp_corner's 0 walls
+    // differ from the mod's default of 1 and would otherwise be written into mod_settings).
+    const DynamicPrintConfig config = load({ { "crisp_corner_small_nozzle_wall_count", "0" }, { "single_nozzle_low_temperature_interface", "0" } });
+    CHECK_FALSE(mod_settings(config).contains("multi_nozzle_walls.small_wall_count"));
+    CHECK_FALSE(mod_settings(config).contains("low_temp_interface.enable"));
 }
 
 TEST_CASE("A value already in mod_settings wins over the line 1 setting", "[LegacySettings]")

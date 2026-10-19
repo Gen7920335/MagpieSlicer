@@ -51,9 +51,10 @@
     "rules": [
         // Priority 1 puts this rule above cura_support's: with both mods on, resin support is used.
         { "target": "support_generator", "value": "\"resin\"", "when": "resin_support.enable", "priority": 1 },
-        // The object is lifted only while support is on, so it never prints in the air.
+        // Slicing lifts only objects with support of their own (per-object enable_support), so an
+        // object never prints in the air, and one with support enabled per object is still lifted.
         { "target": "object_elevation",
           "value": "if(resin_support.tree_type == \"branching\", resin_support.branching_object_elevation, resin_support.default_object_elevation)",
-          "when": "resin_support.enable and enable_support" }
+          "when": "resin_support.enable" }
     ]
 }

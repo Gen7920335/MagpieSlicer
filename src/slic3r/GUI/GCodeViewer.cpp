@@ -195,10 +195,15 @@ static const std::vector<std::pair<std::string, libvgcode::EViewType>>& view_typ
 // one material on a small and a large nozzle) cannot be told apart by filament colour, so then each toolhead
 // gets its own colour from a golden-ratio hue walk (Magpie line 1's "Nozzle used" palette); distinct filament
 // colours are kept as Orca shows them.
+// Only printers with nozzles of different sizes get it, so other printers show the Tool view as Orca does.
 static std::vector<std::string> tool_view_colors(const std::vector<std::string> &filament_colors)
 {
     const std::set<std::string> distinct(filament_colors.begin(), filament_colors.end());
     if (distinct.size() == filament_colors.size())
+        return filament_colors;
+    const PresetBundle *bundle = wxGetApp().preset_bundle;
+    const auto *nozzles = bundle != nullptr ? bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter") : nullptr;
+    if (nozzles == nullptr || std::set<double>(nozzles->values.begin(), nozzles->values.end()).size() < 2)
         return filament_colors;
     std::vector<std::string> palette;
     palette.reserve(filament_colors.size());

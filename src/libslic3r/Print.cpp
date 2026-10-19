@@ -1,9 +1,10 @@
 #ifdef _WIN32
 // Keep this first. A header below reaches boost/regex, whose w32_regex_traits
 // needs the Win32 types declared already.
-#include "libslic3r/StageTimer.hpp"
 #include <Windows.h>
 #endif
+
+#include "libslic3r/StageTimer.hpp"
 
 #include "PrintBase.hpp"
 #include <utility>
@@ -3385,6 +3386,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             if (!model_volume1.mmu_segmentation_facets.equals(model_volume2.mmu_segmentation_facets))
                 return false;
             if (!model_volume1.fuzzy_skin_facets.equals(model_volume2.fuzzy_skin_facets))
+                return false;
             if (!model_volume1.support_channel_facets.equals(model_volume2.support_channel_facets))
                 return false;
             if (model_volume1.config.get() != model_volume2.config.get())

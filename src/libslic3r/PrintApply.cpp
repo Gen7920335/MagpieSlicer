@@ -240,11 +240,15 @@ static bool layer_height_ranges_equal(const t_layer_config_ranges &lr1, const t_
     auto it2 = lr2.begin();
     for (const auto &kvp1 : lr1) {
         const auto &kvp2 = *it2 ++;
-        if (!kvp2.second.has("layer_height") || !kvp1.second.has("layer_height"))
+        // MAGPIE: two ranges without layer_height (material-only) compare by their bounds; before,
+        // any such range made every apply() rebuild the objects and reslice.
+        const bool has1 = kvp1.second.has("layer_height");
+        const bool has2 = kvp2.second.has("layer_height");
+        if (has1 != has2)
             return false;
         if (std::abs(kvp1.first.first  - kvp2.first.first ) > EPSILON ||
             std::abs(kvp1.first.second - kvp2.first.second) > EPSILON ||
-            (check_layer_height && std::abs(kvp1.second.option("layer_height")->getFloat() - kvp2.second.option("layer_height")->getFloat()) > EPSILON))
+            (check_layer_height && has1 && std::abs(kvp1.second.option("layer_height")->getFloat() - kvp2.second.option("layer_height")->getFloat()) > EPSILON))
             return false;
     }
     return true;
@@ -1657,6 +1661,14 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
         //BBS: add more logs
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: found full_config_diff changed.")%__LINE__;
         update_apply_status(this->invalidate_step(psGCodeExport));
+        // MAGPIE: the support generator modules read their parameters straight from mod_settings,
+        // a key no static config owns, so a changed value must redo their support (and stop a
+        // support step still reading the old full config before it is replaced below).
+        for (const char *key : { "mod_settings", "printer_mod_settings" })
+            if (std::find(full_config_diff.begin(), full_config_diff.end(), key) != full_config_diff.end())
+                for (PrintObject *object : m_objects)
+                    if (! object->config().support_generator.value.empty())
+                        update_apply_status(object->invalidate_step(posSupportMaterial));
         m_placeholder_parser.clear_config();
         // clear_config() wiped the constructor-set "version"; restore it for custom G-code.
         m_placeholder_parser.set("version", std::string(SoftFever_VERSION));

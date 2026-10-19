@@ -257,8 +257,14 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
         } else {
             //BBS: normal perimeter
             lower_polygons_series = &perimeter_generator.m_lower_polygons_series;
-            extrusion_mm3_per_mm = perimeter_generator.mm3_per_mm();
-            extrusion_width = perimeter_generator.perimeter_flow.width();
+            if (use_detail_wall_flow) {
+                // MAGPIE: inner detail walls print with the detail nozzle's flow, as in line 1.
+                extrusion_mm3_per_mm = perimeter_generator.smaller_ext_perimeter_flow.mm3_per_mm();
+                extrusion_width = perimeter_generator.smaller_ext_perimeter_flow.width();
+            } else {
+                extrusion_mm3_per_mm = perimeter_generator.mm3_per_mm();
+                extrusion_width = perimeter_generator.perimeter_flow.width();
+            }
         }
         const float extrusion_height = perimeter_generator.half_layer_outer_walls && is_external ?
             float(0.5 * perimeter_generator.layer_height) : float(perimeter_generator.layer_height);

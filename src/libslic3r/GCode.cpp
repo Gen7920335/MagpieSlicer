@@ -9007,8 +9007,13 @@ LayerResult GCode::process_layer(
             gcode += this->emit_lesic_ring_annotations(print.calib_params());
     }
 
-    // MAGPIE: the temperature drop tower grows by one layer on every layer that did not use it to cool down.
-    if (this->temperature_drop_tower_enabled() && std::abs(m_temperature_drop_tower_last_print_z - m_nominal_z) >= EPSILON) {
+    // MAGPIE: no low temperature may outlive its layer (it would reach the next layer's change_layer and
+    // a later tool change); every path finishes the interface itself, this only closes what one missed.
+    gcode += this->finish_low_temperature_interface();
+    // MAGPIE: the temperature drop tower grows by one layer on every layer that did not use it to cool down,
+    // up to the last support interface: above it no layer cools down, so the tower would only cost time.
+    if (this->temperature_drop_tower_enabled() &&
+        m_nominal_z - m_config.z_offset.value <= this->top_support_interface_z() + EPSILON && std::abs(m_temperature_drop_tower_last_print_z - m_nominal_z) >= EPSILON) {
         ExtrusionPath temperature_drop_tower_path;
         if (this->build_temperature_drop_tower_path(temperature_drop_tower_path))
             gcode += this->extrude_temperature_drop_tower(temperature_drop_tower_path, false);
@@ -10307,6 +10312,38 @@ bool GCode::has_configured_low_temperature_nozzle_wiper() const
 // The tower replaces the wait for cooling when there is no brush, printing layer by layer.
 bool GCode::temperature_drop_tower_enabled() const
 {
+    if (! m_temperature_drop_tower_enabled)
+        m_temperature_drop_tower_enabled = this->read_temperature_drop_tower_enabled();
+    return *m_temperature_drop_tower_enabled;
+}
+
+static bool has_support_interface(const ExtrusionEntity &entity)
+{
+    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+        for (const ExtrusionEntity *child : collection->entities)
+            if (child != nullptr && has_support_interface(*child))
+                return true;
+        return false;
+    }
+    return entity.role() == erSupportMaterialInterface;
+}
+
+double GCode::top_support_interface_z() const
+{
+    if (! m_top_support_interface_z) {
+        double top = -std::numeric_limits<double>::max(); // mm, object frame
+        if (m_print != nullptr)
+            for (const PrintObject *object : m_print->objects())
+                for (const SupportLayer *layer : object->support_layers())
+                    if (layer->print_z > top && has_support_interface(layer->support_fills))
+                        top = layer->print_z;
+        m_top_support_interface_z = top;
+    }
+    return *m_top_support_interface_z;
+}
+
+bool GCode::read_temperature_drop_tower_enabled() const
+{
     if (! m_config.support_interface_temperature_drop_tower.value || ! m_config.single_nozzle_low_temperature_interface.value ||
         m_config.support_interface_filament.value != 0 || m_config.print_sequence.value != PrintSequence::ByLayer ||
         this->has_configured_low_temperature_nozzle_wiper())
@@ -10360,7 +10397,12 @@ bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
     if (m_config.nozzle_diameter.values.empty() || m_config.nozzle_temperature.values.empty() || m_config.nozzle_temperature_initial_layer.values.empty())
         return false;
     const float nozzle_diameter = float(m_config.nozzle_diameter.get_at(physical_extruder_id));
-    const float layer_height    = float(m_layer->height);
+    // The tower layer is as tall as the Z step since the tower's last layer (mm). Under H/2 the cooling
+    // pass prints it at mid-layer, so the end-of-layer pass above it is only half a layer tall; m_layer's
+    // full height would extrude twice the plastic. A larger step keeps the layer height as before.
+    float       layer_height    = float(m_layer->height);
+    if (const double step = m_nominal_z - m_temperature_drop_tower_last_print_z; step > EPSILON && step < layer_height)
+        layer_height = float(step);
     if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
         return false;
 
@@ -10610,9 +10652,21 @@ std::string GCode::start_low_temperature_interface(int target_temperature)
     std::string gcode;
     if (interface_temperature > 0 && interface_temperature != normal_temperature) {
         gcode += "; low-temperature support interface begin\n";
-        // Cooling the nozzle down with the auxiliary fan, at the cooling position (rear left of the bed by default).
+        // The temperature drop tower cools the nozzle while printing, once per layer, instead of waiting in place.
+        ExtrusionPath temperature_drop_tower_path;
+        const bool    use_temperature_drop_tower = normal_temperature > interface_temperature &&
+                                                std::abs(m_temperature_drop_tower_last_print_z - m_nominal_z) >= EPSILON &&
+                                                this->build_temperature_drop_tower_path(temperature_drop_tower_path);
+        // Cooling the nozzle down with the auxiliary fan: on the tower when there is one (line 1), otherwise at the
+        // cooling position (rear left of the bed by default).
         bool auxiliary_fan_started = false;
         if (m_config.support_interface_auxiliary_fan_cooling_on_temperature_change.value && m_config.auxiliary_fan.value &&
+            m_config.support_interface_auxiliary_fan_speed.value > 0 && ! m_config.additional_cooling_fan_speed.values.empty() &&
+            normal_temperature > interface_temperature && use_temperature_drop_tower) {
+            gcode += "; low-temperature support interface auxiliary cooling\n";
+            gcode += m_writer.set_additional_fan(m_config.support_interface_auxiliary_fan_speed.value);
+            auxiliary_fan_started = true;
+        } else if (m_config.support_interface_auxiliary_fan_cooling_on_temperature_change.value && m_config.auxiliary_fan.value &&
             m_config.support_interface_auxiliary_fan_speed.value > 0 && ! m_config.additional_cooling_fan_speed.values.empty() &&
             normal_temperature > interface_temperature && m_last_pos_defined) {
             Vec2d position = m_config.support_interface_cooling_position.value;
@@ -10633,16 +10687,19 @@ std::string GCode::start_low_temperature_interface(int target_temperature)
                 auxiliary_fan_started = true;
             }
         }
-        // The temperature drop tower cools the nozzle while printing, once per layer, instead of waiting in place.
-        ExtrusionPath temperature_drop_tower_path;
-        const bool    use_temperature_drop_tower = normal_temperature > interface_temperature &&
-                                                std::abs(m_temperature_drop_tower_last_print_z - m_nominal_z) >= EPSILON &&
-                                                this->build_temperature_drop_tower_path(temperature_drop_tower_path);
         if (use_temperature_drop_tower) {
             gcode += m_writer.set_temperature(interface_temperature, false, filament_id);
             gcode += this->extrude_temperature_drop_tower(temperature_drop_tower_path, true);
-        } else
-            gcode += m_writer.set_temperature(interface_temperature, true, filament_id);
+        } else {
+            std::string wait = m_writer.set_temperature(interface_temperature, true, filament_id);
+            // Marlin's M109 S waits only while heating; cooling down to the interface temperature
+            // needs M109 R, which waits in both directions.
+            const GCodeFlavor flavor = m_config.gcode_flavor.value;
+            if ((flavor == gcfMarlinLegacy || flavor == gcfMarlinFirmware) && normal_temperature > interface_temperature &&
+                boost::starts_with(wait, "M109 S"))
+                wait[5] = 'R';
+            gcode += wait;
+        }
         if (auxiliary_fan_started)
             gcode += m_writer.set_additional_fan(m_config.additional_cooling_fan_speed.get_at(filament_id));
 
@@ -12005,7 +12062,10 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
 
     // use G1 because we rely on paths being straight (G0 may make round paths)
     if (travel.size() >= 2) {
-        if (m_half_layer_dispatch_active || m_config.outer_wall_half_layer_height || m_config.support_half_layer_height) {
+        // The H/2 flags in m_config may be the previous object's; on a layer with no H/2 frame (an empty
+        // support layer, the end-of-layer drop tower) there is no logical layer and a plain travel is right.
+        if (m_half_layer_dispatch_active ||
+            ((m_config.outer_wall_half_layer_height || m_config.support_half_layer_height) && m_logical_layer != nullptr)) {
             if (m_logical_layer == nullptr)
                 throw std::logic_error("Half-height travel requires an explicit logical parent layer");
             if (!std::isfinite(m_half_layer_motion_reference_height) || m_half_layer_motion_reference_height <= 0.)

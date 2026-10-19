@@ -7676,6 +7676,13 @@ void Tab::add_mods_page(const std::string& scope)
     line.full_width = 1;
     line.widget = [this, mods, scope](wxWindow* parent) -> wxSizer* {
         m_mod_params_panel = new ModParamsPanel(parent, mods, scope);
+        // The page can be cleared without clear_pages() (background page rebuild, cancelled build),
+        // which destroys the panel; forget it then so reload_config() never reaches a freed panel.
+        m_mod_params_panel->Bind(wxEVT_DESTROY, [this](wxWindowDestroyEvent& event) {
+            if (event.GetEventObject() == m_mod_params_panel)
+                m_mod_params_panel = nullptr;
+            event.Skip();
+        });
         m_mod_params_panel->load_from_config(*m_config);
         m_mod_params_panel->on_change = [this, scope](const std::string& text) {
             const char* key = ModParamsPanel::config_key(scope);

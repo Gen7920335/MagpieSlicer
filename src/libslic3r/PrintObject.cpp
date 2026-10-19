@@ -1696,6 +1696,10 @@ bool PrintObject::invalidate_state_by_config_options(
             steps.emplace_back(posSlice);
         } else if (opt_key == "enable_support") {
             steps.emplace_back(posSupportMaterial);
+            // MAGPIE: an object_elevation lifts the object only while it has support (Slicing.cpp),
+            // so switching support moves its layers.
+            if (m_config.object_elevation.value > 0.)
+                steps.emplace_back(posSlice);
             if (m_config.support_top_z_distance == 0.) {
             	// Enabling / disabling supports while soluble support interface is enabled.
             	// This changes the bridging logic (bridging enabled without supports, disabled with supports).
@@ -1713,7 +1717,11 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "support_interface_sublayer_angle"
             || opt_key == "support_wall_loops"
             || opt_key == "tree_support_wall_loops"
-            || opt_key == "support_interface_sublayer_temperature"
+            // MAGPIE: switching the sublayer temperature on or off regroups the support fills; another
+            // value only changes the G-code (handled below with the other temperatures).
+            || (opt_key == "support_interface_sublayer_temperature" &&
+                (old_config.option(opt_key) == nullptr || new_config.option(opt_key) == nullptr ||
+                 (old_config.option(opt_key)->getInt() > 0) != (new_config.option(opt_key)->getInt() > 0)))
             || opt_key == "support_half_layer_height"
             || opt_key == "support_angle"
             || opt_key == "support_on_build_plate_only"
@@ -1947,6 +1955,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "support_interface_temperature_drop_tower_x"
             || opt_key == "support_interface_temperature_drop_tower_y"
             || opt_key == "support_interface_temperature"
+            || opt_key == "support_interface_sublayer_temperature"
             || opt_key == "support_interface_heating_time"
             || opt_key == "support_interface_auxiliary_fan_cooling_on_temperature_change"
             || opt_key == "support_interface_auxiliary_fan_speed"
@@ -5011,8 +5020,9 @@ void PrintObject::combine_infill()
 void PrintObject::_generate_support_material()
 {
     MAGPIE_STAGE_TIMER("step.support");
-    // MAGPIE: support.generator slot. An empty support_generator runs Orca's generators unchanged.
-    if (const std::string &name = m_config.support_generator.value; !name.empty()) {
+    // MAGPIE: support.generator slot. An empty support_generator runs Orca's generators unchanged,
+    // and so does a raft without support: the modules build support, Orca builds the bare raft.
+    if (const std::string &name = m_config.support_generator.value; !name.empty() && this->has_support()) {
         const ModHost::SupportGenerator *generator = ModHost::find_support_generator(name);
         if (generator == nullptr)
             throw Slic3r::SlicingError(Slic3r::format(_u8L("Support generator \"%1%\" is not installed."), name));

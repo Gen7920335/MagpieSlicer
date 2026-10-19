@@ -3801,7 +3801,8 @@ bool WipingExtrusions::is_overriddable(const ExtrusionEntityCollection& eec, con
 {
     // MAGPIE: walls a wall planner assigned to a nozzle keep it, and so does the gap fill that follows them;
     // flushing into them would change it.
-    if (has_wall_tool_hint(eec) || (! region.config().wall_planner.value.empty() && eec.role() == erGapFill))
+    // Only a wall planner sets tool hints, so without one the walk over the collection is skipped.
+    if (! region.config().wall_planner.value.empty() && (eec.role() == erGapFill || has_wall_tool_hint(eec)))
         return false;
 
     if (print_config.filament_soluble.get_at(m_layer_tools->extruder(eec, region)))

@@ -234,8 +234,9 @@ SlicingParameters SlicingParameters::create_from_config(
         params.object_print_z_uncompensated_max += print_z;
     }
 
-    // MAGPIE: a support module may lift the object; with the default 0 nothing moves.
-    if (const coordf_t elevation = object_config.object_elevation.value; elevation > 0.) {
+    // MAGPIE: a support module may lift the object; with the default 0 nothing moves. Only an object
+    // with support of its own is lifted (as in line 1), so it never prints in the air.
+    if (const coordf_t elevation = object_config.object_elevation.value; elevation > 0. && object_config.enable_support.value) {
         params.object_print_z_min += elevation;
         params.object_print_z_max += elevation;
         params.object_print_z_uncompensated_max += elevation;
@@ -405,7 +406,9 @@ std::vector<double> layer_height_profile_adaptive(const SlicingParameters& slici
 
         for (auto const& [range,options] : object.layer_config_ranges) {
             if ( print_z >= range.first && print_z <= range.second) {
-                    height = options.opt_float("layer_height");
+                    // MAGPIE: a range that only changes the material has no layer_height.
+                    if (options.has("layer_height"))
+                        height = options.opt_float("layer_height");
                     break;
             };
         };

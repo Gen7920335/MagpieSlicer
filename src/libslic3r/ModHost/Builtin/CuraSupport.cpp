@@ -6,6 +6,7 @@
 
 #include "CuraSupport.hpp"
 
+#include "libslic3r/AABBTreeLines.hpp"
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/ExPolygon.hpp"
@@ -192,15 +193,20 @@ Polygons varying_xy_disallowed_area(const Inputs &in, size_t layer_idx, const Mo
         acc.resize(acc.size() + poly.size(), {0, 0.});
     for (const Delta &d : deltas) {
         const double natural = d.support_distance * bounded_tan(in.support_angle_rad);
+        // Every vertex against every edge of the neighbouring layer was quadratic per layer. The tree finds
+        // the nearest edge; the exact minimum is then taken over the edges within that distance (plus 1
+        // scaled unit), so the result is the brute-force minimum bit for bit.
+        const Lines                             lines = to_lines(d.layer);
+        const AABBTreeLines::LinesDistancer<Line> distancer(lines);
         size_t       i       = 0;
         for (const Polygon &poly : layer_current)
             for (const Point &p : poly.points) {
                 double min_dist2 = std::numeric_limits<double>::max();
-                for (const Polygon &dp : d.layer)
-                    for (size_t k = 0; k < dp.size(); ++k) {
-                        const Line l(dp.points[k], dp.points[(k + 1) % dp.size()]);
-                        min_dist2 = std::min(min_dist2, l.distance_to_squared(p));
-                    }
+                if (! lines.empty()) {
+                    const double nearest = std::get<0>(distancer.distance_from_lines_extra<false>(p));
+                    for (size_t k : distancer.all_lines_in_radius(p, nearest + 1.))
+                        min_dist2 = std::min(min_dist2, lines[k].distance_to_squared(p));
+                }
                 const double slope     = std::sqrt(min_dist2) / d.delta_z;
                 const double wall      = std::atan(std::abs(slope));
                 const double ratio     = std::clamp(wall / in.support_angle_rad, 0., 1.);
@@ -680,15 +686,41 @@ void generate(PrintObject &object, const std::vector<Polygons> *mask)
         if (!areas.bottoms[i].empty())
             interface_layers.push_back(make_layer(i, SupporLayerType::BottomInterface, std::move(areas.bottoms[i])));
     }
-    if (base_layers.empty() && interface_layers.empty())
-        return;
     std::sort(interface_layers.begin(), interface_layers.end(), [](const SupportGeneratorLayer *a, const SupportGeneratorLayer *b) { return *a < *b; });
 
-    SupportGeneratorLayersPtr raft_layers = generate_raft_base(object, support_params, object.slicing_parameters(), empty, interface_layers, empty,
+    // As in line 1 and the classic generator, the raft contact layer carries the first object layer
+    // (expanded by raft_expansion) and the feet of the columns; generate_raft_base builds the raft
+    // base and interface below it. Without it the raft comes out empty and the object, lifted by
+    // the raft height, prints in the air.
+    SupportGeneratorLayersPtr     top_contacts;
+    const SlicingParameters      &slicing_params = object.slicing_parameters();
+    if (slicing_params.has_raft()) {
+        const Layer &first_layer  = *object.layers().front();
+        Polygons     raft_contact = to_polygons(first_layer.lslices);
+        if (object.config().raft_expansion.value > 0)
+            raft_contact = expand(raft_contact, scaled<float>(object.config().raft_expansion.value));
+        if (!base_layers.empty() && is_approx(base_layers.front()->print_z, first_layer.print_z))
+            raft_contact = union_(raft_contact, base_layers.front()->polygons);
+        if (!raft_contact.empty()) {
+            SupportGeneratorLayer &contact = storage.allocate(SupporLayerType::TopContact);
+            contact.print_z                = slicing_params.raft_contact_top_z;
+            contact.bottom_z               = slicing_params.raft_interface_top_z;
+            contact.height                 = slicing_params.contact_raft_layer_height;
+            contact.idx_object_layer_above = 0;
+            contact.contact_polygons       = std::make_unique<Polygons>(raft_contact);
+            contact.overhang_polygons      = std::make_unique<Polygons>(raft_contact);
+            contact.polygons               = std::move(raft_contact);
+            top_contacts.push_back(&contact);
+        }
+    }
+    if (base_layers.empty() && interface_layers.empty() && top_contacts.empty())
+        return;
+
+    SupportGeneratorLayersPtr raft_layers = generate_raft_base(object, support_params, slicing_params, top_contacts, interface_layers, empty,
                                                                base_layers, storage);
     if (object.print()->canceled()) throw CanceledException();
     // H/2 support refines these layers into half-height bands, so each role gets its own list.
-    SupportGeneratorLayersPtr bottom_contacts, top_contacts, base_interface_layers;
+    SupportGeneratorLayersPtr bottom_contacts, base_interface_layers;
     generate_support_layers(object, raft_layers, bottom_contacts, top_contacts, base_layers, interface_layers, base_interface_layers, &storage);
     if (object.print()->canceled()) throw CanceledException();
     generate_support_toolpaths(object.support_layers(), object.config(), support_params, object.slicing_parameters(), raft_layers, bottom_contacts,

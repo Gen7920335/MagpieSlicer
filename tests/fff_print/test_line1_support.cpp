@@ -14,6 +14,7 @@
 #include "libslic3r/Support/SupportParameters.hpp"
 
 #include "line1_settings.hpp"
+#include <nlohmann/json.hpp>
 #include "test_helpers.hpp"
 
 #include <algorithm>
@@ -1040,4 +1041,88 @@ TEST_CASE("Consecutive support exports keep independent G-code state", "[Support
         { "brim_type", "outer_only" }, { "brim_width", 5 },
     });
     CHECK(overhang.find("support material") != std::string::npos);
+}
+
+TEST_CASE("Cura support prints a full raft under the object", "[CuraSupport][Raft]")
+{
+    BundledMods mods;
+    // Before: the Cura generator gave the raft no contact layer, so every raft layer came out empty
+    // and the object, lifted by the raft height, printed in the air. Line 1 built the contact from
+    // the first object layer, as the classic generator does.
+    const int  raft_layers = GENERATE(2, 3);
+    const bool overhang    = GENERATE(false, true);
+    TriangleMesh fixture = make_cube(8., 8., 8.);
+    if (overhang) {
+        TriangleMesh ceiling = make_cube(24., 8., 1.2);
+        ceiling.translate(-8.f, 0.f, 8.f);
+        fixture.merge(ceiling);
+    }
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
+        {"enable_support", true}, {"raft_layers", raft_layers}});
+    line1(config, "support_type", "normal_cura(auto)");
+
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({ fixture }, print, config));
+    const PrintObject &object = *print.objects().front();
+    const SlicingParameters &slicing = object.slicing_parameters();
+    CAPTURE(raft_layers, overhang);
+    REQUIRE(object.config().support_generator.value == "cura");
+    size_t raft_with_paths = 0;
+    for (const SupportLayer *layer : object.support_layers())
+        if (layer->print_z <= slicing.raft_contact_top_z + EPSILON)
+            raft_with_paths += layer->has_extrusions();
+    CHECK(raft_with_paths == size_t(raft_layers));
+}
+
+TEST_CASE("A raft without support stays a raft with a support module on", "[SupportGenerator][Raft]")
+{
+    BundledMods mods;
+    // Before: a generator module ran whenever the support step did, also for "raft on, support off":
+    // Resin replaced the raft footprint with its (empty) demand and Cura had no raft at all.
+    const char *support_type = GENERATE("normal_cura(auto)", "resin(auto)");
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
+        {"enable_support", false}, {"raft_layers", 3}});
+    line1(config, "support_type", support_type);
+
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({ make_cube(10., 10., 5.) }, print, config));
+    const PrintObject &object = *print.objects().front();
+    const SlicingParameters &slicing = object.slicing_parameters();
+    CAPTURE(support_type);
+    // Not lifted beyond the raft, and every raft layer prints.
+    CHECK(object.layers().front()->bottom_z() == Catch::Approx(slicing.raft_contact_top_z + slicing.gap_raft_object));
+    size_t raft_with_paths = 0;
+    for (const SupportLayer *layer : object.support_layers())
+        if (layer->print_z <= slicing.raft_contact_top_z + EPSILON)
+            raft_with_paths += layer->has_extrusions();
+    CHECK(raft_with_paths == 3);
+}
+
+TEST_CASE("A changed support module parameter regenerates the support", "[SupportGenerator][Invalidation]")
+{
+    BundledMods mods;
+    // Before: the module parameters live in mod_settings, which no static config owns, so a change
+    // only invalidated G-code export and the old support was exported.
+    TriangleMesh fixture = make_cube(8., 8., 8.);
+    TriangleMesh ceiling = make_cube(24., 8., 1.2);
+    ceiling.translate(-8.f, 0.f, 8.f);
+    fixture.merge(ceiling);
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    line1(config, "support_type", "normal_cura(auto)");
+
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({ fixture }, print, config));
+    REQUIRE(print.objects().front()->is_step_done(posSupportMaterial));
+
+    DynamicPrintConfig changed = print.full_print_config();
+    const std::string stored = changed.opt_string("mod_settings");
+    nlohmann::json settings = stored.empty() ? nlohmann::json::object() : nlohmann::json::parse(stored);
+    settings["cura_support.join_distance"] = 7.5;
+    changed.set_key_value("mod_settings", new ConfigOptionString(settings.dump()));
+    print.apply(print.model(), changed);
+    CHECK_FALSE(print.objects().front()->is_step_done(posSupportMaterial));
+    CHECK(print.objects().front()->is_step_done(posSlice));
 }
