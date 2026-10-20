@@ -5077,6 +5077,10 @@ void PrintObject::combine_infill()
 void PrintObject::_generate_support_material()
 {
     MAGPIE_STAGE_TIMER("step.support");
+    {
+        std::lock_guard<std::mutex> lock(m_native_mods_mutex);
+        m_native_mods_used.clear();
+    }
     // MAGPIE: support.generator slot. An empty support_generator runs Orca's generators unchanged,
     // and so does a raft without support: the modules build support, Orca builds the bare raft. A name
     // no built-in module has is looked up among the native mods' support.areas implementations.

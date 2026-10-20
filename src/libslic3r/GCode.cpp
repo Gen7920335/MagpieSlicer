@@ -1,4 +1,5 @@
 #include "libslic3r/StageTimer.hpp"
+#include "Accel/BatchAccel.hpp"
 #include "ModHost/NativeMods.hpp"
 #include "ModHost/SlotRegistry.hpp"
 #include "ModHost/WallPlanner.hpp"
@@ -1180,6 +1181,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
             gcodegen.m_avoid_crossing_perimeters.use_external_mp_once();
             gcode += gcodegen.travel_to(wipe_tower_point_to_object_point(gcodegen, start_pos + plate_origin_2d), erMixed,
                                         "Travel to a Wipe Tower");
+            gcode += gcodegen.layer_time_tower_arrival(); // MAGPIE: layer time blending, purge_tower
             gcode += gcodegen.unretract();
         }
 
@@ -1634,6 +1636,9 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
             check_add_eol(start_filament_gcode_str);
         }
 
+        // MAGPIE: layer time blending (purge_tower): over the tower before the unretract.
+        if (!tcr.priming)
+            wipe_next_start_point_str += gcodegen.layer_time_tower_arrival();
         start_filament_gcode_str = start_filament_gcode_str + wipe_next_start_point_str + toolchange_unretract_str;
 
         // Orca: the custom change_filament_gcode lifts to the object layer height and the unretract
@@ -1771,6 +1776,8 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
             if (!tcr.priming && gcodegen.last_pos_defined())
                 gcode += travel_to_tower_gap(gcodegen, gcodegen.last_pos(), start_wipe_pos);
             gcode += gcodegen.travel_to(start_wipe_pos, erMixed, "Travel to a Wipe Tower");
+            if (!tcr.priming)
+                gcode += gcodegen.layer_time_tower_arrival(); // MAGPIE: layer time blending, purge_tower
             gcode += gcodegen.unretract();
         } else {
             // When this is multiextruder printer without any ramming, we can just change
@@ -1831,6 +1838,10 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
                 }
             }
             if (gcodegen.config().enable_prime_tower) {
+                // MAGPIE: layer time blending (purge_tower): the tool changed in place and the tower's own entry
+                // travel brought the nozzle here.
+                if (!tcr.priming)
+                    deretraction_str += gcodegen.layer_time_tower_arrival();
                 deretraction_str += gcodegen.writer().travel_to_z(z, "Force restore layer Z", true);
                 Vec3d position{gcodegen.writer().get_position()};
                 position.z() = z;
@@ -3348,18 +3359,41 @@ static void stream_file(const std::string &path, GCodeProcessor &processor, cons
 // How a site waits: not at all, a bare G4, lifted off the part around the G4, or parked.
 enum class WaitForm { None, Dwell, Lifted, Parked };
 
+// purge_tower: where the nozzle arrived over a tower; the next site's wait is written before it.
+constexpr const char *visit_tag = ";MAGPIE_WAIT_VISIT";
+
 // Shortest wait that lifts the nozzle, s. A shorter one rests the nozzle no longer than Orca's own layer
 // change does, and the lift moves alone would take a good part of it (0.2 s or more).
 constexpr double lifted_wait_min_s = 1.;
+
+// The E value a G0/G1/G2/G3/G92 line sets, as written, or empty: the text after its E word, before any comment.
+static std::string_view e_word(std::string_view line)
+{
+    line = line.substr(0, std::min(line.find(';'), line.size()));
+    if (line.size() < 3 || line[0] != 'G')
+        return {};
+    const size_t code_end = line.find(' ');
+    const std::string_view code = line.substr(0, code_end);
+    if (code_end == std::string_view::npos || (code != "G0" && code != "G1" && code != "G2" && code != "G3" && code != "G92"))
+        return {};
+    for (size_t i = code_end; i < line.size(); ++i)
+        if (line[i] == 'E' && line[i - 1] == ' ') {
+            const size_t end = line.find(' ', i);
+            return line.substr(i + 1, end == std::string_view::npos ? std::string_view::npos : end - i - 1);
+        }
+    return {};
+}
 
 // Copies `src` to `dst`, writing each site's wait before its tag and leaving out the tower blocks of the
 // sites from tower_end on. A lifted wait lifts, waits dwell_ms[k] (no G4 for 0) and comes back down; a
 // parked one also travels to the park position and back between the lift and the descent. Each move
 // carries its own feed rate, and every line that follows a site in Orca's output sets its own, so the
 // blocks change no modal state that matters. A tower block starts and ends retracted, with the same
-// pending lift, at the layer's Z, so leaving it out leaves the moves after it valid.
+// pending lift, at the layer's Z, so leaving it out leaves the moves after it valid. With absolute E
+// (`absolute_e`) the moves after it continue from the E the block ended at, so a left-out block is replaced
+// by a G92 setting that E without moving the filament.
 static void write_waits(const std::string &src, const std::string &dst, const std::vector<LayerTimeWaitSite> &sites,
-                        const std::vector<WaitForm> &form, const std::vector<long long> &dwell_ms, size_t tower_end)
+                        const std::vector<WaitForm> &form, const std::vector<long long> &dwell_ms, size_t tower_end, bool absolute_e)
 {
     boost::nowide::ifstream in(src, std::ios::binary);
     boost::nowide::ofstream out(dst, std::ios::binary | std::ios::trunc);
@@ -3370,6 +3404,8 @@ static void write_waits(const std::string &src, const std::string &dst, const st
     const std::string end_tag   = ";" + GCodeProcessor::wait_tower_end_tag();
     size_t            k         = 0;
     bool              skipping  = false;
+    std::string       skipped_e; // the last E value set inside the block being left out, as written
+    bool              skipped_e_was_reset = false; // ... by a G92
     std::string       line;
     auto z_move = [&out](double z, double speed) {
         GCodeG1Formatter w;
@@ -3386,17 +3422,32 @@ static void write_waits(const std::string &src, const std::string &dst, const st
     while (std::getline(in, line)) {
         const bool newline = !in.eof();
         if (skipping) {
-            if (line == tag)
+            if (line == tag) {
                 ++k;
-            else if (line == end_tag)
+            } else if (line == end_tag) {
                 skipping = false;
+                // A block that ends with the writer's own E reset needs nothing more.
+                if (absolute_e && !skipped_e.empty() && !skipped_e_was_reset)
+                    out << "G92 E" << skipped_e << "\n";
+            } else if (const std::string_view e = e_word(line); !e.empty()) {
+                skipped_e.assign(e.data(), e.size());
+                skipped_e_was_reset = line.rfind("G92 ", 0) == 0;
+            }
             continue;
         }
         if (line == begin_tag && k >= tower_end) {
             skipping = true;
+            skipped_e.clear();
+            skipped_e_was_reset = false;
             continue;
         }
-        if (line == tag && k < sites.size()) {
+        if (line == visit_tag) {
+            // The visit before site k, which waits here.
+            if (k < sites.size() && sites[k].wait_at_visit && form[k] != WaitForm::None && dwell_ms[k] > 0)
+                out << "G4 P" << dwell_ms[k] << "\n";
+        } else if (line == tag && k < sites.size() && sites[k].wait_at_visit) {
+            ++k;
+        } else if (line == tag && k < sites.size()) {
             const LayerTimeWaitSite &site = sites[k];
             const WaitForm           f    = form[k];
             if (f == WaitForm::Lifted || f == WaitForm::Parked)
@@ -3434,6 +3485,26 @@ static double rest_to_rest_time(double distance, double speed, double accel)
 
 } // namespace LayerTimeBlendExport
 
+bool GCode::layer_time_tower_visited(const Print &print, coordf_t print_z) const
+{
+    // The temperature drop tower is printed on every layer up to the last support interface (process_layer,
+    // start_low_temperature_interface); the prime tower on every layer up to its height.
+    if (this->temperature_drop_tower_enabled() && print_z <= this->top_support_interface_z() + EPSILON)
+        return true;
+    return m_wipe_tower && print.has_wipe_tower() && print_z <= double(print.wipe_tower_data().height) + EPSILON;
+}
+
+std::string GCode::layer_time_tower_arrival()
+{
+    if (!m_layer_time_visit_wanted)
+        return {};
+    m_layer_time_visit_wanted = false;
+    m_layer_time_visit_tagged = true;
+    // Over the tower, retracted, before the nozzle extrudes there: the next site's wait is a bare G4 here, the
+    // ooze falls on the tower and its lines re-prime the nozzle.
+    return std::string(LayerTimeBlendExport::visit_tag) + "\n";
+}
+
 std::optional<Vec2d> GCode::layer_time_park_position(const Print &print, coordf_t print_z)
 {
     const std::vector<Vec2d> &area = m_config.printable_area.values;
@@ -3442,21 +3513,6 @@ std::optional<Vec2d> GCode::layer_time_park_position(const Print &print, coordf_
     BoundingBoxf bed; // mm, plate coordinates
     for (const Vec2d &p : area)
         bed.merge(p);
-    // Over a purge tower while it is being printed: the ooze falls on the tower.
-    if (m_layer_time_wait_at == LayerTimeWaitAt::PurgeTower) {
-        if (this->temperature_drop_tower_enabled() && m_temperature_drop_tower_path_initialized &&
-            print_z <= this->top_support_interface_z() + EPSILON) {
-            // The corner of the L, where both arms meet.
-            const double band = TEMPERATURE_DROP_TOWER_LINE_COUNT * m_temperature_drop_tower_spacing; // mm
-            return Vec2d(m_temperature_drop_tower_left + 0.5 * band, m_temperature_drop_tower_rear - 0.5 * band);
-        }
-        if (m_wipe_tower && print.has_wipe_tower() && std::abs(m_config.wipe_tower_rotation_angle.value) < EPSILON &&
-            print_z <= double(print.wipe_tower_data().height) + EPSILON) {
-            const size_t plate = size_t(std::max(0, print.get_plate_index()));
-            const Vec2d  corner(m_config.wipe_tower_x.get_at(plate), m_config.wipe_tower_y.get_at(plate));
-            return corner + 0.5 * Vec2d(print.wipe_tower_data().width, print.wipe_tower_data().depth);
-        }
-    }
     const Vec2d configured(m_config.layer_time_blend_park_x.value, m_config.layer_time_blend_park_y.value);
     // An automatic park position keeps this far from the printable area's edge, mm.
     constexpr double park_margin = 5.;
@@ -3617,6 +3673,20 @@ std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
     std::string gcode;
     if (m_layer_time_wait_at == LayerTimeWaitAt::Tower && !m_layer_time_tower_placed && !this->place_layer_time_tower(print))
         m_layer_time_wait_at = LayerTimeWaitAt::Park;
+    // purge_tower. The sites stay at the layer starts, so the intervals are the model's layer times (Gen,
+    // 2026-10-20: the model's layer times are what is blended, not the time between tower visits). A wait
+    // anywhere in the layer before the site adds to the same interval, so when that layer visited a tower the
+    // wait is written at its visit tag, over the tower; otherwise the site parks.
+    if (m_layer_time_wait_at == LayerTimeWaitAt::PurgeTower) {
+        const bool at_visit       = m_layer_time_visit_tagged;
+        m_layer_time_visit_tagged = false;
+        m_layer_time_visit_wanted = this->layer_time_tower_visited(print, print_z);
+        if (at_visit) {
+            site.wait_at_visit = true;
+            m_layer_time_sites.push_back(site);
+            return gcode + ";" + GCodeProcessor::wait_site_tag() + "\n";
+        }
+    }
     const Vec2f writer_offset = m_writer.get_xy_offset();
     auto emitted = [&writer_offset](const Vec2d &p) { return Vec2d(p.x() - writer_offset.x(), p.y() - writer_offset.y()); };
     if (m_layer_time_wait_at == LayerTimeWaitAt::Tower) {
@@ -3742,9 +3812,12 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
                 if (mark.kind == MarkKind::Site && k < n)
                     sites[k++].layer_id = mark.layer_id >= 2 ? mark.layer_id - 2 : 0;
         }
-        plan = m_layer_time_planner->plan(sites, print.config(), print_time_s);
-        // Leaving tower blocks out shifts the E axis when it is absolute, so then the tower stays whole.
-        if (!m_config.use_relative_e_distances.value)
+        plan = m_layer_time_planner->plan(sites, print.full_print_config(), [&print]() { return print.canceled(); }, print_time_s);
+        // With absolute E a left-out block is bridged by a G92 (write_waits). Flavors whose writer never resets E
+        // with G92 (GCodeWriter::reset_e) may not take one, so there the tower stays whole.
+        if (!m_config.use_relative_e_distances.value && (m_config.gcode_flavor.value == gcfMach3 ||
+                                                         m_config.gcode_flavor.value == gcfMakerWare ||
+                                                         m_config.gcode_flavor.value == gcfSailfish))
             plan.tower_end = n;
         for (size_t k = 0; k < n && k < plan.dwell_s.size(); ++k) {
             dwell_ms[k] = std::llround(plan.dwell_s[k] * 1000.);
@@ -3752,7 +3825,8 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
                 continue;
             if (plan.use_park[k])
                 form[k] = WaitForm::Parked;
-            else if (m_layer_time_sites[k].at_tower || plan.added_s[k] < LayerTimeBlendExport::lifted_wait_min_s)
+            else if (m_layer_time_sites[k].at_tower || m_layer_time_sites[k].wait_at_visit ||
+                     plan.added_s[k] < LayerTimeBlendExport::lifted_wait_min_s)
                 form[k] = WaitForm::Dwell;
             else
                 form[k] = WaitForm::Lifted;
@@ -3763,7 +3837,8 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
     const bool any_wait = std::any_of(form.begin(), form.end(), [](WaitForm f) { return f != WaitForm::None; });
     if (any_wait || plan.tower_end < n) {
         const std::string path_filled = path_tmp + ".ltb";
-        LayerTimeBlendExport::write_waits(path_tmp, path_filled, m_layer_time_sites, form, dwell_ms, plan.tower_end);
+        const bool absolute_e = !m_config.use_relative_e_distances.value;
+        LayerTimeBlendExport::write_waits(path_tmp, path_filled, m_layer_time_sites, form, dwell_ms, plan.tower_end, absolute_e);
         // Check and correct once. A wait adds pure time, so a site's error after filling (the lift and park
         // moves, the stop the G4 forces) is the same for any G4 value: one correction is exact up to the
         // estimator's resolution (its per-move times are floats, a few ms late in a long print). Sites in
@@ -3801,7 +3876,7 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
             BOOST_LOG_TRIVIAL(error) << "Layer time blending: " << measured.size() << " sites after filling, " << kept << " expected";
         }
         if (corrected)
-            LayerTimeBlendExport::write_waits(path_tmp, path_filled, m_layer_time_sites, form, dwell_ms, plan.tower_end);
+            LayerTimeBlendExport::write_waits(path_tmp, path_filled, m_layer_time_sites, form, dwell_ms, plan.tower_end, absolute_e);
         print.throw_if_canceled();
         boost::nowide::remove(path_tmp.c_str());
         if (std::error_code ec = rename_file(path_filled, path_tmp))
@@ -3840,6 +3915,8 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
         BOOST_LOG_TRIVIAL(warning) << message;
         print.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL, message);
     }
+    for (const std::string &message : plan.mod_warnings)
+        print.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL, m_layer_time_planner->mod_id + ": " + message);
 
     // The final estimate, statistics and post-processing run over the G-code as written.
     setup(m_processor, path_tmp);
@@ -4137,12 +4214,16 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     // an axis remap (belt printers), where the in-place lift would not be a plain Z move.
     m_layer_time_sites.clear();
     m_layer_time_planner = nullptr;
+    m_native_mods_used.clear();
     if (const std::string &planner = print.config().layer_time_planner.value; !planner.empty()) {
         m_layer_time_planner = ModHost::find_time_planner(planner);
         if (m_layer_time_planner == nullptr)
-            BOOST_LOG_TRIVIAL(error) << "Unknown layer time planner \"" << planner << "\"; no waits added";
-        else if (print.config().spiral_mode.value || m_writer.has_axis_remap())
+            // TRN %1% is the name of a layer time planner, which a mod provides.
+            throw Slic3r::SlicingError(Slic3r::format(_u8L("No loaded mod provides the layer time planner \"%1%\"."), planner));
+        if (print.config().spiral_mode.value || m_writer.has_axis_remap())
             m_layer_time_planner = nullptr;
+        else
+            m_native_mods_used.insert(m_layer_time_planner->mod_id);
     }
     // Where the waits happen. A tower is not printed in a by-object print, where the head would hit it.
     const std::string &wait_at = print.config().layer_time_blend_wait_at.value;
@@ -4151,6 +4232,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     if (m_layer_time_wait_at == LayerTimeWaitAt::Tower && print.config().print_sequence.value == PrintSequence::ByObject)
         m_layer_time_wait_at = LayerTimeWaitAt::Park;
     m_layer_time_tower_placed    = false;
+    m_layer_time_visit_wanted = false;
+    m_layer_time_visit_tagged = false;
     m_layer_time_tower_side      = 0.;
     m_layer_time_tower_last_z    = 0.;
     m_layer_time_tower_brim_done = false;
@@ -4828,9 +4911,15 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     std::string thumbnails_value = print.config().option<ConfigOptionString>("thumbnails")->value;
     // search string for the BTT_TFT label
     bool has_BTT_thumbnail = (thumbnails_value.find("BTT_TFT") != std::string::npos);
-    // MAGPIE: the native mods this G-code was made with, so it can be reproduced. Nothing when none is
-    // loaded, which keeps the mod-free output byte-identical.
-    const std::string native_mods = ModHost::native_mod_summary();
+    // MAGPIE: the native mods this G-code was made with, so it can be reproduced: the export's own slots, the
+    // objects' support and the accelerator of the slicing session. Nothing when it uses none, which keeps
+    // the output of a print without them byte-identical.
+    for (const PrintObject *object : print.objects())
+        for (const std::string &id : object->native_mods_used())
+            m_native_mods_used.insert(id);
+    if (const std::string accelerator = Accel::session_mod(); !accelerator.empty())
+        m_native_mods_used.insert(accelerator);
+    const std::string native_mods = ModHost::native_mod_summary(m_native_mods_used);
     if (has_BTT_thumbnail && !native_mods.empty())
         file.write_format("; mods: %s\n", native_mods.c_str());
 
@@ -9663,6 +9752,14 @@ LayerResult GCode::process_layer(
         if (this->build_temperature_drop_tower_path(temperature_drop_tower_path))
             gcode += this->extrude_temperature_drop_tower(temperature_drop_tower_path, false);
     }
+    // MAGPIE: layer time blending (purge_tower): a layer expected to visit a tower that did not; the next site
+    // parks instead.
+    if (m_layer_time_visit_wanted) {
+        // PERMANENT DIAGNOSTIC: the visit did not happen, so the next wait is not over the tower.
+        BOOST_LOG_TRIVIAL(warning) << "Layer time blending: no tower visit on the layer at " << print_z
+                                   << " mm; the next layer's wait parks";
+        m_layer_time_visit_wanted = false;
+    }
 
 #if 0
     // Apply spiral vase post-processing if this layer contains suitable geometry
@@ -11263,6 +11360,16 @@ std::string GCode::extrude_temperature_drop_tower(const ExtrusionPath &path, boo
     // Tower speeds, mm/s: layers at 30, the final 10 mm of a cooling pass at 10.
     constexpr double tower_speed = 30.0, slow_tail_speed = 10.0, slow_tail_length_mm = 10.0;
     std::string gcode;
+    // MAGPIE: layer time blending (purge_tower): wait over the tower before its first line of this layer.
+    if (m_layer_time_visit_wanted && ! path.polyline.empty()) {
+        const ExtrusionPath *first = &path;
+        std::vector<ExtrusionPath> brim_paths;
+        if (! cooling_transition && ! m_temperature_drop_tower_brim_printed && this->build_temperature_drop_tower_brim_paths(brim_paths) &&
+            ! brim_paths.empty())
+            first = &brim_paths.front();
+        gcode += this->travel_to(first->first_point(), first->role(), "travel to the temperature drop tower");
+        gcode += this->layer_time_tower_arrival();
+    }
     // The auxiliary tower owns its brim; object/support layer IDs do not define its first pass.
     if (! cooling_transition && ! m_temperature_drop_tower_brim_printed) {
         std::vector<ExtrusionPath> brim_paths;

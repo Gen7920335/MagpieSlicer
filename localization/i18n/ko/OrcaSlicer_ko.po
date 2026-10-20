@@ -42971,6 +42971,11 @@ msgstr "레이어 타임 블렌딩: %1% 레이어부터 %2% 레이어까지는 �
 
 # AI Translated
 #, boost-format
+msgid "No loaded mod provides the layer time planner \"%1%\"."
+msgstr "레이어 타임 플래너 \"%1%\"를 제공하는 모드가 로드되어 있지 않습니다."
+
+# AI Translated
+#, boost-format
 msgid "Layer time blending waits: %1% in all, %2% at most per layer"
 msgstr "레이어 타임 블렌딩 대기: 합계 %1%, 레이어당 최대 %2%"
 

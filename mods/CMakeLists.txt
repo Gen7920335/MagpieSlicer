@@ -22,6 +22,7 @@ function(magpie_official_mod id)
 endfunction()
 add_subdirectory(cuda_compute)
 add_subdirectory(cura_support)
+add_subdirectory(layer_time_blend)
 add_subdirectory(multi_nozzle_walls)
 
 if (BUILD_TESTS)

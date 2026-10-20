@@ -1,0 +1,227 @@
+{
+ "description": "Layer time blending (mod layer_time_blend): each wait position, both blend types, easing, the cap and warnings, by-object chains, H/2, the low temperature interface's drop tower and the prime tower. Compared between builds (built-in planner against the native mod, before and after a change), not with vanilla.",
+ "printers": {
+  "u1": {
+   "machine": "presets/u1_04_machine.json",
+   "process": "presets/u1_04_process.json",
+   "filaments": [
+    "presets/u1_pla.json"
+   ],
+   "bed_type": "High Temp Plate"
+  },
+  "u1mn": {
+   "machine": "presets/u1_04_machine.json",
+   "process": "presets/u1_04_process.json",
+   "filaments": [
+    "presets/u1_pla.json",
+    "presets/u1_pla_2.json",
+    "presets/u1_pla_3.json",
+    "presets/u1_pla_4.json"
+   ],
+   "bed_type": "High Temp Plate"
+  },
+  "x1c": {
+   "machine": "presets/x1c_04_machine.json",
+   "process": "presets/x1c_04_process.json",
+   "filaments": [
+    "presets/x1c_pla.json"
+   ],
+   "bed_type": "Textured PEI Plate"
+  }
+ },
+ "cases": [
+  {
+   "name": "overhang_linear_in_place",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 3, \"layer_time_blend.wait_at\": \"in_place\"}"
+   }
+  },
+  {
+   "name": "frog_log_ease",
+   "printer": "u1",
+   "model": "tests/data/frog_legs.obj",
+   "process": {
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"log\", \"layer_time_blend.max_ratio\": 15, \"layer_time_blend.ease_layers\": 3, \"layer_time_blend.wait_at\": \"in_place\"}"
+   }
+  },
+  {
+   "name": "overhang_tower_relative_e",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 3, \"layer_time_blend.wait_at\": \"tower\"}"
+   }
+  },
+  {
+   "name": "overhang_tower_absolute_e",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "machine": {
+    "use_relative_e_distances": "0",
+    "before_layer_change_gcode": ";BEFORE_LAYER_CHANGE\n;[layer_z]",
+    "layer_change_gcode": ";AFTER_LAYER_CHANGE\n;[layer_z]"
+   },
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 3, \"layer_time_blend.wait_at\": \"tower\"}"
+   }
+  },
+  {
+   "name": "tee_tower_relative_e",
+   "printer": "u1",
+   "model": "external:tee.stl",
+   "process": {
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 2, \"layer_time_blend.wait_at\": \"tower\"}"
+   }
+  },
+  {
+   "name": "tee_tower_absolute_e",
+   "printer": "u1",
+   "model": "external:tee.stl",
+   "process": {
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 2, \"layer_time_blend.wait_at\": \"tower\"}"
+   },
+   "machine": {
+    "use_relative_e_distances": "0",
+    "before_layer_change_gcode": ";BEFORE_LAYER_CHANGE\n;[layer_z]",
+    "layer_change_gcode": ";AFTER_LAYER_CHANGE\n;[layer_z]"
+   }
+  },
+  {
+   "name": "tee_park_cap_warn",
+   "printer": "u1",
+   "model": "external:tee.stl",
+   "process": {
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 2, \"layer_time_blend.wait_at\": \"park\", \"layer_time_blend.wait_cap\": 20, \"layer_time_blend.warn_single\": 5, \"layer_time_blend.in_place_max\": 3}"
+   }
+  },
+  {
+   "name": "tee_park_position",
+   "printer": "u1",
+   "model": "external:tee.stl",
+   "machine": {
+    "printer_mod_settings": "{\"layer_time_blend.park_x\": 20, \"layer_time_blend.park_y\": 250}"
+   },
+   "process": {
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 4, \"layer_time_blend.wait_at\": \"park\"}"
+   }
+  },
+  {
+   "name": "byobject_park",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "print_sequence": "by object",
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 3, \"layer_time_blend.wait_at\": \"tower\"}"
+   },
+   "cli_args": [
+    "--arrange",
+    "1",
+    "D:\\claude\\magpie-next\\tests\\data\\20mm_cube.obj"
+   ]
+  },
+  {
+   "name": "tee_h2_in_place",
+   "printer": "u1",
+   "model": "external:tee.stl",
+   "process": {
+    "mod_settings": "{\"half_layer.outer_walls\": true, \"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 3, \"layer_time_blend.wait_at\": \"in_place\"}"
+   }
+  },
+  {
+   "name": "overhang_low_temp_purge_tower",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "3",
+    "support_interface_bottom_layers": "0",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.temperature\": 170, \"low_temp_interface.heating_time\": 5, \"low_temp_interface.tower\": true, \"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 3, \"layer_time_blend.wait_at\": \"purge_tower\"}"
+   }
+  },
+  {
+   "name": "frog_prime_tower_purge_tower",
+   "printer": "u1mn",
+   "model": "tests/data/frog_legs.obj",
+   "machine": {
+    "nozzle_diameter": [
+     "0.4",
+     "0.4",
+     "0.6",
+     "0.6"
+    ],
+    "max_layer_height": [
+     "0.32",
+     "0.32",
+     "0.48",
+     "0.48"
+    ],
+    "min_layer_height": [
+     "0.08",
+     "0.08",
+     "0.12",
+     "0.12"
+    ],
+    "nozzle_type": "hardened_steel"
+   },
+   "process": {
+    "line_width": "105%",
+    "outer_wall_line_width": "105%",
+    "inner_wall_line_width": "112%",
+    "sparse_infill_line_width": "105%",
+    "internal_solid_infill_line_width": "105%",
+    "support_line_width": "105%",
+    "top_surface_line_width": "105%",
+    "ooze_prevention": "0",
+    "slowdown_for_curled_perimeters": "0",
+    "standby_temperature_delta": "-150",
+    "wipe_tower_filament": "0",
+    "preheat_time": "30",
+    "wipe_tower_cone_angle": "15",
+    "prime_tower_brim_width": "5",
+    "initial_layer_print_height": "0.25",
+    "top_shell_layers": "5",
+    "bottom_shell_layers": "3",
+    "brim_width": "0",
+    "bridge_line_width": "0.4",
+    "wall_loops": "3",
+    "outer_wall_filament_id": "1",
+    "inner_wall_filament_id": "2",
+    "sparse_infill_filament_id": "2",
+    "internal_solid_filament_id": "1",
+    "top_surface_filament_id": "2",
+    "bottom_surface_filament_id": "1",
+    "wall_generator": "classic",
+    "enable_prime_tower": "1",
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 3, \"layer_time_blend.wait_at\": \"purge_tower\"}"
+   },
+   "cli_args": [
+    "--filament-colour",
+    "#F2754E;#2E86DE;#F2754E;#F2754E",
+    "--load-filament-ids",
+    "2,1",
+    "--arrange",
+    "1",
+    "D:\\claude\\magpie-next\\tests\\data\\20mm_cube.obj"
+   ]
+  },
+  {
+   "name": "cube_x1c_linear_tower",
+   "printer": "x1c",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "tree(auto)",
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 3}"
+   }
+  }
+ ]
+}

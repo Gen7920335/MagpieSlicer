@@ -132,6 +132,7 @@ using Function = mp_status (*)(void *, mp_ctx *, const mp_support_input_v1 *, mp
 Areas call(const PrintObject &object, const NativeEntry &entry, Function fn, const std::vector<Polygons> *mask)
 {
     const auto *table = static_cast<const mp_support_areas_v1 *>(entry.table);
+    object.note_native_mod(entry.mod->id());
     Input       in;
     gather(object, mask, in);
 

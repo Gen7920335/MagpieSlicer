@@ -8,6 +8,8 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <type_traits>
 
 #include <boost/log/trivial.hpp>
@@ -41,6 +43,9 @@ struct SessionState
 
 std::atomic<const SessionState *> g_session{nullptr};
 std::atomic<uint64_t>             g_rejected{0};
+// The accelerator mod of the current or last session (session_mod).
+std::mutex                        g_session_mod_mutex;
+std::string                       g_session_mod;
 
 // Per operation, for the session: time spent in the accelerator on accepted batches (the call into the
 // mod, packing and decoding included) and, in Verify mode, time the CPU reference took on the same
@@ -120,6 +125,10 @@ bool run_batch(Op op, size_t count, const Call &call, const std::function<T(size
 Session::Session(const DynamicPrintConfig &full_print_config)
 {
     g_rejected = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_session_mod_mutex);
+        g_session_mod.clear();
+    }
     for (OpTiming &t : g_timing)
         t.reset();
     std::shared_ptr<const ModHost::NativeModSet> mods = ModHost::active_native_mods();
@@ -164,6 +173,10 @@ Session::Session(const DynamicPrintConfig &full_print_config)
         state->table = table;
         state->mode  = mode;
         g_session.store(state, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(g_session_mod_mutex);
+            g_session_mod = entry->mod->id();
+        }
         BOOST_LOG_TRIVIAL(info) << "Accelerator " << entry->mod->id() << ": " << mode_text(mode);
         break;
     }
@@ -203,6 +216,12 @@ const char *mode_name()
 }
 
 uint64_t rejected_batches() { return g_rejected.load(); }
+
+std::string session_mod()
+{
+    std::lock_guard<std::mutex> lock(g_session_mod_mutex);
+    return g_session_mod;
+}
 
 OpTimes op_times(Op op)
 {

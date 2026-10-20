@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -10,6 +11,7 @@
 
 namespace Slic3r {
 
+class DynamicPrintConfig;
 class ExPolygon;
 class PerimeterGenerator;
 class PrintConfig;
@@ -40,7 +42,8 @@ void register_support_generator(SupportGenerator generator);
 // at the start of a full layer, before its first extrusion; the core marks the sites while exporting,
 // estimates their times, asks the planner and fills the waits in. Chosen by the layer_time_planner
 // setting; an empty setting marks no sites. Input and output are numbers only, so a planner never
-// touches G-code or geometry.
+// touches G-code or geometry. Planners are native mods filling the C slot of
+// mods/sdk/include/magpie_slot_time_plan.h; these structures are the core's view of its data.
 struct WaitSite
 {
     size_t layer_id = 0;      // G-code layer printed just before the site (the layer whose time interval_s is)
@@ -78,18 +81,25 @@ struct WaitPlan
     // The first site whose tower block is left out (no wait at or after it needs the tower); the number of
     // sites keeps every block.
     size_t                   tower_end = 0;
+    // Slicing warnings the planner's mod raised through the host (host->warn), in call order.
+    std::vector<std::string> mod_warnings;
 };
 
 struct TimePlanner
 {
-    std::string name;
-    std::string label;
-    // The plan for the sites of one print; `print_time_s` is the print's estimated time before waits.
-    std::function<WaitPlan(const std::vector<WaitSite> &sites, const PrintConfig &config, double print_time_s)> plan;
+    std::string name;                 // the layer_time_planner value that selects it
+    std::string mod_id, mod_version;  // the native mod that fills the slot
+    // The plan for the sites of one print. `config` is the print's full configuration, which holds the mod's
+    // parameters; `cancelled` says the user stopped the slice; `print_time_s` is the print's estimated time
+    // before waits. A failing planner (an error status, a crash, a host->warn error, a plan that is not finite
+    // or not for these sites) throws Slic3r::SlicingError naming the mod; nothing falls back to no waits.
+    std::function<WaitPlan(const std::vector<WaitSite> &sites, const DynamicPrintConfig &config,
+                           const std::function<bool()> &cancelled, double print_time_s)> plan;
 };
 
-const TimePlanner *find_time_planner(const std::string &name);
-void register_time_planner(TimePlanner planner);
+// The planner of the active native mods registered under `name` (gcode.time_plan v1), or nullptr. The
+// planner keeps the native mod set it came from alive.
+std::shared_ptr<const TimePlanner> find_time_planner(const std::string &name);
 
 } // namespace ModHost
 } // namespace Slic3r

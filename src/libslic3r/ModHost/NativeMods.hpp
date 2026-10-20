@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -119,8 +120,9 @@ private:
 // The native mods the application runs with; empty until load_active_mods_from_data_dir().
 std::shared_ptr<const NativeModSet> active_native_mods();
 void set_active_native_mods(std::shared_ptr<const NativeModSet> mods);
-// "half_layer 2.0.0, cura_support 1.3.1": the loaded native mods, for the G-code header. Empty when none.
-std::string native_mod_summary();
+// "half_layer 2.0.0, cura_support 1.3.1": the active native mods among `used` (mod ids), in load order, for
+// the G-code header. Empty when none of them is loaded.
+std::string native_mod_summary(const std::set<std::string> &used);
 // Shuts the active native mods down (application exit).
 void shutdown_native_mods();
 

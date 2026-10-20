@@ -82,6 +82,7 @@ Each slot and service is defined by its own C header in `mods/sdk/include/`, nex
 | slot `accel.batch` v1 | `magpie_accel.h` | Batch accelerator (`Accel/BatchAccel.*`). Four inner loops (facet layer ranges, rectilinear crossings, Lightning boundary distances, tree support contact points) keep their CPU functions as the reference; the core offers a loop's items as one batch and computes it itself when the accelerator declines. The accelerator asks for a mode at the start of each slice; in Verify mode the core recomputes every item and throws the batch away on any difference, so an accelerator cannot change the G-code. Trusted mode (no check) is granted to official mods only; any other mod asking for it is checked anyway. |
 | slot `wall.plan` v1 | `magpie_slot_wall_plan.h` | Wall planner (`ModHost/WallPlanner.*`). The core opens the planner for each region it builds or routes walls of (open reads the planner's parameters and the region's settings once; the printer's nozzles and filaments are handed over as numbers and strings) and asks per layer for the detail nozzle and the toolhead of the whole layer's walls, per island for the plan (wall counts, overlap, infill compensation; the island comes simplified as the walls follow it), and per wall tag for the filament. The core keeps the detail flow (the outer wall width resolved on the detail nozzle), the Classic and Arachne generators that print a plan, the wall tags, the tool ordering and G-code routing, and the line width checks, for which the planner lists the filaments it may use. Picked by the wall_planner value; a value no loaded mod provides stops the slice. |
 | slot `support.areas` v1 | `magpie_support.h` | Support generator by areas (`ModHost/NativeSupport.*`). The core hands over an object's islands, enforcers, blockers, an optional mask and the printable area, gets back body, roof and bottom areas per layer, and builds Orca support layers from them (raft, interfaces, toolpaths). Picked by the support_generator value, after the built-in generators. |
+| slot `gcode.time_plan` v1 | `magpie_slot_time_plan.h` | Time planner (`ModHost/SlotRegistry.*`, `GCode::apply_layer_time_plan`). The core marks wait sites in the exported G-code, estimates their intervals and hands the numbers over; the planner returns per-site waits, park choices, a tower cut and warning kinds, which the core checks (counts, indices, finite non-negative waits) before writing them. Picked by layer_time_planner; a name no mod provides stops the slice. |
 | service `core.geometry` v1 | `magpie_geometry.h` | The core's own ClipperUtils operations (offset, booleans, simplify, union_ex, area, nearest-edge distances), so a mod that came out of the core computes exactly the polygons it computed inside it. Services named `core.*` need no `depends`. |
 
 ## Official mods
@@ -92,12 +93,17 @@ into package folders `<build>/official_mods/<id>/`: `cuda_compute` (fills `accel
 "multi_nozzle"). They are signed with `--mod-sign` and
 the official key, which stays off the repository, and installed like any package. Tests load the build
 folders directly (`magpie_use_official_mods` in `tests/CMakeLists.txt`; `fff_print/test_helpers.cpp`
-makes their slots active for the whole run).
+makes their slots active for the whole run). A mod's own unit tests (`mods/<id>/unit/`, `tests/mods/CMakeLists.txt`) compile
+its sources with Catch2 and nothing of the core; the core's side of its slot is tested through the built
+library. `layer_time_blend` fills `gcode.time_plan` as "blend".
 
 ## Native mods in the G-code
 
-When native mods are loaded, the G-code header names them (`; mods: id version, ...`) so a print can
-be reproduced. With none loaded nothing is written.
+When a print uses a native mod (its time planner or support generator made part of the print, or it
+accelerated the slicing session), the G-code header names it
+(`; mods: id version, ...`) so the print can be reproduced. A mod that is loaded but not used, such
+as a bundled one whose feature is off, is not named, so output without native code stays
+byte-identical to Orca's.
 
 ## Tools
 

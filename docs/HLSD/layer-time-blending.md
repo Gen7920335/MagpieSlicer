@@ -1,10 +1,15 @@
 # Layer time blending
 
 Layer time blending adds waits after short layers so that the times of neighbouring layers stay
-close, which keeps the cooling each layer gets even. It is the bundled mod
-`resources/mods/layer_time_blend.json`; its rules write the hidden `layer_time_planner` and
-`layer_time_blend_*` settings, and the `blend` module at the `gcode.time_plan` slot plans the
-waits. With the mod off nothing is written and the G-code is Orca's.
+close, which keeps the cooling each layer gets even. It is the bundled native mod
+`mods/layer_time_blend` ([native-mods.md](native-mods.md)): its library fills the `gcode.time_plan`
+slot (`mods/sdk/include/magpie_slot_time_plan.h`) under the name `blend` and reads the blending
+parameters itself; its rules write only what the core's export reads, the hidden
+`layer_time_planner` (which marks the sites) and the `layer_time_blend_*` settings for where the
+nozzle waits, the tower, the park position and the temperature estimate. The core marks the sites,
+measures them, hands the numbers to the slot and writes the waits; it has no planner of its own,
+and a planner name no loaded mod provides stops the slice. With the mod off nothing is written and
+the G-code is Orca's.
 
 ## Target times
 
@@ -60,13 +65,23 @@ when a wait is next to them.
   `layer_time_blend_tower_x/_y`. The nozzle waits over its center, then prints the loop, which
   re-primes it. Each layer's part is a self-contained block that starts and ends retracted at the
   layer's Z, so the blocks above the last wait that needs the tower are left out; the planner picks
-  the lowest cut that keeps every limit. Not in by-object prints and not with absolute E (the cut
-  would shift E); a tower that does not fit parks instead.
+  the lowest cut that keeps every limit. With absolute E a left-out block that does not end with the
+  writer's own `G92 E0` is replaced by a `G92` to the E it ended at, so the moves after it push no
+  extra filament; on the flavors whose writer never resets E (Mach3, MakerWare, Sailfish) the tower
+  stays whole. Not in by-object prints; a tower that does not fit parks instead.
 - `park`: lift, travel to the park position (printer `layer_time_blend_park_x/_y`, rear left by
   default), wait, back to the same XY, down. Waits shorter than `in_place_max` or the trip wait in
   place.
-- `purge_tower`: parks over the temperature drop tower or the prime tower while they are printed,
-  else at the park position.
+- `purge_tower`: the sites stay at the layer starts, so what is blended is the model's layer times.
+  A wait adds to its interval wherever it falls inside the layer before the site, so when that layer
+  visits the temperature drop tower or the prime tower the wait is written at the visit
+  (`;MAGPIE_WAIT_VISIT`): where the nozzle has arrived over the tower, retracted, before its first
+  line there (after the travel to it, or in a tool change made in place, before the tower
+  generator's deretraction). It is a bare G4, the ooze falls on the tower and its lines re-prime the
+  nozzle; there is no extra trip. When the layer before did not visit a tower (above the towers) the
+  site parks at the park position. Timing the intervals from visit to visit instead would even the
+  time at the tower, which does not matter, and makes waits wherever the visit moves within the layer
+  (an alternating tool order); Gen chose the model's layer times (2026-10-20).
 
 Waiting away from the part means the part fan does not blow on it: equal layer times do not mean
 equal cooling, only closer to it.
@@ -76,4 +91,3 @@ equal cooling, only closer to it.
 - The times are the estimator's; machine limits that differ from the firmware's shift them, mostly
   in proportion.
 - Objects with different layer heights on one plate are blended by G-code layer.
-- The prime tower is waited over, not inside its own visit.

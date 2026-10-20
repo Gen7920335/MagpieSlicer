@@ -55,6 +55,8 @@ bool should_dispatch(Op op, size_t items);
 const char *mode_name();
 // Batches of the current (or last) session thrown away because they differed from the CPU.
 uint64_t rejected_batches();
+// The id of the accelerator mod that ran in the current or last session, or empty (the G-code header).
+std::string session_mod();
 
 // Timing of the current (or last) session, per operation, over the batches the accelerator computed
 // and that were used: wall time of the accelerator call (packing, transfer, kernels, decoding), and in

@@ -104,6 +104,8 @@ add_subdirectory(fff_print)
 add_subdirectory(half_layer)
 add_subdirectory(sla_print)
 add_subdirectory(filament_group)
+# MAGPIE: the bundled mods' own unit tests (mods/<id>/unit), which see the mod's code only.
+add_subdirectory(mods)
 
 # End-to-end checks of the orca-slicer binary. Linux only: they read result.json, which the CLI
 # writes on Linux only. src/ is added before tests/, so the target is known here.

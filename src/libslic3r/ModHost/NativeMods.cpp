@@ -769,12 +769,13 @@ void set_active_native_mods(std::shared_ptr<const NativeModSet> mods)
     g_active_native = std::move(mods);
 }
 
-std::string native_mod_summary()
+std::string native_mod_summary(const std::set<std::string> &used)
 {
     std::string out;
     if (std::shared_ptr<const NativeModSet> mods = active_native_mods())
         for (const auto &m : mods->mods())
-            out += (out.empty() ? "" : ", ") + m->id() + " " + m->manifest().version;
+            if (used.count(m->id()) > 0)
+                out += (out.empty() ? "" : ", ") + m->id() + " " + m->manifest().version;
     return out;
 }
 

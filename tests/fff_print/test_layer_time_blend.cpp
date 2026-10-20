@@ -1,5 +1,6 @@
-// MAGPIE: layer time blending (gcode.time_plan slot, resources/mods/layer_time_blend.json): wait sites,
-// in-place waits filled in after the export, and the re-estimate of the G-code as written.
+// MAGPIE: layer time blending (gcode.time_plan slot, the bundled native mod mods/layer_time_blend): wait
+// sites, in-place waits filled in after the export, and the re-estimate of the G-code as written. Every
+// test turns the mod on through its parameters, as the settings page does, with the bundled mods loaded.
 #include <catch2/catch_all.hpp>
 
 #include "libslic3r/GCode/GCodeProcessor.hpp"
@@ -36,8 +37,36 @@ TriangleMesh pillar_with_slab()
     return pillar;
 }
 
-DynamicPrintConfig blend_config(const std::string &planner, double max_diff_s)
+// The mod's parameters as JSON members ("layer_time_blend.<name>": <value>), joined after `first`.
+std::string mod_json(const std::string &first, const std::vector<std::pair<std::string, std::string>> &params)
 {
+    std::string out = "{" + first;
+    for (const auto &[name, value] : params)
+        out += std::string(out.size() > 1 ? ", " : "") + "\"layer_time_blend." + name + "\": " + value;
+    return out + "}";
+}
+
+// Blending linear with limit max_diff_s (s) when `planner` is "blend", off when it is empty; `params` and
+// `printer_params` add mod parameters of the process and printer scopes (values as JSON).
+DynamicPrintConfig blend_config(const std::string &planner, double max_diff_s,
+                                const std::vector<std::pair<std::string, std::string>> &params = {},
+                                const std::vector<std::pair<std::string, std::string>> &printer_params = {})
+{
+    std::vector<std::pair<std::string, std::string>> process = {
+        {"blend_type", planner == "blend" ? "\"linear\"" : "\"off\""},
+        {"max_diff", std::to_string(max_diff_s)},
+        // The default waits over a tower; these tests choose where they wait.
+        {"wait_at", "\"in_place\""},
+        {"warn_total_pct", "0"},
+        {"warn_single", "0"},
+    };
+    for (const auto &p : params) {
+        auto it = std::find_if(process.begin(), process.end(), [&p](const auto &q) { return q.first == p.first; });
+        if (it == process.end())
+            process.push_back(p);
+        else
+            it->second = p.second;
+    }
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({
         {"layer_height", "0.3"},
@@ -49,18 +78,19 @@ DynamicPrintConfig blend_config(const std::string &planner, double max_diff_s)
         {"brim_type", "no_brim"},
         // No cooling slowdown, which would stretch the short layers towards each other.
         {"slow_down_for_layer_cooling", "0"},
-        {"layer_time_planner", planner},
-        {"layer_time_blend_max_diff", std::to_string(max_diff_s)},
-        {"layer_time_blend_warn_total", "0"},
-        {"layer_time_blend_warn_single", "0"},
     });
+    config.set_key_value("mod_settings", new ConfigOptionString(mod_json("", process)));
+    config.set_key_value("printer_mod_settings", new ConfigOptionString(mod_json("", printer_params)));
     return config;
 }
 
 // Slices `mesh` placed at the middle of the default 200 x 200 mm bed (not arranged, which would centre it
-// on the origin, half off the bed), so there is room for a tower and a park position around it.
+// on the origin, half off the bed), so there is room for a tower and a park position around it. The
+// bundled mods are active meanwhile: their rules and the planner's library.
 std::string slice_mesh(TriangleMesh mesh, const DynamicPrintConfig &config)
 {
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
     Print print;
     Model model;
     mesh.translate(100.f, 100.f, 0.f);
@@ -131,7 +161,10 @@ TEST_CASE("Waits of zero leave the G-code as it was apart from the site tags", "
     // 16 mm at 0.3 mm is 53 whole layers (the last 0.1 mm is not printed); a site starts each.
     CHECK(count_lines_starting(blended, site_tag) == 53);
     CHECK(count_lines_starting(blended, "G4 ") == 0);
-    CHECK(without_lines_starting(blended, site_tag) == plain);
+    // The header names the native mod the blended G-code used, and only there.
+    CHECK(count_lines_starting(blended, "; mods: layer_time_blend ") == 1);
+    CHECK(count_lines_starting(plain, "; mods:") == 0);
+    CHECK(without_lines_starting(without_lines_starting(blended, site_tag), "; mods:") == plain);
 }
 
 TEST_CASE("In-place waits blend the layer times around a long layer", "[LayerTimeBlend]")
@@ -218,10 +251,14 @@ TEST_CASE("An in-place wait lifts the nozzle and returns it to the same height",
 
 namespace {
 
-DynamicPrintConfig wait_at_config(const std::string &wait_at, double max_diff_s)
+DynamicPrintConfig wait_at_config(const std::string &wait_at, double max_diff_s,
+                                  const std::vector<std::pair<std::string, std::string>> &params = {},
+                                  const std::vector<std::pair<std::string, std::string>> &printer_params = {})
 {
-    DynamicPrintConfig config = blend_config("blend", max_diff_s);
-    config.set_deserialize_strict({{"layer_time_blend_wait_at", wait_at}, {"use_relative_e_distances", "1"}});
+    std::vector<std::pair<std::string, std::string>> all = {{"wait_at", "\"" + wait_at + "\""}};
+    all.insert(all.end(), params.begin(), params.end());
+    DynamicPrintConfig config = blend_config("blend", max_diff_s, all, printer_params);
+    config.set_deserialize_strict({{"use_relative_e_distances", "1"}});
     return config;
 }
 
@@ -316,11 +353,115 @@ TEST_CASE("Tower waits happen over the tower, which stops above the last wait", 
     CHECK(extrusions > 0);
 }
 
+namespace {
+
+// The filament each forward E move pushes (extrusions and unretracts), mm, in G-code order, as the printer
+// reads them: relative E as written, absolute E as the step from the last E (G92 included).
+std::vector<double> extrusion_steps(const std::vector<std::string> &lines, bool absolute_e)
+{
+    std::vector<double> steps;
+    double              e = 0.;
+    for (const std::string &line : lines) {
+        if (line.rfind("G92 ", 0) == 0) {
+            const size_t at = line.find(" E");
+            if (at != std::string::npos)
+                e = std::stod(line.substr(at + 2));
+            continue;
+        }
+        const std::optional<double> v = axis_value(line, 'E');
+        if (!v)
+            continue;
+        const double step = absolute_e ? *v - e : *v;
+        if (absolute_e)
+            e = *v;
+        if (step > 0.)
+            steps.push_back(step);
+    }
+    return steps;
+}
+
+size_t count_lines(const std::vector<std::string> &lines, const std::string &line)
+{
+    return size_t(std::count(lines.begin(), lines.end(), line));
+}
+
+} // namespace
+
+TEST_CASE("With absolute E the tower is cut above the last wait as with relative E, and E stays continuous", "[LayerTimeBlend]")
+{
+    // As in the tower test: 10 s ramps end well below the pillar's top, so the tower can stop there.
+    const double       max_diff_s = 10.;
+    const std::string  relative   = slice_mesh(pillar_with_slab(), wait_at_config("tower", max_diff_s));
+    DynamicPrintConfig config     = wait_at_config("tower", max_diff_s);
+    config.set_deserialize_strict({{"use_relative_e_distances", "0"}});
+    const std::string  absolute   = slice_mesh(pillar_with_slab(), config);
+    const std::vector<std::string> rel = lines_of(relative), abs = lines_of(absolute);
+    const std::string begin_tag = ";MAGPIE_WAIT_TOWER_BEGIN";
+    // The same cut with either E mode: fewer blocks than the 53 layers.
+    const size_t blocks = count_lines(rel, begin_tag);
+    REQUIRE(blocks > 0);
+    CHECK(blocks < 53);
+    CHECK(count_lines(abs, begin_tag) == blocks);
+    // Leaving a block out must not hand its filament to the next move (the unretract after it): the largest
+    // forward step is the relative output's (a left-out block's E would add a few mm to one move), up to the
+    // rounding of E to 5 decimals on both sides, mm.
+    const std::vector<double> rel_steps = extrusion_steps(rel, false), abs_steps = extrusion_steps(abs, true);
+    REQUIRE(!rel_steps.empty());
+    REQUIRE(abs_steps.size() == rel_steps.size());
+    CHECK(*std::max_element(abs_steps.begin(), abs_steps.end()) <= *std::max_element(rel_steps.begin(), rel_steps.end()) + 1e-4);
+    check_blended(measured_intervals(absolute), max_diff_s);
+}
+
+TEST_CASE("Purge tower waits happen at the temperature drop tower's visit and blend the model's layer times", "[LayerTimeBlend]")
+{
+    // The slab's underside needs support; the low temperature interface prints a drop tower on every layer up to
+    // the last interface. The sites stay at the layer starts, so the blended intervals are the model's layer
+    // times; a wait for a layer whose layer before visited the tower is written at that visit, over the tower.
+    const double       max_diff_s = 2.;
+    DynamicPrintConfig config     = wait_at_config("purge_tower", max_diff_s, {}, {{"park_x", "10"}, {"park_y", "190"}});
+    config.set_deserialize_strict({{"enable_support", "1"}, {"support_interface_top_layers", "2"}});
+    const std::string mod_settings = config.opt_string("mod_settings");
+    config.set_key_value("mod_settings", new ConfigOptionString(mod_settings.substr(0, mod_settings.size() - 1) +
+        R"(, "low_temp_interface.enable": true, "low_temp_interface.temperature": 170, "low_temp_interface.tower": true})"));
+    const std::string              out   = slice_mesh(pillar_with_slab(), config);
+    const std::vector<std::string> lines = lines_of(out);
+    REQUIRE(out.find("; temperature drop tower layer") != std::string::npos);
+    const std::string visit_tag = ";MAGPIE_WAIT_VISIT";
+    size_t visits = 0, tower_waits = 0;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (lines[i] != visit_tag)
+            continue;
+        ++visits;
+        // At the drop tower: its marker comes before the next extrusion.
+        bool at_tower = false;
+        for (size_t j = i + 1; j < lines.size(); ++j) {
+            if (lines[j].rfind("; temperature drop tower", 0) == 0 || lines[j].rfind("; low-temperature support interface temperature drop tower", 0) == 0) {
+                at_tower = true;
+                break;
+            }
+            if (axis_value(lines[j], 'E') && (axis_value(lines[j], 'X') || axis_value(lines[j], 'Y')))
+                break;
+        }
+        CHECK(at_tower);
+        if (lines[i - 1].rfind("G4 P", 0) == 0) {
+            // A bare wait where the nozzle already is: no lift and no trip before it.
+            CHECK(lines[i - 2].rfind("G1 Z", 0) != 0);
+            const bool parked = axis_value(lines[i - 2], 'X').has_value() && lines[i - 3].rfind("G1 Z", 0) == 0;
+            CHECK_FALSE(parked);
+            ++tower_waits;
+        }
+    }
+    CHECK(count_lines_starting(out, site_tag) == 53);
+    CHECK(visits > 0);
+    CHECK(tower_waits > 0);
+    // The intervals between the layer-start sites, the model's layer times, are the ones blended.
+    check_blended(measured_intervals(out), max_diff_s);
+}
+
 TEST_CASE("Parked waits go to the park position and come back to where they left", "[LayerTimeBlend]")
 {
     const double       max_diff_s = 2.;
-    DynamicPrintConfig config     = wait_at_config("park", max_diff_s);
-    config.set_deserialize_strict({{"layer_time_blend_park_x", "10"}, {"layer_time_blend_park_y", "190"}, {"layer_time_blend_in_place_max", "2"}});
+    DynamicPrintConfig config     = wait_at_config("park", max_diff_s, {{"in_place_max", "2"}}, {{"park_x", "10"}, {"park_y", "190"}});
     const std::string              out   = slice_mesh(pillar_with_slab(), config);
     const std::vector<std::string> lines = lines_of(out);
     double x = 0., y = 0.;
@@ -346,8 +487,7 @@ TEST_CASE("Parked waits go to the park position and come back to where they left
 
 TEST_CASE("Waiting at a purge tower without one parks", "[LayerTimeBlend]")
 {
-    DynamicPrintConfig config = wait_at_config("purge_tower", 2.);
-    config.set_deserialize_strict({{"layer_time_blend_park_x", "10"}, {"layer_time_blend_park_y", "190"}});
+    DynamicPrintConfig config = wait_at_config("purge_tower", 2., {}, {{"park_x", "10"}, {"park_y", "190"}});
     const std::string out = slice_mesh(pillar_with_slab(), config);
     CHECK(out.find("G1 X10 Y190") != std::string::npos);
     check_blended(measured_intervals(out), 2.);
@@ -355,8 +495,6 @@ TEST_CASE("Waiting at a purge tower without one parks", "[LayerTimeBlend]")
 
 TEST_CASE("The bundled mod loads and drives the planner", "[LayerTimeBlend]")
 {
-    BundledMods mods;
-    REQUIRE(mods.errors.empty());
     DynamicPrintConfig config = blend_config("", 2.);
     // Through the mod: linear, D = 2 s, waiting in place.
     config.set_key_value("mod_settings", new ConfigOptionString(
