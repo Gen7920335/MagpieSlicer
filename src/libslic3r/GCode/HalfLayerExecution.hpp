@@ -3,6 +3,7 @@
 #include "ExtrusionSpeed.hpp"
 #include "../ExtrusionEntityCollection.hpp"
 #include "../HalfLayerPlan.hpp"
+#include "../LayerBands.hpp"
 #include "../PrintConfig.hpp"
 #include <algorithm>
 #include <limits>
@@ -338,10 +339,9 @@ inline void refresh_half_layer_fixed_insertion_metrics(HalfLayerExecutionPlan &p
         starts[i] = elapsed;
         elapsed += plan.tasks[i].extrusion_seconds;
     }
+    // Timing only: midpoint_error_seconds stays the scheduler's own measure at its choice (layer.bands slot).
     plan.insertion.second_start_seconds = starts[plan.upper_begin];
     plan.insertion.total_seconds = elapsed;
-    plan.insertion.midpoint_error_seconds = std::abs(
-        plan.insertion.second_start_seconds - starts[plan.lower_begin] - 0.5 * elapsed);
 }
 
 // Reconcile once after upper-wall insertion. A reservation survives only when
@@ -698,6 +698,7 @@ inline double half_layer_initial_entry_seconds(unsigned int incoming_filament,
 // complete upper pass is inserted; every within-group order stays unchanged.
 // Core boundaries are legal by construction (whole-loop/path completion).
 inline HalfLayerExecutionPlan schedule_half_layer_execution(
+    const LayerBandScheduler &choose_insertion,
     std::vector<HalfLayerExecutionTask> prefix,
     std::vector<HalfLayerExecutionTask> lower,
     std::vector<HalfLayerExecutionTask> core,
@@ -759,10 +760,16 @@ inline HalfLayerExecutionPlan schedule_half_layer_execution(
         double first_start_seconds = elapsed[prefix.size()];
         if (!prefix.empty())
             first_start_seconds += half_layer_transition_seconds(prefix.back(), lower.front());
-        out.insertion = select_half_layer_insertion(elapsed.back(), first_start_seconds,
+        if (!choose_insertion)
+            throw std::logic_error("Half-layer insertion needs the band plan's scheduler");
+        out.insertion = choose_insertion(elapsed.back(), first_start_seconds,
             elapsed[out.lower_end], upper_seconds, boundaries);
         if (out.insertion.boundary == HalfLayerInsertion::unavailable)
             throw std::logic_error("No legal half-layer insertion boundary");
+        // The scheduler picks one of the boundaries, an allowed one after the lower block.
+        if (out.insertion.boundary >= boundaries.size() || !boundaries[out.insertion.boundary].allowed ||
+            boundaries[out.insertion.boundary].elapsed_seconds < elapsed[out.lower_end])
+            throw std::logic_error("The band scheduler chose an illegal half-layer insertion boundary");
         insertion_index += out.insertion.boundary;
     }
     out.upper_begin = insertion_index;
@@ -783,11 +790,12 @@ inline HalfLayerExecutionPlan schedule_half_layer_execution(
 }
 
 inline HalfLayerExecutionPlan schedule_half_layer_execution(
+    const LayerBandScheduler &choose_insertion,
     std::vector<HalfLayerExecutionTask> lower,
     std::vector<HalfLayerExecutionTask> core,
     std::vector<HalfLayerExecutionTask> upper)
 {
-    return schedule_half_layer_execution({}, std::move(lower), std::move(core), std::move(upper), 0.);
+    return schedule_half_layer_execution(choose_insertion, {}, std::move(lower), std::move(core), std::move(upper), 0.);
 }
 
 } // namespace Slic3r

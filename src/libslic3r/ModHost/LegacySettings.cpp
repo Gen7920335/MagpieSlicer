@@ -35,8 +35,10 @@ struct LegacyKey
 };
 
 const LegacyKey legacy_keys[] = {
-    { "outer_wall_half_layer_height", "half_layer.outer_walls", Kind::Bool, true },
-    { "support_half_layer_height", "half_layer.support", Kind::Bool, true },
+    // H/2 (a native mod since M7). Line 2 saved these keys as its rule wrote them, from the parameters mod_settings
+    // keeps; their defaults carry nothing.
+    { "outer_wall_half_layer_height", "half_layer.outer_walls", Kind::Bool, false, "0" },
+    { "support_half_layer_height", "half_layer.support", Kind::Bool, false, "0" },
     // The low temperature interface (a native mod since M6). Line 2 saved these keys as its rule wrote them, from
     // the parameters mod_settings keeps; their defaults carry nothing.
     { "single_nozzle_low_temperature_interface", "low_temp_interface.enable", Kind::Bool, false, "0" },

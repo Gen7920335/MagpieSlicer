@@ -561,7 +561,7 @@ void process_perimeter_polygon(const Polygon &orig_polygon, float z_coord, const
   size_t orig_angle_index = 0;
   perimeter.start_index = result.points.size();
   perimeter.flow_width = region != nullptr ? region->flow(FlowRole::frExternalPerimeter).width() : 0.0f;
-  if (region != nullptr && region->layer()->object()->config().outer_wall_half_layer_height)
+  if (region != nullptr && region->layer()->object()->layer_bands().walls())
     perimeter.physical_layer = region->layer();
   bool some_point_enforced = false;
   while (!orig_polygon_points.empty() || !oversampled_points.empty()) {

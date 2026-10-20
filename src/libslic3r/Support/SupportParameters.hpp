@@ -36,6 +36,8 @@ struct SupportParameters {
         const PrintConfig& print_config = object.print()->config();
         const PrintObjectConfig& object_config = object.config();
         const SlicingParameters& slicing_params = object.slicing_parameters();
+        // MAGPIE: support printed in layer bands (layer.bands slot, H/2).
+        this->banded_support = object.layer_bands().support;
 
         this->zero_gap_interface_top = slicing_params.zero_gap_interface_top;
         this->zero_gap_interface_bottom = slicing_params.zero_gap_interface_bottom;
@@ -340,6 +342,8 @@ struct SupportParameters {
     // MAGPIE: print every support island, even one the fill pattern misses (a thin pillar of a
     // support module). Off for Orca's own generators.
     bool                    keep_narrow_islands { false };
+    // MAGPIE: the object's support prints in layer bands (PrintObject::layer_bands()).
+    bool                    banded_support { false };
     // MAGPIE: print the first support layer with the base pattern, spacing and angle, so its lines
     // sit under the lines above (Cura support); only the flow is the first layer's. Off for Orca.
     bool                    aligned_first_layer { false };

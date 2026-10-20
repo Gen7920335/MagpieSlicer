@@ -17,6 +17,7 @@
 #include "BoundingBox.hpp"
 #include "ExtrusionEntityCollection.hpp"
 #include "Flow.hpp"
+#include "LayerBands.hpp"
 #include "LineWidths.hpp"
 #include "Point.hpp"
 #include "PrintConfig.hpp"
@@ -505,6 +506,11 @@ public:
         { std::lock_guard<std::mutex> lock(m_native_mods_mutex); m_native_mods_used.insert(id); }
     std::set<std::string> native_mods_used() const
         { std::lock_guard<std::mutex> lock(m_native_mods_mutex); return m_native_mods_used; }
+    // MAGPIE: which of this object's paths print in thinner bands inside each model layer (slot layer.bands), as
+    // the loaded mods answered for its settings when the print was last applied.
+    const LayerBandPlan &layer_bands() const { return m_layer_bands; }
+    // Asks the mods again (Print::apply); returns whether the plan changed.
+    bool            update_layer_bands();
     SupportLayer*   get_support_layer(int idx) { return idx<m_support_layers.size()? m_support_layers[idx]:nullptr; }
     const SupportLayer* get_support_layer_at_printz(coordf_t print_z, coordf_t epsilon) const;
     SupportLayer*   get_support_layer_at_printz(coordf_t print_z, coordf_t epsilon);
@@ -732,6 +738,7 @@ private:
         ExtrusionEntity *entity     { nullptr };
     };
     std::vector<BeltDroppedFill>            m_belt_dropped_fills;
+    LayerBandPlan                            m_layer_bands;
     std::unique_ptr<HalfLayerSourceLayers>   m_half_layer_sources;
     std::unique_ptr<HalfLayerSupportSources> m_half_layer_support_sources;
     SupportLayerPtrs                        m_support_layers;

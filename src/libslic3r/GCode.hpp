@@ -908,6 +908,14 @@ protected:
     const Layer*                        m_logical_layer = nullptr;
     double                              m_half_layer_motion_reference_height = 0.;
     bool                                m_half_layer_dispatch_active = false;
+    // MAGPIE: band travel lift of the print in model layer heights (layer.bands slot), and the object whose settings
+    // m_config last took (nullptr: the print's defaults).
+    double                              m_band_lift_layers = 0.;
+    const PrintObject                  *m_config_object = nullptr;
+    // Travel lift over bands in model layer heights: the print's, or the object m_config took when larger (a GCode
+    // used outside an export has no print-wide value).
+    double band_lift_layers() const
+        { return std::max(m_band_lift_layers, m_config_object != nullptr ? m_config_object->layer_bands().min_travel_lift_layers : 0.); }
     // Printed source plane retained across custom physical-tool changes. NaN
     // means ordinary writer lift state is authoritative.
     double                              m_half_layer_pending_source_z = std::numeric_limits<double>::quiet_NaN();

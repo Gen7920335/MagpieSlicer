@@ -1856,11 +1856,12 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
         {"outer_wall_filament_id", 1}, {"inner_wall_filament_id", 2},
         {"sparse_infill_filament_id", 2}, {"internal_solid_filament_id", 2},
         {"top_surface_filament_id", 2}, {"bottom_surface_filament_id", 2},
-        {"outer_wall_half_layer_height", true}, {"outer_wall_line_width", 0.15},
+        {"outer_wall_line_width", 0.15},
         {"initial_layer_line_width", 0.}, {"line_width", 0.},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}, {"enable_prime_tower", false},
         {"use_relative_e_distances", true}, {"layer_change_gcode", "G92 E0\n"},
     });
+    Slic3r::Test::half_layer_params(config, true);
     config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.15, 0.4}); // mm
     config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
     config.set_key_value("max_layer_height", new ConfigOptionFloats{0.4, 0.4});   // mm
@@ -1870,7 +1871,7 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
     // Scenario 6 asks for full-height support under half-height outer walls; that combination is
     // forced to half-height support, so it validates like scenario 5.
     const bool should_pass = scenario == 0 || scenario == 5 || scenario == 6 || scenario == 8;
-    if (scenario == 1) config.set("outer_wall_half_layer_height", false);
+    if (scenario == 1) Slic3r::Test::half_layer_params(config, false);
     if (scenario == 2) config.set("inner_wall_filament_id", 1);
     if (scenario == 3) config.set("sparse_infill_filament_id", 1);
     if (scenario == 4) config.set("initial_layer_print_height", 0.32);
@@ -1880,7 +1881,7 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
         config.set("outer_wall_line_width", 0.4);
         config.set("support_filament", 1);
         config.set("support_interface_filament", 1);
-        config.set("support_half_layer_height", scenario == 5);
+        Slic3r::Test::half_layer_params(config, true, scenario == 5);
         config.set_deserialize_strict({{"support_line_width", "100%"}});
     }
     if (scenario == 7 || scenario == 8) {

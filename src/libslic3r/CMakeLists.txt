@@ -141,6 +141,8 @@ set(lisbslic3r_sources
     ModHost/NativeSupport.hpp
     ModHost/GCodeEvents.cpp
     ModHost/GCodeEvents.hpp
+    ModHost/LayerBands.cpp
+    ModHost/LayerBands.hpp
     ModHost/ObjectZOffset.cpp
     ModHost/ObjectZOffset.hpp
     ModHost/ParamGraph.cpp

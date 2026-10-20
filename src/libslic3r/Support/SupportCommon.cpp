@@ -1424,10 +1424,12 @@ std::vector<double> half_height_support_z_grid(const PrintObject &object)
 
 std::pair<double, double> half_height_support_band_limits_mm(const PrintObject &object)
 {
-    // Nominal H/2 band and half of it. The logical support grid keeps independent support
-    // layer heights, whose boundaries sit off the model grid (0.011 mm bands under 0.2 mm layers).
-    const double band_mm = 0.5 * object.config().layer_height.value;
-    return {0.5 * band_mm, band_mm};
+    // The band plan's limits (layer.bands slot), given as fractions of the layer height; H/2 gives half a band and
+    // one band, because the logical support grid keeps independent support layer heights whose boundaries sit off
+    // the model grid (0.011 mm bands under 0.2 mm layers without the limits).
+    const LayerBandPlan &bands = object.layer_bands();
+    return {bands.support_band_min_layers * object.config().layer_height.value,
+            bands.support_band_max_layers * object.config().layer_height.value};
 }
 
 std::vector<double> half_height_support_band_ends(
@@ -1595,7 +1597,7 @@ SupportGeneratorLayersPtr generate_support_layers(
                         this_layer_id_interface = other_layer.interface_id() + 1;
                     }
             }
-            if (object.config().support_half_layer_height.value) {
+            if (object.layer_bands().support) {
                 for (size_t k = i; k < j; ++k) {
                     auto &source = *layers_sorted[k];
                     if (half_layer_storage != nullptr) {
@@ -1609,7 +1611,7 @@ SupportGeneratorLayersPtr generate_support_layers(
                 }
             }
             auto *installed = object.add_support_layer(layer_id ++, this_layer_id_interface, height_min, zavg);
-            if (object.config().support_half_layer_height.value)
+            if (object.layer_bands().support)
                 for (size_t k = i; k < j; ++k) {
                     const auto &source = *layers_sorted[k];
                     if (source.half_layer_source_id != size_t(-1))
@@ -1622,7 +1624,7 @@ SupportGeneratorLayersPtr generate_support_layers(
         i = j;
     }
     // MAGPIE: H/2 support splits each support layer into its physical half-height bands and assembles again.
-    if (object.config().support_half_layer_height.value && half_layer_storage != nullptr) {
+    if (object.layer_bands().support && half_layer_storage != nullptr) {
         refine_half_height_support_regions(object, *half_layer_storage,
             {&raft_layers, &bottom_contacts, &top_contacts, &intermediate_layers, &interface_layers, &base_interface_layers});
         // Discard only the just-created empty support descriptors. The broader
@@ -2019,7 +2021,7 @@ void generate_support_toolpaths(
                         (raft_contact ? &support_params.raft_interface_flow :
                          interface_as_base ? &support_params.support_material_flow : &support_params.support_material_interface_flow)
                             ->with_height(float(layer_ex.layer->height));
-                    if (config.support_half_layer_height.value && !raft_contact && layer_ex.layer->bridging)
+                    if (support_params.banded_support && !raft_contact && layer_ex.layer->bridging)
                         interface_flow = Flow(support_params.support_material_bottom_interface_flow.width(),
                             float(layer_ex.layer->height), support_params.support_material_bottom_interface_flow.nozzle_diameter());
                     filler->angle = interface_as_base ?
@@ -2035,7 +2037,7 @@ void generate_support_toolpaths(
                         bottom_interface ? support_params.bottom_interface_density : support_params.top_interface_density;
                     filler->spacing = raft_contact ? support_params.raft_interface_flow.spacing() :
                         interface_as_base ? support_params.support_material_flow.spacing() : support_params.support_material_interface_flow.spacing();
-                    if (config.support_half_layer_height.value && !raft_contact) {
+                    if (support_params.banded_support && !raft_contact) {
                         const double gap_mm = interface_as_base ? config.support_base_pattern_spacing.value :
                             bottom_interface ? config.support_bottom_interface_spacing.value :
                             support_params.ironing ? 0. : config.support_interface_spacing.value;
@@ -2128,7 +2130,7 @@ void generate_support_toolpaths(
                 if (! is_belt_printer && base_layer.layer->bottom_z < EPSILON && support_params.aligned_first_layer) {
                     // MAGPIE: the base lines continue down to the bed, printed with the first layer's flow.
                     flow = support_params.first_layer_flow;
-                    if (config.support_half_layer_height.value)
+                    if (support_params.banded_support)
                         flow = flow.with_height(float(base_layer.layer->height));
                 } else if (! is_belt_printer && base_layer.layer->bottom_z < EPSILON) {
                     // Base flange (the 1st layer).
@@ -2138,7 +2140,7 @@ void generate_support_toolpaths(
                                                                            float(config.raft_first_layer_density.value * 0.01);
                     flow = support_params.first_layer_flow;
                     // MAGPIE: H/2 support prints the first layer in its physical band.
-                    if (config.support_half_layer_height.value)
+                    if (support_params.banded_support)
                         flow = flow.with_height(float(base_layer.layer->height));
                     // use the proper spacing for first layer as we don't need to align
                     // its pattern to the other layers

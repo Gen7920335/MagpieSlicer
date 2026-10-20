@@ -577,7 +577,7 @@ TEST_CASE("Temperature waits inside the print count without blending", "[LayerTi
 TEST_CASE("Under H/2 a wait site starts each full layer only", "[LayerTimeBlend]")
 {
     DynamicPrintConfig config = blend_config("blend", 1e6);
-    config.set_deserialize_strict({{"outer_wall_half_layer_height", "1"}});
+    Slic3r::Test::half_layer_params(config, true);
     const std::string out = slice_mesh(pillar_with_slab(), config);
     // The 53 layers of the plain slice: half-height passes are no layers of their own.
     CHECK(count_lines_starting(out, site_tag) == 53);

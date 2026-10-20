@@ -1525,7 +1525,7 @@ void TreeSupport::generate_toolpaths()
 {
     // MAGPIE: H/2 support splits each support layer into its physical half-height bands before toolpaths.
     std::vector<size_t> half_layer_source_ids;
-    if (m_object->config().support_half_layer_height.value) {
+    if (m_object->layer_bands().support) {
         const auto cuts_mm = half_height_support_z_grid(*m_object);
         const auto [min_band_mm, max_band_mm] = half_height_support_band_limits_mm(*m_object);
         std::vector<std::unique_ptr<SupportLayer>> physical_layers;
@@ -1796,7 +1796,7 @@ void TreeSupport::generate_toolpaths()
                         // interface
                         if (logical_support_id == 0 && !belt_floor_active) {
                             Flow flow = m_raft_layers == 0 ? m_object->print()->brim_flow() : support_flow;
-                            if (object_config.support_half_layer_height.value && m_raft_layers == 0)
+                            if (m_object->layer_bands().support && m_raft_layers == 0)
                                 flow = support_material_1st_layer_flow(m_object, float(ts_layer->height));
                             ExtrusionRole brim_role = (area_group.type == SupportLayer::RoofType && !area_group.interface_as_base) ?
                                 erSupportMaterialInterface : erSupportMaterial;
@@ -1869,7 +1869,7 @@ void TreeSupport::generate_toolpaths()
                         // base_areas
                         bool support_base_on_bed = (logical_support_id == 0 && m_raft_layers == 0 && !belt_floor_active);
                         Flow flow = support_base_on_bed ? m_support_params.first_layer_flow : support_flow;
-                        if (object_config.support_half_layer_height.value && support_base_on_bed)
+                        if (m_object->layer_bands().support && support_base_on_bed)
                             flow = flow.with_height(float(ts_layer->height));
                         bool need_infill = with_infill;
                         if(m_object_config->support_base_pattern==smpDefault)

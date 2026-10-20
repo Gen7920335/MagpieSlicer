@@ -43,6 +43,7 @@
 #include "ModHost/NativeCompose.hpp"
 #include "ModHost/NativeContacts.hpp"
 #include "ModHost/NativeSupport.hpp"
+#include "ModHost/LayerBands.hpp"
 #include "ModHost/ObjectZOffset.hpp"
 #include "ModHost/SlotRegistry.hpp"
 #include "AABBTreeIndirect.hpp"
@@ -613,7 +614,7 @@ void PrintObject::make_perimeters()
     }
 
     m_half_layer_sources.reset();
-    if (m_config.outer_wall_half_layer_height) {
+    if (m_layer_bands.walls()) {
         m_half_layer_sources = std::make_unique<HalfLayerSourceLayers>(make_half_layer_source_layers());
         // A trimmed empty top section remains empty. Keep its band descriptor
         // available to assembly without copying geometry from the other phase.
@@ -1084,7 +1085,7 @@ void PrintObject::generate_support_material(bool with_belt_brim)
         if (with_belt_brim)
             this->generate_belt_brim();
         // MAGPIE: H/2 support keeps its physical bands as support sources for G-code.
-        if (m_config.support_half_layer_height.value)
+        if (m_layer_bands.support)
             m_half_layer_support_sources = std::make_unique<HalfLayerSupportSources>(this, m_support_layers);
         this->set_done(posSupportMaterial);
     }
@@ -1408,14 +1409,14 @@ const HalfLayerSourceLayers *PrintObject::half_layer_sources() const
 {
     if (m_shared_object)
         return m_shared_object->half_layer_sources();
-    return m_config.outer_wall_half_layer_height && this->is_step_done(posPerimeters) ? m_half_layer_sources.get() : nullptr;
+    return m_layer_bands.walls() && this->is_step_done(posPerimeters) ? m_half_layer_sources.get() : nullptr;
 }
 
 const HalfLayerSupportSources *PrintObject::half_layer_support_sources() const
 {
     if (m_shared_object)
         return m_shared_object->half_layer_support_sources();
-    return m_config.support_half_layer_height && this->is_step_done(posSupportMaterial) ?
+    return m_layer_bands.support && this->is_step_done(posSupportMaterial) ?
         m_half_layer_support_sources.get() : nullptr;
 }
 
@@ -1614,7 +1615,6 @@ bool PrintObject::invalidate_state_by_config_options(
                opt_key == "wall_loops"
             || opt_key == "wall_planner"
             || opt_key == "crisp_corner_small_nozzle_wall_speed"
-            || opt_key == "outer_wall_half_layer_height"
             || opt_key == "alternate_extra_wall"
             || opt_key == "top_one_wall_type"
             || opt_key == "min_width_top_surface"
@@ -1710,7 +1710,6 @@ bool PrintObject::invalidate_state_by_config_options(
         } else if (
         	   opt_key == "support_type"
             || opt_key == "support_generator"
-            || opt_key == "support_half_layer_height"
             || opt_key == "support_angle"
             || opt_key == "support_on_build_plate_only"
             || opt_key == "support_critical_regions_only"
@@ -1978,7 +1977,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "wipe_inward_distance"
             || opt_key == "spiral_starting_flow_ratio"
             || opt_key == "spiral_finishing_flow_ratio") {
-            if (this->config().outer_wall_half_layer_height.value || this->config().support_half_layer_height.value)
+            if (m_layer_bands.active())
                 invalidated |= m_print->invalidate_step(psWipeTower);
             else
                 invalidated |= m_print->invalidate_step(psGCodeExport);
@@ -4268,10 +4267,6 @@ PrintObjectConfig PrintObject::object_config_from_model_object(const PrintObject
         // the per-nozzle field of that width.
         prepare_line_widths(config, line_widths, { &src_normalized });
     }
-    // MAGPIE: half-height outer walls need support built on the same half-height grid underneath them
-    // (Magpie line 1 beta 6). This is the single owner of that rule for GUI, CLI and 3MF input.
-    if (config.outer_wall_half_layer_height.value)
-        config.support_half_layer_height.value = true;
     // Clamp invalid extruders to the default extruder (with index 1).
     clamp_exturder_to_default(config.support_filament,           num_extruders);
     clamp_exturder_to_default(config.support_interface_filament, num_extruders);
@@ -4451,6 +4446,20 @@ void PrintObject::generate_support_preview()
     this->generate_support_material();
     boost::posix_time::ptime ts3 = boost::posix_time::microsec_clock::local_time();
     profiler.duration2 = (ts3 - ts2).total_milliseconds();
+}
+
+bool PrintObject::update_layer_bands()
+{
+    LayerBandPlan plan = ModHost::layer_band_plan(this->print()->full_print_config(), m_config, this->model_object()->name);
+    // A plan the band executor cannot print bands nothing; Print::validate reports why.
+    if (std::string problem = layer_band_plan_problem(plan); !problem.empty()) {
+        plan       = LayerBandPlan();
+        plan.error = std::move(problem);
+    }
+    if (plan.same_as(m_layer_bands))
+        return false;
+    m_layer_bands = std::move(plan);
+    return true;
 }
 
 void PrintObject::update_slicing_parameters()

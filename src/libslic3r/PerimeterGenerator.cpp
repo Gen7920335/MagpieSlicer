@@ -108,30 +108,26 @@ public:
 
 using PerimeterGeneratorLoops = std::vector<PerimeterGeneratorLoop>;
 
-// MAGPIE: H/2 outer walls. A round, nozzle-diameter bridge cannot fit a half-height shell band. Only those shell
-// paths use a thin bridge cross section; ordinary/core bridges retain their original Flow. The width resolves on the
-// nozzle that prints the path (path_flow).
-// MAGPIE: the physical nozzle of a wall path that is known here only by its diameter (mm): the region's outer wall
-// nozzle when it has that diameter, then its inner wall nozzle, then the first nozzle of that diameter. This does not
-// follow the routing table: two nozzles of one diameter with different per-nozzle bridge widths are not told apart.
-// Filament maps are not applied, as everywhere in PerimeterGenerator.
-static size_t wall_path_nozzle(const PerimeterGenerator &generator, float nozzle_mm)
+// MAGPIE: the physical nozzle of an outer wall path tagged `hint`, as the G-code routes it: the wall planner's filament
+// for the hint (wall.plan wall_filament, GCode's process_layer and H/2 task collection), else the region's outer wall
+// filament. Filament maps are not applied, as everywhere in PerimeterGenerator.
+static size_t outer_wall_path_nozzle(const PerimeterGenerator &generator, ExtrusionToolHint hint)
 {
-    const PrintConfig &pc = *generator.print_config;
-    auto same = [&](size_t nozzle) { return std::abs(float(pc.nozzle_diameter.get_at(nozzle)) - nozzle_mm) < float(EPSILON); }; // mm
-    for (const int filament : { generator.config->outer_wall_filament_id.value, generator.config->inner_wall_filament_id.value })
-        if (const size_t nozzle = printing_nozzle_index(pc, filament, false); same(nozzle))
-            return nozzle;
-    for (size_t nozzle = 0; nozzle < pc.nozzle_diameter.size(); ++nozzle)
-        if (same(nozzle))
-            return nozzle;
-    return 0;
+    const unsigned int base     = unsigned(std::max(1, generator.config->outer_wall_filament_id.value));
+    unsigned int       filament = base;
+    if (generator.wall_planner != nullptr)
+        if (const unsigned int f = generator.wall_planner->wall_filament(size_t(generator.layer_id), hint, base))
+            filament = f;
+    return printing_nozzle_index(*generator.print_config, int(filament), false);
 }
 
-static Flow half_layer_shell_bridge_flow(const PerimeterGenerator &generator, size_t /* depth */, const Flow &path_flow)
+// MAGPIE: H/2 outer walls. A round, nozzle-diameter bridge cannot fit a half-height shell band. Only those shell
+// paths use a thin bridge cross section; ordinary/core bridges retain their original Flow. The width resolves on the
+// nozzle that prints the path (`hint` routes it, path_flow carries its diameter).
+static Flow half_layer_shell_bridge_flow(const PerimeterGenerator &generator, ExtrusionToolHint hint, const Flow &path_flow)
 {
     const float nozzle = path_flow.nozzle_diameter();
-    const double explicit_width_mm = line_width_setting_on_nozzle(*generator.config, "bridge_line_width", wall_path_nozzle(generator, nozzle)).get_abs_value(nozzle);
+    const double explicit_width_mm = line_width_setting_on_nozzle(*generator.config, "bridge_line_width", outer_wall_path_nozzle(generator, hint)).get_abs_value(nozzle);
     const float height_mm = float(0.5 * generator.layer_height);
     const Flow base(explicit_width_mm > 0. ? float(explicit_width_mm) : path_flow.width(), height_mm, nozzle);
     const double ratio = generator.config->bridge_flow.value;
@@ -246,6 +242,11 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
         bool is_small_width = loop.is_smaller_width_perimeter;
         // MAGPIE: a wall of the wall plan's detail nozzle (wall.plan slot).
         const bool use_detail_wall_flow = loop.depth < perimeter_generator.detail_wall_count;
+        // MAGPIE: the loop's routing tag. A narrow loop is printed at the detail nozzle's width, so by the detail
+        // nozzle; without the tag it went to the large nozzle at the detail width.
+        const ExtrusionToolHint loop_tool_hint = perimeter_generator.detail_wall_routing ?
+            (use_detail_wall_flow ? ExtrusionToolHint::DetailWall : ExtrusionToolHint::LargeWall) :
+            is_small_width && perimeter_generator.narrow_loops_use_detail_flow ? ExtrusionToolHint::DetailWall : ExtrusionToolHint::Auto;
 
         ExtrusionRole role;
         ExtrusionLoopRole loop_role;
@@ -353,7 +354,7 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
             // the loop centerline and original lower slices is >= half nozzle diameter
             if (remain_polines.size() != 0) {
                 const Flow bridge_flow = perimeter_generator.half_layer_outer_walls && is_external ?
-                    half_layer_shell_bridge_flow(perimeter_generator, loop.depth,
+                    half_layer_shell_bridge_flow(perimeter_generator, loop_tool_hint,
                         Flow(float(extrusion_width), extrusion_height,
                             perimeter_generator.wall_flow_at_depth(loop.depth).nozzle_diameter())) :
                     perimeter_generator.overhang_flow;
@@ -384,12 +385,7 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
         }
 
         ExtrusionLoop extrusion_loop(std::move(paths), loop_role);
-        if (perimeter_generator.detail_wall_routing)
-            extrusion_loop.tool_hint = use_detail_wall_flow ? ExtrusionToolHint::DetailWall : ExtrusionToolHint::LargeWall;
-        else if (is_small_width && perimeter_generator.narrow_loops_use_detail_flow)
-            // MAGPIE: a narrow loop is printed at the detail nozzle's width, so by the detail nozzle; without the
-            // hint it went to the large nozzle at the detail width.
-            extrusion_loop.tool_hint = ExtrusionToolHint::DetailWall;
+        extrusion_loop.tool_hint = loop_tool_hint;
         coll.append(std::move(extrusion_loop));
     }
 
@@ -658,7 +654,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
             if (half_shell_bridge) {
                 for (size_t idx = first_bridge; idx < paths.size(); ++idx) {
                     ExtrusionPath &path = paths[idx];
-                    const Flow bridge_flow = half_layer_shell_bridge_flow(perimeter_generator, extrusion->inset_idx,
+                    const Flow bridge_flow = half_layer_shell_bridge_flow(perimeter_generator, wall_tool_hint,
                         Flow(path.width, path.height, path_flow.nozzle_diameter()));
                     path.width = bridge_flow.width();
                     path.height = bridge_flow.height();

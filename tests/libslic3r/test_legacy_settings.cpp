@@ -116,9 +116,8 @@ TEST_CASE("Line 1 feature settings become mod parameters and line 1 only keys ar
     CHECK(config.opt_serialize("support_interface_pattern") == "auto");
     CHECK_FALSE(config.has("cura_support_join_distance"));
     CHECK_FALSE(config.has("resin_branching_support_pillar_diameter"));
-    // A setting this build also defines goes back to its default: the mod's rule writes it from now on.
-    CHECK_FALSE(config.opt_bool("outer_wall_half_layer_height"));
-    // One it no longer defines (the low temperature interface is a native mod) is dropped.
+    // Settings this build no longer defines (H/2 and the low temperature interface are native mods) are dropped.
+    CHECK_FALSE(config.has("outer_wall_half_layer_height"));
     CHECK_FALSE(config.has("single_nozzle_low_temperature_interface"));
     CHECK_FALSE(config.has("support_interface_temperature"));
 }
@@ -128,20 +127,23 @@ TEST_CASE("A migrated line 1 feature turns off with its mod parameter", "[Legacy
     BundledMods mods;
     // Before: the line 1 key kept its value 1, differed from the system preset, and so counted as a
     // user change; the mod's rule skipped it and the feature stayed on with the parameter off.
+    // The multi-nozzle walls mod's rule writes crisp_corner_small_nozzle_wall_speed, a key this build defines.
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.apply(load({ { "outer_wall_half_layer_height", "1" } }));
-    REQUIRE(mod_settings(config)["half_layer.outer_walls"] == true);
+    const std::string off = config.opt_serialize("crisp_corner_small_nozzle_wall_speed");
+    config.apply(load({ { "crisp_corner_small_nozzle_wall_speed", "30" } }));
+    REQUIRE(mod_settings(config).contains("multi_nozzle_walls.small_wall_speed"));
+    CHECK(config.opt_serialize("crisp_corner_small_nozzle_wall_speed") == off);
     config.set_key_value("different_settings_to_system", new ConfigOptionStrings({ "", "", "" }));
 
     DynamicPrintConfig on = config;
     REQUIRE(ModHost::active_mods()->resolve(on).empty());
-    CHECK(on.opt_bool("outer_wall_half_layer_height"));
+    CHECK(on.opt_serialize("crisp_corner_small_nozzle_wall_speed") == "30");
 
     nlohmann::json m = mod_settings(config);
-    m["half_layer.outer_walls"] = false;
+    m["multi_nozzle_walls.small_wall_speed"] = 0;
     config.set_key_value("mod_settings", new ConfigOptionString(m.dump()));
     REQUIRE(ModHost::active_mods()->resolve(config).empty());
-    CHECK_FALSE(config.opt_bool("outer_wall_half_layer_height"));
+    CHECK(config.opt_serialize("crisp_corner_small_nozzle_wall_speed") == off);
 }
 
 TEST_CASE("A line 2 file that stores a mod-owned key at its default adds no mod parameter", "[LegacySettings]")

@@ -978,11 +978,12 @@ TEST_CASE("Elevated Resin support remains continuous when synchronized with a pr
         {"enable_support", true},
         {"support_filament", 2}, {"support_interface_filament", 2},
         {"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"support_half_layer_height", half}, {"raft_layers", raft},
+        {"raft_layers", raft},
         {"enable_prime_tower", synchronized}, {"independent_support_layer_height", !synchronized},
         {"single_extruder_multi_material", true}, {"use_relative_e_distances", true},
         {"layer_change_gcode", "G92 E0\n"}, {"skirt_loops", 0}, {"brim_type", "no_brim"},
     });
+    Slic3r::Test::half_layer_params(config, false, half);
     line1(config, "support_type", "resin(auto)");
     line1(config, "resin_support_object_elevation", 1.2);
     line1(config, "resin_branching_support_object_elevation", 1.2);

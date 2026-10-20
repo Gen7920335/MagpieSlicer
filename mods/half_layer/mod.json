@@ -1,0 +1,18 @@
+{
+    // H/2 (Magpie line 1): the outer two walls, or the support, print in two half-height bands per model layer,
+    // the later band near the middle of the layer's print time. Travel over them lifts at least 1.5 model layer
+    // heights. Half-height outer walls always bring half-height support with them. The defaults change nothing.
+    // A native mod filling the layer.bands slot; the core slices and prints the bands it answers. The parameters
+    // are read per object, so an object can set its own.
+    "id": "half_layer",
+    "name": "Half-height outer walls and support", "name_ko": "절반 높이 외벽과 서포트",
+    "version": "2.0.0",
+    "api": { "major": 1, "min_minor": 1 },
+    "binary": "half_layer",
+    "slots": [ { "slot": "layer.bands", "version": 1, "impl": "half_layer" } ],
+    "thread_safe": true,
+    "params": {
+        "outer_walls": { "scope": "object", "invalidates": ["posPerimeters", "posSupportMaterial"], "type": "bool", "default": false, "label": "Half-height outer walls", "label_ko": "절반 높이 외벽" },
+        "support":     { "scope": "object", "invalidates": ["posSupportMaterial"], "type": "bool", "default": false, "label": "Half-height support", "label_ko": "절반 높이 서포트" }
+    }
+}

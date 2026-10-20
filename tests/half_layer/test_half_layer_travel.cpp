@@ -15,6 +15,39 @@
 
 using namespace Slic3r;
 
+// The H/2 mod (layer.bands slot) picks where the later band goes; these run its schedule.
+TEST_CASE("Half-layer timing selects a legal midpoint without changing path order", "[HalfLayer][Time][Mod]")
+{
+    // First outer wall takes 10 s; remaining existing work takes 70 s. The
+    // second wall adds 20 s. Independent expected full duration is 100 s.
+    const std::vector<HalfLayerInsertionBoundary> slots{
+        {0., 0., 0., 0., true}, {10., 0., 0., 0., true},
+        {40., 0., 0., 0., true}, {50., 0., 0., 0., false},
+        {60., 0., 0., 0., true}, {80., 0., 0., 0., true}};
+    const auto insertion = Test::half_layer_scheduler()(80., 0., 10., 20., slots);
+    REQUIRE(insertion.boundary == 2); // equal error at 40/60, stable earliest tie
+    CHECK(insertion.total_seconds == 100.);
+    CHECK(insertion.midpoint_error_seconds == 10.);
+    auto all_blocked = slots;
+    for (auto& slot : all_blocked) slot.allowed = false;
+    CHECK(Test::half_layer_scheduler()(80., 0., 10., 20., all_blocked).boundary ==
+          HalfLayerInsertion::unavailable);
+}
+
+TEST_CASE("Half-layer midpoint includes repeated tool visit cost", "[HalfLayer][Time][Mod]")
+{
+    // A nominal midpoint at 50 s would require an expensive tool return.
+    const std::vector<HalfLayerInsertionBoundary> slots{
+        {40., 0., 0., 0., true}, {50., 30., 0., 0., true},
+        {60., 0., 0., 0., true}};
+    const auto insertion = Test::half_layer_scheduler()(80., 0., 10., 20., slots);
+    CHECK(insertion.boundary == 0);
+    CHECK(insertion.midpoint_error_seconds == 10.);
+    // Support before the first outer wall must not be mistaken for wall age.
+    CHECK(Test::half_layer_scheduler()(80., 10., 20., 20., slots).boundary == 2);
+}
+
+
 TEST_CASE("Half-layer custom Z replay preserves coordinate mode units and G92", "[HalfLayer][Travel][CustomGCode]")
 {
     constexpr double tolerance_mm = 0.000001;
@@ -157,7 +190,7 @@ TEST_CASE("Physical task insertion minimizes whole-path midpoint error and retai
     std::vector<HalfLayerExecutionTask> core;
     for (size_t i = 0; i < 12; ++i)
         core.push_back(task(0, core_seconds, double(i) * 2., 1.2));
-    const auto plan = schedule_half_layer_execution(lower, core, upper);
+    const auto plan = schedule_half_layer_execution(Test::half_layer_scheduler(), lower, core, upper);
     REQUIRE(plan.tasks.size() == 14);
     REQUIRE(plan.upper_end == plan.upper_begin + 1);
     CHECK(plan.lower_end == 1);
@@ -233,7 +266,7 @@ TEST_CASE("Half-layer midpoint accounts for support prefix and entry time", "[Ha
     std::vector<HalfLayerExecutionTask> lower{task(1, 10., 0.)};
     std::vector<HalfLayerExecutionTask> core{task(1, 10., 2.), task(1, 10., 4.), task(1, 10., 6.)};
     std::vector<HalfLayerExecutionTask> upper{task(1, 10., 8.)};
-    const auto plan = schedule_half_layer_execution(prefix, lower, core, upper, 5.);
+    const auto plan = schedule_half_layer_execution(Test::half_layer_scheduler(), prefix, lower, core, upper, 5.);
     REQUIRE(plan.insertion.boundary != HalfLayerInsertion::unavailable);
     CHECK(plan.lower_end == 2);
     CHECK(plan.tasks.front().tool.filament == 0);
@@ -267,7 +300,7 @@ TEST_CASE("Half-layer midpoint uses asymmetric cached purge costs", "[HalfLayer]
         task(0, 2., 2.), task(1, 2., 4.), task(0, 2., 6.)};
     const std::vector<HalfLayerExecutionTask> upper{task(1, 4., 8.)};
     const double initial_seconds = 1.;
-    const auto plan = schedule_half_layer_execution(prefix, lower, core, upper, initial_seconds);
+    const auto plan = schedule_half_layer_execution(Test::half_layer_scheduler(), prefix, lower, core, upper, initial_seconds);
 
     auto pair_seconds = [](unsigned from, unsigned to) {
         if (from == to) return 0.;
@@ -425,7 +458,7 @@ TEST_CASE("Cross-material wipe shifts only an adjacent same-nozzle boundary",
     CHECK(core[2].extrusion_seconds == Catch::Approx(3.));
     CHECK(core[3].tool.filament == 1);
 
-    HalfLayerExecutionPlan plan = schedule_half_layer_execution({}, {}, std::move(core), {}, 0.);
+    HalfLayerExecutionPlan plan = schedule_half_layer_execution(Test::half_layer_scheduler(), {}, {}, std::move(core), {}, 0.);
     reconcile_half_layer_cross_material_wipe(plan, context.loaded_filament_by_tool, reservations, 0);
     REQUIRE(plan.visits.size() == 2);
     CHECK(plan.visits[0].tool.filament == 0);
@@ -483,7 +516,7 @@ TEST_CASE("Cross-material wipe rolls back once when midpoint insertion breaks ad
             item.tool_entry_seconds_by_filament = {0., 0.};
         });
     REQUIRE(reservations == 1);
-    HalfLayerExecutionPlan plan = schedule_half_layer_execution({}, std::move(lower),
+    HalfLayerExecutionPlan plan = schedule_half_layer_execution(Test::half_layer_scheduler(), {}, std::move(lower),
         std::move(core), std::move(upper), 0.);
     REQUIRE(plan.upper_end < plan.tasks.size());
     reconcile_half_layer_cross_material_wipe(plan, context.loaded_filament_by_tool, reservations, 0);
@@ -631,7 +664,7 @@ TEST_CASE("First-task wipe rollback refreshes initial entry timing",
     const unsigned incoming_filament = 1;
     const double provisional_initial_seconds = half_layer_initial_entry_seconds(incoming_filament, lower.front());
     REQUIRE(provisional_initial_seconds == Catch::Approx(0.));
-    HalfLayerExecutionPlan plan = schedule_half_layer_execution({}, std::move(lower),
+    HalfLayerExecutionPlan plan = schedule_half_layer_execution(Test::half_layer_scheduler(), {}, std::move(lower),
         std::move(core), std::move(upper), provisional_initial_seconds);
     const auto fixed_upper_begin = plan.upper_begin;
     reconcile_half_layer_cross_material_wipe(plan, context.loaded_filament_by_tool, reservations, incoming_filament);
@@ -656,8 +689,8 @@ TEST_CASE("First-task wipe rollback refreshes initial entry timing",
         }
         CHECK(plan.insertion.total_seconds == Catch::Approx(elapsed_seconds));
         CHECK(plan.insertion.second_start_seconds == Catch::Approx(upper_start_seconds));
-        CHECK(plan.insertion.midpoint_error_seconds ==
-            Catch::Approx(std::abs(upper_start_seconds - 7. - elapsed_seconds / 2.)));
+        // The midpoint error stays the H/2 mod's own measure at its choice (layer.bands schedule); the core refreshes
+        // only the timing above.
     }
 }
 
@@ -681,7 +714,7 @@ TEST_CASE("Half-layer scheduler cost is measured separately from geometry", "[.S
     std::vector<double> elapsed_ms;
     for (int run = 0; run < 6; ++run) {
         const auto start = std::chrono::steady_clock::now();
-        auto plan = schedule_half_layer_execution({base}, core, {base});
+        auto plan = schedule_half_layer_execution(Test::half_layer_scheduler(), {base}, core, {base});
         reconcile_half_layer_cross_material_wipe(plan, {0}, 0, 0);
         const double duration_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - start).count();
@@ -777,9 +810,9 @@ TEST_CASE("G-code short travel applies the logical parent lift with either toggl
     const bool variable = GENERATE(false, true);
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"outer_wall_half_layer_height", bool(toggles & 1)}, {"support_half_layer_height", bool(toggles & 2)},
         {"z_hop", configured_hop_mm}, {"retraction_minimum_travel", 1000.}, {"reduce_crossing_wall", false},
         {"travel_speed", 120.}, {"initial_layer_travel_speed", 30.}, {"retract_lift_above", 100.}});
+    Slic3r::Test::half_layer_params(config, bool(toggles & 1), bool(toggles & 2));
     Print print;
     Model model;
     init_print({cube(5.)}, print, model, config);

@@ -1286,8 +1286,6 @@ PRINT_CONFIG_CLASS_DEFINE(
     // Force the generation of solid shells between adjacent materials/volumes.
     ((ConfigOptionBool,                interface_shells))
     ((ConfigOptionFloat,               layer_height))
-    ((ConfigOptionBool,                outer_wall_half_layer_height))
-    ((ConfigOptionBool,                support_half_layer_height))
     ((ConfigOptionFloat,               mmu_segmented_region_max_width))
     ((ConfigOptionFloat,               mmu_segmented_region_interlocking_depth))
     ((ConfigOptionFloat,               raft_contact_distance))

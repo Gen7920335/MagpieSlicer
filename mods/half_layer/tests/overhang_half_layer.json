@@ -1,0 +1,13 @@
+{
+    "description": "The overhang model with half-height outer walls (and so half-height support) printed in two bands per layer by this mod.",
+    "args": [
+        "--load-settings",
+        "presets/machine.json;presets/process.json",
+        "overhang.obj"
+    ],
+    "contains": [
+        ";TYPE:Outer wall",
+        ";TYPE:Support",
+        "; mods: half_layer 2.0.0"
+    ]
+}

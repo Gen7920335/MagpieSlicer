@@ -520,11 +520,20 @@ void ToolOrdering::sort_and_build_data(const PrintObject& object , unsigned int 
 
 static bool half_layer_features_enabled(const PrintObject &object)
 {
-    return object.config().outer_wall_half_layer_height.value ||
-           object.config().support_half_layer_height.value;
+    return object.layer_bands().active();
 }
 
-static void finalize_half_layer_frame(const PrintConfig &print_config, LayerTools &tools, HalfLayerPrintExecutionPlan &print_plan,
+// The scheduler of the print's band plans (Print::validate keeps every banded object on one implementation).
+static const LayerBandScheduler &print_band_scheduler(const Print &print)
+{
+    for (const PrintObject *object : print.objects())
+        if (object->layer_bands().active())
+            return object->layer_bands().scheduler;
+    static const LayerBandScheduler none;
+    return none;
+}
+
+static void finalize_half_layer_frame(const LayerBandScheduler &scheduler, const PrintConfig &print_config, LayerTools &tools, HalfLayerPrintExecutionPlan &print_plan,
     unsigned int incoming_filament,
     HalfLayerWipeIntoContext &wipe_context,
     std::vector<HalfLayerExecutionTask> prefix,
@@ -581,7 +590,7 @@ static void finalize_half_layer_frame(const PrintConfig &print_config, LayerTool
     const HalfLayerExecutionTask *first_task = !prefix.empty() ? &prefix.front() :
         !lower.empty() ? &lower.front() : !core.empty() ? &core.front() : &upper.front();
     const double initial_seconds = half_layer_initial_entry_seconds(incoming_filament, *first_task);
-    frame.plan = schedule_half_layer_execution(std::move(prefix), std::move(lower), std::move(core),
+    frame.plan = schedule_half_layer_execution(scheduler, std::move(prefix), std::move(lower), std::move(core),
         std::move(upper), initial_seconds);
     reconcile_half_layer_cross_material_wipe(frame.plan,
         wipe_context.loaded_filament_by_tool, wipe_reservation_count, incoming_filament);
@@ -705,7 +714,7 @@ void ToolOrdering::build_half_layer_execution(const Print &print)
             for (size_t instance_id = 0; instance_id < assignment.object->instances().size(); ++instance_id)
                 append_half_layer_model_tasks(*assignment.object, assignment.parent_index, tools, instance_id,
                     lower, core, upper);
-        finalize_half_layer_frame(print.config(), tools, *print_plan, incoming, wipe_context, std::move(prefix), std::move(lower),
+        finalize_half_layer_frame(print_band_scheduler(print), print.config(), tools, *print_plan, incoming, wipe_context, std::move(prefix), std::move(lower),
             std::move(core), std::move(upper));
         const HalfLayerExecutionFrame *frame = tools.half_layer_frame_index == size_t(-1) ? nullptr :
             &print_plan->frames[tools.half_layer_frame_index];
@@ -774,7 +783,7 @@ void ToolOrdering::build_half_layer_execution(const PrintObject &object)
         for (size_t parent_index : model_by_frame[frame_index])
             for (size_t instance_id = first_instance; instance_id < end_instance; ++instance_id)
                 append_half_layer_model_tasks(object, parent_index, tools, instance_id, lower, core, upper);
-        finalize_half_layer_frame(object.print()->config(), tools, *print_plan, incoming, wipe_context, std::move(prefix), std::move(lower),
+        finalize_half_layer_frame(object.layer_bands().scheduler, object.print()->config(), tools, *print_plan, incoming, wipe_context, std::move(prefix), std::move(lower),
             std::move(core), std::move(upper));
         const HalfLayerExecutionFrame *frame = tools.half_layer_frame_index == size_t(-1) ? nullptr :
             &print_plan->frames[tools.half_layer_frame_index];
@@ -831,7 +840,7 @@ ToolOrdering::ToolOrdering(const PrintObject &object, unsigned int first_extrude
     m_instance_id = instance_id;
     if (m_instance_id != size_t(-1) && m_instance_id >= object.instances().size())
         throw std::out_of_range("ToolOrdering instance scope is outside the PrintObject");
-    if (object.config().outer_wall_half_layer_height || object.config().support_half_layer_height)
+    if (object.layer_bands().active())
         m_print_config_ptr = &object.print()->config();
     m_print = const_cast<Print*>(object.print());
     if (object.layers().empty())

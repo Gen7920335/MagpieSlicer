@@ -462,8 +462,8 @@ TEST_CASE("Single wall on top surfaces gives no large nozzle wall a detail nozzl
             { "layer_height", 0.12 },
             { "initial_layer_print_height", 0.12 },
             { "top_shell_layers", 3 },
-            { "only_one_wall_top", true },
-            { "outer_wall_half_layer_height", h2 } });
+            { "only_one_wall_top", true } });
+        Slic3r::Test::half_layer_params(config, h2);
         multi_nozzle_params(config, { { "small_wall_count", 2 }, { "interlock", true } });
         TriangleMesh mesh = make_cube(20., 20., step_mm);
         TriangleMesh top  = make_cube(10., 10., 3.);
@@ -555,12 +555,11 @@ TEST_CASE("Different inner and outer materials retain their actual tools with ev
     config.set_deserialize_strict({
         {"inner_wall_filament_id", inner}, {"wall_loops", 4},
         {"layer_height", 0.12}, {"initial_layer_print_height", 0.12},
-        {"outer_wall_half_layer_height", (half_mode & 1) != 0},
-        {"support_half_layer_height", (half_mode & 2) != 0},
         {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"enable_prime_tower", false}, {"enable_overhang_speed", "0,0"},
         {"print_sequence", sequential ? "by object" : "by layer"},
     });
+    Slic3r::Test::half_layer_params(config, (half_mode & 1) != 0, (half_mode & 2) != 0);
     config.set_key_value("filament_colour", new ConfigOptionStrings{"#FF0000", "#00FF00"});
     TriangleMesh mesh = cube(6);
     mesh.scale(Vec3f(1.f, 1.f, 0.2f));
@@ -697,8 +696,8 @@ TEST_CASE("Nozzle edits reslice the same Print like a fresh Print", "[MultiNozzl
     const bool half_height = GENERATE(false, true);
     CAPTURE(half_height);
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.4, 1, "arachne", true);
-    config.set_deserialize_strict({ { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 },
-                                    { "outer_wall_half_layer_height", half_height } });
+    config.set_deserialize_strict({ { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 } });
+    Slic3r::Test::half_layer_params(config, half_height);
     multi_nozzle_params(config, { { "detail_toolhead", 2 } });
     Print print;
     Model model;
@@ -1153,8 +1152,8 @@ TEST_CASE("Detail and large walls under a single top wall print their own nozzle
         DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "arachne", true);
         config.set_deserialize_strict({
             { "wall_loops", 2 }, { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
-            { "top_shell_layers", 3 }, { "only_one_wall_top", true },
-            { "outer_wall_half_layer_height", h2 } });
+            { "top_shell_layers", 3 }, { "only_one_wall_top", true } });
+        Slic3r::Test::half_layer_params(config, h2);
         multi_nozzle_params(config, { { "small_wall_count", 2 }, { "interlock", true } });
         TriangleMesh mesh = make_cube(20., 20., step_mm);
         TriangleMesh top  = make_cube(10., 10., 3.);
@@ -1255,8 +1254,8 @@ TEST_CASE("Detail and large walls overlap on single-wall-top layers as on other 
         DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "arachne", true);
         config.set_deserialize_strict({
             { "wall_loops", 2 }, { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
-            { "top_shell_layers", 3 }, { "only_one_wall_top", true },
-            { "outer_wall_half_layer_height", h2 } });
+            { "top_shell_layers", 3 }, { "only_one_wall_top", true } });
+        Slic3r::Test::half_layer_params(config, h2);
         multi_nozzle_params(config, { { "small_wall_count", 2 }, { "interlock", true }, { "wall_overlap", 30 } });
         TriangleMesh mesh = make_cube(20., 20., step_mm);
         TriangleMesh top  = make_cube(10., 10., 3.);
@@ -1342,8 +1341,8 @@ TEST_CASE("A narrow island's outer wall at the detail width is printed by the de
         DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "classic", true);
         config.set_deserialize_strict({
             { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
-            { "outer_wall_half_layer_height", h2 },
         });
+        Slic3r::Test::half_layer_params(config, h2);
         // A tube 4 mm across with a 0.6 mm wall (narrower than two 0.4 mm outer walls; 6.4 mm2, under the narrow
         // loop area limit), 1.2 mm tall, in 180 sectors.
         constexpr int    sectors = 180;
@@ -1412,8 +1411,8 @@ TEST_CASE("Gap fill between large walls is printed by the large nozzle", "[Multi
         DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "classic", true);
         config.set_deserialize_strict({
             { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
-            { "wall_loops", 3 },  { "gap_fill_target", "everywhere" },
-            { "outer_wall_half_layer_height", h2 } });
+            { "wall_loops", 3 },  { "gap_fill_target", "everywhere" } });
+        Slic3r::Test::half_layer_params(config, h2);
         multi_nozzle_params(config, { { "small_wall_count", 2 } });
         // A wedge 20 mm long, 3 mm wide at its base, 1.2 mm tall: its walls converge and leave gaps of every width.
         indexed_triangle_set wedge;
@@ -1512,13 +1511,13 @@ TEST_CASE("Every large nozzle override range is checked against the nozzle that 
     CAPTURE(ranges);
     DynamicPrintConfig config = multifilament_config(2, {
         { "layer_height", 0.16 }, { "initial_layer_print_height", 0.16 }, // mm
-        { "wall_loops", 4 }, { "outer_wall_half_layer_height", true },
-        { "outer_wall_filament_id", 1 }, { "inner_wall_filament_id", 1 }, { "sparse_infill_filament_id", 1 },
+        { "wall_loops", 4 }, { "outer_wall_filament_id", 1 }, { "inner_wall_filament_id", 1 }, { "sparse_infill_filament_id", 1 },
         { "internal_solid_filament_id", 1 }, { "top_surface_filament_id", 1 }, { "bottom_surface_filament_id", 1 },
         { "initial_layer_line_width", 0. }, { "line_width", 0. },
         { "skirt_loops", 0 }, { "brim_type", "no_brim" }, { "enable_prime_tower", false },
         { "use_relative_e_distances", true }, { "layer_change_gcode", "G92 E0\n" },
     });
+    Slic3r::Test::half_layer_params(config, true);
     // The second nozzle (0.15 mm) is thinner than the 0.16 mm layer its inner walls print at.
     config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.4, 0.15 }); // mm
     config.set_key_value("filament_map", new ConfigOptionInts{ 1, 2 });
@@ -1568,4 +1567,55 @@ TEST_CASE("The first layer tool order measures islands with their own nozzle's w
             first_tool = current_tool;
     });
     CHECK(first_tool == 1);
+}
+
+// MAGPIE: an H/2 shell bridge takes the bridge width of the nozzle that prints it, as the G-code routes the wall
+// (wall.plan's wall_filament, else the outer wall filament). The bridge width used to be looked up on the first nozzle
+// with the path's diameter: with two 0.15 mm nozzles it read the per-nozzle field of the one that does not print it.
+TEST_CASE("H/2 shell bridges take the bridge width of the nozzle that prints them", "[MultiNozzleWalls][HalfLayer][Widths]")
+{
+    OfficialMods mods;
+    const char *engine = GENERATE("classic", "arachne");
+    CAPTURE(engine);
+    DynamicPrintConfig config = multifilament_config(3, {
+        { "wall_generator", engine }, { "wall_loops", 2 }, { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+        { "skirt_loops", 0 }, { "brim_type", "no_brim" }, { "enable_prime_tower", false }, { "enable_support", false },
+        { "only_one_wall_top", false }, { "only_one_wall_first_layer", false },
+    });
+    config.set_num_extruders(3);
+    config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(false));
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.4, 0.15, 0.15 }); // mm
+    // Filament 2 has another colour, so the detail walls go to filament 3 on toolhead 3 (the wall colour comes first).
+    config.set_key_value("filament_colour", new ConfigOptionStrings{ "#FF0000", "#00FF00", "#FF0000" });
+    size_flush_to_nozzles(config);
+    // Bridge widths per nozzle, mm (0: the process width): nozzle 2 and nozzle 3 differ.
+    config.set_key_value(per_nozzle_line_width_key("bridge_line_width"), new ConfigOptionFloats{ 0., 0.12, 0.18 });
+    config.set_deserialize_strict({ { "wall_planner", "multi_nozzle" } });
+    multi_nozzle_params(config, { { "enable", true }, { "small_wall_count", 1 }, { "detail_toolhead", 3 } });
+    half_layer_params(config, true);
+    const std::string gcode = slice({ TestMesh::overhang }, config);
+
+    int                   tool = -1;
+    bool                  overhang = false;
+    double                width = 0.; // mm, the last ;WIDTH
+    std::map<int, std::map<std::string, size_t>> widths; // tool -> overhang wall ;WIDTH -> moves
+    std::istringstream    lines(gcode);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.size() >= 2 && line[0] == 'T' && std::isdigit((unsigned char) line[1]))
+            tool = std::stoi(line.substr(1));
+        else if (line.rfind(";TYPE:", 0) == 0)
+            overhang = line == ";TYPE:Overhang wall";
+        else if (line.rfind(";WIDTH:", 0) == 0)
+            width = std::stod(line.substr(7));
+        else if (overhang && line.rfind("G1 ", 0) == 0 && line.find(" E") != std::string::npos && line.find('X') != std::string::npos)
+            ++widths[tool][std::to_string(int(std::lround(width * 1000.)))];
+    }
+    for (const auto &[t, by_width] : widths)
+        for (const auto &[w, n] : by_width)
+            UNSCOPED_INFO("tool " << t << ": " << n << " overhang wall moves " << w << " um wide");
+    // The detail walls are on toolhead 3 (T2); its bridges are 0.18 mm, nozzle 2's 0.12 mm field is not used.
+    REQUIRE(widths.count(2) == 1);
+    CHECK(widths[2].count("180") == 1);
+    CHECK(widths[2].count("120") == 0);
+    CHECK(widths.count(1) == 0);
 }

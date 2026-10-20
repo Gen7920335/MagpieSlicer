@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/reporters/catch_reporter_event_listener.hpp>
 #include <catch2/reporters/catch_reporter_registrars.hpp>
+#include "libslic3r/ModHost/LayerBands.hpp"
 #include "libslic3r/ModHost/NativeMods.hpp"
 #include <iostream>
 #include "libslic3r/TriangleMesh.hpp"
@@ -579,6 +580,36 @@ void multi_nozzle_params(DynamicPrintConfig &config, const nlohmann::json &param
     for (const auto &[name, value] : params.items())
         prefixed["multi_nozzle_walls." + name] = value;
     set_mod_params(config, prefixed);
+}
+
+void half_layer_params(DynamicPrintConfig &config, bool outer_walls, bool support)
+{
+    set_mod_params(config, {{"half_layer.outer_walls", outer_walls}, {"half_layer.support", support}});
+}
+
+void half_layer_object_params(ModelConfig &config, bool outer_walls, bool support)
+{
+    const auto    *stored = dynamic_cast<const ConfigOptionString *>(config.option("object_mod_settings"));
+    nlohmann::json values = stored != nullptr && !stored->value.empty() ? nlohmann::json::parse(stored->value) : nlohmann::json::object();
+    values["half_layer.outer_walls"] = outer_walls;
+    values["half_layer.support"]     = support;
+    config.set_key_value("object_mod_settings", new ConfigOptionString(values.dump()));
+}
+
+const LayerBandScheduler &half_layer_scheduler()
+{
+    static const LayerBandScheduler scheduler = [] {
+        OfficialMods       mods;
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        half_layer_params(config, true);
+        PrintObjectConfig object_config;
+        object_config.apply(config, true);
+        const LayerBandPlan plan = ModHost::layer_band_plan(config, object_config, "scheduler");
+        if (!plan.scheduler)
+            throw std::runtime_error("The official H/2 mod is not loaded: " + plan.error);
+        return plan.scheduler;
+    }();
+    return scheduler;
 }
 
 } } // namespace Slic3r::Test

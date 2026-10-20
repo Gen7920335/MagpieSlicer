@@ -56,23 +56,6 @@ inline bool is_half_layer_outer_wall(size_t inset_index, bool enabled)
     return enabled && inset_index < 2;
 }
 
-inline double half_layer_travel_lift_mm(double configured_lift_mm,
-                                       double model_layer_height_mm,
-                                       bool wall_enabled, bool support_enabled)
-{
-    if (!std::isfinite(configured_lift_mm) || configured_lift_mm < 0.)
-        throw std::invalid_argument("Invalid configured Z hop");
-    if (!wall_enabled && !support_enabled)
-        return configured_lift_mm;
-    if (!std::isfinite(model_layer_height_mm) || model_layer_height_mm <= 0.)
-        throw std::invalid_argument("Half-layer Z hop requires the parent model height");
-    // Required travel lift, in mm, relative to the actual nominal extrusion Z.
-    const double minimum_lift_mm = 1.5 * model_layer_height_mm;
-    if (!std::isfinite(minimum_lift_mm))
-        throw std::invalid_argument("Half-layer Z hop overflow");
-    return std::max(configured_lift_mm, minimum_lift_mm);
-}
-
 // Cost of an existing immutable path block. Speed must already include physical
 // nozzle, role and volumetric limits. This estimate adds no motion simulation.
 inline double half_layer_path_seconds(double length_mm, double effective_speed_mm_s)
@@ -97,6 +80,7 @@ struct HalfLayerInsertionBoundary {
     bool allowed;
 };
 
+// The later band's place (slot layer.bands: the mod chooses it, LayerBands.hpp).
 struct HalfLayerInsertion {
     static constexpr size_t unavailable = std::numeric_limits<size_t>::max();
     size_t boundary = unavailable;
@@ -104,53 +88,6 @@ struct HalfLayerInsertion {
     double total_seconds = 0.;
     double midpoint_error_seconds = 0.;
 };
-
-// One scan of existing boundaries, with deterministic earliest-boundary tie
-// breaking. 'allowed' comes from geometry/ordering, never from the time score.
-// The first wall is already part of base_seconds; the second wall is not.
-inline HalfLayerInsertion select_half_layer_insertion(
-    double base_seconds, double first_start_seconds, double first_end_seconds,
-    double second_wall_seconds, const std::vector<HalfLayerInsertionBoundary>& boundaries)
-{
-    if (!std::isfinite(base_seconds) || !std::isfinite(first_start_seconds) ||
-        !std::isfinite(first_end_seconds) || !std::isfinite(second_wall_seconds) ||
-        base_seconds < 0. || first_start_seconds < 0. ||
-        first_end_seconds < first_start_seconds || first_end_seconds > base_seconds ||
-        second_wall_seconds < 0.)
-        throw std::invalid_argument("Invalid half-layer timing interval");
-    HalfLayerInsertion best;
-    double best_error_seconds = std::numeric_limits<double>::infinity();
-    double previous_elapsed_seconds = 0.;
-    for (size_t i = 0; i < boundaries.size(); ++i) {
-        const auto& boundary = boundaries[i];
-        if (!std::isfinite(boundary.elapsed_seconds) ||
-            !std::isfinite(boundary.approach_seconds) ||
-            !std::isfinite(boundary.departure_seconds) ||
-            !std::isfinite(boundary.replaced_transition_seconds) ||
-            boundary.elapsed_seconds < previous_elapsed_seconds ||
-            boundary.elapsed_seconds > base_seconds || boundary.approach_seconds < 0. ||
-            boundary.departure_seconds < 0. || boundary.replaced_transition_seconds < 0. ||
-            boundary.replaced_transition_seconds > base_seconds - boundary.elapsed_seconds)
-            throw std::invalid_argument("Invalid half-layer insertion boundary");
-        previous_elapsed_seconds = boundary.elapsed_seconds;
-        if (!boundary.allowed || boundary.elapsed_seconds < first_end_seconds)
-            continue;
-        const double total_seconds = base_seconds + second_wall_seconds +
-            boundary.approach_seconds + boundary.departure_seconds - boundary.replaced_transition_seconds;
-        const double second_start_seconds = boundary.elapsed_seconds + boundary.approach_seconds;
-        if (!std::isfinite(total_seconds) || !std::isfinite(second_start_seconds))
-            throw std::invalid_argument("Half-layer insertion time overflow");
-        // Match start-to-start spacing, in seconds. first_start need not be zero
-        // when support, priming or other objects precede the first outer wall.
-        const double error_seconds = std::abs(
-            second_start_seconds - first_start_seconds - 0.5 * total_seconds);
-        if (error_seconds < best_error_seconds) {
-            best = {i, second_start_seconds, total_seconds, error_seconds};
-            best_error_seconds = error_seconds;
-        }
-    }
-    return best;
-}
 
 struct HalfLayerToolVisit {
     unsigned physical_tool;

@@ -2317,6 +2317,11 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     // (posSlicing and posSupportMaterial was invalidated).
     for (PrintObject *object : m_objects)
     {
+        // MAGPIE: the object's layer bands (slot layer.bands), from its settings as now applied. A changed plan
+        // redoes what reads it, also when the mod's parameters did not declare it (before the slicing parameters,
+        // which redoing the support makes invalid).
+        if (object->update_layer_bands())
+            update_apply_status(object->invalidate_step(posPerimeters) | object->invalidate_step(posSupportMaterial));
         object->update_slicing_parameters();
         m_support_used |= object->config().enable_support;
     }

@@ -609,8 +609,6 @@ TEST_CASE("Half-height wall setting owns live source geometry and invalidates on
     const double h_mm = GENERATE(0.1, 0.2, 0.3);
     const int walls = GENERATE(0, 1, 2, 4);
     auto config = DynamicPrintConfig::full_print_config();
-    REQUIRE_FALSE(config.opt_bool("outer_wall_half_layer_height"));
-    REQUIRE_FALSE(config.opt_bool("support_half_layer_height"));
     config.set_deserialize_strict({{"layer_height", h_mm}, {"initial_layer_print_height", h_mm},
         {"wall_loops", walls}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false}});
     config.set_key_value("wall_generator", new ConfigOptionEnum<PerimeterGeneratorType>(engine));
@@ -618,7 +616,7 @@ TEST_CASE("Half-height wall setting owns live source geometry and invalidates on
     Model model;
     init_print({make_cube(20., 20., 5.)}, print, model, config);
     for (const bool enabled : {false, true, false, true, false}) {
-        config.set_key_value("outer_wall_half_layer_height", new ConfigOptionBool(enabled));
+        Slic3r::Test::half_layer_params(config, enabled);
         print.apply(model, config);
         auto &object = *print.get_object(size_t(0));
         print.process();
@@ -661,9 +659,10 @@ TEST_CASE("Shell-only half layers participate in first-layer and empty-layer val
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"wall_generator", engine}, {"wall_loops", walls},
         {"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"outer_wall_half_layer_height", true}, {"top_shell_layers", 0}, {"bottom_shell_layers", 0},
+        {"top_shell_layers", 0}, {"bottom_shell_layers", 0},
         {"sparse_infill_density", "0%"}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
     struct ExportStagePrint : Print {
         using Print::invalidate_step;
         using Print::set_started;
@@ -712,17 +711,19 @@ TEST_CASE("Shell-only half layers participate in first-layer and empty-layer val
 TEST_CASE("Half-layer settings survive process-preset and 3MF project round trips",
     "[HalfLayer][Persistence]")
 {
-    const std::array<std::string, 2> keys{
-        "outer_wall_half_layer_height", "support_half_layer_height"};
+    // H/2 is the half_layer mod's parameters, kept in the process preset's mod_settings.
     const std::vector<std::string> &print_options = Preset::print_options();
-    for (const std::string &key : keys)
-        REQUIRE(std::find(print_options.begin(), print_options.end(), key) != print_options.end());
+    REQUIRE(std::find(print_options.begin(), print_options.end(), "mod_settings") != print_options.end());
+    auto half_layer_on = [](const DynamicPrintConfig &config) {
+        const auto *stored = config.option<ConfigOptionString>("mod_settings");
+        if (stored == nullptr || stored->value.empty())
+            return false;
+        const nlohmann::json values = nlohmann::json::parse(stored->value);
+        return values.value("half_layer.outer_walls", false) && values.value("half_layer.support", false);
+    };
 
     DynamicPrintConfig source_config = DynamicPrintConfig::full_print_config();
-    source_config.set_deserialize_strict({
-        {keys[0], true},
-        {keys[1], true},
-    });
+    Slic3r::Test::half_layer_params(source_config, true, true);
 
     const boost::filesystem::path preset_path = boost::filesystem::temp_directory_path() /
         boost::filesystem::unique_path("magpie-half-layer-preset-%%%%-%%%%.json");
@@ -736,8 +737,7 @@ TEST_CASE("Half-layer settings survive process-preset and 3MF project round trip
     boost::filesystem::remove(preset_path);
     REQUIRE(preset_reason.empty());
     REQUIRE(preset_substitutions.empty());
-    for (const std::string &key : keys)
-        CHECK(preset_config.opt_bool(key));
+    CHECK(half_layer_on(preset_config));
 
     Model source_model;
     ModelObject *source_object = source_model.add_object();
@@ -773,8 +773,7 @@ TEST_CASE("Half-layer settings survive process-preset and 3MF project round trip
         delete preset;
     boost::filesystem::remove(project_path);
     REQUIRE(loaded);
-    for (const std::string &key : keys)
-        CHECK(restored_config.opt_bool(key));
+    CHECK(half_layer_on(restored_config));
 }
 
 TEST_CASE("Disabling live half-height walls restores every ordinary machine command", "[HalfLayer][LiveWalls][OffRecovery]")
@@ -804,11 +803,11 @@ TEST_CASE("Disabling live half-height walls restores every ordinary machine comm
     const std::string before = commands(gcode(print));
     REQUIRE_FALSE(before.empty());
     for (int repeat = 0; repeat < 2; ++repeat) {
-        config.set_key_value("outer_wall_half_layer_height", new ConfigOptionBool(true));
+        Slic3r::Test::half_layer_params(config, true);
         print.apply(model, config);
         print.process();
         REQUIRE(print.get_object(size_t(0))->half_layer_sources() != nullptr);
-        config.set_key_value("outer_wall_half_layer_height", new ConfigOptionBool(false));
+        Slic3r::Test::half_layer_params(config, false);
         print.apply(model, config);
         const auto after = commands(gcode(print));
         CAPTURE(engine, h_mm, repeat);
@@ -828,10 +827,10 @@ TEST_CASE("Live half-height walls meet generated solid infill at narrow neck tra
     const double shear_ratio = GENERATE(0., 1.);
     auto config = detail ? multifilament_config(2) : DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", h_mm}, {"initial_layer_print_height", h_mm},
-        {"wall_generator", engine}, {"wall_loops", 4}, {"outer_wall_half_layer_height", enabled},
-        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
+        {"wall_generator", engine}, {"wall_loops", 4}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
         {"elefant_foot_compensation", 0.}, {"sparse_infill_density", 100.}, {"sparse_infill_pattern", "rectilinear"},
         {"wall_planner", "multi_nozzle"}});
+    Slic3r::Test::half_layer_params(config, enabled);
     multi_nozzle_params(config, { { "enable", detail }, { "small_wall_count", 2 }, { "interlock", true } });
     if (detail) {
         config.set_num_extruders(2);
@@ -934,8 +933,9 @@ TEST_CASE("Tool and seam consumers retain auxiliary physical walls under their l
     config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
     config.set_deserialize_strict({{"single_extruder_multi_material", false}, {"wall_generator", engine},
         {"layer_height", h_mm}, {"initial_layer_print_height", h_mm}, {"wall_loops", 2},
-        {"outer_wall_half_layer_height", true}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
+        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"detect_overhang_wall", false}, {"wall_planner", "multi_nozzle"}});
+    Slic3r::Test::half_layer_params(config, true);
     // This fixture intentionally needs both different-colored materials;
     // Auto must not substitute another color just to obtain a small nozzle.
     multi_nozzle_params(config, { { "enable", true }, { "detail_toolhead", 2 }, { "small_wall_count", detail_count } });
@@ -989,10 +989,11 @@ TEST_CASE("Sliced half-height paths produce a complete material-resolved executi
     }
     config.set_deserialize_strict({{"wall_generator", engine}, {"layer_height", h_mm},
         {"initial_layer_print_height", h_mm}, {"wall_loops", detail_count == 0 ? 4 : 2},
-        {"outer_wall_half_layer_height", true}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
+        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"outer_wall_speed", outer_speed_mm_s}, {"bottom_shell_layers", 10}, {"fill_density", 100.},
         {"detect_overhang_wall", false}, {"enable_overhang_speed", false}, {"slow_down_layers", 0},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
     Print print;
     Model model;
     init_print({make_cube(20., 20., 3.)}, print, model, config);
@@ -1012,7 +1013,7 @@ TEST_CASE("Sliced half-height paths produce a complete material-resolved executi
     REQUIRE_FALSE(lower.empty());
     REQUIRE_FALSE(core.empty());
     REQUIRE_FALSE(upper.empty());
-    const auto plan = schedule_half_layer_execution(lower, core, upper);
+    const auto plan = schedule_half_layer_execution(Test::half_layer_scheduler(), lower, core, upper);
     CHECK(plan.tasks.size() == lower.size() + core.size() + upper.size());
     CHECK(plan.upper_begin >= lower.size());
     CHECK(plan.upper_end <= plan.tasks.size());
@@ -1092,7 +1093,8 @@ TEST_CASE("Support half bands retain classified volume contact separation and lo
 {
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"support_half_layer_height", true}, {"enable_support", false}, {"support_interface_top_layers", 2}});
+        {"enable_support", false}, {"support_interface_top_layers", 2}});
+    Slic3r::Test::half_layer_params(config, false, true);
     Print print;
     Model model;
     init_print({cube(2.)}, print, model, config);
@@ -1169,9 +1171,10 @@ TEST_CASE("Native support generators produce half-height paths without changing 
     const double h_mm = GENERATE(0.1, 0.2, 0.3);
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", h_mm}, {"initial_layer_print_height", h_mm},
-        {"support_half_layer_height", true}, {"enable_support", true}, {"support_threshold_angle", 60},
+        {"enable_support", true}, {"support_threshold_angle", 60},
         {"support_interface_top_layers", 2}, {"support_interface_bottom_layers", 2},
         {"support_on_build_plate_only", true}, {"support_threshold_overlap", 0.}});
+    Slic3r::Test::half_layer_params(config, false, true);
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(type));
     config.set_key_value("support_generator", new ConfigOptionString(support_generator));
     if (generator == 2 || generator == 3)
@@ -1238,10 +1241,11 @@ TEST_CASE("Both wipe tower planners consume repeated half-layer visits", "[HalfL
         {"machine_load_filament_time", 1.0}, {"machine_unload_filament_time", 2.0},
         {"machine_tool_change_time", 7.0},
         {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"wall_loops", 4},
-        {"outer_wall_half_layer_height", true}, {"only_one_wall_top", false},
+        {"only_one_wall_top", false},
         {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
         {"z_hop", configured_hop_mm},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
     config.set_key_value("flush_volumes_matrix", new ConfigOptionFloats{0., 100., 20., 0.});
     config.set_key_value("flush_multiplier", new ConfigOptionFloats{1.});
     size_flush_to_nozzles(config); // MAGPIE: nightly checks one flush block and multiplier per nozzle
@@ -1405,8 +1409,9 @@ TEST_CASE("Dedicated wipe-tower material is an explicit execution visit", "[Half
     config.set_deserialize_strict({{"single_extruder_multi_material", true},
         {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"} /* MAGPIE: inside the 200 mm test bed (nightly default is off it) */, {"purge_in_prime_tower", true}, {"wipe_tower_filament", 3},
         {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"wall_loops", 4},
-        {"outer_wall_half_layer_height", true}, {"only_one_wall_top", false},
+        {"only_one_wall_top", false},
         {"only_one_wall_first_layer", false}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
     std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides;
     for (int filament : {1, 2}) {
         overrides.push_back({{"extruder", filament}});
@@ -1450,9 +1455,10 @@ TEST_CASE("Half-height support retains the original logical event grid", "[HalfL
     const char *support_generator = generator == 1 ? "cura" : generator == 4 ? "resin" : generator == 5 ? "mixed" : "";
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"support_half_layer_height", true}, {"enable_support", true}, {"support_threshold_angle", 60},
+        {"enable_support", true}, {"support_threshold_angle", 60},
         {"support_interface_top_layers", 2}, {"support_interface_bottom_layers", 2},
         {"support_on_build_plate_only", true}, {"support_threshold_overlap", 0.}, {"raft_layers", raft_layers}});
+    Slic3r::Test::half_layer_params(config, false, true);
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(type));
     config.set_key_value("support_generator", new ConfigOptionString(support_generator));
     if (generator == 2 || generator == 3)
@@ -1539,7 +1545,7 @@ TEST_CASE("Half-height support retains the original logical event grid", "[HalfL
             CHECK(observed_support == expected_support);
         }
     }
-    config.set_deserialize_strict({{"support_half_layer_height", false}});
+    Slic3r::Test::half_layer_params(config, false);
     print.apply(model, config);
     CHECK(print.get_object(size_t(0))->half_layer_support_sources() == nullptr);
     print.process();
@@ -1557,7 +1563,7 @@ TEST_CASE("Half-height support retains the original logical event grid", "[HalfL
         CHECK(off.support_layers()[i]->height == Catch::Approx(original_grid[i].height_mm).margin(0.000001));
         CHECK(off.support_layers()[i]->interface_id() == original_grid[i].interface_id);
     }
-    config.set_deserialize_strict({{"support_half_layer_height", true}});
+    Slic3r::Test::half_layer_params(config, false, true);
     print.apply(model, config);
     print.process();
     const auto *restored = print.get_object(size_t(0))->half_layer_support_sources();
@@ -1579,8 +1585,8 @@ TEST_CASE("Half-layer execution frame exports real G-code", "[HalfLayer][GCodeDi
     config.set_deserialize_strict({{"layer_height", layer_height}, {"initial_layer_print_height", layer_height},
         {"wall_generator", wall_generator}, {"wall_loops", wall_loops}, {"skirt_loops", 0}, {"brim_type", "no_brim"},
         {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
-        {"outer_wall_half_layer_height", mode != 1}, {"support_half_layer_height", mode != 0},
         {"enable_support", mode != 0}, {"support_threshold_angle", 60}});
+    Slic3r::Test::half_layer_params(config, mode != 1, mode != 0);
     Print print;
     Model model;
     if (mode == 0)
@@ -1629,9 +1635,9 @@ TEST_CASE("Half-layer timing and clearance changes invalidate the borrowed execu
 {
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"wall_loops", 4}, {"outer_wall_half_layer_height", true},
-        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
+        {"wall_loops", 4}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
     config.set_key_value("z_hop", new ConfigOptionFloats{0.1});
     Print print;
     Model model;
@@ -1663,7 +1669,8 @@ TEST_CASE("Half-layer settings reject spiral vase instead of silently disabling 
 {
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"wall_loops", 1}, {"spiral_mode", true}, {"outer_wall_half_layer_height", true}});
+        {"wall_loops", 1}, {"spiral_mode", true}});
+    Slic3r::Test::half_layer_params(config, true);
     Print print;
     Model model;
     init_print({cube(5.)}, print, model, config);
@@ -1681,13 +1688,13 @@ TEST_CASE("Half-layer settings preserve visit-local wipe-into claims and stored 
     auto config = multifilament_config(2);
     config.set_key_value("filament_map", new ConfigOptionInts{1, 1});
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"wall_loops", 4}, {"outer_wall_half_layer_height", true},
-        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
+        {"wall_loops", 4}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"detect_overhang_wall", false}, {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"} /* MAGPIE: inside the 200 mm test bed (nightly default is off it) */,
         {"purge_in_prime_tower", true}, {"single_extruder_multi_material", true},
         {"flush_into_objects", false}, {"flush_into_infill", false},
         {"is_infill_first", true}, {"sparse_infill_density", "20%"},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
     config.set_key_value("before_layer_change_gcode", new ConfigOptionString("G92 E0"));
     config.set_key_value("flush_volumes_matrix", new ConfigOptionFloats{0., 100., 20., 0.});
     config.set_key_value("flush_multiplier", new ConfigOptionFloats{1.});
@@ -1795,12 +1802,13 @@ TEST_CASE("Half-height support uses same-nozzle cross-material wipe reservations
     auto config = multifilament_config(2);
     config.set_key_value("filament_map", new ConfigOptionInts{1, 1});
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"support_half_layer_height", true}, {"enable_support", true}, {"support_threshold_angle", 60},
+        {"enable_support", true}, {"support_threshold_angle", 60},
         {"support_interface_top_layers", 2}, {"support_filament", 0},
         {"support_interface_filament", 0}, {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"} /* MAGPIE: inside the 200 mm test bed (nightly default is off it) */,
         {"purge_in_prime_tower", true}, {"single_extruder_multi_material", true},
         {"flush_into_objects", false}, {"flush_into_infill", false},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, false, true);
     config.set_key_value("before_layer_change_gcode", new ConfigOptionString("G92 E0"));
     config.set_key_value("flush_volumes_matrix", new ConfigOptionFloats{0., 100., 20., 0.});
     config.set_key_value("flush_multiplier", new ConfigOptionFloats{1.});
@@ -1905,11 +1913,12 @@ TEST_CASE("Half-layer purge credit matches emitted support volume under flow cha
     const bool role_flow = GENERATE(false, true);
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"support_half_layer_height", true}, {"enable_support", true},
+        {"enable_support", true},
         {"support_threshold_angle", 60}, {"support_interface_top_layers", 2},
         {"print_flow_ratio", process_ratio}, {"set_other_flow_ratios", role_flow},
         {"support_flow_ratio", 0.6}, {"support_interface_flow_ratio", 0.6}, {"first_layer_flow_ratio", 1.},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}, {"enable_arc_fitting", false}});
+    Slic3r::Test::half_layer_params(config, false, true);
     config.set_key_value("filament_flow_ratio", new ConfigOptionFloats{filament_ratio});
     Print print;
     Model model;
@@ -1956,7 +1965,7 @@ TEST_CASE("Model purge capacity covers late flow and seam changes", "[HalfLayer]
     const bool scarf = variant == 3 || variant == 4;
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"outer_wall_half_layer_height", true}, {"wall_loops", 4},
+        {"wall_loops", 4},
         {"wall_generator", engine},
         {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}, {"enable_arc_fitting", false},
@@ -1965,6 +1974,7 @@ TEST_CASE("Model purge capacity covers late flow and seam changes", "[HalfLayer]
         {"small_area_infill_flow_compensation", compensation},
         {"top_surface_pattern", "monotonic"}, {"bottom_surface_pattern", "monotonic"},
         {"internal_solid_infill_pattern", "rectilinear"}});
+    Slic3r::Test::half_layer_params(config, true);
     config.set_key_value("small_area_infill_flow_compensation_model",
         new ConfigOptionStrings{"0, 0.5", "100, 1.0"});
     Print print;
@@ -2033,10 +2043,11 @@ TEST_CASE("Late model flow changes invalidate and restore purge eligibility", "[
 {
     const int option = GENERATE(0, 1, 2);
     auto config = DynamicPrintConfig::full_print_config();
-    config.set_deserialize_strict({{"outer_wall_half_layer_height", true}, {"wall_loops", 4},
+    config.set_deserialize_strict({{"wall_loops", 4},
         {"seam_gap", 0.}, {"seam_slope_type", "none"}, {"small_area_infill_flow_compensation", false},
         {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
     Print print;
     Model model;
     init_print({make_cube(10., 10., 3.)}, print, model, config);
@@ -2083,9 +2094,10 @@ TEST_CASE("Changing flow invalidates cached half-layer purge capacity", "[HalfLa
 {
     const std::string key = GENERATE("filament_flow_ratio", "print_flow_ratio", "support_flow_ratio");
     auto config = DynamicPrintConfig::full_print_config();
-    config.set_deserialize_strict({{"support_half_layer_height", true}, {"enable_support", true},
+    config.set_deserialize_strict({{"enable_support", true},
         {"support_threshold_angle", 60}, {"set_other_flow_ratios", true},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, false, true);
     Print print;
     Model model;
     init_print({TestMesh::overhang}, print, model, config);
@@ -2126,9 +2138,10 @@ TEST_CASE("Wipe-into never claims across separate physical nozzles",
     config.set_deserialize_strict({{"single_extruder_multi_material", false},
         {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"} /* MAGPIE: inside the 200 mm test bed (nightly default is off it) */, {"purge_in_prime_tower", true},
         {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"wall_loops", 4},
-        {"outer_wall_half_layer_height", true}, {"only_one_wall_top", false},
+        {"only_one_wall_top", false},
         {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
         {"flush_into_objects", false}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
     config.set_key_value("flush_volumes_matrix", new ConfigOptionFloats{0., 100., 20., 0.});
     config.set_key_value("flush_multiplier", new ConfigOptionFloats{1.});
     size_flush_to_nozzles(config); // MAGPIE: nightly checks one flush block and multiplier per nozzle
@@ -2204,9 +2217,10 @@ TEST_CASE("Sequential copies receive independent half-layer execution plans", "[
 {
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"wall_loops", 4}, {"outer_wall_half_layer_height", true}, {"print_sequence", "by object"},
+        {"wall_loops", 4}, {"print_sequence", "by object"},
         {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
     Print print;
     Model model;
     init_print({cube(5.)}, print, model, config);
@@ -2255,13 +2269,13 @@ TEST_CASE("Half-layer skirt is consumed only by its scheduled filament", "[HalfL
         {"outer_wall_filament_id", 1}, {"inner_wall_filament_id", 2},
         {"sparse_infill_filament_id", 2}, {"internal_solid_filament_id", 2},
         {"top_surface_filament_id", 2}, {"bottom_surface_filament_id", 2},
-        {"outer_wall_half_layer_height", true}, {"support_half_layer_height", support_half},
         {"only_one_wall_first_layer", false}, {"enable_support", true},
         {"support_filament", 2}, {"support_interface_filament", 2}, {"support_threshold_angle", 60},
         {"skirt_type", "combined"}, {"skirt_loops", 2}, {"skirt_height", skirt_height},
         {"brim_type", "no_brim"}, {"enable_prime_tower", false},
         {"use_relative_e_distances", true}, {"layer_change_gcode", "G92 E0\n"},
     });
+    Slic3r::Test::half_layer_params(config, true, support_half);
     config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
     Print print;
     Model model;
@@ -2291,8 +2305,9 @@ TEST_CASE("Half-layer dispatcher retains auxiliary and sequential workflows", "[
     SECTION("combined skirt and brim") {
         auto config = DynamicPrintConfig::full_print_config();
         config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-            {"wall_loops", 4}, {"outer_wall_half_layer_height", true}, {"only_one_wall_top", false},
+            {"wall_loops", 4}, {"only_one_wall_top", false},
             {"only_one_wall_first_layer", false}, {"skirt_loops", 2}, {"brim_type", "outer_only"}, {"brim_width", 3.}});
+        Slic3r::Test::half_layer_params(config, true);
         Print print;
         Model model;
         init_print({cube(5.)}, print, model, config);
@@ -2303,9 +2318,9 @@ TEST_CASE("Half-layer dispatcher retains auxiliary and sequential workflows", "[
     SECTION("support brim restores shifted object origin") {
         auto config = DynamicPrintConfig::full_print_config();
         config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-            {"outer_wall_half_layer_height", true}, {"support_half_layer_height", true},
             {"enable_support", true}, {"support_threshold_angle", 60}, {"brim_type", "outer_only"},
             {"brim_width", 3.}, {"skirt_loops", 0}});
+        Slic3r::Test::half_layer_params(config, true, true);
         const auto support_min_x = [&](double shift_x) {
             Print print;
             Model model;
@@ -2333,9 +2348,10 @@ TEST_CASE("Half-layer dispatcher retains auxiliary and sequential workflows", "[
     SECTION("sequential objects") {
         auto config = DynamicPrintConfig::full_print_config();
         config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-            {"wall_loops", 4}, {"outer_wall_half_layer_height", true}, {"only_one_wall_top", false},
+            {"wall_loops", 4}, {"only_one_wall_top", false},
             {"only_one_wall_first_layer", false}, {"print_sequence", "by object"},
             {"gcode_label_objects", true}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+        Slic3r::Test::half_layer_params(config, true);
         TriangleMesh left = cube(5.);
         TriangleMesh right = cube(5.);
         right.translate(10.f, 0.f, 0.f);
@@ -2352,9 +2368,10 @@ TEST_CASE("Half-layer dispatcher retains auxiliary and sequential workflows", "[
         Slic3r::Test::OfficialMods mods;
         auto config = DynamicPrintConfig::full_print_config();
         config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-            {"support_half_layer_height", true}, {"enable_support", true}, {"support_threshold_angle", 60},
+            {"enable_support", true}, {"support_threshold_angle", 60},
             {"support_interface_top_layers", 2}, {"support_interface_filament", 0},
             {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+        Slic3r::Test::half_layer_params(config, false, true);
         Slic3r::Test::set_mod_params(config, {{"low_temp_interface.enable", true}, {"low_temp_interface.temperature", 170},
             {"low_temp_interface.heating_time", 0.0}, {"low_temp_interface.tower", false}, {"low_temp_interface.aux_fan", false},
             {"low_temp_interface.brush", false}});
@@ -2383,11 +2400,12 @@ TEST_CASE("Half-layer dispatcher retains auxiliary and sequential workflows", "[
     SECTION("traditional timelapse and wrapping hooks") {
         auto config = DynamicPrintConfig::full_print_config();
         config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-            {"wall_loops", 4}, {"outer_wall_half_layer_height", true}, {"only_one_wall_top", false},
+            {"wall_loops", 4}, {"only_one_wall_top", false},
             {"only_one_wall_first_layer", false}, {"printer_structure", "i3"},
             {"time_lapse_gcode", ";HALF_LAYER_TIMELAPSE"}, {"timelapse_type", "0"},
             {"enable_wrapping_detection", true}, {"wrapping_detection_gcode", ";HALF_LAYER_WRAPPING"},
             {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+        Slic3r::Test::half_layer_params(config, true);
         Print print;
         Model model;
         init_print({cube(5.)}, print, model, config);
@@ -2398,8 +2416,9 @@ TEST_CASE("Half-layer dispatcher retains auxiliary and sequential workflows", "[
     SECTION("variable parent heights") {
         auto config = DynamicPrintConfig::full_print_config();
         config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-            {"wall_loops", 4}, {"outer_wall_half_layer_height", true}, {"only_one_wall_top", false},
+            {"wall_loops", 4}, {"only_one_wall_top", false},
             {"only_one_wall_first_layer", false}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+        Slic3r::Test::half_layer_params(config, true);
         Print print;
         Model model;
         init_print({cube(20.)}, print, model, config);
@@ -2432,10 +2451,10 @@ TEST_CASE("Bunny60 exports half-height support through every native generator", 
     REQUIRE(load_drc(bunny_path.string().c_str(), &bunny));
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"wall_loops", 4}, {"outer_wall_half_layer_height", outer_half}, {"support_half_layer_height", true},
-        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"enable_support", true},
+        {"wall_loops", 4}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"enable_support", true},
         {"support_threshold_angle", 60}, {"support_interface_top_layers", 2},
         {"support_interface_bottom_layers", 2}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, outer_half, true);
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(type));
     config.set_key_value("support_generator", new ConfigOptionString(support_generator));
     if (generator == 2 || generator == 3)
@@ -2564,9 +2583,10 @@ TEST_CASE("Independent support layers under H/2 support produce no sliver bands"
     auto config = DynamicPrintConfig::full_print_config();
     // An off-grid gap: independent support layers put the contact 0.15 mm under the model.
     config.set_deserialize_strict({{"layer_height", h_mm}, {"initial_layer_print_height", h_mm},
-        {"support_half_layer_height", true}, {"enable_support", true}, {"support_threshold_angle", 60},
+        {"enable_support", true}, {"support_threshold_angle", 60},
         {"independent_support_layer_height", true}, {"support_top_z_distance", 0.15},
         {"support_bottom_z_distance", 0.15}, {"support_on_build_plate_only", true}});
+    Slic3r::Test::half_layer_params(config, false, true);
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormalAuto));
     TriangleMesh mesh = make_cube(5., 10., 6.);
     TriangleMesh ceiling = make_cube(20., 10., 1.2);
@@ -2591,18 +2611,20 @@ TEST_CASE("Half-height outer walls force half-height support", "[HalfLayer][Supp
     const bool outer_walls = GENERATE(false, true);
     const bool support = GENERATE(false, true);
     auto config = DynamicPrintConfig::full_print_config();
-    config.set_deserialize_strict({{"outer_wall_half_layer_height", outer_walls}, {"support_half_layer_height", support},
-        {"enable_support", true}});
+    config.set_deserialize_strict({{"enable_support", true}});
+    Slic3r::Test::half_layer_params(config, outer_walls, support);
     Print print;
     Model model;
     init_print({make_cube(10., 10., 10.)}, print, model, config);
     CAPTURE(outer_walls, support);
-    // Global settings: support follows the outer walls, and stays as configured otherwise.
-    CHECK(print.get_object(0)->config().support_half_layer_height.value == (outer_walls || support));
+    // Global settings: support follows the outer walls, and stays as configured otherwise (the H/2 mod's plan).
+    CHECK(print.get_object(0)->layer_bands().support == (outer_walls || support));
+    CHECK(print.get_object(0)->layer_bands().walls() == outer_walls);
     // A per-object override of the outer walls forces the object's support too.
-    model.objects.front()->config.set("outer_wall_half_layer_height", true);
+    Slic3r::Test::half_layer_object_params(model.objects.front()->config, true);
     print.apply(model, config);
-    CHECK(print.get_object(0)->config().support_half_layer_height.value);
+    CHECK(print.get_object(0)->layer_bands().walls());
+    CHECK(print.get_object(0)->layer_bands().support);
 }
 
 TEST_CASE("Half-height frames print upper-plane support after the lower outer-wall pass", "[HalfLayer][SupportOrder]")
@@ -2610,8 +2632,9 @@ TEST_CASE("Half-height frames print upper-plane support after the lower outer-wa
     const int generator = GENERATE(0, 2);
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"outer_wall_half_layer_height", true}, {"enable_support", true}, {"support_threshold_angle", 60},
+        {"enable_support", true}, {"support_threshold_angle", 60},
         {"support_on_build_plate_only", true}, {"layer_change_gcode", "G92 E0"}});
+    Slic3r::Test::half_layer_params(config, true);
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(generator == 0 ? stNormalAuto : stTreeAuto));
     TriangleMesh mesh = make_cube(5., 10., 6.);
     TriangleMesh ceiling = make_cube(20., 10., 1.2);

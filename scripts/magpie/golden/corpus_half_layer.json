@@ -1,5 +1,5 @@
 {
- "description": "H/2 (resources/mods/half_layer.json) on the U1, compared by hand with Magpie line 1 (Beta 7) per layer: Z sequence, role order, half-pass placement.",
+ "description": "H/2 (the half_layer mod) on the U1, compared by hand with Magpie line 1 (Beta 7) per layer: Z sequence, role order, half-pass placement.",
  "printers": {
   "u1": {
    "machine": "presets/u1_04_machine.json",

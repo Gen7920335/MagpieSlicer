@@ -1088,11 +1088,11 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
 
     // MAGPIE: H/2 tower travel clearance (Magpie line 1 Beta 6). Without H/2 the tower placeholders are empty.
     static double prepare_wipe_tower_travel_config(DynamicConfig &variables, const PrintConfig &config,
-                                                   bool enabled, double parent_height_mm, double tower_z_mm)
+                                                   bool enabled, double lift_layers, double parent_height_mm, double tower_z_mm)
     {
         // Both tower backends and nested nozzle-change blocks use this policy.
-        // The caller supplies original logical H, never the tower/physical H.
-        const double minimum_lift_mm = enabled ? half_layer_travel_lift_mm(0., parent_height_mm, true, false) : 0.;
+        // The caller supplies original logical H, never the tower/physical H, and the band plan's lift in model layers.
+        const double minimum_lift_mm = enabled ? band_travel_lift_mm(0., parent_height_mm, lift_layers) : 0.;
         variables.set_key_value("half_layer_tower_travel_enabled", new ConfigOptionBool(enabled));
         const size_t filament_count = std::max(config.filament_diameter.size(), config.filament_colour.size());
         for (size_t filament = 0; filament < filament_count; ++filament) {
@@ -1284,7 +1284,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
                 // through the placeholder parser would also drop the writer's acceleration cache (the block
                 // sets its own) and add an acceleration command after the toolchange.
                 DynamicConfig travel_variables;
-                prepare_wipe_tower_travel_config(travel_variables, gcodegen.config(), true,
+                prepare_wipe_tower_travel_config(travel_variables, gcodegen.config(), true, gcodegen.band_lift_layers(),
                     gcodegen.m_half_layer_motion_reference_height, gcodegen.writer().get_position().z());
                 const std::string nozzle_template = std::move(nozzle_moves);
                 nozzle_moves.clear();
@@ -1657,7 +1657,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         config.set_key_value("filament_start_gcode", new ConfigOptionString(start_filament_gcode_str));
         const bool half_layer_travel = gcodegen.m_half_layer_dispatch_active;
         const double minimum_lift_mm = prepare_wipe_tower_travel_config(config, gcodegen.config(),
-            half_layer_travel, gcodegen.m_half_layer_motion_reference_height, z);
+            half_layer_travel, gcodegen.band_lift_layers(), gcodegen.m_half_layer_motion_reference_height, z);
         if (!half_layer_travel)
             strip_wipe_tower_travel_lines(tcr_rotated_gcode);
         std::string tcr_gcode, tcr_escaped_gcode = gcodegen.placeholder_parser_process("tcr_rotated_gcode", tcr_rotated_gcode, new_filament_id, &config);
@@ -1972,7 +1972,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
 
         const bool half_layer_travel = gcodegen.m_half_layer_dispatch_active;
         const double minimum_lift_mm = prepare_wipe_tower_travel_config(config, gcodegen.config(),
-            half_layer_travel, gcodegen.m_half_layer_motion_reference_height, z);
+            half_layer_travel, gcodegen.band_lift_layers(), gcodegen.m_half_layer_motion_reference_height, z);
         if (!half_layer_travel)
             strip_wipe_tower_travel_lines(tcr_rotated_gcode);
 
@@ -4210,6 +4210,11 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     this->apply_print_config(print.config());
     m_config.apply(print.default_object_config());
     m_config.apply(print.default_region_config());
+    m_config_object = nullptr;
+    // MAGPIE: travel over layer bands (layer.bands slot) lifts by the print's largest band plan lift.
+    m_band_lift_layers = 0.;
+    for (const PrintObject *object : print.objects())
+        m_band_lift_layers = std::max(m_band_lift_layers, object->layer_bands().min_travel_lift_layers);
 
     //m_volumetric_speed = DoExport::autospeed_volumetric_limit(print);
     print.throw_if_canceled();
@@ -4924,6 +4929,9 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     for (const PrintObject *object : print.objects()) {
         for (const std::string &id : object->native_mods_used())
             m_native_mods_used.insert(id);
+        // The mod that bands the object's layers (layer.bands slot).
+        if (object->layer_bands().active())
+            m_native_mods_used.insert(object->layer_bands().mod_id);
         // The wall planners the object's regions name (wall.plan slot), each opened for them.
         for (const PrintRegion &region : object->all_regions())
             if (const std::string id = ModHost::wall_planner_mod_id(region.config().wall_planner.value); !id.empty())
@@ -6494,10 +6502,8 @@ void retarget_half_layer_task_material(HalfLayerExecutionTask &task,
     const auto metrics = half_layer_entity_metrics(*task.entity, config, context);
     task.extrusion_seconds = metrics.seconds;
     task.wipe_into_volume_mm3 = half_layer_purge_volume_mm3(*task.entity, metrics.volume_mm3, config, context);
-    task.clearance_mm = half_layer_travel_lift_mm(config.z_hop.get_at(destination_filament),
-        task.motion_reference_height,
-        task.object->config().outer_wall_half_layer_height.value,
-        task.object->config().support_half_layer_height.value);
+    task.clearance_mm = band_travel_lift_mm(config.z_hop.get_at(destination_filament),
+        task.motion_reference_height, task.object->layer_bands().min_travel_lift_layers);
     set_half_layer_tool_entry_costs(task, config);
 }
 
@@ -6578,8 +6584,8 @@ void append_half_layer_model_tasks(const PrintObject &object, size_t parent_inde
                     task.z_speed_mm_s = config.travel_speed_z.get_at(physical_tool);
                     if (task.z_speed_mm_s == 0.)
                         task.z_speed_mm_s = task.travel_speed_mm_s;
-                    task.clearance_mm = half_layer_travel_lift_mm(config.z_hop.get_at(filament), parent.height,
-                        object.config().outer_wall_half_layer_height.value, object.config().support_half_layer_height.value);
+                    task.clearance_mm = band_travel_lift_mm(config.z_hop.get_at(filament), parent.height,
+                        object.layer_bands().min_travel_lift_layers);
                     task.motion_reference_height = parent.height;
                     task.wipe_into_eligible = const_cast<LayerTools &>(tools).wiping_extrusions().is_overriddable(
                         root, print_config, object, region->region()) &&
@@ -6741,9 +6747,8 @@ void append_half_layer_support_tasks(const PrintObject &object, const Layer &log
             task.z_speed_mm_s = config.travel_speed_z.get_at(physical_tool);
             if (task.z_speed_mm_s == 0.)
                 task.z_speed_mm_s = task.travel_speed_mm_s;
-            task.clearance_mm = half_layer_travel_lift_mm(config.z_hop.get_at(filament),
-                motion_reference_height(*physical), object.config().outer_wall_half_layer_height.value,
-                object.config().support_half_layer_height.value);
+            task.clearance_mm = band_travel_lift_mm(config.z_hop.get_at(filament),
+                motion_reference_height(*physical), object.layer_bands().min_travel_lift_layers);
             task.motion_reference_height = motion_reference_height(*physical);
             task.wipe_into_eligible = const_cast<LayerTools &>(tools).wiping_extrusions().is_support_overriddable(
                 role, object) && half_layer_entity_has_stable_purge_volume(entity, config, context);
@@ -7164,6 +7169,7 @@ std::string GCode::generate_object_brim(const Print &print, const PrintObject &o
         // geometry is already in plate coordinates.
         m_config.apply(print.default_region_config());
         m_config.apply(object.config(), true);
+        m_config_object = &object;
         // m_layer is not switched to this object until after brim emission, so name
         // the belt-floor owner explicitly or the classification borrows whichever
         // object was visited last.
@@ -7346,6 +7352,7 @@ std::string GCode::emit_belt_brim_bands(const Print                     &print,
         // Speeds, flow and retraction all read m_config.
         m_config.apply(print.default_region_config());
         m_config.apply(object.config(), true);
+        m_config_object = &object;
         // Apron bands have no Layer at all (m_layer is null here), so the belt
         // floor owner has to be named the same way the object brim names it.
         BeltFloorObjectGuard floor_owner{ m_belt_floor_object, &object };
@@ -7731,6 +7738,7 @@ LayerResult GCode::process_layer(
 
     // Initialize config with the 1st object to be printed at this layer.
     m_config.apply(layer.object()->config(), true);
+    m_config_object = layer.object();
 
     // Check whether it is possible to apply the spiral vase logic for this layer.
     // Just a reminder: A spiral vase mode is allowed for a single object, single material print only.
@@ -8777,6 +8785,7 @@ LayerResult GCode::process_layer(
                 throw std::logic_error("Half-layer task has no full-height motion reference");
             m_config.apply(print.default_region_config());
             m_config.apply(task.object->config(), true);
+            m_config_object = task.object;
             this->set_physical_layer(*task.physical_layer, *task.logical_layer, task.motion_reference_height);
             if (task.region != nullptr)
                 m_config.apply(task.region->region().config());
@@ -9110,6 +9119,7 @@ LayerResult GCode::process_layer(
                     instance_to_print.print_object.slicing_parameters().raft_layers() == layer_to_print.object_layer->id();
                 m_config.apply(print.default_region_config());
                 m_config.apply(instance_to_print.print_object.config(), true);
+                m_config_object = &instance_to_print.print_object;
                 m_layer = layer_to_print.layer();
                 m_object_layer_over_raft = object_layer_over_raft;
                 if (m_config.reduce_crossing_wall)
@@ -9355,6 +9365,7 @@ LayerResult GCode::process_layer(
                     instance_to_print.print_object.slicing_parameters().raft_layers() == layer_to_print.object_layer->id();
                 m_config.apply(print.default_region_config());
                 m_config.apply(instance_to_print.print_object.config(), true);
+                m_config_object = &instance_to_print.print_object;
                 m_layer = layer_to_print.layer();
                 m_object_layer_over_raft = object_layer_over_raft;
                 if (m_config.reduce_crossing_wall)
@@ -9769,6 +9780,7 @@ void GCode::set_physical_layer(const Layer &physical, const Layer &logical_paren
     m_logical_layer = &logical_parent;
     m_half_layer_motion_reference_height = motion_reference_height;
     m_config.apply(physical.object()->config(), true);
+    m_config_object = physical.object();
     m_nominal_z = physical.print_z + m_config.z_offset.value;
     m_need_change_layer_lift_z = true;
     m_writer.set_is_first_layer(this->on_first_layer());
@@ -9862,8 +9874,6 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "region_mod_settings"sv,
         "wall_planner"sv,
         "crisp_corner_small_nozzle_wall_speed"sv,
-        "outer_wall_half_layer_height"sv,
-        "support_half_layer_height"sv,
         "support_interface_temperature_drop_tower_x"sv,
         "support_interface_temperature_drop_tower_y"sv,
         "layer_time_planner"sv,
@@ -12443,16 +12453,15 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
 
     // use G1 because we rely on paths being straight (G0 may make round paths)
     if (travel.size() >= 2) {
-        // The H/2 flags in m_config may be the previous object's; on a layer with no H/2 frame (an empty
+        // The object m_config took last may be the previous object; on a layer with no H/2 frame (an empty
         // support layer, the end-of-layer drop tower) there is no logical layer and a plain travel is right.
         if (m_half_layer_dispatch_active ||
-            ((m_config.outer_wall_half_layer_height || m_config.support_half_layer_height) && m_logical_layer != nullptr)) {
+            (m_config_object != nullptr && m_config_object->layer_bands().active() && m_logical_layer != nullptr)) {
             if (m_logical_layer == nullptr)
                 throw std::logic_error("Half-height travel requires an explicit logical parent layer");
             if (!std::isfinite(m_half_layer_motion_reference_height) || m_half_layer_motion_reference_height <= 0.)
                 throw std::logic_error("Half-height travel requires a full-height motion reference");
-            const double minimum_lift_mm = half_layer_travel_lift_mm(0., m_half_layer_motion_reference_height,
-                true, false);
+            const double minimum_lift_mm = band_travel_lift_mm(0., m_half_layer_motion_reference_height, this->band_lift_layers());
             const double target_nominal_z_mm = z == DBL_MAX ? m_nominal_z : z;
             if (std::isfinite(m_half_layer_pending_source_z)) {
                 gcode += m_writer.ensure_travel_clearance(m_half_layer_pending_source_z,

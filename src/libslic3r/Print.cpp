@@ -367,8 +367,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
     std::vector<PrintObjectStep> osteps;
     bool invalidated = false;
     const bool half_layer_execution_enabled = std::any_of(m_objects.begin(), m_objects.end(), [](const PrintObject *object) {
-        return object != nullptr && (object->config().outer_wall_half_layer_height.value ||
-                                     object->config().support_half_layer_height.value);
+        return object != nullptr && object->layer_bands().active();
     });
 
     // MAGPIE: a per-nozzle line width field invalidates what its line width does.
@@ -2021,10 +2020,14 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
         else if (width_mm > nozzle_mm * MAX_LINE_WIDTH_MULTIPLIER)
             error = {line_width_error(false, print.line_width_reference_mm()), &object, width_key};
     };
-    const int outer_count = config.outer_wall_half_layer_height.value ? 2 : 1; // walls printed at half height
+    // MAGPIE: the object's band plan (layer.bands slot): banded walls and support print at the lowest band's height.
+    const LayerBandPlan &bands = object.layer_bands();
+    const double band_fraction = bands.band_fractions.empty() ? 1. :
+        *std::min_element(bands.band_fractions.begin(), bands.band_fractions.end());
+    const int outer_count = bands.walls() ? bands.wall_depths : 1; // walls printed at band height
     for (const bool first : { true, false }) {
         const double full_mm  = first ? first_height_mm : max_height_mm;
-        const double outer_mm = config.outer_wall_half_layer_height.value ? 0.5 * full_mm : full_mm;
+        const double outer_mm = bands.walls() ? band_fraction * full_mm : full_mm;
         for (const PrintRegion &region : object.all_regions()) {
             const PrintRegionConfig &rc = region.config();
             const int outer = std::max(1, rc.outer_wall_filament_id.value);
@@ -2068,7 +2071,7 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
                 check(rc.bottom_surface_filament_id.value, rc, "internal_solid_infill_line_width", full_mm, first);
         }
         if (object.has_support() || object.has_raft()) {
-            const double support_mm = config.support_half_layer_height.value ? 0.5 * full_mm : full_mm;
+            const double support_mm = bands.support ? band_fraction * full_mm : full_mm;
             // An auxiliary tower of a G-code event mod prints full layers with the support filament (line 1's
             // temperature drop tower).
             const bool aux_tower = ModHost::gcode_events_tower_requested(object);
@@ -2155,6 +2158,22 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         ModHost::object_z_offset(m_full_print_config, object->config(), object->model_object()->name, &error);
         if (!error.empty())
             return {error, object};
+    }
+    // MAGPIE: layer bands (layer.bands): a plan that failed or that the band executor cannot print, and banded objects of
+    // one print on different implementations (the band executor runs one scheduler for the print's layers).
+    {
+        const PrintObject *banded = nullptr;
+        for (const PrintObject *object : m_objects) {
+            if (!object->layer_bands().error.empty())
+                return {object->layer_bands().error, object};
+            if (!object->layer_bands().active())
+                continue;
+            if (banded != nullptr && banded->layer_bands().mod_id != object->layer_bands().mod_id)
+                return {Slic3r::format(_u8L("Objects \"%1%\" and \"%2%\" are printed in layer bands by different mods (%3%, %4%). Use one of them for every object."),
+                                       banded->model_object()->name, object->model_object()->name, banded->layer_bands().mod_id,
+                                       object->layer_bands().mod_id), object};
+            banded = object;
+        }
     }
 
     // MAGPIE: say when absolute line widths were scaled to each nozzle (scale_absolute_line_widths_to_nozzles),
@@ -2531,7 +2550,7 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 
     if (m_config.spiral_mode) {
         for (const PrintObject *object : m_objects)
-            if (object->config().outer_wall_half_layer_height.value || object->config().support_half_layer_height.value)
+            if (object->layer_bands().active())
                 return {L("Half-height outer walls or supports cannot be combined with spiral vase mode because their discrete Z passes require ordinary layer geometry."),
                     object, "spiral_mode"};
         size_t total_copies_count = 0;
@@ -2877,7 +2896,7 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
             }
 
             // MAGPIE: H/2 objects are checked per role (validate_half_layer_nozzles) instead of below.
-            const bool half_layer_object = object->config().outer_wall_half_layer_height.value || object->config().support_half_layer_height.value;
+            const bool half_layer_object = object->layer_bands().active();
             // Tallest layer of the object (variable layer height included), mm.
             double max_height_mm = object->config().layer_height.value;
             if (half_layer_object) {

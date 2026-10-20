@@ -2,6 +2,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include "libslic3r/HalfLayerPlan.hpp"
+#include "libslic3r/LayerBands.hpp"
 
 using namespace Slic3r;
 
@@ -55,44 +56,18 @@ TEST_CASE("Half-layer roles preserve effective XY count", "[HalfLayer][Walls]")
     CHECK_FALSE(is_half_layer_outer_wall(2, true));
 }
 
-TEST_CASE("Half-layer hop uses parent height without adding to configured hop", "[HalfLayer][Hop]")
+TEST_CASE("Band travel lift uses the parent height without adding to the configured hop", "[HalfLayer][Hop]")
 {
-    const bool wall = GENERATE(false, true);
-    const bool support = GENERATE(false, true);
+    // H/2's plan lifts at least 1.5 model layer heights; 0 keeps the configured hop.
+    const double lift_layers = GENERATE(0., 1.5);
     const double configured = GENERATE(0., 0.1, 0.2999, 0.3, 0.3001, 0.8);
-    const double expected = wall || support ? std::max(configured, 0.3) : configured;
-    CHECK(half_layer_travel_lift_mm(configured, 0.2, wall, support) == Catch::Approx(expected));
+    const double expected = lift_layers > 0. ? std::max(configured, 0.3) : configured;
+    CHECK(band_travel_lift_mm(configured, 0.2, lift_layers) == Catch::Approx(expected));
+    CHECK_THROWS_AS(band_travel_lift_mm(-0.1, 0.2, lift_layers), std::invalid_argument);
 }
 
-TEST_CASE("Half-layer timing selects a legal midpoint without changing path order", "[HalfLayer][Time]")
+TEST_CASE("Half-layer path time divides length by speed", "[HalfLayer][Time]")
 {
-    // First outer wall takes 10 s; remaining existing work takes 70 s. The
-    // second wall adds 20 s. Independent expected full duration is 100 s.
-    const std::vector<HalfLayerInsertionBoundary> slots{
-        {0., 0., 0., 0., true}, {10., 0., 0., 0., true},
-        {40., 0., 0., 0., true}, {50., 0., 0., 0., false},
-        {60., 0., 0., 0., true}, {80., 0., 0., 0., true}};
-    const auto insertion = select_half_layer_insertion(80., 0., 10., 20., slots);
-    REQUIRE(insertion.boundary == 2); // equal error at 40/60, stable earliest tie
-    CHECK(insertion.total_seconds == 100.);
-    CHECK(insertion.midpoint_error_seconds == 10.);
-    auto all_blocked = slots;
-    for (auto& slot : all_blocked) slot.allowed = false;
-    CHECK(select_half_layer_insertion(80., 0., 10., 20., all_blocked).boundary ==
-          HalfLayerInsertion::unavailable);
-}
-
-TEST_CASE("Half-layer midpoint includes repeated tool visit cost", "[HalfLayer][Time]")
-{
-    // A nominal midpoint at 50 s would require an expensive tool return.
-    const std::vector<HalfLayerInsertionBoundary> slots{
-        {40., 0., 0., 0., true}, {50., 30., 0., 0., true},
-        {60., 0., 0., 0., true}};
-    const auto insertion = select_half_layer_insertion(80., 0., 10., 20., slots);
-    CHECK(insertion.boundary == 0);
-    CHECK(insertion.midpoint_error_seconds == 10.);
-    // Support before the first outer wall must not be mistaken for wall age.
-    CHECK(select_half_layer_insertion(80., 10., 20., 20., slots).boundary == 2);
     CHECK(half_layer_path_seconds(120., 30.) == 4.);
     CHECK_THROWS_AS(half_layer_path_seconds(120., 0.), std::invalid_argument);
 }
