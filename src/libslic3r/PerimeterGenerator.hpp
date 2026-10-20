@@ -143,6 +143,9 @@ public:
     const ModHost::WallPlanner *wall_planner { nullptr };
     int                         detail_wall_count { 0 };
     bool                        detail_wall_routing { false };
+    // MAGPIE: smaller_ext_perimeter_flow is the wall planner's detail nozzle flow, so Classic's narrow-loop walls
+    // printed at that width belong to the detail nozzle even on an island the plan leaves to the large nozzle.
+    bool                        narrow_loops_use_detail_flow { false };
     // MAGPIE: H/2 outer walls. Transient geometry-plan input, never inferred from the detail-nozzle count.
     // The parent layer height is unchanged; only the outer two physical paths use half that height. Both
     // half-layer cross sections must be supplied by the owning layer planner before this is used for output.

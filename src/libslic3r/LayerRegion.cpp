@@ -402,6 +402,15 @@ static HalfLayerGapFill assign_joint_half_layer_gaps(const HalfLayerRegionWallCa
                     throw std::invalid_argument("Half-layer joint gap demand requires a homogeneous gap policy");
         auto owned = policy;
         owned.flow = owned.flow.with_height(float(candidate.bands[phase].height_mm()));
+        // MAGPIE: the jointly owned gaps keep every source demand's split between the wall planner's nozzles.
+        owned.route_by_wall_nozzle = false;
+        owned.detail_regions.clear();
+        for (const auto *inputs : {&candidate.core_gap_demands, &candidate.phase_gap_demands[phase]})
+            for (const auto &demand : *inputs) {
+                owned.route_by_wall_nozzle = owned.route_by_wall_nozzle || demand.route_by_wall_nozzle;
+                append(owned.detail_regions, demand.detail_regions);
+            }
+        owned.detail_regions = union_ex(owned.detail_regions);
         owned.regions = intersection_ex(diff_ex(union_ex(phase_regions[phase], core_regions), common_regions), source_sections[phase]);
         Polygons occupied = reserved_core;
         half_layer_volume_footprint(*candidate.shells[phase], occupied);

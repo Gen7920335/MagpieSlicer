@@ -65,6 +65,15 @@ ExtrusionEntityCollection make_perimeter_gap_fill(PerimeterGapDemand demand)
         [&demand](const ThickPolyline &p) { return p.length() < demand.minimum_length_scaled; }), polylines.end());
     ExtrusionEntityCollection result;
     variable_width(polylines, erGapFill, demand.flow, result.entities);
+    if (demand.route_by_wall_nozzle)
+        for (ExtrusionEntity *entity : result.entities) {
+            // Each gap fill line runs inside one gap region; its middle vertex says which.
+            const Polyline line   = entity->as_polyline();
+            const bool     detail = !line.points.empty() &&
+                std::any_of(demand.detail_regions.begin(), demand.detail_regions.end(),
+                            [&line](const ExPolygon &region) { return region.contains(line.points[line.points.size() / 2]); });
+            entity->tool_hint     = detail ? ExtrusionToolHint::DetailWall : ExtrusionToolHint::LargeWall;
+        }
     return result;
 }
 
@@ -377,6 +386,10 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
         ExtrusionLoop extrusion_loop(std::move(paths), loop_role);
         if (perimeter_generator.detail_wall_routing)
             extrusion_loop.tool_hint = use_detail_wall_flow ? ExtrusionToolHint::DetailWall : ExtrusionToolHint::LargeWall;
+        else if (is_small_width && perimeter_generator.narrow_loops_use_detail_flow)
+            // MAGPIE: a narrow loop is printed at the detail nozzle's width, so by the detail nozzle; without the
+            // hint it went to the large nozzle at the detail width.
+            extrusion_loop.tool_hint = ExtrusionToolHint::DetailWall;
         coll.append(std::move(extrusion_loop));
     }
 
@@ -1688,6 +1701,7 @@ void PerimeterGenerator::process_classic()
         planner_detail_flow = this->wall_planner->detail_flow(*this);
     if (planner_detail_flow)
         this->smaller_ext_perimeter_flow = *planner_detail_flow;
+    this->narrow_loops_use_detail_flow = planner_detail_flow.has_value();
     m_ext_mm3_per_mm_smaller_width = this->smaller_ext_perimeter_flow.mm3_per_mm();
 
     // prepare grown lower layer slices for overhang detection
@@ -1738,6 +1752,8 @@ void PerimeterGenerator::process_classic()
 
         ExPolygons last        = union_ex(surface.expolygon.simplify_p(surface_simplify_resolution));
         ExPolygons gaps;
+        // MAGPIE: the gaps between two of the wall plan's detail walls, printed by the detail nozzle.
+        ExPolygons detail_gaps;
         ExPolygons top_fills;
         ExPolygons fill_clip;
         // ORCA: only_one_wall_top, all empty unless this island has a top surface on this layer. See the
@@ -1867,9 +1883,13 @@ void PerimeterGenerator::process_classic()
                             0.5 * wall_flow_at_depth(size_t(i - 1)).scaled_spacing() : 0.5 * distance;
                         const double next_edge_distance_scaled = half_layer_outer_walls ?
                             0.5 * wall_flow_at_depth(size_t(i)).scaled_spacing() : 0.5 * distance;
-                        append(gaps, diff_ex(
+                        ExPolygons depth_gaps = diff_ex(
                             offset(last, -float(previous_edge_distance_scaled)),
-                            offset(offsets, float(next_edge_distance_scaled + 10)))); // Existing 10 scaled units = 0.00001 mm safety offset.
+                            offset(offsets, float(next_edge_distance_scaled + 10))); // Existing 10 scaled units = 0.00001 mm safety offset.
+                        // Between walls i - 1 and i: both detail walls when i < the detail wall count.
+                        if (this->detail_wall_routing && i < this->detail_wall_count)
+                            append(detail_gaps, depth_gaps);
+                        append(gaps, std::move(depth_gaps));
                     }
                 }
                 if (offsets.empty() && offsets_with_smaller_width.empty()) {
@@ -2215,6 +2235,8 @@ void PerimeterGenerator::process_classic()
                 this->solid_infill_flow.with_height(float(0.5 * layer_height)) : this->solid_infill_flow;
             PerimeterGapDemand demand{std::move(gaps_ex), gap_flow, min, max,
                 surface_simplify_resolution, double(scale_(config->filter_out_gap_fill.value))};
+            demand.route_by_wall_nozzle = this->detail_wall_routing;
+            demand.detail_regions       = union_ex(detail_gaps);
             if (gap_demands != nullptr)
                 gap_demands->push_back(demand);
             auto gap_fill = make_perimeter_gap_fill(std::move(demand));
@@ -3001,9 +3023,21 @@ void PerimeterGenerator::process_arachne()
                 // instead - the fallback when there is no top fill - walls the top/non-top interface and rings
                 // top-surface islands with inner walls that don't exist when the feature is disabled.
                 const bool     clip_walls_over_top = top_fill_replaces_inner_walls(*this->config);
-                const Polygons inner_region        = to_polygons(offset_ex(clip_walls_over_top ? infill_contour
-                                                                                               : diff_ex(infill_contour, top_expolygons),
-                                                                          wall_0_inset));
+                // MAGPIE: when the single pass holds the plan's detail walls, the first inner wall is a large wall and
+                // overlaps the last detail wall by the plan's boundary overlap, the way the full pass places it (the
+                // innermost fixed shell's overlap, or the H/2 profile's at that depth), scaled mm.
+                const coord_t detail_boundary_overlap =
+                    !wall_plan.active || single_pass_walls != this->detail_wall_count ? 0 :
+                    half_layer_outer_walls ? half_layer_wall_boundary_overlap(*this, wall_plan, single_pass_walls, this->detail_wall_count) :
+                                             wall_plan.boundary_overlap();
+                const ExPolygons inner_base = detail_boundary_overlap > 0 ? offset_ex(infill_contour, float(detail_boundary_overlap)) : infill_contour;
+                // ORCA: the single pass's inner contour follows its innermost bead, and wall_0_inset moves bead 0 only
+                // (OuterWallInsetBeadingStrategy), so the contour is taken back by wall_0_inset when bead 0 is the
+                // innermost bead. MAGPIE: with more single pass walls the innermost bead stays where the full pass puts it.
+                const coord_t inner_region_inset = single_pass_walls == 1 ? wall_0_inset : 0;
+                const Polygons inner_region        = to_polygons(offset_ex(clip_walls_over_top ? inner_base
+                                                                                               : diff_ex(inner_base, top_expolygons),
+                                                                          inner_region_inset));
                 // MAGPIE: the inner walls start at depth single_pass_walls. The single pass's fixed outer wall profile
                 // (detail nozzle spacing at depth 0) is not theirs: their first bead would take the detail width while
                 // its depth, and so its tool, is a large wall. Only the H/2 depths they hold carry a profile.

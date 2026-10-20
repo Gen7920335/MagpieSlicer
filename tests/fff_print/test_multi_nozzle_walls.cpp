@@ -480,16 +480,17 @@ TEST_CASE("Single wall on top surfaces gives no large nozzle wall a detail nozzl
     }
 }
 
-TEST_CASE("Gap fill between walls prints with the detail nozzle", "[MultiNozzleWalls]")
+TEST_CASE("Gap fill between large walls stays on the base nozzle with detail walls", "[MultiNozzleWalls]")
 {
-    // Classic walls on a 0.6 mm base nozzle leave gap fill in a 3 mm wide bar (convex, so its corners get
-    // detail walls); with detail walls on the 0.4 mm nozzle the gap fill follows them, and without them it
-    // stays on the base nozzle.
+    // Classic walls on a 0.6 mm base nozzle leave gap fill in the middle of a 3 mm wide bar (convex, so its corners
+    // get one detail wall on the 0.4 mm nozzle). That gap lies between the large walls and is sized for them, so it
+    // stays on the base nozzle with or without the detail wall (line 1 sent it to the detail nozzle; gap fill between
+    // two detail walls still goes there, see the wedge test below).
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.6, 2, "classic", true);
     config.set_deserialize_strict({ { "wall_loops", 3 }, { "gap_fill_target", "everywhere" } });
     const std::set<int> gap_tools = tools_for_type(slice({ make_cube(20., 3., 10.) }, config), "Gap infill");
     REQUIRE_FALSE(gap_tools.empty());
-    CHECK(gap_tools == std::set<int>{ 0 });
+    CHECK(gap_tools == std::set<int>{ 1 });
 
     config.set_deserialize_strict({ { "use_smaller_nozzles_in_crisp_corners", false } });
     CHECK(tools_for_type(slice({ make_cube(20., 3., 10.) }, config), "Gap infill") == std::set<int>{ 1 });
@@ -1095,5 +1096,222 @@ TEST_CASE("Each tool prints the prime tower in its own nozzle's width", "[MultiN
         const std::vector<std::string> mismatches = width_mismatches(print, gcode);
         INFO(join_lines(mismatches));
         CHECK(mismatches.empty());
+    }
+}
+
+TEST_CASE("Detail and large walls overlap on single-wall-top layers as on other layers", "[MultiNozzleWalls][Arachne]")
+{
+    // A 20 mm box carrying a 10 mm box flush with its left side: the last layer below the step has a U-shaped top
+    // surface, so Arachne's single-wall-top
+    // path prints the detail walls in one pass and the large walls in a second. On other layers one pass places
+    // the first large wall the plan's boundary overlap (crisp_corner_nozzle_wall_overlap) into the last detail wall.
+    // The gap between their centerlines on the box's straight left side must be the same on both kinds of layer.
+    const double step_mm = GENERATE(6.0, 6.12); // the step layer is odd (one detail wall) or even (two)
+    const bool   h2      = GENERATE(false, true);
+    DYNAMIC_SECTION("step " << step_mm << " mm, H/2 " << h2) {
+        DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "arachne", true);
+        config.set_deserialize_strict({
+            { "wall_loops", 2 }, { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+            { "top_shell_layers", 3 }, { "only_one_wall_top", true },
+            { "crisp_corner_small_nozzle_wall_count", 2 }, { "crisp_corner_interlace_small_nozzle_walls", true },
+            { "crisp_corner_nozzle_wall_overlap", "30%" },
+            { "outer_wall_half_layer_height", h2 },
+        });
+        TriangleMesh mesh = make_cube(20., 20., step_mm);
+        TriangleMesh top  = make_cube(10., 10., 3.);
+        top.translate(0.f, 5.f, float(step_mm));
+        mesh.merge(top);
+        Print print;
+        Model model;
+        init_print({ mesh }, print, model, config);
+        print.process();
+        const PrintObject &object = *print.objects().front();
+        const Layer *step_layer = nullptr;
+        for (const Layer *layer : object.layers())
+            if (layer->print_z < step_mm + EPSILON)
+                step_layer = layer;
+        REQUIRE(step_layer != nullptr);
+        REQUIRE(step_layer->id() >= 4);
+        // Same interlace parity, two layers lower: no top surface there.
+        const Layer *plain_layer = object.layers()[step_layer->id() - 2];
+
+        // Centerline x (mm) of the last detail wall and the first large wall on the left side of the 20 mm box, at
+        // y = 10 mm: under the upper box, so not top surface on the step layer either.
+        auto gap = [&](const Layer &layer) {
+            const BoundingBox box = get_extents(layer.lslices);
+            const double      x0  = unscale<double>(box.min.x()), y0 = unscale<double>(box.min.y());
+            double detail_x = -1e9, large_x = 1e9;
+            // H/2 keeps the half-height outer walls on the two phase layers of the parent layer.
+            std::vector<const ExtrusionEntity *> walls = walls_of(*layer.regions().front());
+            if (const HalfLayerSourceLayers *sources = object.half_layer_sources())
+                for (const auto &phase : sources->phases)
+                    if (layer.id() < phase.size())
+                        for (const ExtrusionEntity *wall : walls_of(*phase[layer.id()]->regions().front()))
+                            walls.push_back(wall);
+            for (const ExtrusionEntity *wall : walls) {
+                std::vector<const ExtrusionPath *> paths;
+                if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(wall))
+                    for (const ExtrusionPath &path : loop->paths) paths.push_back(&path);
+                else if (const auto *multi = dynamic_cast<const ExtrusionMultiPath *>(wall))
+                    for (const ExtrusionPath &path : multi->paths) paths.push_back(&path);
+                else if (const auto *path = dynamic_cast<const ExtrusionPath *>(wall))
+                    paths.push_back(path);
+                for (const ExtrusionPath *path : paths)
+                    for (size_t i = 1; i < path->polyline.points.size(); ++i) {
+                        // Where the segment crosses y = 10 mm, the middle of that side.
+                        const double ax = unscale<double>(path->polyline.points[i - 1].x()) - x0, ay = unscale<double>(path->polyline.points[i - 1].y()) - y0;
+                        const double bx = unscale<double>(path->polyline.points[i].x()) - x0, by = unscale<double>(path->polyline.points[i].y()) - y0;
+                        if ((ay - 10.) * (by - 10.) > 0. || ay == by)
+                            continue;
+                        const double x = ax + (bx - ax) * (10. - ay) / (by - ay);
+                        if (x > 2.)
+                            continue;
+                        if (wall->tool_hint == ExtrusionToolHint::DetailWall)
+                            detail_x = std::max(detail_x, x);
+                        else if (wall->tool_hint == ExtrusionToolHint::LargeWall)
+                            large_x = std::min(large_x, x);
+                    }
+            }
+            REQUIRE(detail_x > -1e9);
+            REQUIRE(large_x < 1e9);
+            return large_x - detail_x;
+        };
+        const double step_gap  = gap(*step_layer);
+        const double plain_gap = gap(*plain_layer);
+        CAPTURE(step_layer->id(), step_gap, plain_gap);
+        // mm; a 30 % overlap of a 0.17 mm detail spacing is about 0.05 mm. Measured with H/2 off: without the inner
+        // pass's overlap the odd step layer was 0.2965 against 0.2536; with the overlap but the inner region pulled
+        // back by wall_0_inset on two single pass walls, the even one was 0.2536 against 0.2407. Both now agree
+        // within 1e-6 mm.
+        CHECK(std::abs(step_gap - plain_gap) < 0.005);
+    }
+}
+
+TEST_CASE("A narrow island's outer wall at the detail width is printed by the detail nozzle", "[MultiNozzleWalls][Classic]")
+{
+    // Classic prints the outer wall of a narrow island (narrower than two large outer walls, BBS's narrow loop) at
+    // the narrow-loop width, which the wall planner makes the detail nozzle's. A thin round tube has a hole and no
+    // corner sharp enough for the detail nozzle, so island_needs_detail() leaves its wall plan off; its narrow walls
+    // must still go to the detail nozzle. Before the fix they went to the 0.4 mm nozzle at 0.17 mm.
+    const bool h2 = GENERATE(false, true);
+    DYNAMIC_SECTION("H/2 " << h2) {
+        // Nozzle 1 0.15 mm (detail), nozzle 2 0.4 mm (the walls' filament).
+        DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "classic", true);
+        config.set_deserialize_strict({
+            { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+            { "outer_wall_half_layer_height", h2 },
+        });
+        // A tube 4 mm across with a 0.6 mm wall (narrower than two 0.4 mm outer walls; 6.4 mm2, under the narrow
+        // loop area limit), 1.2 mm tall, in 180 sectors.
+        constexpr int    sectors = 180;
+        constexpr double r_out = 2.0, r_in = 1.4, height = 1.2; // mm
+        indexed_triangle_set tube;
+        for (int i = 0; i < sectors; ++i) {
+            const double a = 2. * PI * i / sectors;
+            for (const double z : { 0., height })
+                for (const double r : { r_out, r_in })
+                    tube.vertices.emplace_back(float(r * std::cos(a)), float(r * std::sin(a)), float(z));
+        }
+        // Vertex of sector i: 4 i + 2 (top) + (inner).
+        auto v = [](int i, bool top, bool inner) { return (i % sectors) * 4 + (top ? 2 : 0) + (inner ? 1 : 0); };
+        for (int i = 0; i < sectors; ++i) {
+            const int j = i + 1;
+            tube.indices.emplace_back(v(i, false, false), v(j, false, false), v(j, true, false)); // outside
+            tube.indices.emplace_back(v(i, false, false), v(j, true, false), v(i, true, false));
+            tube.indices.emplace_back(v(i, false, true), v(i, true, true), v(j, true, true)); // inside
+            tube.indices.emplace_back(v(i, false, true), v(j, true, true), v(j, false, true));
+            tube.indices.emplace_back(v(i, true, false), v(j, true, false), v(j, true, true)); // top
+            tube.indices.emplace_back(v(i, true, false), v(j, true, true), v(i, true, true));
+            tube.indices.emplace_back(v(i, false, false), v(j, false, true), v(j, false, false)); // bottom
+            tube.indices.emplace_back(v(i, false, false), v(i, false, true), v(j, false, true));
+        }
+        TriangleMesh mesh(std::move(tube));
+        REQUIRE(mesh.volume() > 0.);
+        Print print;
+        Model model;
+        init_print({ mesh }, print, model, config);
+        const std::string gcode = Slic3r::Test::gcode(print);
+
+        int                   tool  = -1;
+        bool                  outer = false;
+        double                width = 0.; // mm, the last ;WIDTH (G-code repeats it only when it changes)
+        std::map<int, size_t> narrow_moves; // tool -> outer wall moves narrower than 0.25 mm
+        std::istringstream    lines(gcode);
+        for (std::string line; std::getline(lines, line);) {
+            if (line.size() >= 2 && line[0] == 'T' && std::isdigit((unsigned char) line[1]))
+                tool = std::stoi(line.substr(1));
+            else if (line.rfind(";TYPE:", 0) == 0)
+                outer = line == ";TYPE:Outer wall";
+            else if (line.rfind(";WIDTH:", 0) == 0)
+                width = std::stod(line.substr(7));
+            else if (outer && line.rfind("G1 ", 0) == 0 && line.find(" E") != std::string::npos &&
+                     line.find('X') != std::string::npos && width > 0. && width < 0.25) // mm; the 0.4 mm walls are 0.4 or more
+                ++narrow_moves[tool];
+        }
+        INFO("narrow outer wall moves on the 0.15 mm tool: " << narrow_moves[0] << ", on the 0.4 mm tool: " << narrow_moves[1]);
+        // The tube's walls are printed at the detail width...
+        CHECK(narrow_moves[0] > 0);
+        // ...and none of it by the 0.4 mm nozzle (a 0.17 mm line from a 0.4 mm nozzle).
+        CHECK(narrow_moves[1] == 0);
+    }
+}
+
+TEST_CASE("Gap fill between large walls is printed by the large nozzle", "[MultiNozzleWalls][Classic]")
+{
+    // Classic sizes gap fill for the large walls (up to two large wall spacings wide). Gap fill between the large
+    // walls of a wedge used to go to the detail nozzle with the rest of the region's gap fill, a 0.6 mm line from a
+    // 0.15 mm nozzle, which the line width check stops. Only gap fill between two detail walls goes to it now.
+    const bool h2 = GENERATE(false, true);
+    DYNAMIC_SECTION("H/2 " << h2) {
+        // Nozzle 1 0.15 mm (detail), nozzle 2 0.4 mm (the walls' filament).
+        DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "classic", true);
+        config.set_deserialize_strict({
+            { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+            { "wall_loops", 3 }, { "crisp_corner_small_nozzle_wall_count", 2 }, { "gap_fill_target", "everywhere" },
+            { "outer_wall_half_layer_height", h2 },
+        });
+        // A wedge 20 mm long, 3 mm wide at its base, 1.2 mm tall: its walls converge and leave gaps of every width.
+        indexed_triangle_set wedge;
+        const float          z_top = 1.2f; // mm
+        for (const float z : { 0.f, z_top }) {
+            wedge.vertices.emplace_back(0.f, 0.f, z);
+            wedge.vertices.emplace_back(20.f, 1.5f, z);
+            wedge.vertices.emplace_back(0.f, 3.f, z);
+        }
+        wedge.indices = { { 0, 2, 1 }, { 3, 4, 5 },             // bottom, top
+                          { 0, 1, 4 }, { 0, 4, 3 }, { 1, 2, 5 }, // sides
+                          { 1, 5, 4 }, { 2, 0, 3 }, { 2, 3, 5 } };
+        TriangleMesh mesh(std::move(wedge));
+        REQUIRE(mesh.volume() > 0.);
+        Print print;
+        Model model;
+        init_print({ mesh }, print, model, config);
+        // The line width check throws on a gap fill too wide for the nozzle printing it.
+        std::string gcode;
+        REQUIRE_NOTHROW(gcode = Slic3r::Test::gcode(print));
+
+        const std::vector<double> nozzles = { 0.15, 0.4 }; // mm, by tool
+        int                       tool    = -1;
+        bool                      gap     = false;
+        double                    width   = 0.; // mm, the last ;WIDTH (G-code repeats it only when it changes)
+        std::map<int, double>     widest;       // tool -> widest gap fill, mm
+        std::istringstream        lines(gcode);
+        for (std::string line; std::getline(lines, line);) {
+            if (line.size() >= 2 && line[0] == 'T' && std::isdigit((unsigned char) line[1]))
+                tool = std::stoi(line.substr(1));
+            else if (line.rfind(";TYPE:", 0) == 0)
+                gap = line == ";TYPE:Gap infill";
+            else if (line.rfind(";WIDTH:", 0) == 0)
+                width = std::stod(line.substr(7));
+            else if (gap && tool >= 0 && line.rfind("G1 ", 0) == 0 && line.find(" E") != std::string::npos && line.find('X') != std::string::npos)
+                widest[tool] = std::max(widest[tool], width);
+        }
+        INFO("widest gap fill on the 0.15 mm tool: " << widest[0] << " mm, on the 0.4 mm tool: " << widest[1] << " mm");
+        // The wedge has gap fill, wider than a 0.15 mm nozzle prints, and the 0.4 mm nozzle prints it.
+        CHECK(widest[1] > 3. * nozzles[0]);
+        // Gap fill between the two detail walls (where they converge) is printed by the 0.15 mm nozzle, at most
+        // 3 x its diameter (mm).
+        CHECK(widest[0] > 0.);
+        CHECK(widest[0] <= 3. * nozzles[0]);
     }
 }

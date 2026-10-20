@@ -6431,7 +6431,6 @@ void append_half_layer_model_tasks(const PrintObject &object, size_t parent_inde
             const unsigned base_filament = unsigned(std::max(1, region_config.outer_wall_filament_id.value));
             const ModHost::WallPlanner *planner = region_config.wall_planner.value.empty() ? nullptr :
                                                   ModHost::find_wall_planner(region_config.wall_planner.value);
-            const bool region_has_detail_walls = planner != nullptr && has_detail_wall(region->perimeters);
             auto collect_root = [&](const ExtrusionEntityCollection &root, bool perimeter) {
                 auto collect = [&](auto &&self, const ExtrusionEntity &entity) -> void {
                     if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
@@ -6453,7 +6452,10 @@ void append_half_layer_model_tasks(const PrintObject &object, size_t parent_inde
                         if (planner != nullptr && planner->wall_filament)
                             if (const unsigned int f = planner->wall_filament(print_config, region_config, parent.id(), entity.tool_hint, base_filament))
                                 filament = f - 1;
-                    } else if (root.role() == erGapFill && region_has_detail_walls && planner->wall_filament) {
+                    } else if (root.role() == erGapFill && planner != nullptr && entity.tool_hint == ExtrusionToolHint::DetailWall &&
+                               planner->wall_filament) {
+                        // MAGPIE: gap fill between two detail walls (make_perimeter_gap_fill); the rest keeps Orca's route.
+                        // The hint decides: with H/2 the detail walls are on the phase layers, not in this region.
                         if (const unsigned int f = planner->wall_filament(print_config, region_config, parent.id(), ExtrusionToolHint::DetailWall, base_filament))
                             filament = f - 1;
                     }
@@ -8346,16 +8348,25 @@ LayerResult GCode::process_layer(
                             }
                         };
 
-                        // MAGPIE: gap fill between walls goes with the detail walls when the wall planner gave this
-                        // region's walls on this layer a detail nozzle (as Magpie line 1 prints it).
+                        // MAGPIE: gap fill between two detail walls goes to the detail nozzle (make_perimeter_gap_fill
+                        // tags it); other gap fill, sized for the large walls, keeps Orca's route.
                         if (entity_type == ObjectByExtruder::Island::Region::INFILL && extrusions->role() == erGapFill &&
-                            ! region.config().wall_planner.value.empty()) {
+                            ! region.config().wall_planner.value.empty() && has_detail_wall(*extrusions)) {
                             if (const ModHost::WallPlanner *planner = ModHost::find_wall_planner(region.config().wall_planner.value);
-                                planner != nullptr && planner->wall_filament && has_detail_wall(layerm->perimeters)) {
+                                planner != nullptr && planner->wall_filament) {
                                 const unsigned int base = unsigned(std::max(1, region.config().outer_wall_filament_id.value));
                                 if (const unsigned int f = planner->wall_filament(print.config(), region.config(), layer.id(), ExtrusionToolHint::DetailWall, base)) {
-                                    process_extrusions(extrusions, nullptr, false, int(f) - 1);
-                                    continue;
+                                    auto detail = std::make_unique<ExtrusionEntityCollection>();
+                                    auto rest   = std::make_unique<ExtrusionEntityCollection>();
+                                    for (const ExtrusionEntity *entity : extrusions->entities)
+                                        (has_detail_wall(*entity) ? detail : rest)->append(*entity);
+                                    detail->no_sort = rest->no_sort = extrusions->no_sort;
+                                    split_perimeter_storage.emplace_back(std::move(detail));
+                                    process_extrusions(split_perimeter_storage.back().get(), nullptr, false, int(f) - 1);
+                                    if (rest->entities.empty())
+                                        continue;
+                                    split_perimeter_storage.emplace_back(std::move(rest));
+                                    extrusions = split_perimeter_storage.back().get();
                                 }
                             }
                         }
