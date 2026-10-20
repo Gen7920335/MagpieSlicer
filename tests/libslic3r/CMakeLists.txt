@@ -24,6 +24,7 @@ add_executable(${_TEST_NAME}_tests
     test_mod_host.cpp
     test_native_mods.cpp
     test_layer_time_blend.cpp
+    test_batch_accel.cpp
     test_cuda_compute.cpp
     test_mod_index.cpp
     test_legacy_settings.cpp
@@ -106,11 +107,13 @@ target_include_directories(${_TEST_NAME}_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 set_property(TARGET ${_TEST_NAME}_tests PROPERTY FOLDER "tests")
 
 orcaslicer_copy_test_dlls()
+magpie_use_official_mods(${_TEST_NAME}_tests)
 
 # MAGPIE: the native test mods (mods/CMakeLists.txt) are built before the tests that load them.
 if (MAGPIE_TEST_MOD_TARGETS)
     add_dependencies(${_TEST_NAME}_tests ${MAGPIE_TEST_MOD_TARGETS})
     target_compile_definitions(${_TEST_NAME}_tests PRIVATE MAGPIE_TEST_MODS_DIR=R"\(${MAGPIE_TEST_MODS_DIR}\)")
+    target_compile_definitions(${_TEST_NAME}_tests PRIVATE MAGPIE_TEST_ACCEL_DIR=R"\(${MAGPIE_TEST_ACCEL_DIR}\)")
 endif ()
 
 orcaslicer_discover_tests(${_TEST_NAME}_tests)

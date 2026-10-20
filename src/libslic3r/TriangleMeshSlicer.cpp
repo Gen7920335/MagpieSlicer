@@ -1,5 +1,5 @@
 #include "libslic3r/StageTimer.hpp"
-#include "libslic3r/Gpu/CudaCompute.hpp"
+#include "libslic3r/Accel/BatchAccel.hpp"
 #include "ClipperUtils.hpp"
 #include "ExPolygon.hpp"
 #include "Point.hpp"
@@ -567,8 +567,8 @@ static FacetSliceType slice_facet_for_cut_mesh(
 }
 
 // Layers [first, last) of zs a facet with vertex heights z spans, and its lowest vertex.
-// MAGPIE: also the CPU reference of the CUDA test mod's magpie_mesh_layer_ranges kernel.
-static inline Gpu::CudaLayerRange facet_layer_range(const std::array<float, 3> &z, const std::vector<float> &zs)
+// MAGPIE: also the CPU reference of the batch accelerator's facet layer ranges (Accel/BatchAccel.hpp).
+static inline Accel::LayerRange facet_layer_range(const std::array<float, 3> &z, const std::vector<float> &zs)
 {
     // find facet extents
     const float min_z = fminf(z[0], fminf(z[1], z[2]));
@@ -591,8 +591,8 @@ void slice_facet_at_zs(
     const std::vector<float>                         &zs,
     std::vector<IntersectionLines>                   &lines,
     std::array<std::mutex, 64>                       &lines_mutex,
-    // MAGPIE: facet_layer_range() computed by the CUDA test mod, or nullptr.
-    const Gpu::CudaLayerRange                        *gpu_range = nullptr)
+    // MAGPIE: facet_layer_range() computed by the batch accelerator, or nullptr.
+    const Accel::LayerRange                          *gpu_range = nullptr)
 {
     stl_vertex vertices[3] { transform_vertex_fn(mesh_vertices[indices(0)]), transform_vertex_fn(mesh_vertices[indices(1)]), transform_vertex_fn(mesh_vertices[indices(2)]) };
 
@@ -600,7 +600,7 @@ void slice_facet_at_zs(
     const float min_z = fminf(vertices[0].z(), fminf(vertices[1].z(), vertices[2].z()));
     const float max_z = fmaxf(vertices[0].z(), fmaxf(vertices[1].z(), vertices[2].z()));
 
-    const Gpu::CudaLayerRange range = gpu_range ? *gpu_range :
+    const Accel::LayerRange range = gpu_range ? *gpu_range :
         facet_layer_range({ vertices[0].z(), vertices[1].z(), vertices[2].z() }, zs);
     auto min_layer = zs.begin() + range.first;
     auto max_layer = zs.begin() + range.last;
@@ -630,10 +630,10 @@ static inline std::vector<IntersectionLines> slice_make_lines(
     MAGPIE_STAGE_TIMER("fn.slice_make_lines");
     std::vector<IntersectionLines>  lines(zs.size(), IntersectionLines());
     std::array<std::mutex, 64>      lines_mutex;
-    // MAGPIE: CUDA test mod. The layer range of every facet in one GPU batch; empty when CUDA is off,
-    // the batch is small or the GPU declined it, and then each facet finds its range on the CPU.
-    std::vector<Gpu::CudaLayerRange> gpu_ranges;
-    if (Gpu::cuda_should_dispatch(indices.size())) {
+    // MAGPIE: batch accelerator. The layer range of every facet in one batch; empty when no accelerator
+    // runs or it declined the batch, and then each facet finds its range on the CPU.
+    std::vector<Accel::LayerRange> gpu_ranges;
+    if (Accel::should_dispatch(Accel::Op::FacetLayerRanges, indices.size())) {
         std::vector<std::array<float, 3>> facet_z(indices.size());
         tbb::parallel_for(tbb::blocked_range<size_t>(0, indices.size()), [&](const tbb::blocked_range<size_t> &range) {
             for (size_t i = range.begin(); i < range.end(); ++ i)
@@ -641,7 +641,7 @@ static inline std::vector<IntersectionLines> slice_make_lines(
                     facet_z[i][k] = transform_vertex_fn(vertices[indices[i](k)]).z();
         });
         throw_on_cancel_fn();
-        if (! Gpu::cuda_mesh_layer_ranges(facet_z, zs, [&](size_t i) { return facet_layer_range(facet_z[i], zs); }, gpu_ranges))
+        if (! Accel::mesh_layer_ranges(facet_z, zs, [&](size_t i) { return facet_layer_range(facet_z[i], zs); }, gpu_ranges))
             gpu_ranges.clear();
     }
     tbb::parallel_for(

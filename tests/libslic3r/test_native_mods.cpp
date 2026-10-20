@@ -531,3 +531,23 @@ TEST_CASE("The mod test slices each case twice and checks the G-code", "[NativeM
         CHECK(any_contains(report.lines, "has \"M600\""));
     }
 }
+
+TEST_CASE("Test case arguments naming files of the tests folder are made absolute, lists too", "[NativeMods]")
+{
+    TempDir dir;
+    // Presets in a subfolder: every .json directly in tests/ is a test case.
+    write_text(dir.path / "tests" / "presets" / "machine.json", "{}");
+    write_text(dir.path / "tests" / "presets" / "process.json", "{}");
+    write_text(dir.path / "tests" / "model.obj", "");
+    write_text(dir.path / "tests" / "case.json",
+               R"({"args": ["--load-settings", "presets/machine.json;presets/process.json", "model.obj", "presets/machine.json;missing.json"]})");
+    const std::vector<ModTestCase> cases = read_mod_test_cases(dir.path.string());
+    REQUIRE(cases.size() == 1);
+    const fs::path tests = dir.path / "tests";
+    REQUIRE(cases[0].args.size() == 4);
+    CHECK(cases[0].args[0] == "--load-settings");
+    CHECK(cases[0].args[1] == (tests / "presets/machine.json").string() + ";" + (tests / "presets/process.json").string());
+    CHECK(cases[0].args[2] == (tests / "model.obj").string());
+    // One part that is not a file of the folder leaves the argument as written.
+    CHECK(cases[0].args[3] == "presets/machine.json;missing.json");
+}

@@ -7778,14 +7778,6 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloat(1.));
 
-    // MAGPIE: CUDA test mod, driven by resources/mods/cuda_compute.json. Hidden; "off" never loads the
-    // CUDA driver. "on" checks every GPU result against the CPU, "max" trusts the GPU (Gpu/CudaCompute.hpp).
-    def = this->add("cuda_compute", coString);
-    def->label = L("CUDA compute");
-    def->tooltip = L("Runs some slicing calculations on an NVIDIA GPU: off, on (every GPU result is checked against the CPU) or max (GPU results are used unchecked).");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionString("off"));
-
     // MAGPIE: Snapmaker U1 start G-code guard (Magpie line 1), driven by resources/mods/snapmaker_u1.json.
     def = this->add("snapmaker_u1_start_guard", coBool);
     def->label = L("Guard the Snapmaker U1 start G-code");
@@ -10521,6 +10513,8 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
         "smooth_coefficient", "overhang_totally_speed", "silent_mode",
         "overhang_speed_classic",
         "anisotropic_surfaces", // superseded by top_surface_fill_order / bottom_surface_fill_order
+        // MAGPIE: the CUDA mod's mode, a mod parameter (cuda_compute.mode) since the mod became a native mod.
+        "cuda_compute",
         // Belt printer keys retired before the first release: the global-mode and
         // back-transform switches are presumed on, and the pre-slice axis remap, the
         // support Z offset mode, the support floor mode (always on) and the first-layer

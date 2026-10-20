@@ -7,7 +7,7 @@
 
 #include "MixedSupport.hpp"
 
-#include "CuraSupport.hpp"
+#include "libslic3r/ModHost/NativeSupport.hpp"
 
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/ClipperUtils.hpp"
@@ -301,10 +301,20 @@ void painted_channels(const PrintObject &object, std::vector<Polygons> &normal, 
     }
 }
 
+// The Cura support mod (mods/cura_support), which Mixed support uses for its normal channel when
+// normal_generator is "cura".
+static const NativeEntry &cura_generator(const PrintObject &)
+{
+    const NativeEntry *entry = NativeSupport::find("cura");
+    if (entry == nullptr)
+        throw Slic3r::SlicingError(_u8L("Mixed support uses Cura support for its normal support, but the Cura support mod is not installed."));
+    return *entry;
+}
+
 std::vector<Polygons> detect_demand(const PrintObject &object, const ModSettings &s)
 {
     if (s.normal_generator == "cura")
-        return CuraSupport::overhang_demand(object, CuraSupport::read_settings(object));
+        return NativeSupport::overhang_demand(object, cura_generator(object));
 
     std::vector<Polygons>        demand(object.layer_count());
     SupportGeneratorLayerStorage storage;
@@ -357,7 +367,7 @@ void generate(PrintObject &object)
         auto run_normal = [&object, &s](const std::vector<Polygons> &mask) {
             object.clear_support_layers();
             if (s.normal_generator == "cura") {
-                CuraSupport::generate(object, &mask);
+                NativeSupport::generate(object, cura_generator(object), &mask);
             } else {
                 SupportMaterialOverrides overrides;
                 overrides.contact_mask        = &mask;

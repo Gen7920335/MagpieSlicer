@@ -1,6 +1,10 @@
 #include "test_helpers.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/reporters/catch_reporter_event_listener.hpp>
+#include <catch2/reporters/catch_reporter_registrars.hpp>
+#include "libslic3r/ModHost/NativeMods.hpp"
+#include <iostream>
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Config.hpp"
@@ -509,10 +513,49 @@ std::vector<std::string> role_sequence(const std::string &gcode, const std::vect
     return seq;
 }
 
+const ModHost::ModLoadResult &official_mods()
+{
+    // Never destroyed: at process exit the libraries may be detached before static destructors run.
+    static const ModHost::ModLoadResult &result = *new ModHost::ModLoadResult([] {
+        ModHost::ModLoadOptions options;
+#ifdef MAGPIE_OFFICIAL_MODS_DIR
+        // Built in this tree, so they load as bundled ones do.
+        options.bundled_dir = MAGPIE_OFFICIAL_MODS_DIR;
+#endif
+        ModHost::ModLoadResult loaded = ModHost::load_mods(options);
+        for (const std::string &e : loaded.errors)
+            std::cerr << "Official mod not loaded: " << e << std::endl;
+        return loaded;
+    }());
+    return result;
+}
+
+namespace {
+// Makes the official native mods' slots active for the test run.
+class OfficialModsListener final : public Catch::EventListenerBase
+{
+public:
+    using Catch::EventListenerBase::EventListenerBase;
+    void testRunStarting(const Catch::TestRunInfo &) override
+    {
+        m_previous = ModHost::active_native_mods();
+        ModHost::set_active_native_mods(official_mods().native);
+    }
+    void testRunEnded(const Catch::TestRunStats &) override { ModHost::set_active_native_mods(m_previous); }
+
+private:
+    std::shared_ptr<const ModHost::NativeModSet> m_previous;
+};
+} // namespace
+CATCH_REGISTER_LISTENER(OfficialModsListener)
+
 BundledMods::BundledMods() : previous(ModHost::active_mods())
 {
-    ModHost::set_active_mods(std::make_shared<const ModHost::ModSet>(
-        ModHost::ModSet::load_dir(boost::filesystem::path(PROFILES_DIR) / ".." / "mods", errors)));
+    std::vector<boost::filesystem::path> dirs{boost::filesystem::path(PROFILES_DIR) / ".." / "mods"};
+#ifdef MAGPIE_OFFICIAL_MODS_DIR
+    dirs.emplace_back(MAGPIE_OFFICIAL_MODS_DIR);
+#endif
+    ModHost::set_active_mods(std::make_shared<const ModHost::ModSet>(ModHost::ModSet::load_dirs(dirs, errors)));
 }
 
 BundledMods::~BundledMods() { ModHost::set_active_mods(previous); }

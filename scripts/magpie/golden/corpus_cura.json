@@ -1,0 +1,120 @@
+{
+    "description": "Cura support corpus: the Cura support mod (mods/cura_support) on the u1 printer. Used as the gate when Cura support moved from the core into its native mod: the built-in and the mod build must give identical normalized G-code (the '; mods:' header line aside).",
+    "printers": {
+        "u1": {
+            "machine": "presets/u1_04_machine.json",
+            "process": "presets/u1_04_process.json",
+            "filaments": [
+                "presets/u1_pla.json"
+            ],
+            "bed_type": "High Temp Plate"
+        },
+        "x1c": {
+            "machine": "presets/x1c_04_machine.json",
+            "process": "presets/x1c_04_process.json",
+            "filaments": [
+                "presets/x1c_pla.json"
+            ],
+            "bed_type": "Textured PEI Plate"
+        }
+    },
+    "cases": [
+        {
+            "name": "overhang_cura",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"cura_support.enable\":true}"
+            }
+        },
+        {
+            "name": "frog_legs_cura",
+            "printer": "u1",
+            "model": "tests/data/frog_legs.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"cura_support.enable\":true}"
+            }
+        },
+        {
+            "name": "frog_legs_cura_raft",
+            "printer": "u1",
+            "model": "tests/data/frog_legs.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "raft_layers": "3",
+                "mod_settings": "{\"cura_support.enable\":true}"
+            }
+        },
+        {
+            "name": "overhang_cura_towers_conical",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"cura_support.enable\":true,\"cura_support.use_towers\":true,\"cura_support.conical_enabled\":true,\"cura_support.minimum_support_area\":0.5}"
+            }
+        },
+        {
+            "name": "pyramid_cura_interfaces_solid_first",
+            "printer": "u1",
+            "model": "tests/data/pyramid.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_interface_top_layers": "3",
+                "support_interface_bottom_layers": "2",
+                "support_expansion": "0.8",
+                "mod_settings": "{\"cura_support.enable\":true,\"cura_support.solid_first_layer\":true,\"cura_support.roof_offset\":0.5,\"cura_support.z_overrides_xy\":false}"
+            }
+        },
+        {
+            "name": "frog_legs_cura_build_plate_only",
+            "printer": "u1",
+            "model": "tests/data/frog_legs.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_on_build_plate_only": "1",
+                "support_threshold_angle": "40",
+                "mod_settings": "{\"cura_support.enable\":true,\"cura_support.conical_enabled\":true}"
+            }
+        },
+        {
+            "name": "frog_legs_mixed_cura",
+            "printer": "u1",
+            "model": "tests/data/frog_legs.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"mixed_support.enable\":true,\"mixed_support.normal_generator\":\"cura\",\"mixed_support.coverage_threshold\":50}"
+            }
+        },
+        {
+            "name": "overhang_cura_x1c",
+            "printer": "x1c",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"cura_support.enable\":true}"
+            }
+        },
+        {
+            "name": "tree_3mf_cura",
+            "printer": "u1",
+            "model": "external:tree.3mf",
+            "optional": true,
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"cura_support.enable\":true}"
+            }
+        }
+    ]
+}

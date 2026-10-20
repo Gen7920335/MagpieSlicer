@@ -3,6 +3,7 @@
 
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Geometry.hpp"
+#include "libslic3r/ModHost/ModPackage.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Point.hpp"
@@ -143,6 +144,12 @@ std::vector<std::string> role_sequence(const std::string &gcode, const std::vect
 
 // Makes the bundled mods (resources/mods) the active mods while it lives, and restores the
 // previous set afterwards. errors lists the mods that failed to load.
+// The official native mods built in this tree (mods/CMakeLists.txt: Cura support, CUDA), loaded once
+// per test run. A listener in test_helpers.cpp makes their slots active for the whole run, so a test
+// that picks support_generator "cura" finds it as the application does with the mods installed.
+const ModHost::ModLoadResult &official_mods();
+
+// The bundled JSON mods plus the official native mods' manifests are the active set for its lifetime.
 struct BundledMods
 {
     std::shared_ptr<const ModHost::ModSet> previous;

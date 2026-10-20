@@ -1,0 +1,16 @@
+{
+    // Test accelerator for the core's batch accelerator tests (tests/libslic3r/test_batch_accel.cpp).
+    // Not shipped. Computes facet layer ranges with its own code, wrong on purpose when "wrong" is set.
+    "id": "magpie_test_accel",
+    "name": "Test accelerator",
+    "version": "1.0.0",
+    "api": { "major": 1, "min_minor": 0 },
+    "binary": "magpie_test_accel",
+    "slots": [ { "slot": "accel.batch", "version": 1, "impl": "test" } ],
+    "thread_safe": true,
+    "params": {
+        "mode":  { "type": "string", "default": "off", "label": "Mode",
+                   "options": [ { "value": "off", "label": "Off" }, { "value": "on", "label": "On" }, { "value": "max", "label": "Max" } ] },
+        "wrong": { "type": "bool", "default": false, "label": "Return one wrong item" }
+    }
+}

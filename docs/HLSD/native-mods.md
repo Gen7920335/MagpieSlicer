@@ -73,6 +73,25 @@ process value), slicer settings, Clipper offsets and booleans, memory, logging, 
 cancel flag and the core's thread pool. One integer coordinate unit is `host->scaling_factor_mm`
 millimetres, read at each call: the application switches it for very large beds.
 
+## Core slots and services
+
+Each slot and service is defined by its own C header in `mods/sdk/include/`, next to the base header.
+
+| Name | Header | What the core does with it |
+|---|---|---|
+| slot `accel.batch` v1 | `magpie_accel.h` | Batch accelerator (`Accel/BatchAccel.*`). Four inner loops (facet layer ranges, rectilinear crossings, Lightning boundary distances, tree support contact points) keep their CPU functions as the reference; the core offers a loop's items as one batch and computes it itself when the accelerator declines. The accelerator asks for a mode at the start of each slice; in Verify mode the core recomputes every item and throws the batch away on any difference, so an accelerator cannot change the G-code. Trusted mode (no check) is granted to official mods only; any other mod asking for it is checked anyway. |
+| slot `support.areas` v1 | `magpie_support.h` | Support generator by areas (`ModHost/NativeSupport.*`). The core hands over an object's islands, enforcers, blockers, an optional mask and the printable area, gets back body, roof and bottom areas per layer, and builds Orca support layers from them (raft, interfaces, toolpaths). Picked by the support_generator value, after the built-in generators. |
+| service `core.geometry` v1 | `magpie_geometry.h` | The core's own ClipperUtils operations (offset, booleans, simplify, union_ex, area, nearest-edge distances), so a mod that came out of the core computes exactly the polygons it computed inside it. Services named `core.*` need no `depends`. |
+
+## Official mods
+
+Official mods live in `mods/<id>/` (source, `mod.json`, `tests/`) and build, with the SDK template only,
+into package folders `<build>/official_mods/<id>/`: `cuda_compute` (fills `accel.batch`) and `cura_support`
+(fills `support.areas` as "cura" and offers `cura.support_areas`). They are signed with `--mod-sign` and
+the official key, which stays off the repository, and installed like any package. Tests load the build
+folders directly (`magpie_use_official_mods` in `tests/CMakeLists.txt`; `fff_print/test_helpers.cpp`
+makes their slots active for the whole run).
+
 ## Native mods in the G-code
 
 When native mods are loaded, the G-code header names them (`; mods: id version, ...`) so a print can

@@ -40,6 +40,7 @@
 #include "Fill/FillTpmsAdaptive.hpp"
 #include "format.hpp"
 #include "ModHost/ModSet.hpp"
+#include "ModHost/NativeSupport.hpp"
 #include "ModHost/SlotRegistry.hpp"
 #include "AABBTreeIndirect.hpp"
 #include "AABBTreeLines.hpp"
@@ -5083,12 +5084,17 @@ void PrintObject::_generate_support_material()
 {
     MAGPIE_STAGE_TIMER("step.support");
     // MAGPIE: support.generator slot. An empty support_generator runs Orca's generators unchanged,
-    // and so does a raft without support: the modules build support, Orca builds the bare raft.
+    // and so does a raft without support: the modules build support, Orca builds the bare raft. A name
+    // no built-in module has is looked up among the native mods' support.areas implementations.
     if (const std::string &name = m_config.support_generator.value; !name.empty() && this->has_support()) {
-        const ModHost::SupportGenerator *generator = ModHost::find_support_generator(name);
-        if (generator == nullptr)
+        if (const ModHost::SupportGenerator *generator = ModHost::find_support_generator(name)) {
+            generator->generate(*this);
+            return;
+        }
+        const ModHost::NativeEntry *native = ModHost::NativeSupport::find(name);
+        if (native == nullptr)
             throw Slic3r::SlicingError(Slic3r::format(_u8L("Support generator \"%1%\" is not installed."), name));
-        generator->generate(*this);
+        ModHost::NativeSupport::generate(*this, *native);
         return;
     }
     generate_orca_support_material();

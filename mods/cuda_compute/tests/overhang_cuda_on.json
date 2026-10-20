@@ -1,0 +1,11 @@
+{
+    "description": "CUDA on (results checked against the CPU by the slicer): the slice must be deterministic and pass the G-code checks. Batches go to the GPU only above the mod batch floor, or with MAGPIE_CUDA_SLICER_FORCE_DISPATCH=1.",
+    "args": [
+        "--load-settings",
+        "presets/machine.json;presets/process.json",
+        "overhang.obj"
+    ],
+    "contains": [
+        "cuda_compute 1.0.0"
+    ]
+}

@@ -1,0 +1,70 @@
+{
+    "description": "CUDA corpus: cases that run the four accelerated loops (mesh slicing, rectilinear infill, Lightning infill, tree support contact points). Sliced with the CUDA mod off, on and max; every run must give identical normalized G-code, with the built-in and the mod build alike.",
+    "printers": {
+        "u1": {
+            "machine": "presets/u1_04_machine.json",
+            "process": "presets/u1_04_process.json",
+            "filaments": [
+                "presets/u1_pla.json"
+            ],
+            "bed_type": "High Temp Plate"
+        },
+        "x1c": {
+            "machine": "presets/x1c_04_machine.json",
+            "process": "presets/x1c_04_process.json",
+            "filaments": [
+                "presets/x1c_pla.json"
+            ],
+            "bed_type": "Textured PEI Plate"
+        }
+    },
+    "cases": [
+        {
+            "name": "idler_rectilinear",
+            "printer": "u1",
+            "model": "tests/data/extruder_idler.obj",
+            "process": {
+                "sparse_infill_pattern": "rectilinear",
+                "sparse_infill_density": "20%"
+            }
+        },
+        {
+            "name": "idler_lightning",
+            "printer": "u1",
+            "model": "tests/data/extruder_idler.obj",
+            "process": {
+                "sparse_infill_pattern": "lightning",
+                "sparse_infill_density": "15%"
+            }
+        },
+        {
+            "name": "overhang_tree_hybrid",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "tree(auto)",
+                "support_style": "tree_hybrid"
+            }
+        },
+        {
+            "name": "frog_legs_tree_slim",
+            "printer": "u1",
+            "model": "tests/data/frog_legs.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "tree(auto)",
+                "support_style": "tree_slim"
+            }
+        },
+        {
+            "name": "ipadstand_lines",
+            "printer": "u1",
+            "model": "tests/data/ipadstand.obj",
+            "process": {
+                "sparse_infill_pattern": "line",
+                "top_surface_pattern": "monotonic"
+            }
+        }
+    ]
+}
