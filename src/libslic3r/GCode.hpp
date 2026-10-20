@@ -589,6 +589,11 @@ protected:
     std::string     extrude_layer_time_tower(coordf_t print_z);
     // The position a parked wait goes to at this layer, mm (plate coordinates), or nothing.
     std::optional<Vec2d> layer_time_park_position(const Print &print, coordf_t print_z);
+    // Whether this layer visits the temperature drop tower or the prime tower (purge_tower waits there).
+    bool            layer_time_tower_visited(const Print &print, coordf_t print_z) const;
+    // The pending site of a purge_tower layer, written where the nozzle has arrived over the tower; empty
+    // when none is pending.
+    std::string     layer_time_tower_arrival();
     void            apply_layer_time_plan(Print &print, const std::string &path_tmp);
     // Bedslinger model: derive the Y-axis acceleration limit from the machine force/bed-mass config
     // and the mass already printed. Yields the min machine Y acceleration when the A2L config keys are
@@ -937,6 +942,8 @@ protected:
     // sites written so far in G-code order.
     std::shared_ptr<const ModHost::TimePlanner> m_layer_time_planner;
     std::vector<LayerTimeWaitSite>      m_layer_time_sites;
+    // purge_tower: this layer's site, waiting for the nozzle to reach the tower it visits.
+    std::optional<LayerTimeWaitSite>    m_layer_time_pending_site;
     LayerTimeWaitAt                     m_layer_time_wait_at{ LayerTimeWaitAt::InPlace };
     // The layer time tower: placed at the first site; its footprint's lower left corner (brim included),
     // its side and its brim width, mm (plate coordinates), the Z of its last layer and whether its brim is out.

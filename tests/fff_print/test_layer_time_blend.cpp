@@ -353,6 +353,110 @@ TEST_CASE("Tower waits happen over the tower, which stops above the last wait", 
     CHECK(extrusions > 0);
 }
 
+namespace {
+
+// The filament each forward E move pushes (extrusions and unretracts), mm, in G-code order, as the printer
+// reads them: relative E as written, absolute E as the step from the last E (G92 included).
+std::vector<double> extrusion_steps(const std::vector<std::string> &lines, bool absolute_e)
+{
+    std::vector<double> steps;
+    double              e = 0.;
+    for (const std::string &line : lines) {
+        if (line.rfind("G92 ", 0) == 0) {
+            const size_t at = line.find(" E");
+            if (at != std::string::npos)
+                e = std::stod(line.substr(at + 2));
+            continue;
+        }
+        const std::optional<double> v = axis_value(line, 'E');
+        if (!v)
+            continue;
+        const double step = absolute_e ? *v - e : *v;
+        if (absolute_e)
+            e = *v;
+        if (step > 0.)
+            steps.push_back(step);
+    }
+    return steps;
+}
+
+size_t count_lines(const std::vector<std::string> &lines, const std::string &line)
+{
+    return size_t(std::count(lines.begin(), lines.end(), line));
+}
+
+} // namespace
+
+TEST_CASE("With absolute E the tower is cut above the last wait as with relative E, and E stays continuous", "[LayerTimeBlend]")
+{
+    // As in the tower test: 10 s ramps end well below the pillar's top, so the tower can stop there.
+    const double       max_diff_s = 10.;
+    const std::string  relative   = slice_mesh(pillar_with_slab(), wait_at_config("tower", max_diff_s));
+    DynamicPrintConfig config     = wait_at_config("tower", max_diff_s);
+    config.set_deserialize_strict({{"use_relative_e_distances", "0"}});
+    const std::string  absolute   = slice_mesh(pillar_with_slab(), config);
+    const std::vector<std::string> rel = lines_of(relative), abs = lines_of(absolute);
+    const std::string begin_tag = ";MAGPIE_WAIT_TOWER_BEGIN";
+    // The same cut with either E mode: fewer blocks than the 53 layers.
+    const size_t blocks = count_lines(rel, begin_tag);
+    REQUIRE(blocks > 0);
+    CHECK(blocks < 53);
+    CHECK(count_lines(abs, begin_tag) == blocks);
+    // Leaving a block out must not hand its filament to the next move (the unretract after it): the largest
+    // forward step is the relative output's (a left-out block's E would add a few mm to one move), up to the
+    // rounding of E to 5 decimals on both sides, mm.
+    const std::vector<double> rel_steps = extrusion_steps(rel, false), abs_steps = extrusion_steps(abs, true);
+    REQUIRE(!rel_steps.empty());
+    REQUIRE(abs_steps.size() == rel_steps.size());
+    CHECK(*std::max_element(abs_steps.begin(), abs_steps.end()) <= *std::max_element(rel_steps.begin(), rel_steps.end()) + 1e-4);
+    check_blended(measured_intervals(absolute), max_diff_s);
+}
+
+TEST_CASE("Purge tower waits happen during the temperature drop tower's own visit", "[LayerTimeBlend]")
+{
+    // The slab's underside needs support; the low temperature interface prints a drop tower on every layer up to
+    // the last interface. Below it the waits are over the tower when the nozzle gets there; above it they park.
+    const double       max_diff_s = 2.;
+    DynamicPrintConfig config     = wait_at_config("purge_tower", max_diff_s, {}, {{"park_x", "10"}, {"park_y", "190"}});
+    config.set_deserialize_strict({{"enable_support", "1"}, {"support_interface_top_layers", "2"}});
+    const std::string mod_settings = config.opt_string("mod_settings");
+    config.set_key_value("mod_settings", new ConfigOptionString(mod_settings.substr(0, mod_settings.size() - 1) +
+        R"(, "low_temp_interface.enable": true, "low_temp_interface.temperature": 170, "low_temp_interface.tower": true})"));
+    const std::string              out   = slice_mesh(pillar_with_slab(), config);
+    const std::vector<std::string> lines = lines_of(out);
+    REQUIRE(out.find("; temperature drop tower layer") != std::string::npos);
+    size_t sites = 0, tower_sites = 0, tower_waits = 0;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (lines[i] != site_tag)
+            continue;
+        ++sites;
+        // Over the drop tower: its marker comes before the next extrusion.
+        bool at_tower = false;
+        for (size_t j = i + 1; j < lines.size(); ++j) {
+            if (lines[j].rfind("; temperature drop tower", 0) == 0 || lines[j].rfind("; low-temperature support interface temperature drop tower", 0) == 0) {
+                at_tower = true;
+                break;
+            }
+            if (axis_value(lines[j], 'E') && (axis_value(lines[j], 'X') || axis_value(lines[j], 'Y')))
+                break;
+        }
+        if (!at_tower)
+            continue;
+        ++tower_sites;
+        if (lines[i - 1].rfind("G4 P", 0) == 0) {
+            // A bare wait where the nozzle already is: no lift and no trip before it.
+            CHECK(lines[i - 2].rfind("G1 Z", 0) != 0);
+            const bool parked = axis_value(lines[i - 2], 'X').has_value() && lines[i - 3].rfind("G1 Z", 0) == 0;
+            CHECK_FALSE(parked);
+            ++tower_waits;
+        }
+    }
+    CHECK(sites == 53);
+    CHECK(tower_sites > 0);
+    CHECK(tower_waits > 0);
+    check_blended(measured_intervals(out), max_diff_s);
+}
+
 TEST_CASE("Parked waits go to the park position and come back to where they left", "[LayerTimeBlend]")
 {
     const double       max_diff_s = 2.;

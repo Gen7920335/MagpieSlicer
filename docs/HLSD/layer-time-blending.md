@@ -65,13 +65,21 @@ when a wait is next to them.
   `layer_time_blend_tower_x/_y`. The nozzle waits over its center, then prints the loop, which
   re-primes it. Each layer's part is a self-contained block that starts and ends retracted at the
   layer's Z, so the blocks above the last wait that needs the tower are left out; the planner picks
-  the lowest cut that keeps every limit. Not in by-object prints and not with absolute E (the cut
-  would shift E); a tower that does not fit parks instead.
+  the lowest cut that keeps every limit. With absolute E a left-out block that does not end with the
+  writer's own `G92 E0` is replaced by a `G92` to the E it ended at, so the moves after it push no
+  extra filament; on the flavors whose writer never resets E (Mach3, MakerWare, Sailfish) the tower
+  stays whole. Not in by-object prints; a tower that does not fit parks instead.
 - `park`: lift, travel to the park position (printer `layer_time_blend_park_x/_y`, rear left by
   default), wait, back to the same XY, down. Waits shorter than `in_place_max` or the trip wait in
   place.
-- `purge_tower`: parks over the temperature drop tower or the prime tower while they are printed,
-  else at the park position.
+- `purge_tower`: on a layer that visits the temperature drop tower or the prime tower, the site is
+  where the nozzle has arrived over the tower, retracted, before its first line there: after the
+  travel to it, or in a tool change made in place, before the tower generator's deretraction. The
+  wait is a bare G4 and the tower's lines re-prime the nozzle; there is no extra trip. The site is
+  then mid-layer, so the interval it measures runs from one visit to the next, and where the visit
+  moves within the layer (a tool order that alternates) those intervals vary more than the layer
+  times do. Layers above the towers park at the park position. A layer expected to visit a tower
+  that did not still gets its site, in place at the layer's end (logged).
 
 Waiting away from the part means the part fan does not blow on it: equal layer times do not mean
 equal cooling, only closer to it.
@@ -81,4 +89,3 @@ equal cooling, only closer to it.
 - The times are the estimator's; machine limits that differ from the firmware's shift them, mostly
   in proportion.
 - Objects with different layer heights on one plate are blended by G-code layer.
-- The prime tower is waited over, not inside its own visit.
