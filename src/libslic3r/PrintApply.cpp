@@ -1357,8 +1357,17 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     // MAGPIE: mod rules set values in the mod-rule layer before anything reads the config. With no
     // mod loaded this does nothing, which keeps the output equal to vanilla Orca.
     m_mod_rule_errors.clear();
-    if (std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods(); mods && !mods->empty())
-        m_mod_rule_errors = mods->resolve(new_full_config);
+    m_mod_rule_clashes.clear();
+    if (std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods(); mods && !mods->empty()) {
+        std::vector<ModHost::ModSet::RuleClash> clashes;
+        m_mod_rule_errors = mods->resolve(new_full_config, {}, &clashes);
+        for (ModHost::ModSet::RuleClash &c : clashes) {
+            std::string others;
+            for (const std::string &m : c.other_mods)
+                others += (others.empty() ? "" : ", ") + m;
+            m_mod_rule_clashes.push_back({std::move(c.setting), std::move(c.used_mod), std::move(c.used_value), std::move(others)});
+        }
+    }
     // MAGPIE: absolute line widths follow each nozzle on printers with mixed nozzle sizes. Done before the
     // config is diffed, so a change of nozzle_diameter or printer_variant invalidates the widths it moves;
     // object and region overrides take the same reference below.
@@ -1673,14 +1682,35 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
         //BBS: add more logs
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: found full_config_diff changed.")%__LINE__;
         update_apply_status(this->invalidate_step(psGCodeExport));
-        // MAGPIE: the support generator modules read their parameters straight from mod_settings,
-        // a key no static config owns, so a changed value must redo their support (and stop a
-        // support step still reading the old full config before it is replaced below).
-        for (const char *key : { "mod_settings", "printer_mod_settings" })
-            if (std::find(full_config_diff.begin(), full_config_diff.end(), key) != full_config_diff.end())
+        // MAGPIE: mod parameter values live in keys no static config owns (mod_settings,
+        // printer_mod_settings, filament_mod_settings). A parameter acts through its rules, whose
+        // settings invalidate what they change in the diffs above, or is read by the mod's code; for
+        // that, the steps each changed parameter declares ("invalidates", posSlice when it declares
+        // none) are redone here, which also stops a step still reading the old full config before it
+        // is replaced below.
+        if (std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods(); mods && ! mods->empty()) {
+            std::set<std::string> steps;
+            auto changed = [&full_config_diff](const char *key) {
+                return std::find(full_config_diff.begin(), full_config_diff.end(), key) != full_config_diff.end();
+            };
+            for (const char *key : { "mod_settings", "printer_mod_settings" })
+                if (changed(key)) {
+                    const auto *old_opt = m_full_print_config.option<ConfigOptionString>(key);
+                    const auto *new_opt = new_full_config.option<ConfigOptionString>(key);
+                    steps.merge(mods->invalidated_steps(old_opt ? old_opt->value : std::string(), new_opt ? new_opt->value : std::string()));
+                }
+            if (changed("filament_mod_settings")) {
+                const auto *old_opt = m_full_print_config.option<ConfigOptionStrings>("filament_mod_settings");
+                const auto *new_opt = new_full_config.option<ConfigOptionStrings>("filament_mod_settings");
+                const size_t n = std::max(old_opt ? old_opt->size() : 0, new_opt ? new_opt->size() : 0);
+                for (size_t i = 0; i < n; ++i)
+                    steps.merge(mods->invalidated_steps(old_opt && i < old_opt->size() ? old_opt->values[i] : std::string(),
+                                                        new_opt && i < new_opt->size() ? new_opt->values[i] : std::string()));
+            }
+            if (! steps.empty())
                 for (PrintObject *object : m_objects)
-                    if (! object->config().support_generator.value.empty())
-                        update_apply_status(object->invalidate_step(posSupportMaterial));
+                    update_apply_status(object->invalidate_mod_steps(steps));
+        }
         m_placeholder_parser.clear_config();
         // clear_config() wiped the constructor-set "version"; restore it for custom G-code.
         m_placeholder_parser.set("version", std::string(SoftFever_VERSION));

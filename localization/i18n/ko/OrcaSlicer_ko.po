@@ -43114,6 +43114,7 @@ msgstr "CUDA 연산"
 msgid "Runs some slicing calculations on an NVIDIA GPU: off, on (every GPU result is checked against the CPU) or max (GPU results are used unchecked)."
 msgstr "일부 슬라이싱 계산을 NVIDIA GPU에서 실행합니다: 끔, 켬(모든 GPU 결과를 CPU로 검증) 또는 최대(GPU 결과를 검증 없이 사용)."
 
+# AI Translated
 msgid "Line width for each nozzle, in mm, on a printer whose nozzles differ in size. 0 uses the line width setting, scaled to that nozzle."
 msgstr "노즐 크기가 서로 다른 프린터에서 노즐마다 쓸 선 너비(mm)입니다. 0이면 선 너비 설정을 그 노즐에 맞게 비율로 바꿔 씁니다."
 
@@ -43151,6 +43152,142 @@ msgid "%1% on nozzle %2% (%3% mm), in mm. Leave empty to use the line width sett
 msgstr "노즐 %2%(%3% mm)의 %1% 선 너비(mm)입니다. 비워 두면 선 너비 설정을 씁니다."
 
 # AI Translated
+msgid "Test a mod"
+msgstr "모드 검사"
+
+# AI Translated
+msgid "Check that the mod with this id loads, slice each case in its tests folder twice and check the G-code, then exit."
+msgstr "이 id의 모드가 로드되는지 확인하고, tests 폴더의 각 케이스를 두 번 슬라이스해 G-code를 검사한 뒤 종료합니다."
+
+# AI Translated
+msgid "Sign a mod package"
+msgstr "모드 패키지 서명"
+
+# AI Translated
+msgid "Write the SIGNATURE of the mod package folder given, with the key of --mod-sign-key, then exit."
+msgstr "지정한 모드 패키지 폴더의 SIGNATURE를 --mod-sign-key의 키로 쓴 뒤 종료합니다."
+
+# AI Translated
+msgid "Signing key"
+msgstr "서명 키"
+
+# AI Translated
+msgid "Ed25519 private key (PEM file) for --mod-sign."
+msgstr "--mod-sign에 쓸 Ed25519 개인 키(PEM 파일)입니다."
+
+# AI Translated
+msgid "Signing key name"
+msgstr "서명 키 이름"
+
+# AI Translated
+msgid "The name the application knows the signing key by."
+msgstr "앱이 이 서명 키를 알아보는 이름입니다."
+
+# AI Translated
+msgid "New signing key"
+msgstr "새 서명 키"
+
+# AI Translated
+msgid "Write a new Ed25519 private key to this PEM file and print its public key, then exit."
+msgstr "새 Ed25519 개인 키를 이 PEM 파일에 쓰고 공개 키를 출력한 뒤 종료합니다."
+
+# AI Translated
+#, c-format
+msgid "%s (native code)"
+msgstr "%s (네이티브 코드)"
+
+# AI Translated
+msgid "Bundled"
+msgstr "기본 포함"
+
+# AI Translated
+#, c-format
+msgid "Downloaded %s %s. It is installed when you restart the application."
+msgstr "%s %s을(를) 받았습니다. 앱을 다시 시작하면 설치됩니다."
+
+# AI Translated
+msgid "Installed Mods"
+msgstr "설치된 모드"
+
+# AI Translated
+msgid "Mod settings"
+msgstr "모드 설정"
+
+# AI Translated
+msgid "Mod settings..."
+msgstr "모드 설정..."
+
+# AI Translated
+msgid "Not running; see the log"
+msgstr "실행되지 않음, 로그 참고"
+
+# AI Translated
+msgid "On, off after restart"
+msgstr "켜짐, 다시 시작하면 꺼짐"
+
+# AI Translated
+msgid "Removed at restart"
+msgstr "다시 시작하면 삭제됨"
+
+# AI Translated
+msgid "Updated at restart"
+msgstr "다시 시작하면 업데이트됨"
+
+# AI Translated
+msgid "Set here"
+msgstr "여기서 설정"
+
+# AI Translated
+msgid "Set mod parameters for this object or part only"
+msgstr "이 오브젝트나 파트에만 모드 파라미터를 설정합니다"
+
+# AI Translated
+msgid "State"
+msgstr "상태"
+
+# AI Translated
+msgid "The changes apply when you restart the application."
+msgstr "바꾼 내용은 앱을 다시 시작하면 적용됩니다."
+
+# AI Translated
+#, c-format
+msgid "The value of %s is not a valid %s."
+msgstr "%s의 값이 올바른 %s이(가) 아닙니다."
+
+# AI Translated
+msgid "Turn mods off or on, or remove them, from the next start"
+msgstr "다음 시작부터 모드를 끄거나 켜거나 삭제합니다"
+
+# AI Translated
+msgid "Turn off"
+msgstr "끄기"
+
+# AI Translated
+msgid "Turn on"
+msgstr "켜기"
+
+# AI Translated
+msgid "Turning a mod off or on and removing it apply when you restart the application."
+msgstr "모드 끄기·켜기와 삭제는 앱을 다시 시작하면 적용됩니다."
+
+# AI Translated
+#, c-format
+msgid "Values for \"%s\". A value not set here is inherited."
+msgstr "\"%s\"의 값입니다. 여기서 설정하지 않은 값은 위 단계의 값을 따릅니다."
+
+# AI Translated
+#, boost-format
+msgid "Mods %1% and %2% both set \"%3%\"; the value \"%4%\" of %2% is used. Turn off the mods you do not want."
+msgstr "모드 %1%와(과) %2%가 둘 다 \"%3%\"를 설정합니다. %2%의 값 \"%4%\"를 씁니다. 원하지 않는 모드는 끄세요."
+
+# AI Translated
+msgid "The start G-code moves the Snapmaker U1 before homing, so a G28 was added after PRINT_START."
+msgstr "시작 G-code가 원점 복귀 전에 Snapmaker U1을 움직여서 PRINT_START 뒤에 G28을 넣었습니다."
+
+# AI Translated
+msgid "The start G-code lacks the Snapmaker U1 pre-print sequence, so the stock U1 start G-code was used instead. Turn off the Snapmaker U1 start guard on the printer's Mods page to keep your own."
+msgstr "시작 G-code에 Snapmaker U1 출력 전 순서가 없어서 순정 U1 시작 G-code를 대신 썼습니다. 직접 쓴 시작 G-code를 쓰려면 프린터 설정의 Mods 페이지에서 Snapmaker U1 시작 보호를 끄세요."
+
 #, boost-format
 msgid "%1% is printed %2% mm wide by the %3% mm nozzle of tool %4%: it was laid out for another tool's nozzle."
 msgstr "%1%이(가) 툴 %4%의 %3% mm 노즐로 %2% mm 너비로 출력됩니다. 다른 툴의 노즐에 맞춰 배치된 것입니다."

@@ -153,6 +153,9 @@
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/ProjectTask.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
+#include "libslic3r/ModHost/ModPackage.hpp"
+#include "libslic3r/ModHost/ModTest.hpp"
+#include "libslic3r/ModHost/NativeMods.hpp"
 #include "slic3r/GUI/GUI_ObjectList.hpp"
 #include "slic3r/GUI/I18N.hpp"
 #include "slic3r/GUI/Jobs/SendJob.hpp"
@@ -1271,6 +1274,8 @@ int CLI::run(int argc, char **argv)
     // MAGPIE: mod index actions run on their own and exit.
     if (m_given_option_keys.count("mod_search") || m_given_option_keys.count("mod_install"))
         return run_mod_index_actions();
+    if (m_given_option_keys.count("mod_test") || m_given_option_keys.count("mod_sign") || m_given_option_keys.count("mod_keygen"))
+        return run_mod_tool_actions();
     std::string temp_path = per_user_temp_dir(wxFileName::GetTempDir().utf8_str().data(), per_user_temp_id());
     // Some consumers write into the temp root directly, so create it up front.
     try {
@@ -8192,6 +8197,92 @@ int CLI::run_mod_index_actions()
     return result;
 }
 
+// MAGPIE: tools for mod authors. --mod-keygen writes a new signing key, --mod-sign signs a package
+// folder, --mod-test checks a loaded mod (ModTest.hpp): each test case is sliced by this same program
+// run as a separate process, twice, so the determinism check also covers a fresh process.
+int CLI::run_mod_tool_actions()
+{
+    namespace fs = boost::filesystem;
+    auto read_text = [](const std::string &path) {
+        boost::nowide::ifstream in(path, std::ios::binary);
+        std::stringstream       ss;
+        ss << in.rdbuf();
+        return ss.str();
+    };
+    try {
+        if (m_given_option_keys.count("mod_keygen")) {
+            const std::string path = m_config.opt_string("mod_keygen");
+            if (fs::exists(path)) {
+                boost::nowide::cerr << "Not overwriting " << path << std::endl;
+                return CLI_INVALID_PARAMS;
+            }
+            const ModHost::SigningKey key = ModHost::generate_signing_key();
+            boost::nowide::ofstream out(path, std::ios::binary);
+            out << key.private_pem;
+            out.close();
+            if (!out) {
+                boost::nowide::cerr << "Could not write " << path << std::endl;
+                return CLI_INVALID_PARAMS;
+            }
+            boost::nowide::cout << "Wrote " << path << "\nPublic key: " << key.public_key_hex << std::endl;
+            return 0;
+        }
+        if (m_given_option_keys.count("mod_sign")) {
+            const std::string dir = m_config.opt_string("mod_sign");
+            const std::string key = m_config.opt_string("mod_sign_key");
+            if (key.empty()) {
+                boost::nowide::cerr << "--mod-sign needs --mod-sign-key <private key PEM file>" << std::endl;
+                return CLI_INVALID_PARAMS;
+            }
+            const std::string pem = read_text(key);
+            ModHost::sign_package(dir, pem, m_config.opt_string("mod_sign_key_id"));
+            const ModHost::SignatureCheck check = ModHost::check_package_signature(dir);
+            boost::nowide::cout << "Signed " << dir << " with \"" << m_config.opt_string("mod_sign_key_id") << "\" (public key "
+                                << ModHost::public_key_of(pem) << "): "
+                                << (check.valid ? std::string("this application trusts it") : "not trusted here: " + check.error) << std::endl;
+            return 0;
+        }
+        if (m_given_option_keys.count("mod_test")) {
+            const std::string id   = m_config.opt_string("mod_test");
+            const fs::path    exe  = boost::dll::program_location();
+            const fs::path    temp = fs::temp_directory_path() / ("magpie-mod-test-" + id);
+            auto slice = [&](const ModHost::ModTestCase &c, int run) {
+                const fs::path out = temp / c.name / std::to_string(run);
+                fs::remove_all(out);
+                fs::create_directories(out);
+                std::vector<std::string> args;
+                if (!data_dir().empty())
+                    args = {"--datadir", data_dir()};
+                args.insert(args.end(), {"--slice", "0", "--outputdir", out.string()});
+                args.insert(args.end(), c.args.begin(), c.args.end());
+                const int code = ModHost::run_child_process(exe.string(), args, (out / "output.txt").string());
+                if (code != 0)
+                    throw std::runtime_error("exit code " + std::to_string(code) + ", see " + (out / "output.txt").string());
+                std::vector<fs::path> gcodes;
+                for (fs::directory_iterator it(out), end; it != end; ++it)
+                    if (it->path().extension() == ".gcode")
+                        gcodes.push_back(it->path());
+                std::sort(gcodes.begin(), gcodes.end());
+                if (gcodes.empty())
+                    throw std::runtime_error("no G-code was written to " + out.string());
+                std::string gcode;
+                for (const fs::path &g : gcodes)
+                    gcode += read_text(g.string());
+                return gcode;
+            };
+            const ModHost::ModTestReport report = ModHost::run_mod_test(id, slice);
+            for (const std::string &line : report.lines)
+                boost::nowide::cout << line << std::endl;
+            boost::nowide::cout << (report.passed ? "PASSED " : "FAILED ") << id << std::endl;
+            return report.passed ? 0 : CLI_SLICING_ERROR;
+        }
+    } catch (const std::exception &e) {
+        boost::nowide::cerr << "Error: " << e.what() << std::endl;
+        return CLI_INVALID_PARAMS;
+    }
+    return 0;
+}
+
 void attach_console_on_demand(){
 #ifdef _WIN32
     static bool console_attached = false;
@@ -8534,7 +8625,10 @@ extern "C" {
             throw std::bad_alloc();
         });
         // Call the UTF8 main.
-        return CLI().run(argc, argv_ptrs.data());
+        const int result = CLI().run(argc, argv_ptrs.data());
+        // MAGPIE: native mods shut down while their libraries are still attached.
+        ModHost::shutdown_native_mods();
+        return result;
     }
 }
 #else /* _MSC_VER */
@@ -8547,6 +8641,9 @@ int main(int argc, char **argv)
     // OrcaSlicer with SIGPIPE (exit 141) and produces no crash report.
     std::signal(SIGPIPE, SIG_IGN);
 #endif
-    return CLI().run(argc, argv);
+    const int result = CLI().run(argc, argv);
+    // MAGPIE: native mods shut down while their libraries are still attached.
+    ModHost::shutdown_native_mods();
+    return result;
 }
 #endif /* _MSC_VER */

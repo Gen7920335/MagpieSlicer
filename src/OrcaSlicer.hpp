@@ -73,6 +73,7 @@ private:
 
     // MAGPIE: --mod-search / --mod-install; returns the process exit code.
     int run_mod_index_actions();
+    int run_mod_tool_actions();
     std::vector<Model>          m_models;
 
     bool setup(int argc, char **argv);

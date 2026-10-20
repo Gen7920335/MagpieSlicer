@@ -1303,6 +1303,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     // Automatic supports (generated based on support_threshold_angle).
     ((ConfigOptionEnum<SupportType>,   support_type))
     ((ConfigOptionString,              support_generator))
+    // MAGPIE: this object's values of object-scope mod parameters (JSON, see PrintConfig.cpp).
+    ((ConfigOptionString,              object_mod_settings))
     ((ConfigOptionFloat,               object_elevation))
     ((ConfigOptionString,              support_interface_pattern_override))
     ((ConfigOptionInt,                 support_interface_sublayer_start))
@@ -1567,6 +1569,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionInt, wall_loops))
     // MAGPIE: wall.plan slot and multi-nozzle walls (see PrintConfig.cpp).
     ((ConfigOptionString, wall_planner))
+    // MAGPIE: this region's values of region-scope mod parameters (JSON, see PrintConfig.cpp).
+    ((ConfigOptionString, region_mod_settings))
     ((ConfigOptionBool, use_smaller_nozzles_in_crisp_corners))
     ((ConfigOptionInt, crisp_corner_detail_toolhead))
     ((ConfigOptionInt, crisp_corner_small_nozzle_wall_count))

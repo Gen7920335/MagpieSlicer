@@ -7,9 +7,18 @@ planner, half-height walls). With no mod enabled the slicer slices exactly like 
 
 ## Where mods come from
 
-The app loads every `*.json` in `<resources>/mods` (bundled with the app) and then in
-`<data dir>/mods` (installed by the user), checks them together and keeps the set for GUI and CLI
-slicing. A file that fails to load is logged and left out; the others still load.
+The app loads every `*.json` and every package folder `<id>/mod.json` in `<resources>/mods`
+(bundled with the app) and then in `<data dir>/mods` (installed by the user), checks them together
+and keeps the set for GUI and CLI slicing. A file that fails to load is logged and left out; the
+others still load. A package may carry native code ([native-mods.md](native-mods.md)).
+
+Bundled mods are official. An installed package is official or verified when its `SIGNATURE` verifies
+with a key the application trusts; a single installed `.json` file is a community mod. Only official
+mods may write G-code a printer runs (`machine_start_gcode` and every other `*_gcode` setting, and
+`post_process`): a rule of any other mod on one of them does not load.
+
+Installed Mods (main menu) turns mods off or on and removes installed ones; those changes, and
+packages from Get Mods, apply at the next start.
 
 ## The definition
 
@@ -30,11 +39,22 @@ slicing. A file that fails to load is logged and left out; the others still load
 }
 ```
 
-- **params** become rows on the Mods page of a settings tab. `type` is `float`, `int`, `bool`
-  or `string`. `scope` picks the preset that stores the value: `process` (default, stored in
-  `mod_settings`), `printer` (`printer_mod_settings`) or `filament` (`filament_mod_settings`,
-  one value per filament, read as `<id>.<name>[i]`). `label`, `unit` and `page` are display
-  text; `invalidates` lists the slicing steps a change redoes.
+- **params** become rows on the Mods page of a settings tab. `type` is `float`, `int`, `bool`,
+  `string` or `float_or_percent` (a number, or `"50%"`, which a rule passes on to a setting that
+  takes a percentage). `scope` picks where the value is stored: `process` (default, stored in
+  `mod_settings`), `printer` (`printer_mod_settings`), `filament` (`filament_mod_settings`,
+  one value per filament, read as `<id>.<name>[i]`), `object` or `region`. An object or region
+  parameter keeps its default value on the process Mods page and can be set per object
+  (`object_mod_settings`) or per object, layer range, part or modifier (`region_mod_settings`,
+  joined per parameter, the most specific level winning) from the object's "Mod settings...". Rules
+  read the process value; a native mod reads the value of the object or region it works on.
+  `label`, `unit` and `page` are display text.
+- **invalidates** lists the slicing steps a change of the value redoes, by step name
+  (`posSlice`, `posPerimeters`, `posPrepareInfill`, `posInfill`, `posSupportMaterial`,
+  `psWipeTower`, `psSkirtBrim`, `psGCodeExport`, ...). A parameter that lists none redoes
+  everything from slicing, so a missing list is slower but never stale. `["none"]` says the value
+  changes the print only through the settings its rules write, which invalidate what they change
+  themselves; an object or region parameter cannot say so.
 - A `string` parameter with **options** is a dropdown: each option is a value, or an object
   `{"value": ..., "label": ..., "label_ko": ...}`. The default must be one of them, and a stored
   value outside them is reported like a value of the wrong type.
@@ -51,7 +71,9 @@ slicing. A file that fails to load is logged and left out; the others still load
 
 Rules sit above the printer, filament and process presets and below a value the user changed
 in a preset: a setting the user edited stays as the user set it. A rule that cannot be
-evaluated is reported and slicing stops rather than slicing with a half-applied mod.
+evaluated is reported and slicing stops rather than slicing with a half-applied mod. When rules of
+two mods set one setting to different values (two support generators turned on), the higher
+priority wins and slicing warns which mod's value is used.
 
 Keep the defaults neutral, so that installing a mod changes nothing until the user turns it on.
 
@@ -84,6 +106,10 @@ Installing downloads the definition, refuses it unless its SHA-256 matches the i
 with the entry's id, it does not take a bundled mod's id, and it loads together with the mods
 already present. Only then is it written to `<data dir>/mods/<id>.json`; the settings pages are
 rebuilt so its parameters appear.
+
+An entry whose `url` ends in `.zip` is a package. It is downloaded and checked the same way (hash,
+id, no file outside the package, a trusted signature when it carries native code), unpacked to
+`<data dir>/mods/<id>.pending` and installed at the next start.
 
 - GUI: **Get Mods...** in the main menu searches the index and installs with one button.
 - Opening a project whose mod settings name mods that are not installed offers to look them up.

@@ -50,9 +50,22 @@ json parse_object(const std::string &text)
     return json::object();
 }
 
+// The preset tab that stores a parameter's value: object and region parameters keep their process
+// value (the one objects and parts inherit) with the process preset.
+const std::string &tab_scope(const ModHost::ModParam &p)
+{
+    static const std::string process = "process";
+    return p.scope == "object" || p.scope == "region" ? process : p.scope;
+}
+
 wxString display_value(const json &stored, const ModHost::ModParam &p, const std::string &key)
 {
     auto it = stored.find(key);
+    if (p.type == "float_or_percent" && it != stored.end() && it->is_string())
+        return wxString::FromUTF8(it->get<std::string>());
+    if (p.type == "float_or_percent" && it == stored.end())
+        if (const std::string *s = std::get_if<std::string>(&p.default_value))
+            return wxString::FromUTF8(*s);
     if (p.type == "string")
         return wxString::FromUTF8(it != stored.end() && it->is_string() ? it->get<std::string>() : std::get<std::string>(p.default_value));
     double v = std::get<double>(p.default_value);
@@ -70,7 +83,7 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
     grid->AddGrowableCol(1);
     for (const ModHost::Mod &mod : m_mods->mods())
         for (const ModHost::ModParam &p : mod.params) {
-            if (p.scope != m_scope)
+            if (tab_scope(p) != m_scope)
                 continue;
             const std::string key   = mod.id + "." + p.name;
             const std::string language = into_u8(wxGetApp().current_language_code_safe());
@@ -115,7 +128,7 @@ bool ModParamsPanel::has_params(const ModHost::ModSet *mods, const std::string &
         return false;
     for (const ModHost::Mod &mod : mods->mods())
         for (const ModHost::ModParam &p : mod.params)
-            if (p.scope == scope)
+            if (tab_scope(p) == scope)
                 return true;
     return false;
 }
@@ -170,7 +183,12 @@ void ModParamsPanel::commit()
             value = cb->GetValue();
         } else if (auto *tc = dynamic_cast<wxTextCtrl *>(row.control)) {
             const std::string text = tc->GetValue().ToUTF8().data();
+            double            percent = 0.;
             if (p.type == "string") {
+                value = text;
+            } else if (p.type == "float_or_percent" && !text.empty() && text.back() == '%' &&
+                       wxString::FromUTF8(text.substr(0, text.size() - 1)).ToCDouble(&percent)) {
+                // "50%": a percentage of the setting the mod's rule writes it to.
                 value = text;
             } else {
                 double v = 0.;
@@ -207,7 +225,7 @@ std::optional<ModHost::ExprValue> ModParamsPanel::row_value(const Row &row) cons
     if (auto *cb = dynamic_cast<wxCheckBox *>(row.control))
         return ModHost::ExprValue(cb->GetValue());
     if (auto *tc = dynamic_cast<wxTextCtrl *>(row.control)) {
-        if (row.param->type == "string")
+        if (row.param->type == "string" || (row.param->type == "float_or_percent" && tc->GetValue().EndsWith("%")))
             return ModHost::ExprValue(std::string(tc->GetValue().ToUTF8().data()));
         double v = 0.;
         if (tc->GetValue().ToCDouble(&v))

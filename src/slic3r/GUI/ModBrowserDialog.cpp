@@ -179,16 +179,21 @@ void ModBrowserDialog::install_selected()
     set_busy(true);
     std::thread([this, alive = m_alive, entry]() {
         std::string error;
+        bool        needs_restart = false;
         try {
-            download_and_install_mod(entry);
+            download_and_install_mod(entry, &needs_restart);
         } catch (const std::exception &e) {
             error = e.what();
         }
-        wxGetApp().CallAfter([this, alive, entry, error]() {
+        wxGetApp().CallAfter([this, alive, entry, error, needs_restart]() {
             if (!alive->load())
                 return;
             set_busy(false);
-            if (error.empty()) {
+            if (error.empty() && needs_restart) {
+                // A package (it may carry native code) is installed when the application starts next.
+                m_status->SetLabel(wxString::Format(_L("Downloaded %s %s. It is installed when you restart the application."),
+                                                    from_u8(entry.id), from_u8(entry.version)));
+            } else if (error.empty()) {
                 m_installed_any = true;
                 m_status->SetLabel(wxString::Format(_L("Installed %s %s."), from_u8(entry.id), from_u8(entry.version)));
             } else {

@@ -47,3 +47,32 @@ TEST_CASE("Without the guard, or on another printer, the start G-code is kept as
         CHECK(gcode.find("mandatory Snapmaker U1 homing") == std::string::npos);
     }
 }
+
+TEST_CASE("The U1 start guard says when it changed the start G-code", "[SnapmakerU1]")
+{
+    auto run = [](const std::string &start_gcode, bool guard) {
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_deserialize_strict({
+            { "gcode_flavor", "klipper" },
+            { "printer_model", "Snapmaker U1" },
+            { "machine_start_gcode", start_gcode },
+            { "snapmaker_u1_start_guard", guard },
+        });
+        Print print;
+        Model model;
+        init_print({ cube(20.) }, print, model, config);
+        const std::string out = gcode(print);
+        std::string warnings;
+        for (const PrintStateBase::Warning &w : print.step_state_with_warnings(psGCodeExport).warnings)
+            warnings += w.message + "\n";
+        return std::make_pair(out.substr(0, out.find(";LAYER_CHANGE")), warnings);
+    };
+    // Replaced: a comment where the start G-code begins, and a slicing warning.
+    const auto [replaced, replaced_warnings] = run(unsafe_start, true);
+    CHECK(replaced.find("; Magpie: the start G-code lacked the Snapmaker U1 pre-print sequence") != std::string::npos);
+    CHECK(replaced_warnings.find("stock U1 start G-code was used instead") != std::string::npos);
+    // Guard off: neither.
+    const auto [kept, kept_warnings] = run(unsafe_start, false);
+    CHECK(kept.find("; Magpie:") == std::string::npos);
+    CHECK(kept_warnings.find("Snapmaker U1") == std::string::npos);
+}

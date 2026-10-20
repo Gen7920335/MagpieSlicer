@@ -8,13 +8,13 @@
     "name": "Low temperature support interface", "name_ko": "저온 서포트 접점",
     "version": "1.0.0",
     "params": {
-        "enable":          { "type": "bool",  "default": false, "label": "Low temperature support interface", "label_ko": "저온 서포트 접점" },
-        "temperature":     { "type": "int",   "default": 170,   "unit": "degC", "label": "Support interface temperature", "label_ko": "서포트 접점 온도" },
-        "heating_time":    { "type": "float", "default": 5,     "unit": "s",    "label": "Heating time before the model resumes", "label_ko": "모델 출력 재개 전 가열 시간" },
-        "aux_fan":         { "type": "bool",  "default": false, "label": "Cool the nozzle with the auxiliary fan (air duct adapter required)", "label_ko": "보조 팬으로 노즐 냉각 (에어 덕트 어댑터 필요)" },
-        "aux_fan_speed":   { "type": "int",   "default": 100,   "unit": "%",    "label": "Auxiliary fan speed", "label_ko": "보조 팬 속도" },
-        "brush":           { "type": "bool",  "default": false, "label": "Wipe the nozzle on the brush after cooling", "label_ko": "냉각 후 브러시에 노즐 닦기" },
-        "tower":           { "type": "bool",  "default": false, "label": "Cool down on a temperature drop tower (without a brush)", "label_ko": "온도 강하 타워를 출력하며 냉각 (브러시 없을 때)" }
+        "enable":          { "invalidates": ["none"], "type": "bool",  "default": false, "label": "Low temperature support interface", "label_ko": "저온 서포트 접점" },
+        "temperature":     { "invalidates": ["none"], "type": "int",   "default": 170,   "unit": "degC", "label": "Support interface temperature", "label_ko": "서포트 접점 온도" },
+        "heating_time":    { "invalidates": ["none"], "type": "float", "default": 5,     "unit": "s",    "label": "Heating time before the model resumes", "label_ko": "모델 출력 재개 전 가열 시간" },
+        "aux_fan":         { "invalidates": ["none"], "type": "bool",  "default": false, "label": "Cool the nozzle with the auxiliary fan (air duct adapter required)", "label_ko": "보조 팬으로 노즐 냉각 (에어 덕트 어댑터 필요)" },
+        "aux_fan_speed":   { "invalidates": ["none"], "type": "int",   "default": 100,   "unit": "%",    "label": "Auxiliary fan speed", "label_ko": "보조 팬 속도" },
+        "brush":           { "invalidates": ["none"], "type": "bool",  "default": false, "label": "Wipe the nozzle on the brush after cooling", "label_ko": "냉각 후 브러시에 노즐 닦기" },
+        "tower":           { "invalidates": ["none"], "type": "bool",  "default": false, "label": "Cool down on a temperature drop tower (without a brush)", "label_ko": "온도 강하 타워를 출력하며 냉각 (브러시 없을 때)" }
     },
     "rules": [
         { "target": "single_nozzle_low_temperature_interface",                       "value": "low_temp_interface.enable" },

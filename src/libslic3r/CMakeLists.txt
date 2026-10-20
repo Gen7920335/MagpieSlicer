@@ -135,6 +135,13 @@ set(lisbslic3r_sources
     ModHost/LegacySettings.hpp
     ModHost/ModSet.cpp
     ModHost/ModSet.hpp
+    ModHost/ModPackage.cpp
+    ModHost/ModPackage.hpp
+    ModHost/ModTest.cpp
+    ModHost/ModTest.hpp
+    ModHost/NativeCall.cpp
+    ModHost/NativeMods.cpp
+    ModHost/NativeMods.hpp
     ModHost/ParamGraph.cpp
     ModHost/SlotRegistry.cpp
     ModHost/SlotRegistry.hpp
@@ -870,6 +877,12 @@ target_link_libraries(libslic3r
         ZLIB::ZLIB
         OpenSSL::Crypto
     )
+
+if (WIN32)
+    # MAGPIE: the mod signature check (ModHost/ModPackage.cpp) pulls in OpenSSL's EVP layer, whose static
+    # libcrypto references the Windows certificate store.
+    target_link_libraries(libslic3r PUBLIC crypt32)
+endif ()
 
 if(NOT WIN32)
     # OCCT's static targets name FreeType as a bare "freetype", which the macOS linker cannot

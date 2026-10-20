@@ -17,7 +17,7 @@ using json = nlohmann::json;
 
 namespace {
 
-enum class Kind { Bool, Int, Float, Percent, String };
+enum class Kind { Bool, Int, Float, Percent, FloatOrPercent, String };
 
 // One line 1 setting and the mod parameter that now carries it. `owned` marks keys this build
 // also defines (a mod rule writes them); the others are dropped from the loaded config.
@@ -44,7 +44,7 @@ const LegacyKey legacy_keys[] = {
     { "crisp_corner_nozzle_wall_overlap", "multi_nozzle_walls.wall_overlap", Kind::Percent, true },
     { "crisp_corner_interlace_small_nozzle_walls", "multi_nozzle_walls.interlock", Kind::Bool, true },
     { "crisp_corner_detail_toolhead", "multi_nozzle_walls.detail_toolhead", Kind::Int, true },
-    { "crisp_corner_small_nozzle_wall_speed", "multi_nozzle_walls.small_wall_speed", Kind::Float, true },
+    { "crisp_corner_small_nozzle_wall_speed", "multi_nozzle_walls.small_wall_speed", Kind::FloatOrPercent, true },
     { "crisp_corner_large_nozzle_override_regions", "multi_nozzle_walls.override_regions", Kind::String, true },
     { "support_interface_sublayer_angle", "support_extras.sublayer_angle", Kind::Float, true },
     { "support_interface_sublayer_temperature", "support_extras.sublayer_temperature", Kind::Int, true },
@@ -154,12 +154,30 @@ std::optional<json> convert(const std::string &value, Kind kind)
         const double v = std::strtod(value.c_str(), &end);
         return end != value.c_str() ? std::optional<json>(json(v)) : std::nullopt;
     }
+    case Kind::FloatOrPercent: {
+        // "50%" (of the wall speed) stays a percentage; a number is mm/s.
+        const double v = std::strtod(value.c_str(), &end);
+        if (end == value.c_str())
+            return std::nullopt;
+        return *end == '%' ? json(value.substr(0, size_t(end - value.c_str())) + "%") : json(v);
+    }
     case Kind::String: return json(value);
     }
     return std::nullopt;
 }
 
 } // namespace
+
+// The parameter ("<mod>.<name>") and its type that a loaded mod's "legacy_keys" give for `key`.
+static std::optional<std::pair<std::string, std::string>> manifest_legacy_param(const std::string &key)
+{
+    if (const auto mods = active_mods())
+        for (const Mod &mod : mods->mods())
+            if (auto it = mod.legacy_keys.find(key); it != mod.legacy_keys.end())
+                if (const ModParam *p = mods->find_param(mod.id + "." + it->second))
+                    return std::make_pair(mod.id + "." + it->second, p->type);
+    return std::nullopt;
+}
 
 bool stash_legacy_setting(std::string &opt_key, std::string &value, std::map<std::string, std::string> &stash)
 {
@@ -200,6 +218,13 @@ bool stash_legacy_setting(std::string &opt_key, std::string &value, std::map<std
     if (in(special_keys, opt_key) || in(toolhead_width_keys, opt_key) || resin_param(opt_key)) {
         stash[opt_key] = value;
         opt_key.clear();
+        return true;
+    }
+    // A key a loaded mod's manifest names in "legacy_keys". Kept when this build still defines it.
+    if (manifest_legacy_param(opt_key)) {
+        stash[opt_key] = value;
+        if (print_config_def.get(opt_key) == nullptr)
+            opt_key.clear();
         return true;
     }
     return false;
@@ -248,16 +273,15 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
                         continue;
                 }
             }
-            if (k->kind == Kind::Float && value.find('%') != std::string::npos) {
-                // Line 1 allowed a percentage here (of the wall speed); the parameter is mm/s, so
-                // reading "50%" as 50 mm/s would change the print. Report it instead.
-                result.dropped.push_back(key);
-                continue;
-            }
             set(k->param, convert(value, k->kind));
         }
         else if (auto r = resin_param(key))
             set(r->first, convert(value, r->second));
+        else if (auto m = manifest_legacy_param(key)) {
+            const Kind kind = m->second == "bool" ? Kind::Bool : m->second == "int" ? Kind::Int : m->second == "float" ? Kind::Float :
+                              m->second == "float_or_percent" ? Kind::FloatOrPercent : Kind::String;
+            set(m->first, convert(value, kind));
+        }
         else if (in(toolhead_width_keys, key)) {
             if (!toolhead_width_set(value))
                 continue;

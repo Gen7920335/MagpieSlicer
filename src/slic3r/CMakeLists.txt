@@ -296,6 +296,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/IMEXModesCtrl.hpp
     GUI/ModBrowserDialog.cpp
     GUI/ModBrowserDialog.hpp
+    GUI/ModManagerDialog.cpp
+    GUI/ModManagerDialog.hpp
+    GUI/ModObjectSettingsDialog.cpp
+    GUI/ModObjectSettingsDialog.hpp
     GUI/ModParamsPanel.cpp
     GUI/ModParamsPanel.hpp
     GUI/PerNozzleLineWidthsPanel.cpp

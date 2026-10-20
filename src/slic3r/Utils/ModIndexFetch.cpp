@@ -1,6 +1,7 @@
 #include "ModIndexFetch.hpp"
 
 #include "Http.hpp"
+#include "libslic3r/ModHost/ModPackage.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
 #include "libslic3r/Utils.hpp"
 
@@ -18,6 +19,8 @@ const char *const DEFAULT_MOD_INDEX_URL = "https://raw.githubusercontent.com/Gen
 // Largest index and mod definition accepted, bytes. Both are small JSON documents.
 static constexpr size_t MOD_INDEX_SIZE_LIMIT_BYTES      = 4 * 1024 * 1024;
 static constexpr size_t MOD_DEFINITION_SIZE_LIMIT_BYTES = 1024 * 1024;
+// A package carries libraries for its platforms (bin/<platform>/), so it is far larger.
+static constexpr size_t MOD_PACKAGE_SIZE_LIMIT_BYTES    = 256 * 1024 * 1024;
 
 static std::string read_local_url(const std::string &url, size_t size_limit)
 {
@@ -63,11 +66,20 @@ std::vector<ModHost::ModIndexEntry> fetch_mod_index(const std::string &url)
     return ModHost::parse_mod_index(fetch_mod_url(url, MOD_INDEX_SIZE_LIMIT_BYTES));
 }
 
-std::string download_and_install_mod(const ModHost::ModIndexEntry &entry)
+std::string download_and_install_mod(const ModHost::ModIndexEntry &entry, bool *needs_restart)
 {
     namespace fs = boost::filesystem;
+    const fs::path installed = fs::path(data_dir()) / "mods";
+    if (needs_restart)
+        *needs_restart = false;
+    if (boost::iends_with(entry.url, ".zip")) {
+        // Native code is loaded once per run, so a package always applies at the next start.
+        const std::string path = ModHost::stage_mod_package(entry, fetch_mod_url(entry.url, MOD_PACKAGE_SIZE_LIMIT_BYTES), installed.string());
+        if (needs_restart)
+            *needs_restart = true;
+        return path;
+    }
     const std::string definition = fetch_mod_url(entry.url, MOD_DEFINITION_SIZE_LIMIT_BYTES);
-    const fs::path    installed  = fs::path(data_dir()) / "mods";
     std::vector<fs::path> checked;
     if (!resources_dir().empty())
         checked.push_back(fs::path(resources_dir()) / "mods");

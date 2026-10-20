@@ -6,14 +6,14 @@
     "name": "Support extras", "name_ko": "서포트 추가 설정",
     "version": "1.0.0",
     "params": {
-        "interface_pattern": { "type": "string", "default": "",  "label": "Interface pattern (triangles, grid, rectilinear, concentric; empty = Orca's)", "label_ko": "접점 패턴 (triangles, grid, rectilinear, concentric; 비우면 오르카 설정)" },
-        "sublayer_start":    { "type": "int",    "default": 0,   "label": "Interface sublayer: first layer from the contact (2 or more; 0 = off)", "label_ko": "접점 서브레이어: 접촉면부터 첫 레이어 (2 이상; 0 = 끔)" },
-        "sublayer_end":      { "type": "int",    "default": 0,   "label": "Interface sublayer: last layer from the contact", "label_ko": "접점 서브레이어: 접촉면부터 마지막 레이어" },
-        "sublayer_pattern":  { "type": "string", "default": "",  "label": "Interface sublayer pattern (rectilinear, grid, triangles, concentric)", "label_ko": "접점 서브레이어 패턴 (rectilinear, grid, triangles, concentric)" },
-        "sublayer_angle":    { "type": "float",  "default": 0,   "unit": "deg", "label": "Interface sublayer angle", "label_ko": "접점 서브레이어 각도" },
-        "sublayer_temperature": { "type": "int", "default": 0,   "unit": "°C", "label": "Interface sublayer nozzle temperature (0 = filament temperature)", "label_ko": "접점 서브레이어 노즐 온도 (0 = 필라멘트 온도)" },
-        "normal_wall_loops": { "type": "int",    "default": -1,  "label": "Normal support walls (0-10; -1 = Orca's)", "label_ko": "일반 서포트 벽 수 (0-10; -1 = 오르카 설정)" },
-        "tree_wall_loops":   { "type": "int",    "default": -1,  "label": "Tree support walls per branch (1-10; -1 = Orca's)", "label_ko": "트리 서포트 가지당 벽 수 (1-10; -1 = 오르카 설정)" }
+        "interface_pattern": { "invalidates": ["none"], "type": "string", "default": "",  "label": "Interface pattern (triangles, grid, rectilinear, concentric; empty = Orca's)", "label_ko": "접점 패턴 (triangles, grid, rectilinear, concentric; 비우면 오르카 설정)" },
+        "sublayer_start":    { "invalidates": ["none"], "type": "int",    "default": 0,   "label": "Interface sublayer: first layer from the contact (2 or more; 0 = off)", "label_ko": "접점 서브레이어: 접촉면부터 첫 레이어 (2 이상; 0 = 끔)" },
+        "sublayer_end":      { "invalidates": ["none"], "type": "int",    "default": 0,   "label": "Interface sublayer: last layer from the contact", "label_ko": "접점 서브레이어: 접촉면부터 마지막 레이어" },
+        "sublayer_pattern":  { "invalidates": ["none"], "type": "string", "default": "",  "label": "Interface sublayer pattern (rectilinear, grid, triangles, concentric)", "label_ko": "접점 서브레이어 패턴 (rectilinear, grid, triangles, concentric)" },
+        "sublayer_angle":    { "invalidates": ["none"], "type": "float",  "default": 0,   "unit": "deg", "label": "Interface sublayer angle", "label_ko": "접점 서브레이어 각도" },
+        "sublayer_temperature": { "invalidates": ["none"], "type": "int", "default": 0,   "unit": "°C", "label": "Interface sublayer nozzle temperature (0 = filament temperature)", "label_ko": "접점 서브레이어 노즐 온도 (0 = 필라멘트 온도)" },
+        "normal_wall_loops": { "invalidates": ["none"], "type": "int",    "default": -1,  "label": "Normal support walls (0-10; -1 = Orca's)", "label_ko": "일반 서포트 벽 수 (0-10; -1 = 오르카 설정)" },
+        "tree_wall_loops":   { "invalidates": ["none"], "type": "int",    "default": -1,  "label": "Tree support walls per branch (1-10; -1 = Orca's)", "label_ko": "트리 서포트 가지당 벽 수 (1-10; -1 = 오르카 설정)" }
     },
     "rules": [
         { "target": "support_interface_pattern_override", "value": "support_extras.interface_pattern" },

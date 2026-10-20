@@ -1,0 +1,14 @@
+{
+    // Test mod for the core's native mod tests (mods/test_mod/test_mod.cpp). Not shipped.
+    "id": "magpie_test_mod_api2",
+    "name": "Native test mod",
+    "version": "1.0.0",
+    "api": { "major": 1, "min_minor": 0 },
+    "binary": "magpie_test_mod_api2",
+    "slots": [ { "slot": "test.math", "version": 1, "impl": "test_api2" } ],
+    "thread_safe": false,
+    "params": {
+        "gap": { "type": "float", "default": 1.5, "unit": "mm", "scope": "region", "invalidates": ["posPerimeters"],
+                 "label": "Test gap" }
+    }
+}

@@ -8,6 +8,7 @@
 #include <libslic3r/PrintConfig.hpp>
 
 #include <map>
+#include <set>
 #include <string>
 
 using namespace Slic3r;
@@ -111,7 +112,7 @@ TEST_CASE("A mod definition accepts comments and reads params and rules", "[ModH
     const Mod mod = ModSet::parse_mod(R"({
         // A data-only mod.
         "id": "demo", "name": "Demo", "version": "0.1.0",
-        "params": { "gap": { "type": "float", "default": 1.5, "unit": "mm", "page": "Support", "invalidates": ["support"] } },
+        "params": { "gap": { "type": "float", "default": 1.5, "unit": "mm", "page": "Support", "invalidates": ["posSupportMaterial"] } },
         /* one rule */
         "rules": [ { "target": "wall_loops", "value": "3", "when": "layer_height < 0.3", "priority": 10 } ]
     })");
@@ -119,7 +120,7 @@ TEST_CASE("A mod definition accepts comments and reads params and rules", "[ModH
     REQUIRE(mod.params.size() == 1);
     CHECK(mod.params[0].name == "gap");
     CHECK(std::get<double>(mod.params[0].default_value) == 1.5);
-    CHECK(mod.params[0].invalidates == std::vector<std::string>{"support"});
+    CHECK(mod.params[0].invalidates == std::vector<std::string>{"posSupportMaterial"});
     REQUIRE(mod.rules.size() == 1);
     CHECK(mod.rules[0].target == "wall_loops");
     CHECK(mod.rules[0].priority == 10);
@@ -442,4 +443,170 @@ TEST_CASE("Mod parameters keep the order of the definition", "[ModHost]")
     CHECK(mod.params[0].name == "zeta");
     CHECK(mod.params[1].name == "alpha");
     CHECK(mod.params[2].name == "mid");
+}
+
+TEST_CASE("A float_or_percent parameter takes a number or a percentage and passes it on", "[ModHost]")
+{
+    const ModSet mods = build_one(R"({"id": "demo", "version": "1",
+        "params": {"speed": {"type": "float_or_percent", "default": 0, "invalidates": ["none"]}},
+        "rules": [ {"target": "crisp_corner_small_nozzle_wall_speed", "value": "demo.speed"} ]})");
+    DynamicPrintConfig config = full_config();
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"demo.speed": "50%"})"));
+    REQUIRE(mods.resolve(config).empty());
+    const auto *speed = config.option<ConfigOptionFloatOrPercent>("crisp_corner_small_nozzle_wall_speed");
+    CHECK(speed->percent);
+    CHECK(speed->value == 50.);
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"demo.speed": 30})"));
+    REQUIRE(mods.resolve(config).empty());
+    CHECK_FALSE(speed->percent);
+    CHECK(speed->value == 30.);
+    // Not a number and not a percentage: reported, never read as 0.
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"demo.speed": "fast"})"));
+    CHECK_THAT(mods.resolve(config).front(), ContainsSubstring("not a float_or_percent"));
+    CHECK_THROWS_AS(ModSet::parse_mod(R"({"id": "m", "version": "1", "params": {"s": {"type": "float_or_percent", "default": "50"}}})"), ModError);
+}
+
+TEST_CASE("Invalidates lists name known steps, and none stands alone", "[ModHost]")
+{
+    auto param = [](const std::string &def) {
+        return ModSet::parse_mod(R"({"id": "m", "version": "1", "params": {"p": )" + def + "}}");
+    };
+    CHECK_NOTHROW(param(R"({"type": "int", "default": 1, "invalidates": ["posPerimeters", "psGCodeExport"]})"));
+    CHECK_THROWS_WITH(param(R"({"type": "int", "default": 1, "invalidates": ["support"]})"), ContainsSubstring("unknown step"));
+    CHECK_THROWS_WITH(param(R"({"type": "int", "default": 1, "invalidates": ["none", "posSlice"]})"), ContainsSubstring("cannot be listed"));
+    // Rules read the process value of an object or region parameter, so "none" would make its values dead.
+    CHECK_THROWS_WITH(param(R"({"type": "int", "default": 1, "scope": "region", "invalidates": ["none"]})"), ContainsSubstring("name the steps"));
+}
+
+TEST_CASE("A changed parameter redoes the steps it declares, posSlice when it declares none", "[ModHost]")
+{
+    const ModSet mods = build_one(R"({"id": "demo", "version": "1", "params": {
+        "support": {"type": "float", "default": 1, "invalidates": ["posSupportMaterial"]},
+        "walls":   {"type": "float", "default": 1, "invalidates": ["posPerimeters", "psSkirtBrim"]},
+        "rule":    {"type": "float", "default": 1, "invalidates": ["none"]},
+        "silent":  {"type": "float", "default": 1} }})");
+    using Steps = std::set<std::string>;
+    CHECK(mods.invalidated_steps(R"({"demo.support": 1})", R"({"demo.support": 1})") == Steps{});
+    CHECK(mods.invalidated_steps("", R"({"demo.support": 2})") == Steps{"posSupportMaterial"});
+    CHECK(mods.invalidated_steps(R"({"demo.walls": 2})", "") == Steps{"posPerimeters", "psSkirtBrim"});
+    CHECK(mods.invalidated_steps("", R"({"demo.rule": 2})") == Steps{});
+    CHECK(mods.invalidated_steps("", R"({"demo.silent": 2})") == Steps{"posSlice"});
+    // A value of a mod that is not loaded changes nothing that is sliced.
+    CHECK(mods.invalidated_steps("", R"({"absent.x": 2})") == Steps{});
+    CHECK(mods.invalidated_steps(R"({"demo.support": 2, "demo.rule": 1})", R"({"demo.support": 3, "demo.walls": 4})") ==
+          Steps{"posSupportMaterial", "posPerimeters", "psSkirtBrim"});
+}
+
+TEST_CASE("An object or region parameter takes the most specific value stored", "[ModHost]")
+{
+    const ModSet mods = build_one(R"({"id": "demo", "version": "1", "params": {
+        "o": {"type": "float", "default": 1, "scope": "object", "invalidates": ["posSlice"]},
+        "r": {"type": "float", "default": 1, "scope": "region", "invalidates": ["posSlice"]},
+        "p": {"type": "float", "default": 1} }})");
+    DynamicPrintConfig config = full_config();
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"demo.o": 2, "demo.r": 2, "demo.p": 2})"));
+    const std::string object = R"({"demo.o": 3, "demo.r": 3, "demo.p": 3})";
+    const std::string region = R"({"demo.o": 4, "demo.r": 4, "demo.p": 4})";
+    ModSet::ValueSources sources;
+    sources.print = &config;
+    CHECK(std::get<double>(*mods.value_of("demo.r", sources)) == 2.);
+    sources.object_values = &object;
+    sources.region_values = &region;
+    CHECK(std::get<double>(*mods.value_of("demo.r", sources)) == 4.);
+    CHECK(std::get<double>(*mods.value_of("demo.o", sources)) == 3.); // an object parameter has no region level
+    CHECK(std::get<double>(*mods.value_of("demo.p", sources)) == 2.); // a process parameter is the print's
+    // A malformed level is an error, not a fall back to the less specific value.
+    const std::string broken = "{not json";
+    sources.region_values    = &broken;
+    std::string error;
+    CHECK_FALSE(mods.value_of("demo.r", sources, {}, &error).has_value());
+    CHECK_THAT(error, ContainsSubstring("region_mod_settings is not a JSON object"));
+    // Rules read the process value.
+    const ModSet with_rule = build_one(R"({"id": "demo", "version": "1",
+        "params": {"r": {"type": "int", "default": 1, "scope": "region", "invalidates": ["posSlice"]}},
+        "rules": [ {"target": "wall_loops", "value": "demo.r"} ]})");
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"demo.r": 5})"));
+    REQUIRE(with_rule.resolve(config).empty());
+    CHECK(config.opt_int("wall_loops") == 5);
+}
+
+TEST_CASE("Region mod values join per parameter, the more specific level winning", "[ModHost]")
+{
+    CHECK(merge_mod_values("", "") == "");
+    CHECK(merge_mod_values(R"({"a.x": 1, "a.y": 1})", R"({"a.y": 2, "b.z": 3})") == R"({"a.x":1,"a.y":2,"b.z":3})");
+    CHECK(merge_mod_values(R"({"a.x": 1})", "") == R"({"a.x": 1})");
+}
+
+TEST_CASE("Only official mods write printer G-code settings", "[ModHost]")
+{
+    const char *json = R"({"id": "demo", "version": "1", "rules": [ {"target": "machine_start_gcode", "value": "\"G28\""} ]})";
+    Mod mod = ModSet::parse_mod(json);
+    CHECK_THROWS_WITH(ModSet::build({mod}), ContainsSubstring("only official mods may change \"machine_start_gcode\""));
+    mod.official = true;
+    CHECK_NOTHROW(ModSet::build({mod}));
+    CHECK(is_gcode_setting("layer_change_gcode"));
+    CHECK(is_gcode_setting("filament_start_gcode"));
+    CHECK(is_gcode_setting("post_process"));
+    CHECK_FALSE(is_gcode_setting("emit_machine_limits_to_gcode")); // a switch, not G-code
+    CHECK_FALSE(is_gcode_setting("wall_loops"));
+}
+
+TEST_CASE("When two mods set one setting differently, the one used is reported", "[ModHost]")
+{
+    const Mod a = ModSet::parse_mod(R"({"id": "aaa", "version": "1", "params": {"on": {"type": "bool", "default": true, "invalidates": ["none"]}},
+        "rules": [ {"target": "support_generator", "value": "\"cura\"", "when": "aaa.on", "priority": 0} ]})");
+    const Mod b = ModSet::parse_mod(R"({"id": "bbb", "version": "1", "params": {"on": {"type": "bool", "default": true, "invalidates": ["none"]}},
+        "rules": [ {"target": "support_generator", "value": "\"mixed\"", "when": "bbb.on", "priority": 2} ]})");
+    const ModSet mods = ModSet::build({a, b});
+    DynamicPrintConfig config = full_config();
+    std::vector<ModSet::RuleClash> clashes;
+    REQUIRE(mods.resolve(config, {}, &clashes).empty());
+    CHECK(config.opt_string("support_generator") == "mixed");
+    REQUIRE(clashes.size() == 1);
+    CHECK(clashes[0].setting == "support_generator");
+    CHECK(clashes[0].used_mod == "bbb");
+    CHECK(clashes[0].used_value == "mixed");
+    CHECK(clashes[0].other_mods == std::vector<std::string>{"aaa"});
+    // Only one of them on: nothing to report.
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"aaa.on": false})"));
+    clashes.clear();
+    REQUIRE(mods.resolve(config, {}, &clashes).empty());
+    CHECK(clashes.empty());
+}
+
+TEST_CASE("A package manifest is read and checked", "[ModHost]")
+{
+    const Mod mod = ModSet::parse_mod(R"({"id": "pkg", "version": "2.0.0",
+        "api": {"major": 1, "min_minor": 0}, "binary": "pkg",
+        "slots": [ {"slot": "layer.bands", "version": 1, "impl": "half"} ],
+        "depends": [ {"id": "core", "min": "1.0"}, {"id": "other"} ], "conflicts": ["rival"], "thread_safe": true,
+        "params": {"outer": {"type": "bool", "default": false, "scope": "object", "invalidates": ["posSlice"]}},
+        "legacy_keys": {"outer_wall_half_layer_height": "outer"},
+        "gui": {"paint_channels": [ {"id": "normal", "color": "#22AA44", "label": "Normal", "label_ko": "Ilban"} ],
+                "object_params": ["outer"]}})");
+    CHECK(mod.api_major == 1);
+    CHECK(mod.binary == "pkg");
+    REQUIRE(mod.slots.size() == 1);
+    CHECK(mod.slots[0].slot == "layer.bands");
+    CHECK(mod.depends.size() == 2);
+    CHECK(mod.conflicts == std::vector<std::string>{"rival"});
+    CHECK(mod.thread_safe);
+    CHECK(mod.legacy_keys.at("outer_wall_half_layer_height") == "outer");
+    REQUIRE(mod.gui.paint_channels.size() == 1);
+    CHECK(mod.gui.paint_channels[0].labels.at("ko") == "Ilban");
+    CHECK(mod.gui.object_params == std::vector<std::string>{"outer"});
+
+    auto bad = [](const std::string &fields) { return ModSet::parse_mod(R"({"id": "m", "version": "1", )" + fields + "}"); };
+    CHECK_THROWS_WITH(bad(R"("binary": "m")"), ContainsSubstring("must give the \"api\""));
+    CHECK_THROWS_WITH(bad(R"("slots": [ {"slot": "s", "version": 1, "impl": "i"} ])"), ContainsSubstring("needs a \"binary\""));
+    CHECK_THROWS_WITH(bad(R"("legacy_keys": {"old": "missing"})"), ContainsSubstring("must name a parameter"));
+    CHECK_THROWS_WITH(bad(R"("gui": {"paint_channels": [ {"id": "c", "color": "green"} ]})"), ContainsSubstring("needs a \"color\""));
+    CHECK_THROWS_WITH(bad(R"("params": {"p": {"type": "int", "default": 1}}, "gui": {"object_params": ["p"]})"),
+                      ContainsSubstring("not an object or region parameter"));
+    CHECK_THROWS_WITH(bad(R"("depends": [ {"id": "m"} ])"), ContainsSubstring("cannot depend on itself"));
+
+    const Mod rival = ModSet::parse_mod(R"({"id": "rival", "version": "1"})");
+    CHECK_THROWS_WITH(ModSet::build({mod, rival}), ContainsSubstring("conflicts with mod 'rival'"));
+    CHECK(compare_versions("1.10.0", "1.9") > 0);
+    CHECK(compare_versions("2", "2.0.0") == 0);
 }

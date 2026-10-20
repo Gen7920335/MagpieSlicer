@@ -2337,6 +2337,23 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionString());
     def->cli = ConfigOptionDef::nocli;
 
+    // MAGPIE: values of object- and region-scope mod parameters set on one object (object_mod_settings)
+    // or on an object, layer range, part or modifier (region_mod_settings), as JSON keyed like
+    // mod_settings. A parameter missing here takes its mod_settings value; region values of a part or
+    // modifier override the object's per parameter (ModHost::merge_mod_values). They are in the process key
+    // list like every object and region setting, and stay empty there: the process value is mod_settings.
+    def = this->add("object_mod_settings", coString);
+    def->label = L("Mod values");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionString());
+    def->cli = ConfigOptionDef::nocli;
+
+    def = this->add("region_mod_settings", coString);
+    def->label = L("Mod values");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionString());
+    def->cli = ConfigOptionDef::nocli;
+
     def = this->add("print_compatible_printers", coStrings);
     def->set_default_value(new ConfigOptionStrings());
     def->cli = ConfigOptionDef::nocli;
@@ -13670,6 +13687,33 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->label = L("Install mods");
     def->tooltip = L("Download the mods with these ids (comma-separated) from the mod index into the data directory's mods folder, then exit.");
     def->cli_params = "id1,id2";
+
+    // MAGPIE: tools for mod authors.
+    def = this->add("mod_test", coString);
+    def->label = L("Test a mod");
+    def->tooltip = L("Check that the mod with this id loads, slice each case in its tests folder twice and check the G-code, then exit.");
+    def->cli_params = "id";
+
+    def = this->add("mod_sign", coString);
+    def->label = L("Sign a mod package");
+    def->tooltip = L("Write the SIGNATURE of the mod package folder given, with the key of --mod-sign-key, then exit.");
+    def->cli_params = "folder";
+
+    def = this->add("mod_sign_key", coString);
+    def->label = L("Signing key");
+    def->tooltip = L("Ed25519 private key (PEM file) for --mod-sign.");
+    def->cli_params = "file";
+
+    def = this->add("mod_sign_key_id", coString);
+    def->label = L("Signing key name");
+    def->tooltip = L("The name the application knows the signing key by.");
+    def->cli_params = "name";
+    def->set_default_value(new ConfigOptionString("magpie-official-2026"));
+
+    def = this->add("mod_keygen", coString);
+    def->label = L("New signing key");
+    def->tooltip = L("Write a new Ed25519 private key to this PEM file and print its public key, then exit.");
+    def->cli_params = "file";
 
 
     def = this->add("outputdir", coString);

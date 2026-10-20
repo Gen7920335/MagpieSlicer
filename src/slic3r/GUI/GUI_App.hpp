@@ -717,6 +717,8 @@ public:
     // MAGPIE: the Get Mods dialog; `wanted_ids` are mods a project needs. Rebuilds the settings
     // pages after an install so the new mod's parameters appear.
     void            open_mod_browser(const std::vector<std::string>& wanted_ids = {});
+    // MAGPIE: turning mods off or on and removing them, applied at the next start.
+    void            open_mod_manager();
     void            open_preferences(PreferencesTab tab, const std::string& highlight_option = std::string());
     void            open_presetbundledialog(size_t open_on_tab = 0, const std::string& highlight_option = std::string());
     void            open_plugins_dialog(size_t open_on_tab = 0, const std::string& highlight_option = std::string());

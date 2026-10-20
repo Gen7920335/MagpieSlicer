@@ -2,6 +2,7 @@
 
 #include "Expr.hpp"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -41,9 +42,15 @@ struct ModParamOption
 struct ModParam
 {
     std::string              name;
-    std::string              type; // "float", "int", "bool" or "string"
-    // The preset that stores the value: "process" (mod_settings), "printer" (printer_mod_settings)
-    // or "filament" (filament_mod_settings, one value per filament, read as "<mod id>.<name>[i]").
+    // "float", "int", "bool", "string", or "float_or_percent" (a number, or a string "50%"; a rule
+    // writing it to a setting that takes a percentage passes the percentage on).
+    std::string              type;
+    // Where the value is stored and how far down it can differ:
+    // "process" (mod_settings), "printer" (printer_mod_settings), "filament" (filament_mod_settings,
+    // one value per filament, read as "<mod id>.<name>[i]"), "object" (mod_settings, overridden per
+    // object by object_mod_settings) or "region" (mod_settings, overridden per object, layer range,
+    // part or modifier by region_mod_settings). Rules read the process value of object and region
+    // parameters; a native mod reads the value of the object or region it is called for.
     std::string              scope = "process";
     ExprValue                default_value;
     std::string              label;
@@ -51,7 +58,11 @@ struct ModParam
     std::map<std::string, std::string> labels;
     std::string              unit;
     std::string              page;
-    std::vector<std::string> invalidates; // slicing steps to redo when the value changes
+    // Slicing steps to redo when the value changes, by step name ("posSupportMaterial",
+    // "psGCodeExport", see mod_step_names()). An empty list redoes everything from slicing, so a mod
+    // that leaves it out gets a slower but never a stale result. "none" says the value changes the
+    // print only through the settings its rules write, which invalidate what they change themselves.
+    std::vector<std::string> invalidates;
     // A string parameter with options is a dropdown and takes only these values; a stored value
     // outside them is an error, like a value of the wrong type.
     std::vector<ModParamOption> options;
@@ -78,6 +89,46 @@ struct ModRule
     std::string           mod_id;
 };
 
+// A slot implementation a native mod registers ("slots" in the manifest).
+struct ModSlotDecl
+{
+    std::string slot;        // "layer.bands"
+    uint32_t    version = 0; // the slot interface version
+    std::string impl;        // the value of the setting that picks it
+};
+
+// "depends": another mod (or "core", the mod API) that must be loaded first, at least `min`.
+struct ModDependency
+{
+    std::string id;
+    std::string min_version;
+};
+
+// Declarative GUI ("gui" in the manifest). The core GUI draws each item; a mod never runs wx code.
+struct ModGuiItem
+{
+    std::string                        id;    // identifier, unique within its list
+    std::string                        label;
+    std::map<std::string, std::string> labels; // "label_<language>"
+    std::string                        color;  // paint channels: "#RRGGBB"
+    std::string                        unit;   // legends
+};
+
+struct ModGui
+{
+    std::vector<ModGuiItem> paint_channels; // support painting channels, saved in 3MF under the mod's id
+    std::vector<ModGuiItem> aux_towers;     // auxiliary towers the core places, previews and drags
+    std::vector<ModGuiItem> legends;        // per-layer numbers the preview legend shows
+    std::vector<ModGuiItem> calibrations;   // Calibration menu entries
+    // Parameters of object or region scope shown in an object's settings, in this order. Empty
+    // shows every object and region parameter.
+    std::vector<std::string> object_params;
+};
+
+// Where a mod was found. Bundled mods ship with the application in <resources>/mods; installed
+// mods are under <data dir>/mods.
+enum class ModOrigin { Bundled, Installed };
+
 struct Mod
 {
     std::string           id;
@@ -87,7 +138,33 @@ struct Mod
     std::string           version;
     std::vector<ModParam> params;
     std::vector<ModRule>  rules;
+
+    // Package manifest fields (docs/HLSD/mods.md). A single-file JSON mod has none of them.
+    int                                api_major     = 0; // "api": {"major", "min_minor"}; 0 = no native code
+    int                                api_min_minor = 0;
+    std::string                        binary;            // library name under bin/<platform>/, empty = none
+    std::vector<ModSlotDecl>           slots;
+    std::vector<ModDependency>         depends;
+    std::vector<std::string>           conflicts;
+    bool                               thread_safe = false;
+    std::map<std::string, std::string> legacy_keys; // old setting key -> parameter name of this mod
+    ModGui                             gui;
+
+    // Set by the loader, not read from the file.
+    ModOrigin   origin = ModOrigin::Installed;
+    // Bundled, or signed with an official key. Only official mods may write G-code settings
+    // (machine_start_gcode and the other *_gcode keys) and run native code without a verified key.
+    bool        official = false;
+    bool        verified = false; // signed with an official or a verified key
+    std::string dir;              // the package folder; empty for a single JSON file
 };
+
+// The step names an "invalidates" list may use, PrintObjectStep and PrintStep names, plus "none".
+const std::vector<std::string> &mod_step_names();
+// Whether a setting holds G-code a printer runs (machine_start_gcode, layer_change_gcode, ...).
+bool is_gcode_setting(const std::string &key);
+// Compares two dotted version strings numerically ("1.10.0" > "1.9"); missing parts count as 0.
+int compare_versions(const std::string &a, const std::string &b);
 
 // The loaded mods, checked against each other and put in evaluation order. Loading rejects a
 // rule on an unknown setting, a name no setting or mod parameter provides, a cycle between
@@ -99,10 +176,13 @@ public:
     static Mod parse_mod(const std::string &json_text);
     // Checks the mods together and orders their rules. Throws ModError.
     static ModSet build(std::vector<Mod> mods);
-    // Every *.json directly in `dir`, in file-name order. A file that fails to parse or check is
-    // skipped and its error appended to `errors`; a missing directory gives an empty set.
+    // Every *.json directly in `dir` and every package folder <dir>/<id>/mod.json, in file-name order.
+    // A file that fails to parse or check is skipped and its error appended to `errors`; a missing
+    // directory gives an empty set. The mods count as bundled with the application (official): this
+    // is how the bundled set and tests load. Native code is not loaded; the application's loader
+    // (load_active_mods_from_data_dir, ModPackage.hpp) does that and checks installed mods' signatures.
     static ModSet load_dir(const boost::filesystem::path &dir, std::vector<std::string> &errors);
-    // Every *.json in each directory in turn (file-name order within a directory), checked as one set.
+    // The same for each directory in turn, checked as one set.
     static ModSet load_dirs(const std::vector<boost::filesystem::path> &dirs, std::vector<std::string> &errors);
 
     bool empty() const { return m_order.empty(); }
@@ -114,7 +194,43 @@ public:
     // (a value the user changed in a preset) is left as the user set it. A rule whose expression
     // cannot be evaluated (division by zero, an index past the end) is not applied and its error
     // is returned; the caller must not slice while any are returned.
-    std::vector<std::string> resolve(DynamicPrintConfig &config, const std::map<std::string, ExprValue> &param_values = {}) const;
+    // `clashes`, when given, gets each setting that rules of more than one mod set to different
+    // values (several support generators turned on), and whose value is used.
+    struct RuleClash
+    {
+        std::string              setting;    // "support_generator", or "<key>[i]" for one element
+        std::string              used_mod;   // the mod whose rule applied last and stays
+        std::string              used_value;
+        std::vector<std::string> other_mods; // mods whose different values were overwritten
+    };
+    std::vector<std::string> resolve(DynamicPrintConfig &config, const std::map<std::string, ExprValue> &param_values = {},
+                                     std::vector<RuleClash> *clashes = nullptr) const;
+
+    // The parameter "<mod id>.<name>", or nullptr.
+    const ModParam *find_param(const std::string &key) const;
+    const Mod      *find_mod(const std::string &id) const;
+
+    // Where a parameter's value comes from, most specific first: the region's region_mod_settings,
+    // the object's object_mod_settings, then the print config's mod_settings, printer_mod_settings or
+    // filament_mod_settings. Null members are skipped.
+    struct ValueSources
+    {
+        const DynamicPrintConfig *print          = nullptr;
+        const std::string        *object_values  = nullptr; // object_mod_settings JSON
+        const std::string        *region_values  = nullptr; // region_mod_settings JSON
+    };
+    // The value of "<mod id>.<name>" (filament i for a filament parameter) from `sources`, else the
+    // default. Nothing when no loaded mod has the parameter, the index does not fit its scope, or a
+    // stored value has the wrong type (then `error`, when given, says which).
+    std::optional<ExprValue> value_of(const std::string &key, const ValueSources &sources, std::optional<size_t> filament = {},
+                                      std::string *error = nullptr) const;
+
+    // The slicing steps to redo when a stored-values object changes from `old_json` to `new_json`
+    // (mod_settings, printer_mod_settings, one filament's filament_mod_settings, object_mod_settings or
+    // region_mod_settings): the union of the "invalidates" of every parameter whose value changed,
+    // posSlice for one that declares none. Values of mods that are not loaded change nothing that is
+    // sliced and add no step. Step names as in mod_step_names(); "none" is never returned.
+    std::set<std::string> invalidated_steps(const std::string &old_json, const std::string &new_json) const;
 
 private:
     // Indices rather than pointers, so a ModSet stays valid when copied or moved.
@@ -132,10 +248,15 @@ void set_active_mods(std::shared_ptr<const ModSet> mods);
 // a mod that fails to load is logged and left out.
 void load_active_mods_from_data_dir();
 
-// The value of a process- or printer-scope parameter of an active mod: the one stored in `config`
-// (mod_settings / printer_mod_settings), else the parameter's default. Nothing when no active mod
-// declares the parameter or the stored value has the wrong type.
+// The value of a process-, printer-, object- or region-scope parameter of an active mod: the one
+// stored in `config` (mod_settings / printer_mod_settings), else the parameter's default. Nothing
+// when no active mod declares the parameter or the stored value has the wrong type.
 std::optional<ExprValue> param_value(const DynamicPrintConfig &config, const std::string &key);
+
+// `override_json`'s values laid over `base_json`'s, per parameter (both objects keyed
+// "<mod id>.<name>"). How a part's or modifier's region_mod_settings joins its object's. Text
+// that is not a JSON object counts as empty. The result is "" for no values.
+std::string merge_mod_values(const std::string &base_json, const std::string &override_json);
 
 } // namespace ModHost
 } // namespace Slic3r

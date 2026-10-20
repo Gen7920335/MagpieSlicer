@@ -10,6 +10,7 @@
 #include "I18N.hpp"
 #include "Plater.hpp"
 #include "ObjectDataViewModel.hpp"
+#include "ModObjectSettingsDialog.hpp"
 
 #include "OptionsGroup.hpp"
 #include "GLCanvas3D.hpp"
@@ -2050,6 +2051,7 @@ wxMenu* MenuFactory::default_menu()
 wxMenu* MenuFactory::object_menu()
 {
     append_menu_items_convert_unit(&m_object_menu);
+    append_menu_item_mod_settings(&m_object_menu, false);
     append_menu_items_flush_options(&m_object_menu);
     append_menu_item_invalidate_cut_info(&m_object_menu);
     append_menu_item_edit_text(&m_object_menu);
@@ -2072,6 +2074,7 @@ wxMenu* MenuFactory::sla_object_menu()
 wxMenu* MenuFactory::part_menu()
 {
     append_menu_items_convert_unit(&m_part_menu);
+    append_menu_item_mod_settings(&m_part_menu, true);
     append_menu_item_change_filament(&m_part_menu);
     append_menu_item_precise_seam_submenu(&m_part_menu);
     append_menu_item_per_object_settings(&m_part_menu);
@@ -2458,6 +2461,32 @@ void MenuFactory::append_menu_item_per_object_settings(wxMenu* menu)
     append_menu_item(menu, wxID_ANY, names[0], names[1],
         [](wxCommandEvent&) {
             plater()->PopupObjectTableBySelection();
+        }, "", nullptr,
+        []() {
+            Selection& selection = plater()->canvas3D()->get_selection();
+            return selection.is_single_full_object() || selection.is_single_full_instance() || selection.is_single_volume();
+        }, m_parent);
+}
+
+// MAGPIE: the object's or part's values of object- and region-scope mod parameters (ModObjectSettingsDialog).
+void MenuFactory::append_menu_item_mod_settings(wxMenu* menu, bool volume)
+{
+    const wxString name = _L("Mod settings...");
+    if (const int item_id = menu->FindItem(name); item_id != wxNOT_FOUND)
+        menu->Destroy(item_id);
+    if (!ModObjectSettingsDialog::has_params(volume))
+        return;
+    append_menu_item(menu, wxID_ANY, name, _L("Set mod parameters for this object or part only"),
+        [volume](wxCommandEvent&) {
+            const int obj_idx = obj_list()->get_selected_obj_idx();
+            if (obj_idx < 0 || size_t(obj_idx) >= plater()->model().objects.size())
+                return;
+            ModelObject *object = plater()->model().objects[size_t(obj_idx)];
+            ModelVolume *target = volume ? obj_list()->get_selected_model_volume() : nullptr;
+            if (volume && target == nullptr)
+                return;
+            ModObjectSettingsDialog dlg(plater(), *object, target);
+            dlg.ShowModal();
         }, "", nullptr,
         []() {
             Selection& selection = plater()->canvas3D()->get_selection();

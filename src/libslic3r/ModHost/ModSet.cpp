@@ -12,8 +12,9 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <mutex>
 #include <cmath>
+#include <cstdlib>
+#include <mutex>
 #include <functional>
 #include <regex>
 #include <sstream>
@@ -48,6 +49,90 @@ std::string optional_string(const json &j, const char *key)
 // Ids and parameter names are plain identifiers, so "<id>.<name>" splits back unambiguously.
 bool is_identifier(const std::string &s) { return std::regex_match(s, std::regex("[a-z_][a-z0-9_]*")); }
 
+// "50%", "12.5%", "-3%": a number followed by a percent sign, nothing else.
+bool is_percent_text(const std::string &s)
+{
+    if (s.size() < 2 || s.back() != '%')
+        return false;
+    const std::string number = s.substr(0, s.size() - 1);
+    char             *end    = nullptr;
+    std::strtod(number.c_str(), &end);
+    return end != number.c_str() && *end == '\0' && number.find_first_of(" \t") == std::string::npos;
+}
+
+// A stored value of `p` read from JSON: the value, or nothing when it has the wrong type or is not
+// one of a dropdown's options (`error` then says which).
+std::optional<ExprValue> json_param_value(const ModParam &p, const std::string &key, const json &v, std::string *error)
+{
+    if ((p.type == "float" && v.is_number()) || (p.type == "int" && v.is_number_integer()))
+        return v.get<double>();
+    if (p.type == "bool" && v.is_boolean())
+        return v.get<bool>();
+    if (p.type == "float_or_percent") {
+        if (v.is_number())
+            return v.get<double>();
+        if (v.is_string() && is_percent_text(v.get<std::string>()))
+            return v.get<std::string>();
+    }
+    if (p.type == "string" && v.is_string()) {
+        const std::string value = v.get<std::string>();
+        if (param_allows(p, value))
+            return value;
+        if (error)
+            *error = "stored value \"" + value + "\" of mod parameter " + key + " is not one of its options";
+        return std::nullopt;
+    }
+    if (error)
+        *error = "stored value of mod parameter " + key + " is not a " + p.type;
+    return std::nullopt;
+}
+
+// A stored-values object ({"<id>.<name>": value}); text that is not a JSON object is empty.
+json parse_values_object(const std::string &text)
+{
+    if (text.empty())
+        return json::object();
+    try {
+        json j = json::parse(text);
+        if (j.is_object())
+            return j;
+    } catch (const json::parse_error &) {
+    }
+    return json::object();
+}
+
+std::vector<ModGuiItem> parse_gui_items(const json &gui, const char *list, const std::string &where, bool needs_color)
+{
+    std::vector<ModGuiItem> items;
+    auto it = gui.find(list);
+    if (it == gui.end())
+        return items;
+    if (!it->is_array())
+        throw ModError(where + ": \"gui\"." + list + " must be a list");
+    std::set<std::string> ids;
+    for (const json &j : *it) {
+        if (!j.is_object())
+            throw ModError(where + ": each \"gui\"." + list + " entry must be an object");
+        ModGuiItem item;
+        item.id     = optional_string(j, "id");
+        item.label  = optional_string(j, "label");
+        item.labels = {};
+        for (auto &[key, value] : j.items())
+            if (key.size() > 6 && key.compare(0, 6, "label_") == 0 && value.is_string())
+                item.labels[key.substr(6)] = value.get<std::string>();
+        item.color = optional_string(j, "color");
+        item.unit  = optional_string(j, "unit");
+        if (!is_identifier(item.id))
+            throw ModError(where + ": \"gui\"." + list + " entry needs an \"id\" of a-z, 0-9 and _");
+        if (!ids.insert(item.id).second)
+            throw ModError(where + ": \"gui\"." + list + " lists \"" + item.id + "\" twice");
+        if (needs_color && !std::regex_match(item.color, std::regex("#[0-9A-Fa-f]{6}")))
+            throw ModError(where + ": \"gui\"." + list + " \"" + item.id + "\" needs a \"color\" like \"#22AA44\"");
+        items.push_back(std::move(item));
+    }
+    return items;
+}
+
 ExprValue param_default(const json &j, const std::string &type, const std::string &where)
 {
     auto it = j.find("default");
@@ -61,6 +146,12 @@ ExprValue param_default(const json &j, const std::string &type, const std::strin
         return it->get<bool>();
     if (type == "string" && it->is_string())
         return it->get<std::string>();
+    if (type == "float_or_percent") {
+        if (it->is_number())
+            return it->get<double>();
+        if (it->is_string() && is_percent_text(it->get<std::string>()))
+            return it->get<std::string>();
+    }
     throw ModError(where + ": \"default\" does not match type \"" + type + "\"");
 }
 
@@ -313,13 +404,13 @@ Mod ModSet::parse_mod(const std::string &json_text)
             ModParam p;
             p.name = name;
             p.type = required_string(def, "type", mod.id);
-            if (p.type != "float" && p.type != "int" && p.type != "bool" && p.type != "string")
-                throw ModError(where + ": type must be float, int, bool or string");
+            if (p.type != "float" && p.type != "int" && p.type != "bool" && p.type != "string" && p.type != "float_or_percent")
+                throw ModError(where + ": type must be float, int, bool, string or float_or_percent");
             p.default_value = param_default(def, p.type, where);
             if (std::string scope = optional_string(def, "scope"); !scope.empty())
                 p.scope = scope;
-            if (p.scope != "process" && p.scope != "printer" && p.scope != "filament")
-                throw ModError(where + ": scope must be process, printer or filament");
+            if (p.scope != "process" && p.scope != "printer" && p.scope != "filament" && p.scope != "object" && p.scope != "region")
+                throw ModError(where + ": scope must be process, printer, filament, object or region");
             p.label         = optional_string(def, "label");
             p.labels        = translations(def, "label_");
             p.unit          = optional_string(def, "unit");
@@ -327,8 +418,22 @@ Mod ModSet::parse_mod(const std::string &json_text)
             if (auto inv = def.find("invalidates"); inv != def.end()) {
                 if (!inv->is_array())
                     throw ModError(where + ": \"invalidates\" must be a list of step names");
-                for (const auto &step : *inv)
+                const std::vector<std::string> &known = mod_step_names();
+                for (const auto &step : *inv) {
+                    if (!step.is_string() || std::find(known.begin(), known.end(), step.get<std::string>()) == known.end())
+                        throw ModError(where + ": \"invalidates\" names an unknown step " + step.dump() +
+                                       " (one of posSlice, posPerimeters, posPrepareInfill, posInfill, posSupportMaterial, "
+                                       "psWipeTower, psSkirtBrim, psGCodeExport, ... or none)");
                     p.invalidates.push_back(step.get<std::string>());
+                }
+                if (std::find(p.invalidates.begin(), p.invalidates.end(), "none") != p.invalidates.end()) {
+                    if (p.invalidates.size() > 1)
+                        throw ModError(where + ": \"none\" cannot be listed with other steps");
+                    // Rules read the process value only, so an object or region value would change nothing
+                    // through them: the mod's own code reads it and the steps it feeds must be named.
+                    if (p.scope == "object" || p.scope == "region")
+                        throw ModError(where + ": an " + p.scope + " parameter is read by the mod's code; name the steps it changes");
+                }
             }
             if (auto opts = def.find("options"); opts != def.end()) {
                 if (p.type != "string")
@@ -389,6 +494,95 @@ Mod ModSet::parse_mod(const std::string &json_text)
             mod.rules.push_back(std::move(rule));
         }
     }
+
+    // Package manifest fields.
+    const std::string where = "mod '" + mod.id + "'";
+    if (auto it = j.find("api"); it != j.end()) {
+        if (!it->is_object() || !it->contains("major") || !(*it)["major"].is_number_unsigned())
+            mod_fail(mod.id, "\"api\" must be {\"major\": <n>, \"min_minor\": <n>}");
+        mod.api_major = (*it)["major"].get<int>();
+        if (auto minor = it->find("min_minor"); minor != it->end()) {
+            if (!minor->is_number_unsigned())
+                mod_fail(mod.id, "\"api\".min_minor must be a whole number >= 0");
+            mod.api_min_minor = minor->get<int>();
+        }
+    }
+    mod.binary = optional_string(j, "binary");
+    if (!mod.binary.empty() && !std::regex_match(mod.binary, std::regex("[A-Za-z0-9_][A-Za-z0-9_.-]*")))
+        mod_fail(mod.id, "\"binary\" must be a plain file name without extension");
+    if (!mod.binary.empty() && mod.api_major == 0)
+        mod_fail(mod.id, "a mod with a \"binary\" must give the \"api\" it was built for");
+    if (auto it = j.find("slots"); it != j.end()) {
+        if (!it->is_array())
+            mod_fail(mod.id, "\"slots\" must be a list");
+        for (const json &s : *it) {
+            ModSlotDecl decl;
+            if (!s.is_object() || !s.contains("version") || !s["version"].is_number_unsigned())
+                mod_fail(mod.id, "each slot must be {\"slot\", \"version\", \"impl\"}");
+            decl.slot    = required_string(s, "slot", mod.id);
+            decl.version = s["version"].get<uint32_t>();
+            decl.impl    = required_string(s, "impl", mod.id);
+            mod.slots.push_back(std::move(decl));
+        }
+        if (!mod.slots.empty() && mod.binary.empty())
+            mod_fail(mod.id, "\"slots\" are filled by native code; the mod needs a \"binary\"");
+    }
+    if (auto it = j.find("depends"); it != j.end()) {
+        if (!it->is_array())
+            mod_fail(mod.id, "\"depends\" must be a list");
+        for (const json &d : *it) {
+            if (!d.is_object())
+                mod_fail(mod.id, "each dependency must be {\"id\", \"min\"}");
+            ModDependency dep{required_string(d, "id", mod.id), optional_string(d, "min")};
+            if (dep.id == mod.id)
+                mod_fail(mod.id, "a mod cannot depend on itself");
+            mod.depends.push_back(std::move(dep));
+        }
+    }
+    if (auto it = j.find("conflicts"); it != j.end()) {
+        if (!it->is_array())
+            mod_fail(mod.id, "\"conflicts\" must be a list of mod ids");
+        for (const json &c : *it) {
+            if (!c.is_string())
+                mod_fail(mod.id, "\"conflicts\" must be a list of mod ids");
+            mod.conflicts.push_back(c.get<std::string>());
+        }
+    }
+    if (auto it = j.find("thread_safe"); it != j.end()) {
+        if (!it->is_boolean())
+            mod_fail(mod.id, "\"thread_safe\" must be true or false");
+        mod.thread_safe = it->get<bool>();
+    }
+    if (auto it = j.find("legacy_keys"); it != j.end()) {
+        if (!it->is_object())
+            mod_fail(mod.id, "\"legacy_keys\" must map old setting keys to parameter names");
+        for (auto &[old_key, param] : it->items()) {
+            if (!param.is_string() || std::none_of(mod.params.begin(), mod.params.end(),
+                                                   [&param](const ModParam &p) { return p.name == param.get<std::string>(); }))
+                mod_fail(mod.id, "\"legacy_keys\": \"" + old_key + "\" must name a parameter of this mod");
+            mod.legacy_keys[old_key] = param.get<std::string>();
+        }
+    }
+    if (auto it = j.find("gui"); it != j.end()) {
+        if (!it->is_object())
+            mod_fail(mod.id, "\"gui\" must be an object");
+        mod.gui.paint_channels = parse_gui_items(*it, "paint_channels", where, true);
+        mod.gui.aux_towers     = parse_gui_items(*it, "aux_towers", where, false);
+        mod.gui.legends        = parse_gui_items(*it, "legends", where, false);
+        mod.gui.calibrations   = parse_gui_items(*it, "calibrations", where, false);
+        if (auto op = it->find("object_params"); op != it->end()) {
+            if (!op->is_array())
+                mod_fail(mod.id, "\"gui\".object_params must be a list of parameter names");
+            for (const json &name : *op) {
+                auto p = name.is_string() ? std::find_if(mod.params.begin(), mod.params.end(),
+                                                         [&name](const ModParam &q) { return q.name == name.get<std::string>(); })
+                                          : mod.params.end();
+                if (p == mod.params.end() || (p->scope != "object" && p->scope != "region"))
+                    mod_fail(mod.id, "\"gui\".object_params: " + name.dump() + " is not an object or region parameter of this mod");
+                mod.gui.object_params.push_back(name.get<std::string>());
+            }
+        }
+    }
     return mod;
 }
 
@@ -405,6 +599,10 @@ ModSet ModSet::build(std::vector<Mod> mods)
         for (size_t p = 0; p < mod.params.size(); ++p)
             set.m_params[mod.id + "." + mod.params[p].name] = {m, p};
     }
+    for (const Mod &mod : set.m_mods)
+        for (const std::string &other : mod.conflicts)
+            if (ids.count(other))
+                mod_fail(mod.id, "conflicts with mod '" + other + "'; the two do not load together");
 
     // A visibility condition reads parameters only: the settings tab has no full print config.
     for (const Mod &mod : set.m_mods)
@@ -425,6 +623,9 @@ ModSet ModSet::build(std::vector<Mod> mods)
                 throw ModError(where + ": \"" + rule.target + "\" is not a setting");
             if (!is_supported_type(def->type, true))
                 throw ModError(where + ": \"" + rule.target + "\" has a type rules cannot write");
+            // Audit decision B: G-code a printer runs comes only from the user and from official mods.
+            if (is_gcode_setting(rule.target) && !set.m_mods[m].official)
+                throw ModError(where + ": only official mods may change \"" + rule.target + "\" (printer G-code)");
             auto check_names = [&](const Expr &e) {
                 for (const std::string &name : e.names())
                     if (set.m_params.count(name) == 0 && print_config_def.get(name) == nullptr)
@@ -505,9 +706,13 @@ ModSet ModSet::load_dirs(const std::vector<boost::filesystem::path> &dirs, std::
         boost::system::error_code ec;
         if (!fs::is_directory(dir, ec))
             continue;
-        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
             if (fs::is_regular_file(it->status()) && boost::iequals(it->path().extension().string(), ".json"))
                 files.push_back(it->path());
+            // A package folder <id>/mod.json; folders being installed or replaced (<id>.pending) are not mods yet.
+            else if (fs::is_directory(it->status()) && it->path().extension().empty() && fs::is_regular_file(it->path() / "mod.json"))
+                files.push_back(it->path() / "mod.json");
+        }
         std::sort(files.begin(), files.end());
         for (const fs::path &file : files) {
             try {
@@ -515,6 +720,11 @@ ModSet ModSet::load_dirs(const std::vector<boost::filesystem::path> &dirs, std::
                 std::stringstream       ss;
                 ss << in.rdbuf();
                 Mod mod = parse_mod(ss.str());
+                // These directories ship with the application (and tests load the bundled mods this way).
+                mod.origin   = ModOrigin::Bundled;
+                mod.official = mod.verified = true;
+                if (file.filename() == "mod.json")
+                    mod.dir = file.parent_path().string();
                 // Check each mod against those already accepted, so one bad mod does not drop the rest.
                 std::vector<Mod> trial = mods;
                 trial.push_back(mod);
@@ -528,7 +738,8 @@ ModSet ModSet::load_dirs(const std::vector<boost::filesystem::path> &dirs, std::
     return build(std::move(mods));
 }
 
-std::vector<std::string> ModSet::resolve(DynamicPrintConfig &config, const std::map<std::string, ExprValue> &param_values) const
+std::vector<std::string> ModSet::resolve(DynamicPrintConfig &config, const std::map<std::string, ExprValue> &param_values,
+                                         std::vector<RuleClash> *clashes) const
 {
     std::vector<std::string> errors;
     if (m_order.empty())
@@ -568,19 +779,11 @@ std::vector<std::string> ModSet::resolve(DynamicPrintConfig &config, const std::
         auto it = values.find(name);
         if (it == values.end())
             return p.default_value;
-        if ((p.type == "float" && it->is_number()) || (p.type == "int" && it->is_number_integer()))
-            return it->get<double>();
-        if (p.type == "bool" && it->is_boolean())
-            return it->get<bool>();
-        if (p.type == "string" && it->is_string()) {
-            const std::string value = it->get<std::string>();
-            if (param_allows(p, value))
-                return value;
-            errors.push_back("stored value \"" + value + "\" of mod parameter " + name + " is not one of its options");
-            return std::nullopt;
-        }
-        errors.push_back("stored value of mod parameter " + name + " is not a " + p.type);
-        return std::nullopt;
+        std::string error;
+        std::optional<ExprValue> v = json_param_value(p, name, *it, &error);
+        if (!v)
+            errors.push_back(error);
+        return v;
     };
 
     const ExprLookup lookup = [&](const std::string &name, std::optional<size_t> index) -> std::optional<ExprValue> {
@@ -593,12 +796,17 @@ std::vector<std::string> ModSet::resolve(DynamicPrintConfig &config, const std::
                 return v->second;
             if (param.scope == "filament")
                 return *index < filament_values.size() ? stored_value(param, name, filament_values[*index]) : std::nullopt;
+            // Object and region parameters read their process value here: rules apply to the whole print.
             return stored_value(param, name, param.scope == "printer" ? printer_values : process_values);
         }
         const ConfigOptionDef *def = print_config_def.get(name);
         return def ? read_option(config.option(name), def->type, index) : std::nullopt;
     };
 
+    // Audit decision D: which mods set each setting, and to what, so a setting two mods want differently
+    // (two support generators turned on) is reported instead of the higher priority winning in silence.
+    struct Write { std::string mod_id; std::string value; };
+    std::map<std::string, std::vector<Write>> writes; // "<target>" or "<target>[i]"
     for (const Ref &ref : m_order) {
         const ModRule &rule  = m_mods[ref.first].rules[ref.second];
         const std::string where = "mod '" + rule.mod_id + "' rule " + std::to_string(ref.second + 1) + " (" + rule.target + ")";
@@ -610,14 +818,171 @@ std::vector<std::string> ModSet::resolve(DynamicPrintConfig &config, const std::
         try {
             if (rule.when && !expr_truthy(rule.when->evaluate(lookup)))
                 continue;
-            write_option(opt, print_config_def.get(rule.target)->type, rule.value.evaluate(lookup), rule.index, where);
+            const ExprValue value = rule.value.evaluate(lookup);
+            write_option(opt, print_config_def.get(rule.target)->type, value, rule.index, where);
+            writes[rule.index ? rule.target + "[" + std::to_string(*rule.index) + "]" : rule.target].push_back({rule.mod_id, expr_to_string(value)});
         } catch (const ExprError &e) {
             errors.push_back(where + ": " + e.what());
         } catch (const ModError &e) {
             errors.push_back(e.what());
         }
     }
+    if (clashes != nullptr)
+        for (const auto &[target, list] : writes) {
+            // Rules apply in ascending priority, so the last write is the one that stays.
+            const Write &used = list.back();
+            std::vector<std::string> others;
+            for (const Write &w : list)
+                if (w.mod_id != used.mod_id && w.value != used.value &&
+                    std::find(others.begin(), others.end(), w.mod_id) == others.end())
+                    others.push_back(w.mod_id);
+            if (!others.empty())
+                clashes->push_back({target, used.mod_id, used.value, std::move(others)});
+        }
     return errors;
+}
+
+const ModParam *ModSet::find_param(const std::string &key) const
+{
+    auto it = m_params.find(key);
+    return it == m_params.end() ? nullptr : &m_mods[it->second.first].params[it->second.second];
+}
+
+const Mod *ModSet::find_mod(const std::string &id) const
+{
+    for (const Mod &mod : m_mods)
+        if (mod.id == id)
+            return &mod;
+    return nullptr;
+}
+
+std::optional<ExprValue> ModSet::value_of(const std::string &key, const ValueSources &sources, std::optional<size_t> filament,
+                                          std::string *error) const
+{
+    const ModParam *p = find_param(key);
+    if (p == nullptr || (p->scope == "filament") != filament.has_value())
+        return std::nullopt;
+    // Looks `key` up in one stored-values text. Outer nothing: not stored there, look further. Inner
+    // nothing: stored but unusable (the text is not a JSON object, or the value has the wrong type),
+    // which never falls back to a less specific value or the default.
+    auto from_text = [&](const std::string &text, const char *what) -> std::optional<std::optional<ExprValue>> {
+        if (text.empty())
+            return std::nullopt;
+        json values;
+        try {
+            values = json::parse(text);
+        } catch (const json::parse_error &) {
+        }
+        if (!values.is_object()) {
+            if (error)
+                *error = std::string(what) + " is not a JSON object";
+            return std::optional<ExprValue>();
+        }
+        auto it = values.find(key);
+        if (it == values.end())
+            return std::nullopt;
+        return json_param_value(*p, key, *it, error);
+    };
+    auto string_of = [&sources](const char *k) {
+        const auto *opt = sources.print ? sources.print->option<ConfigOptionString>(k) : nullptr;
+        return opt ? opt->value : std::string();
+    };
+    if (p->scope == "region" && sources.region_values)
+        if (auto v = from_text(*sources.region_values, "region_mod_settings"))
+            return *v;
+    if ((p->scope == "region" || p->scope == "object") && sources.object_values)
+        if (auto v = from_text(*sources.object_values, "object_mod_settings"))
+            return *v;
+    if (p->scope == "filament") {
+        const auto *opt = sources.print ? sources.print->option<ConfigOptionStrings>("filament_mod_settings") : nullptr;
+        if (opt == nullptr)
+            return p->default_value;
+        if (*filament >= opt->values.size())
+            return std::nullopt;
+        if (auto v = from_text(opt->values[*filament], "filament_mod_settings"))
+            return *v;
+        return p->default_value;
+    }
+    const char *store = p->scope == "printer" ? "printer_mod_settings" : "mod_settings";
+    if (auto v = from_text(string_of(store), store))
+        return *v;
+    return p->default_value;
+}
+
+std::set<std::string> ModSet::invalidated_steps(const std::string &old_json, const std::string &new_json) const
+{
+    std::set<std::string> steps;
+    if (old_json == new_json)
+        return steps;
+    const json before = parse_values_object(old_json);
+    const json after  = parse_values_object(new_json);
+    std::set<std::string> keys;
+    for (auto &[k, v] : before.items())
+        keys.insert(k);
+    for (auto &[k, v] : after.items())
+        keys.insert(k);
+    for (const std::string &key : keys) {
+        auto b = before.find(key);
+        auto a = after.find(key);
+        if (b != before.end() && a != after.end() && *b == *a)
+            continue;
+        const ModParam *p = find_param(key);
+        if (p == nullptr)
+            continue; // no loaded mod reads it
+        if (p->invalidates.empty())
+            steps.insert("posSlice");
+        for (const std::string &step : p->invalidates)
+            if (step != "none")
+                steps.insert(step);
+    }
+    return steps;
+}
+
+const std::vector<std::string> &mod_step_names()
+{
+    static const std::vector<std::string> names = {
+        "posSlice", "posPerimeters", "posEstimateCurledExtrusions", "posPrepareInfill", "posInfill", "posIroning",
+        "posContouring", "posSupportMaterial", "posSimplifyPath", "posSimplifySupportPath", "posDetectOverhangsForLift",
+        "posSimplifyWall", "posSimplifyInfill", "psWipeTower", "psToolOrdering", "psSkirtBrim", "psGCodeExport", "none",
+    };
+    return names;
+}
+
+bool is_gcode_setting(const std::string &key)
+{
+    const ConfigOptionDef *def = print_config_def.get(key);
+    if (def == nullptr || (def->type != coString && def->type != coStrings))
+        return false;
+    // post_process names programs run on the exported file: worse than G-code, the same rule.
+    return boost::ends_with(key, "_gcode") || boost::ends_with(key, "_gcodes") || key == "post_process";
+}
+
+int compare_versions(const std::string &a, const std::string &b)
+{
+    auto parts = [](const std::string &v) {
+        std::vector<long> out;
+        std::vector<std::string> pieces;
+        boost::split(pieces, v, [](char c) { return c == '.'; });
+        for (const std::string &p : pieces)
+            out.push_back(std::strtol(p.c_str(), nullptr, 10));
+        return out;
+    };
+    std::vector<long> x = parts(a), y = parts(b);
+    x.resize(std::max(x.size(), y.size()), 0);
+    y.resize(x.size(), 0);
+    return x < y ? -1 : (y < x ? 1 : 0);
+}
+
+std::string merge_mod_values(const std::string &base_json, const std::string &override_json)
+{
+    if (override_json.empty())
+        return base_json;
+    json merged = parse_values_object(base_json);
+    // A named object: items() of a temporary would outlive it in the loop.
+    const json overrides = parse_values_object(override_json);
+    for (auto &[k, v] : overrides.items())
+        merged[k] = v;
+    return merged.empty() ? std::string() : merged.dump();
 }
 
 std::shared_ptr<const ModSet> active_mods()
@@ -635,37 +1000,12 @@ void set_active_mods(std::shared_ptr<const ModSet> mods)
 std::optional<ExprValue> param_value(const DynamicPrintConfig &config, const std::string &key)
 {
     std::shared_ptr<const ModSet> mods = active_mods();
-    if (!mods)
+    const ModParam *p = mods ? mods->find_param(key) : nullptr;
+    if (p == nullptr || p->scope == "filament")
         return std::nullopt;
-    const size_t dot = key.find('.');
-    if (dot == std::string::npos)
-        return std::nullopt;
-    for (const Mod &mod : mods->mods()) {
-        if (mod.id != key.substr(0, dot))
-            continue;
-        for (const ModParam &p : mod.params) {
-            if (p.name != key.substr(dot + 1) || p.scope == "filament")
-                continue;
-            const auto *opt = config.option<ConfigOptionString>(p.scope == "printer" ? "printer_mod_settings" : "mod_settings");
-            json stored;
-            try {
-                stored = opt && !opt->value.empty() ? json::parse(opt->value) : json::object();
-            } catch (const json::parse_error &) {
-                return std::nullopt;
-            }
-            auto it = stored.is_object() ? stored.find(key) : stored.end();
-            if (!stored.is_object() || it == stored.end())
-                return p.default_value;
-            if ((p.type == "float" && it->is_number()) || (p.type == "int" && it->is_number_integer()))
-                return it->get<double>();
-            if (p.type == "bool" && it->is_boolean())
-                return it->get<bool>();
-            if (p.type == "string" && it->is_string() && param_allows(p, it->get<std::string>()))
-                return it->get<std::string>();
-            return std::nullopt;
-        }
-    }
-    return std::nullopt;
+    ModSet::ValueSources sources;
+    sources.print = &config;
+    return mods->value_of(key, sources);
 }
 
 bool param_visible(const ModParam &param, const ExprLookup &lookup)
@@ -686,22 +1026,6 @@ bool param_allows(const ModParam &param, const ExprValue &value)
     const std::string *s = std::get_if<std::string>(&value);
     return s != nullptr && std::any_of(param.options.begin(), param.options.end(),
                                        [s](const ModParamOption &o) { return o.value == *s; });
-}
-
-void load_active_mods_from_data_dir()
-{
-    std::vector<boost::filesystem::path> dirs;
-    if (!resources_dir().empty())
-        dirs.push_back(boost::filesystem::path(resources_dir()) / "mods");
-    if (!data_dir().empty())
-        dirs.push_back(boost::filesystem::path(data_dir()) / "mods");
-    std::vector<std::string> errors;
-    auto                     mods = std::make_shared<const ModSet>(ModSet::load_dirs(dirs, errors));
-    for (const std::string &e : errors)
-        BOOST_LOG_TRIVIAL(error) << "Mod not loaded: " << e;
-    if (!mods->mods().empty())
-        BOOST_LOG_TRIVIAL(info) << "Loaded " << mods->mods().size() << " mod(s)";
-    set_active_mods(std::move(mods));
 }
 
 } // namespace ModHost

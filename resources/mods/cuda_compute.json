@@ -7,7 +7,7 @@
     "name": "CUDA compute (experimental)", "name_ko": "CUDA 연산 (실험)",
     "version": "1.0.0",
     "params": {
-        "mode": { "type": "string", "default": "off",
+        "mode": { "invalidates": ["none"], "type": "string", "default": "off",
                   "options": [ { "value": "off", "label": "Off",     "label_ko": "끔" },
                                { "value": "on",  "label": "On (checked against the CPU)", "label_ko": "켬 (CPU로 검증)" },
                                { "value": "max", "label": "Max GPU", "label_ko": "최대 GPU" } ],

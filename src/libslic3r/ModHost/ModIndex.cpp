@@ -176,6 +176,8 @@ std::string install_mod(const ModIndexEntry &entry, const std::string &definitio
             text << in.rdbuf();
             try {
                 Mod existing = ModSet::parse_mod(text.str());
+                // Bundled mods are official, as when the application loads them (ModSet::load_dirs).
+                existing.official = existing.verified = !installed_dir;
                 if (existing.id == mod.id) {
                     if (installed_dir)
                         continue; // the copy being replaced

@@ -191,6 +191,7 @@ private:
     void        append_menu_item_drop(wxMenu* menu);
     void        append_menu_item_per_object_process(wxMenu* menu);
     void        append_menu_item_per_object_settings(wxMenu* menu);
+    void        append_menu_item_mod_settings(wxMenu* menu, bool volume);
     void        append_menu_item_change_filament(wxMenu* menu);
     void        append_menu_item_set_printable(wxMenu* menu);
     void        append_menu_item_set_auto_drop(wxMenu* menu);

@@ -204,6 +204,7 @@
 #include "slic3r/Config/Snapshot.hpp"
 #include "Preferences.hpp"
 #include "ModBrowserDialog.hpp"
+#include "ModManagerDialog.hpp"
 #include "Tab.hpp"
 #include "UpdateDialogs.hpp"
 #include "Mouse3DController.hpp"
@@ -245,6 +246,7 @@
 #include "libslic3r/Format/STEP.hpp"
 #include "libslic3r/Semver.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
+#include "libslic3r/ModHost/NativeMods.hpp"
 #include "slic3r/GUI/ActionRegistry.hpp"
 #include "slic3r/GUI/Camera.hpp"
 #include "slic3r/GUI/ConfigWizard.hpp"
@@ -2950,6 +2952,8 @@ int GUI_App::OnExit()
         BOOST_LOG_TRIVIAL(error) << "Failed to clean up encrypt bbl network log file";
     }
 
+    // MAGPIE: native mods shut down while their libraries are still attached.
+    ModHost::shutdown_native_mods();
     return wxApp::OnExit();
 }
 
@@ -4900,6 +4904,15 @@ void GUI_App::check_printer_presets()
 
 void switch_window_pools();
 void release_window_pools();
+
+void GUI_App::open_mod_manager()
+{
+    ModManagerDialog dlg(mainframe);
+    dlg.ShowModal();
+    if (dlg.changed())
+        MessageDialog(mainframe, _L("The changes apply when you restart the application."), _L("Installed Mods"),
+                      wxOK | wxICON_INFORMATION).ShowModal();
+}
 
 void GUI_App::open_mod_browser(const std::vector<std::string>& wanted_ids)
 {

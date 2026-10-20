@@ -2145,6 +2145,10 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 
     if (!m_mod_rule_errors.empty())
         return { m_mod_rule_errors.front() };
+    for (const ModRuleClash &c : m_mod_rule_clashes)
+        // TRN %1%: one or more mod ids, %2%: the mod id whose value is used, %3%: a setting key, %4%: its value.
+        warn(Slic3r::format(_u8L("Mods %1% and %2% both set \"%3%\"; the value \"%4%\" of %2% is used. Turn off the mods you do not want."),
+                            c.other_mods, c.used_mod, c.setting, c.used_value), c.setting);
 
     // MAGPIE: say when absolute line widths were scaled to each nozzle (scale_absolute_line_widths_to_nozzles),
     // from the print config or an object, part or layer range override.

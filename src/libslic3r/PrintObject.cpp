@@ -39,6 +39,7 @@
 #include "Fill/FillLightning.hpp"
 #include "Fill/FillTpmsAdaptive.hpp"
 #include "format.hpp"
+#include "ModHost/ModSet.hpp"
 #include "ModHost/SlotRegistry.hpp"
 #include "AABBTreeIndirect.hpp"
 #include "AABBTreeLines.hpp"
@@ -2010,6 +2011,16 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "belt_purge_tower_object") {
             invalidated |= m_print->invalidate_step(psWipeTower);
             invalidated |= m_print->invalidate_step(psGCodeExport);
+        } else if (opt_key == "object_mod_settings" || opt_key == "region_mod_settings") {
+            // MAGPIE: this object's (or one of its regions') mod parameter values: the steps the changed
+            // parameters declare. Without the mods loaded nothing reads them.
+            if (std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods()) {
+                auto text = [&opt_key](const ConfigOptionResolver &config) {
+                    const auto *opt = dynamic_cast<const ConfigOptionString *>(config.option(opt_key));
+                    return opt ? opt->value : std::string();
+                };
+                invalidated |= this->invalidate_mod_steps(mods->invalidated_steps(text(old_config), text(new_config)));
+            }
         } else {
             // for legacy, if we can't handle this option let's invalidate all steps
             this->invalidate_all_steps();
@@ -2020,6 +2031,38 @@ bool PrintObject::invalidate_state_by_config_options(
     sort_remove_duplicates(steps);
     for (PrintObjectStep step : steps)
         invalidated |= this->invalidate_step(step);
+    return invalidated;
+}
+
+bool PrintObject::invalidate_mod_steps(const std::set<std::string> &steps)
+{
+    static const std::pair<const char *, PrintObjectStep> object_steps[] = {
+        {"posSlice", posSlice}, {"posPerimeters", posPerimeters}, {"posEstimateCurledExtrusions", posEstimateCurledExtrusions},
+        {"posPrepareInfill", posPrepareInfill}, {"posInfill", posInfill}, {"posIroning", posIroning}, {"posContouring", posContouring},
+        {"posSupportMaterial", posSupportMaterial}, {"posSimplifyPath", posSimplifyPath}, {"posSimplifySupportPath", posSimplifySupportPath},
+        {"posDetectOverhangsForLift", posDetectOverhangsForLift}, {"posSimplifyWall", posSimplifyWall}, {"posSimplifyInfill", posSimplifyInfill},
+    };
+    static const std::pair<const char *, PrintStep> print_steps[] = {
+        {"psWipeTower", psWipeTower}, {"psToolOrdering", psToolOrdering}, {"psSkirtBrim", psSkirtBrim}, {"psGCodeExport", psGCodeExport},
+    };
+    bool invalidated = false;
+    for (const std::string &name : steps) {
+        bool known = false;
+        for (const auto &[n, step] : object_steps)
+            if (name == n) {
+                invalidated |= this->invalidate_step(step);
+                known = true;
+            }
+        for (const auto &[n, step] : print_steps)
+            if (name == n) {
+                invalidated |= m_print->invalidate_step(step);
+                known = true;
+            }
+        // ModSet only returns names of mod_step_names(); one this table lacks would be a stale result.
+        assert(known);
+        if (!known)
+            invalidated |= this->invalidate_all_steps();
+    }
     return invalidated;
 }
 
@@ -4353,6 +4396,14 @@ PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &defau
 {
     PrintRegionConfig config = default_or_parent_region_config;
     FeatureFilamentOverrideMask feature_overrides;
+    // MAGPIE: region-scope mod values join per parameter, the most specific level winning, instead of a
+    // part's string replacing the object's whole set. Same levels and order as applied below.
+    std::string region_mod_values = config.region_mod_settings.value;
+    for (const DynamicPrintConfig *level : { volume.is_model_part() ? &volume.get_object()->config.get() : nullptr, &volume.config.get(),
+                                             volume.material_id().empty() ? nullptr : &volume.material()->config.get(), layer_range_config })
+        if (level != nullptr)
+            if (const auto *opt = level->option<ConfigOptionString>("region_mod_settings"))
+                region_mod_values = ModHost::merge_mod_values(region_mod_values, opt->value);
 
     // For model parts, non-zero values coming from the print defaults should stay explicit.
     if (volume.is_model_part()) {
@@ -4385,6 +4436,7 @@ PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &defau
     prepare_line_widths(config, line_widths,
                         { volume.is_model_part() ? &volume.get_object()->config.get() : nullptr, &volume.config.get(),
                           volume.material_id().empty() ? nullptr : &volume.material()->config.get(), layer_range_config });
+    config.region_mod_settings.value = std::move(region_mod_values);
     // Resolve feature defaults and clamp invalid extruders to index 1.
     clamp_feature_filament_to_valid(config.sparse_infill_filament_id, num_extruders);
     clamp_feature_filament_to_valid(config.outer_wall_filament_id, num_extruders);

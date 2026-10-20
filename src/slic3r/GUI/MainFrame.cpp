@@ -3522,6 +3522,10 @@ void MainFrame::init_menubar_as_editor()
         parent_menu, wxID_ANY, _L("Get Mods") + dots, _L("Search the mod index and install mods"),
         [](wxCommandEvent &) { wxGetApp().open_mod_browser(); },
         "", nullptr, []() { return true; }, this, 2);
+    append_menu_item(
+        parent_menu, wxID_ANY, _L("Installed Mods") + dots, _L("Turn mods off or on, or remove them, from the next start"),
+        [](wxCommandEvent &) { wxGetApp().open_mod_manager(); },
+        "", nullptr, []() { return true; }, this, 3);
     //parent_menu->Insert(1, preference_item);
 #endif
     // Help menu
@@ -3546,6 +3550,10 @@ void MainFrame::init_menubar_as_editor()
     append_menu_item(
         m_topbar->GetTopMenu(), wxID_ANY, _L("Get Mods") + dots, _L("Search the mod index and install mods"),
         [](wxCommandEvent &) { wxGetApp().open_mod_browser(); },
+        "", nullptr, []() { return true; }, this);
+    append_menu_item(
+        m_topbar->GetTopMenu(), wxID_ANY, _L("Installed Mods") + dots, _L("Turn mods off or on, or remove them, from the next start"),
+        [](wxCommandEvent &) { wxGetApp().open_mod_manager(); },
         "", nullptr, []() { return true; }, this);
 
     auto top_menu = m_topbar->GetTopMenu();

@@ -600,6 +600,9 @@ public:
     // It may be called for both the PrintObjectConfig and PrintRegionConfig.
     bool                    invalidate_state_by_config_options(
         const ConfigOptionResolver &old_config, const ConfigOptionResolver &new_config, const std::vector<t_config_option_key> &opt_keys);
+    // MAGPIE: invalidates the steps mod parameters declare (ModSet::invalidated_steps names: posXxx steps
+    // of this object, psXxx steps of the print).
+    bool                    invalidate_mod_steps(const std::set<std::string> &steps);
     // If ! m_slicing_params.valid, recalculate.
     void                    update_slicing_parameters();
 
@@ -1508,6 +1511,14 @@ private:
     // MAGPIE: errors of mod rules that could not be evaluated by the last apply(); validate()
     // reports the first, so nothing is sliced with a rule silently left out.
     std::vector<std::string> m_mod_rule_errors;
+    // MAGPIE: settings that rules of several mods set to different values (audit decision D); validate()
+    // shows each as a warning naming the mod whose value is used.
+    struct ModRuleClash
+    {
+        std::string setting, used_mod, used_value;
+        std::string other_mods; // comma-separated
+    };
+    std::vector<ModRuleClash> m_mod_rule_clashes;
     // MAGPIE: the nozzle absolute line widths are scaled from (absolute_line_width_reference_nozzle), mm,
     // as of the last apply(); 0 on a printer with one nozzle size.
     LineWidthContext         m_line_width_context;
