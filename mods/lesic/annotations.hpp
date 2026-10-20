@@ -1,11 +1,11 @@
 #pragma once
 
-// MAGPIE: LESIC ring annotations (Magpie line 1): the bottom label, ring value labels and the inner brim
-// printed on the first layer of the LESIC calibration ring, as G-code line segments. Included by GCode.cpp only.
+// LESIC ring annotations (Magpie line 1): the bottom label, ring value labels and the inner brim printed on the first
+// layer of the LESIC calibration ring, as G-code line segments. Moved from the core (GCode/LesicAnnotations.hpp)
+// with its arithmetic unchanged; vec2.hpp stands in for the core's Vec2d, the calibration's values and the settings
+// the label reads come through the gcode.events writer (lesic.cpp).
 
-#include "../calib.hpp"
-#include "../PrintConfig.hpp"
-#include "../Point.hpp"
+#include "vec2.hpp"
 
 #include <algorithm>
 #include <array>
@@ -20,8 +20,7 @@
 #include <utility>
 #include <vector>
 
-namespace Slic3r {
-namespace {
+namespace lesic {
 
 constexpr double LESIC_ZERO_ANGLE_DEG = -90.0;
 constexpr bool   LESIC_CLOCKWISE      = true;
@@ -975,17 +974,16 @@ static std::string lesic_clean_label_text(std::string text)
 
 static std::vector<std::string> lesic_label_lines(
     const Calib_Params &params,
-    const FullPrintConfig &config,
-    unsigned int filament_id)
+    const LabelConfig &config)
 {
-    std::string printer_name = config.printer_model.value.empty() ? "PRINTER" : config.printer_model.value;
-    std::string filament_type = config.filament_type.get_at(filament_id).empty() ? "FILAMENT" : config.filament_type.get_at(filament_id);
-    std::string filament_vendor = config.filament_vendor.get_at(filament_id);
+    std::string printer_name = config.printer_model.empty() ? "PRINTER" : config.printer_model;
+    std::string filament_type = config.filament_type.empty() ? "FILAMENT" : config.filament_type;
+    std::string filament_vendor = config.filament_vendor;
     if (filament_vendor == "(Undefined)")
         filament_vendor.clear();
     const std::string filament_label = filament_vendor.empty() ? filament_type : filament_vendor + "/" + filament_type;
-    const double nozzle = config.nozzle_diameter.get_at(0);
-    const double layer_height = params.lesic_layer_height > 0.0 ? params.lesic_layer_height : config.layer_height.value;
+    const double nozzle = config.nozzle_diameter_0;
+    const double layer_height = params.lesic_layer_height > 0.0 ? params.lesic_layer_height : config.layer_height;
 
     return {
         lesic_clean_label_text(printer_name + "/" + filament_label + "/ND " + lesic_format_label_value(nozzle) + "MM"),
@@ -1015,14 +1013,13 @@ static double lesic_bottom_label_height(const Calib_Params &params, const std::v
 
 static std::vector<LesicAnnotationSegment> lesic_bottom_label_segments(
     const Calib_Params &params,
-    const FullPrintConfig &config,
-    unsigned int filament_id)
+    const LabelConfig &config)
 {
     std::vector<LesicAnnotationSegment> out;
     if (params.lesic_circle_diameter <= 0.0)
         return out;
 
-    const std::vector<std::string> lines = lesic_label_lines(params, config, filament_id);
+    const std::vector<std::string> lines = lesic_label_lines(params, config);
     const double char_h = lesic_bottom_label_height(params, lines);
     const double line_width = params.lesic_line_width > 0.0 ? params.lesic_line_width : 0.48;
     const double bottom_stroke_width = lesic_bottom_label_stroke_width(params);
@@ -1144,5 +1141,4 @@ static std::vector<LesicAnnotationSegment> lesic_ring_annotation_segments(const 
     return out;
 }
 
-} // namespace
-} // namespace Slic3r
+} // namespace lesic

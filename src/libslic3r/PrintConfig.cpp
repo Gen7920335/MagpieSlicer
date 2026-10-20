@@ -7395,18 +7395,6 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionString(""));
 
-    // MAGPIE: the interface sublayer temperature, written by the support_extras mod's rule (mods/support_extras)
-    // while its sublayers are on. Its default leaves Orca's G-code unchanged.
-    def = this->add("support_interface_sublayer_temperature", coInt);
-    def->label = L("Interface sublayer temperature");
-    def->category = L("Support");
-    def->tooltip = L("Nozzle temperature while printing the interface sublayers. 0 keeps the filament temperature. "
-                     "With the low temperature support interface on, the sublayers use this target instead of "
-                     "the interface temperature.");
-    def->sidetext = u8"°C";
-    def->min = 0;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionInt(0));
 
     // MAGPIE: wall.plan slot (the planner a native mod provides, see ModHost/WallPlanner.hpp) and the speed of the
     // walls a planner prints with its detail nozzle (line 1's key). The multi_nozzle_walls mod's rules write both;
@@ -7428,70 +7416,15 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloatOrPercent(0., false));
 
-    // MAGPIE: low temperature support interface of Magpie line 1 (same keys, so line-1 projects keep them).
-    // Driven by resources/mods/low_temp_interface.json; the defaults change nothing.
-    def = this->add("single_nozzle_low_temperature_interface", coBool);
-    def->label = L("Low temperature support interface");
-    def->category = L("Support");
-    def->tooltip = L("Print support interfaces at a separate lower nozzle temperature on single-nozzle printers. "
-                     "The nozzle waits for the interface temperature before printing and restores the active filament temperature before other extrusion.");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionBool(false));
 
-    def = this->add("support_interface_temperature", coInt);
-    def->label = L("Support interface temperature");
-    def->category = L("Support");
-    def->tooltip = L("Nozzle temperature used only while printing support interface paths in low temperature interface mode.");
-    def->sidetext = L(u8"℃" /* °C */);	// degrees Celsius, CIS languages need translation
-    def->min = 1;
-    def->max = 350;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionInt(170));
 
-    def = this->add("support_interface_heating_time", coFloat);
-    def->label = L("Interface exit heating time");
-    def->category = L("Support");
-    def->tooltip = L("Time to heat toward the normal filament temperature before model extrusion resumes. "
-                     "The printer does not wait for the full target temperature.");
-    def->sidetext = L("s");
-    def->min = 0;
-    def->max = 60;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(5.0));
 
-    def = this->add("support_interface_auxiliary_fan_cooling_on_temperature_change", coBool);
-    def->label = L("Use auxiliary fan during hotend temperature changes (air duct adapter required)");
-    def->category = L("Support");
-    def->tooltip = L("Use the auxiliary fan to cool the hotend while changing to the low support interface temperature.");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionBool(false));
 
-    def = this->add("support_interface_auxiliary_fan_speed", coInt);
-    def->label = L("Auxiliary fan for nozzle cooling");
-    def->category = L("Support");
-    def->tooltip = L("Auxiliary fan speed used to cool the nozzle before a low temperature support interface.");
-    def->sidetext = "%";
-    def->min = 0;
-    def->max = 100;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionInt(100));
 
-    def = this->add("support_interface_nozzle_wiping_on_temperature_change", coBool);
-    def->label = L("Wipe nozzle after hotend temperature changes");
-    def->category = L("Support");
-    def->tooltip = L("Wipe the nozzle on the brush after changing the hotend temperature for a low temperature support interface.");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionBool(false));
 
-    def = this->add("support_interface_temperature_drop_tower", coBool);
-    def->label = L("Use temperature drop tower");
-    def->category = L("Support");
-    def->tooltip = L("Build an L-shaped tower at the rear-left of the bed and print it slowly while lowering the nozzle temperature. "
-                     "This is used when nozzle wiping is unavailable or disabled and is not supported for print-by-object mode.");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionBool(false));
 
-    // Per plate tower position, mm; negative asks for the rear left of the bed.
+    // MAGPIE: per plate position of an auxiliary tower (GCode/AuxiliaryTower.hpp), mm; negative asks for the rear left
+    // of the bed. The names are those the low temperature interface's tower was saved with.
     def = this->add("support_interface_temperature_drop_tower_x", coFloats);
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloats{ -1.0 });
@@ -7500,26 +7433,8 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloats{ -1.0 });
 
-    def = this->add("support_interface_cooling_position", coPoint);
-    def->label = L("Low temperature interface cooling position");
-    def->tooltip = L("Machine X/Y position for auxiliary-fan nozzle cooling. Negative values use the rear-left corner of the printable area.");
-    def->sidetext = L("mm");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionPoint(Vec2d(-1.0, -1.0)));
 
-    def = this->add("support_interface_brush_start", coPoint);
-    def->label = L("Nozzle brush start position");
-    def->tooltip = L("Machine X/Y position at one end of the nozzle brush.");
-    def->sidetext = L("mm");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionPoint(Vec2d(-1.0, -1.0)));
 
-    def = this->add("support_interface_brush_end", coPoint);
-    def->label = L("Nozzle brush end position");
-    def->tooltip = L("Machine X/Y position at the other end of the nozzle brush.");
-    def->sidetext = L("mm");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionPoint(Vec2d(-1.0, -1.0)));
 
     // MAGPIE: layer time blending, driven by resources/mods/layer_time_blend.json. Hidden; the defaults
     // mark no wait sites and leave the G-code as it is.
@@ -7656,30 +7571,8 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloat(1.));
 
-    // MAGPIE: Snapmaker U1 start G-code guard (Magpie line 1), driven by resources/mods/snapmaker_u1.json.
-    def = this->add("snapmaker_u1_start_guard", coBool);
-    def->label = L("Guard the Snapmaker U1 start G-code");
-    def->tooltip = L("On a Snapmaker U1, use the stock pre-print sequence when the start G-code lacks it, and home all axes "
-                     "after PRINT_START before any move when the start G-code would move unhomed.");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionBool(false));
 
-    def = this->add("support_interface_brush_repetitions", coInt);
-    def->label = L("Nozzle brush repetitions");
-    def->tooltip = L("Number of gentle round trips over the nozzle brush after cooling. Zero disables automatic brushing.");
-    def->min = 0;
-    def->max = 10;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionInt(0));
 
-    def = this->add("support_interface_brush_speed", coFloat);
-    def->label = L("Nozzle brush speed");
-    def->tooltip = L("Travel speed used while wiping the nozzle on the brush.");
-    def->sidetext = L("mm/s");
-    def->min = 1;
-    def->max = 500;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(80.0));
 
     def = this->add("support_type", coEnum);
     def->label = L("Type");

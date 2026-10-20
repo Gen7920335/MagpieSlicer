@@ -139,6 +139,8 @@ set(lisbslic3r_sources
     ModHost/NativeContacts.hpp
     ModHost/NativeSupport.cpp
     ModHost/NativeSupport.hpp
+    ModHost/GCodeEvents.cpp
+    ModHost/GCodeEvents.hpp
     ModHost/ObjectZOffset.cpp
     ModHost/ObjectZOffset.hpp
     ModHost/ParamGraph.cpp
@@ -300,6 +302,9 @@ set(lisbslic3r_sources
     GCode/ExtrusionProcessor.hpp
     GCode/FanMover.cpp
     GCode/FanMover.hpp
+    GCode/AuxiliaryTower.hpp
+    GCode/GCodeEventHost.cpp
+    GCode/GCodeEventHost.hpp
     GCode/GCodeProcessor.cpp
     GCode/GCodeProcessor.hpp
     GCode/GCodeStatistics.cpp
@@ -333,8 +338,6 @@ set(lisbslic3r_sources
     GCode/Thumbnails.hpp
     GCode/ToolOrdering.cpp
     GCode/ToolOrdering.hpp
-    GCode/SnapmakerHomingPolicy.hpp
-    GCode/LesicAnnotations.hpp
     GCode/OrderingStrategies.cpp
     GCode/OrderingStrategies.hpp
     GCode/WipeTower2.cpp
@@ -528,7 +531,6 @@ set(lisbslic3r_sources
     Support/BeltFloorContext.hpp
     Support/SupportCommon.cpp
     Support/SupportCommon.hpp
-    Support/TemperatureDropTower.hpp
     Support/SupportLayer.hpp
     Support/SupportMaterial.cpp
     Support/SupportMaterial.hpp

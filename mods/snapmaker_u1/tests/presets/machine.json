@@ -1,0 +1,3 @@
+{ "type": "machine", "name": "U1 guard mod test", "from": "User", "instantiation": "true", "version": "2.4.0.0",
+  "printer_model": "Snapmaker U1", "gcode_flavor": "klipper", "layer_change_gcode": "G92 E0",
+  "machine_start_gcode": "G1 X10 Y10 F3000\nPRINT_START\nG1 Z5\n" }

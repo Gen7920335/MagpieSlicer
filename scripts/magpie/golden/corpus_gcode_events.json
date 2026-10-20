@@ -1,0 +1,293 @@
+{
+ "description": "G-code event mods (gcode.events slot, M6): the low temperature support interface with its temperature drop tower, auxiliary fan, nozzle brush and interface sublayer temperatures (mods/low_temp_interface, mods/support_extras), and the Snapmaker U1 start G-code guard (mods/snapmaker_u1). Compared built-in (before M6) against the native mods, byte for byte apart from the '; mods:' line. LESIC runs only from the application's Calibration menu, so it is checked by test_lesic.cpp instead. The brush and cooling position are given as line 1's printer settings, which the built-in version reads and the mod version migrates into its printer parameters (LegacySettings).",
+ "printers": {
+  "u1": {
+   "machine": "presets/u1_04_machine.json",
+   "process": "presets/u1_04_process.json",
+   "filaments": [
+    "presets/u1_pla.json"
+   ],
+   "bed_type": "High Temp Plate"
+  },
+  "u1mixed": {
+   "machine": "presets/u1_04_machine.json",
+   "process": "presets/u1_04_process.json",
+   "filaments": [
+    "presets/u1_pla.json",
+    "presets/u1_pla_2.json",
+    "presets/u1_pla_3.json",
+    "presets/u1_pla_4.json"
+   ],
+   "bed_type": "High Temp Plate"
+  },
+  "x1c": {
+   "machine": "presets/x1c_04_machine.json",
+   "process": "presets/x1c_04_process.json",
+   "filaments": [
+    "presets/x1c_pla.json"
+   ],
+   "bed_type": "Textured PEI Plate"
+  }
+ },
+ "cases": [
+  {
+   "name": "ltc_tower_tree",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "tree(auto)",
+    "support_interface_top_layers": "3",
+    "support_interface_bottom_layers": "0",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.temperature\": 175, \"low_temp_interface.tower\": true}"
+   }
+  },
+  {
+   "name": "ltc_tower_aux_fan",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "machine": {
+    "auxiliary_fan": "1"
+   },
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "2",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.tower\": true, \"low_temp_interface.aux_fan\": true, \"low_temp_interface.aux_fan_speed\": 80}"
+   }
+  },
+  {
+   "name": "ltc_aux_fan_rear_left",
+   "printer": "u1",
+   "model": "external:tee.stl",
+   "machine": {
+    "auxiliary_fan": "1"
+   },
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "2",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.aux_fan\": true}"
+   }
+  },
+  {
+   "name": "ltc_aux_fan_cooling_position",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "machine": {
+    "auxiliary_fan": "1",
+    "support_interface_cooling_position": "250x20"
+   },
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "2",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.aux_fan\": true, \"low_temp_interface.heating_time\": 3.5}"
+   }
+  },
+  {
+   "name": "ltc_brush",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "machine": {
+    "support_interface_brush_start": "20x260",
+    "support_interface_brush_end": "60x260",
+    "support_interface_brush_repetitions": "3",
+    "support_interface_brush_speed": "60"
+   },
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "2",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.brush\": true, \"low_temp_interface.tower\": true}"
+   }
+  },
+  {
+   "name": "ltc_marlin_wait",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "machine": {
+    "gcode_flavor": "marlin2"
+   },
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "2",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.heating_time\": 0}"
+   }
+  },
+  {
+   "name": "ltc_sublayers",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "4",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.temperature\": 200, \"support_extras.sublayer_start\": 2, \"support_extras.sublayer_end\": 3, \"support_extras.sublayer_temperature\": 185}"
+   }
+  },
+  {
+   "name": "sublayer_temperature_only",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "tree(auto)",
+    "support_style": "tree_hybrid",
+    "support_interface_top_layers": "4",
+    "mod_settings": "{\"support_extras.sublayer_start\": 2, \"support_extras.sublayer_end\": 4, \"support_extras.sublayer_temperature\": 190, \"support_extras.sublayer_pattern\": \"grid\"}"
+   }
+  },
+  {
+   "name": "ltc_sublayers_tower",
+   "printer": "u1",
+   "model": "external:tee.stl",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "3",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.temperature\": 205, \"low_temp_interface.tower\": true, \"support_extras.sublayer_start\": 2, \"support_extras.sublayer_end\": 3, \"support_extras.sublayer_temperature\": 180}"
+   }
+  },
+  {
+   "name": "ltc_h2_tower",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "2",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.tower\": true, \"half_layer.support\": true}"
+   }
+  },
+  {
+   "name": "ltc_by_object",
+   "printer": "u1",
+   "model": "external:tee.stl",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "2",
+    "print_sequence": "by object",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.tower\": true}"
+   }
+  },
+  {
+   "name": "ltc_raft_tower_position",
+   "printer": "u1",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "raft_layers": "2",
+    "support_interface_top_layers": "2",
+    "support_interface_temperature_drop_tower_x": [
+     "40"
+    ],
+    "support_interface_temperature_drop_tower_y": [
+     "60"
+    ],
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.tower\": true, \"low_temp_interface.temperature\": 180}"
+   }
+  },
+  {
+   "name": "ltc_interface_filament",
+   "printer": "u1mixed",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "2",
+    "support_interface_filament": "2",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.tower\": true}"
+   },
+   "cli_args": [
+    "--filament-colour",
+    "#FFFFFF;#FF0000;#00FF00;#0000FF"
+   ]
+  },
+  {
+   "name": "ltc_tower_mixed_nozzles",
+   "printer": "u1mixed",
+   "model": "tests/data/overhang.obj",
+   "machine": {
+    "nozzle_diameter": [
+     "0.15",
+     "0.4",
+     "0.15",
+     "0.4"
+    ],
+    "max_layer_height": [
+     "0.12",
+     "0.32",
+     "0.12",
+     "0.32"
+    ],
+    "min_layer_height": [
+     "0.04",
+     "0.08",
+     "0.04",
+     "0.08"
+    ]
+   },
+   "process": {
+    "outer_wall_filament_id": "2",
+    "inner_wall_filament_id": "2",
+    "sparse_infill_filament_id": "2",
+    "internal_solid_filament_id": "2",
+    "top_surface_filament_id": "2",
+    "bottom_surface_filament_id": "2",
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_filament": "3",
+    "support_interface_filament": "0",
+    "support_interface_top_layers": "2",
+    "layer_height": "0.12",
+    "initial_layer_print_height": "0.12",
+    "bridge_line_width": "0",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.tower\": true}"
+   },
+   "cli_args": [
+    "--filament-colour",
+    "#FFFFFF;#FF0000;#00FF00;#0000FF"
+   ]
+  },
+  {
+   "name": "ltc_x1c",
+   "printer": "x1c",
+   "model": "tests/data/overhang.obj",
+   "process": {
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_interface_top_layers": "2",
+    "mod_settings": "{\"low_temp_interface.enable\": true, \"low_temp_interface.temperature\": 180, \"low_temp_interface.tower\": true}"
+   }
+  },
+  {
+   "name": "u1_start_replaced",
+   "printer": "u1",
+   "model": "tests/data/20mm_cube.obj",
+   "machine": {
+    "machine_start_gcode": "G1 X10 Y10 F3000\nPRINT_START\nG1 Z5\n"
+   }
+  },
+  {
+   "name": "u1_start_homing_added",
+   "printer": "u1",
+   "model": "tests/data/20mm_cube.obj",
+   "machine": {
+    "machine_start_gcode": "PRINT_START\n{if 0 > 1}M140 S60\nG28 X Y\nG28 Z I140 J140\nM190 S60\nG28 Z\nBED_MESH_CALIBRATE\nM109 S200\nG1 X185 E15 F360\n{endif}G1 X10 Y10 F3000\n"
+   }
+  },
+  {
+   "name": "u1_start_guard_off",
+   "printer": "u1",
+   "model": "tests/data/20mm_cube.obj",
+   "machine": {
+    "machine_start_gcode": "G1 X10 Y10 F3000\nPRINT_START\nG1 Z5\n",
+    "printer_mod_settings": "{\"snapmaker_u1.start_guard\": false}"
+   }
+  }
+ ]
+}

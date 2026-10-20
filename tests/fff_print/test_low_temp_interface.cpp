@@ -1,12 +1,17 @@
-// MAGPIE: low temperature support interface (resources/mods/low_temp_interface.json), ported from Magpie line 1's
-// test_support_material.cpp low temperature interface cases.
+// MAGPIE: low temperature support interface (the native mod mods/low_temp_interface, gcode.events slot), ported from
+// Magpie line 1's test_support_material.cpp low temperature interface cases. Every test holds OfficialMods, so the
+// mod's parameters (set in mod_settings and printer_mod_settings) reach it.
 #include <catch2/catch_all.hpp>
 
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Print.hpp"
-#include "libslic3r/Support/TemperatureDropTower.hpp"
+#include "libslic3r/GCode/AuxiliaryTower.hpp"
+#include "libslic3r/ModHost/GCodeEvents.hpp"
+
+#include "magpie_slot_gcode_events.h"
+#include "../../mods/low_temp_interface/drop_tower.hpp"
 
 #include "test_helpers.hpp"
 
@@ -35,6 +40,25 @@ constexpr std::string_view end_marker           = "low-temperature support inter
 constexpr std::string_view auxiliary_fan_marker = "low-temperature support interface auxiliary cooling";
 constexpr std::string_view wiping_marker        = "low-temperature support interface nozzle brushing";
 
+// The mod's printer parameters ({"<name>": value}), stored as the printer's Mods page stores them.
+void printer_params(DynamicPrintConfig &config, const nlohmann::json &params)
+{
+    const auto    *stored = config.option<ConfigOptionString>("printer_mod_settings");
+    nlohmann::json values = stored != nullptr && !stored->value.empty() ? nlohmann::json::parse(stored->value) : nlohmann::json::object();
+    for (const auto &[name, value] : params.items())
+        values["low_temp_interface." + name] = value;
+    config.set_key_value("printer_mod_settings", new ConfigOptionString(values.dump()));
+}
+
+// The mod's process parameters ({"<name>": value}).
+void process_params(DynamicPrintConfig &config, const nlohmann::json &params)
+{
+    nlohmann::json prefixed = nlohmann::json::object();
+    for (const auto &[name, value] : params.items())
+        prefixed["low_temp_interface." + name] = value;
+    set_mod_params(config, prefixed);
+}
+
 DynamicPrintConfig low_temperature_config(bool enabled, bool auxiliary_fan_toggle = false, bool wiping_toggle = false,
                                           bool auxiliary_fan_supported = true)
 {
@@ -43,20 +67,14 @@ DynamicPrintConfig low_temperature_config(bool enabled, bool auxiliary_fan_toggl
         { "enable_support", true },
         { "support_interface_top_layers", 2 },
         { "support_interface_filament", 0 },
-        { "single_nozzle_low_temperature_interface", enabled },
-        { "support_interface_temperature", 170 },
-        { "support_interface_auxiliary_fan_speed", 100 },
-        { "support_interface_heating_time", 0.0 },
-        { "support_interface_auxiliary_fan_cooling_on_temperature_change", auxiliary_fan_toggle },
-        { "support_interface_nozzle_wiping_on_temperature_change", wiping_toggle },
         { "auxiliary_fan", auxiliary_fan_supported },
-        { "support_interface_brush_repetitions", 2 },
-        { "support_interface_brush_speed", 80.0 },
         { "nozzle_temperature", 220 },
         { "nozzle_temperature_initial_layer", 220 },
     });
-    config.set_key_value("support_interface_brush_start", new ConfigOptionPoint(Vec2d(10.0, 10.0)));
-    config.set_key_value("support_interface_brush_end", new ConfigOptionPoint(Vec2d(20.0, 10.0)));
+    process_params(config, { { "enable", enabled }, { "temperature", 170 }, { "aux_fan_speed", 100 }, { "heating_time", 0.0 },
+                             { "aux_fan", auxiliary_fan_toggle }, { "brush", wiping_toggle } });
+    printer_params(config, { { "brush_repetitions", 2 }, { "brush_speed", 80.0 }, { "brush_start_x", 10.0 }, { "brush_start_y", 10.0 },
+                             { "brush_end_x", 20.0 }, { "brush_end_y", 10.0 } });
     return config;
 }
 
@@ -98,6 +116,7 @@ std::vector<LayerTrace> trace_layers(const std::string &gcode)
 
 TEST_CASE("Low temperature interface prints the interface last at its own temperature", "[LowTemperatureInterface]")
 {
+    OfficialMods mods;
     const std::string gcode = slice({ TestMesh::overhang }, low_temperature_config(true));
     REQUIRE(gcode.find(begin_marker) != std::string::npos);
     REQUIRE(gcode.find(end_marker) != std::string::npos);
@@ -121,12 +140,12 @@ TEST_CASE("Low temperature interface prints the interface last at its own temper
 
 TEST_CASE("Low temperature interface off leaves support and temperatures to Orca", "[LowTemperatureInterface]")
 {
+    OfficialMods mods;
     const std::string off = slice({ TestMesh::overhang }, low_temperature_config(false));
     CHECK(off.find(begin_marker) == std::string::npos);
     DynamicPrintConfig orca = low_temperature_config(false);
-    // The feature's own keys at their defaults: the G-code must not change.
-    for (const char *key : { "support_interface_temperature", "support_interface_heating_time", "support_interface_auxiliary_fan_speed" })
-        orca.set_key_value(key, FullPrintConfig::defaults().option(key)->clone());
+    // The mod's parameters at their defaults: the G-code must not change.
+    process_params(orca, { { "temperature", 170 }, { "heating_time", 5 }, { "aux_fan_speed", 100 } });
     // The header's generation time may tick between the two slices.
     auto without_timestamp = [](std::string gcode) {
         const size_t begin = gcode.find("; generated by");
@@ -160,6 +179,7 @@ TEST_CASE("Low temperature interface off leaves support and temperatures to Orca
 
 TEST_CASE("Low temperature interface hardware actions follow their toggles", "[LowTemperatureInterface]")
 {
+    OfficialMods mods;
     SECTION("both actions disabled") {
         const std::string gcode = slice({ TestMesh::overhang }, low_temperature_config(true, false, false));
         REQUIRE(gcode.find(begin_marker) != std::string::npos);
@@ -190,26 +210,9 @@ TEST_CASE("Low temperature interface hardware actions follow their toggles", "[L
     }
 }
 
-TEST_CASE("The low temperature interface mod drives the same G-code as the core keys", "[LowTemperatureInterface][Mods]")
-{
-    const std::string by_keys = slice({ TestMesh::overhang }, low_temperature_config(true));
-
-    BundledMods mods;
-    REQUIRE(mods.errors.empty());
-    DynamicPrintConfig by_mod = low_temperature_config(false);
-    by_mod.set_key_value("mod_settings", new ConfigOptionString(nlohmann::json{
-        { "low_temp_interface.enable", true }, { "low_temp_interface.heating_time", 0 } }.dump()));
-    const std::string mod_output = slice({ TestMesh::overhang }, by_mod);
-    CHECK(trace_layers(mod_output).size() == trace_layers(by_keys).size());
-    CHECK(mod_output.find(begin_marker) != std::string::npos);
-    for (size_t i = 0; i < trace_layers(by_keys).size(); ++i) {
-        INFO("layer " << i + 1);
-        CHECK(trace_layers(mod_output)[i].temperatures == trace_layers(by_keys)[i].temperatures);
-    }
-}
-
 TEST_CASE("Low temperature interface reheat dwell uses the flavor's dwell command", "[LowTemperatureInterface]")
 {
+    OfficialMods mods;
     // Klipper's G4 reads only P (milliseconds): "G4 S5" would not wait at all on a Klipper printer such as the U1.
     const auto [flavor, expected] = GENERATE(table<std::string, std::string>({
         { "klipper", "G4 P5000 ; heat before next layer" },
@@ -217,7 +220,8 @@ TEST_CASE("Low temperature interface reheat dwell uses the flavor's dwell comman
     }));
     DYNAMIC_SECTION(flavor) {
         DynamicPrintConfig config = low_temperature_config(true);
-        config.set_deserialize_strict({ { "gcode_flavor", flavor }, { "support_interface_heating_time", 5.0 } });
+        config.set_deserialize_strict({ { "gcode_flavor", flavor } });
+        process_params(config, { { "heating_time", 5.0 } });
         const std::string gcode = slice({ TestMesh::overhang }, config);
         REQUIRE(gcode.find(end_marker) != std::string::npos);
         CHECK(gcode.find(expected) != std::string::npos);
@@ -227,15 +231,15 @@ TEST_CASE("Low temperature interface reheat dwell uses the flavor's dwell comman
 
 TEST_CASE("Low temperature interface targets stay within extrudable filament limits", "[LowTemperatureInterface]")
 {
+    OfficialMods mods;
     auto validate = [](bool enabled, int interface_c) {
         DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
         config.set_deserialize_strict({
             { "enable_support", true },
-            { "single_nozzle_low_temperature_interface", enabled },
             { "support_interface_filament", 0 },
-            { "support_interface_temperature", interface_c },
             // Relative E needs the per-layer reset; keep that unrelated preflight error out.
             { "layer_change_gcode", "G92 E0" } });
+        process_params(config, { { "enable", enabled }, { "temperature", interface_c } });
         config.set_key_value("nozzle_temperature_range_high", new ConfigOptionInts({ 240 }));
         Print print;
         Model model;
@@ -244,11 +248,12 @@ TEST_CASE("Low temperature interface targets stay within extrudable filament lim
     };
     // Firmware cold-extrusion guard: 170 degC.
     CHECK(validate(true, 170).string == "");
-    CHECK(validate(true, 169).opt_key == "support_interface_temperature");
-    CHECK(validate(true, 1).opt_key == "support_interface_temperature");
+    CHECK(validate(true, 169).string.find("Support interface temperature 169") != std::string::npos);
+    CHECK(validate(true, 169).string.find("cold-extrusion limit of 170") != std::string::npos);
+    CHECK(validate(true, 1).string.find("cold-extrusion") != std::string::npos);
     // Filament maximum (this fixture: 240 degC).
     CHECK(validate(true, 240).string == "");
-    CHECK(validate(true, 241).opt_key == "support_interface_temperature");
+    CHECK(validate(true, 241).string.find("maximum nozzle temperature 240") != std::string::npos);
     // Feature off: the interface target is never emitted, so it is not judged.
     CHECK(validate(false, 1).string == "");
 }
@@ -282,15 +287,13 @@ DynamicPrintConfig tower_config(const TowerSettings &settings)
         { "enable_support", settings.support_enabled },
         { "support_interface_top_layers", 2 },
         { "support_interface_filament", settings.interface_filament },
-        { "single_nozzle_low_temperature_interface", settings.low_temperature_interface_enabled },
-        { "support_interface_temperature", settings.interface_temperature },
-        { "support_interface_temperature_drop_tower", settings.tower_enabled },
-        { "support_interface_nozzle_wiping_on_temperature_change", settings.configured_wiper },
-        { "support_interface_brush_repetitions", 2 },
-        { "support_interface_brush_speed", 80.0 },
         { "layer_height", settings.layer_height },
         { "initial_layer_print_height", settings.layer_height },
     });
+    process_params(config, { { "enable", settings.low_temperature_interface_enabled }, { "temperature", settings.interface_temperature },
+                             { "tower", settings.tower_enabled }, { "brush", settings.configured_wiper } });
+    printer_params(config, { { "brush_repetitions", 2 }, { "brush_speed", 80.0 }, { "brush_start_x", 10.0 }, { "brush_start_y", 10.0 },
+                             { "brush_end_x", 20.0 }, { "brush_end_y", 10.0 } });
     config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ settings.nozzle_diameter }));
     config.set_key_value("nozzle_temperature", new ConfigOptionInts({ settings.normal_temperature }));
     config.set_key_value("nozzle_temperature_initial_layer", new ConfigOptionInts({ settings.normal_temperature }));
@@ -298,8 +301,6 @@ DynamicPrintConfig tower_config(const TowerSettings &settings)
     config.set_key_value("printable_area", new ConfigOptionPoints(settings.printable_area));
     config.set_key_value("support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ settings.tower_x }));
     config.set_key_value("support_interface_temperature_drop_tower_y", new ConfigOptionFloats({ settings.tower_y }));
-    config.set_key_value("support_interface_brush_start", new ConfigOptionPoint(Vec2d(10.0, 10.0)));
-    config.set_key_value("support_interface_brush_end", new ConfigOptionPoint(Vec2d(20.0, 10.0)));
     if (!settings.extruder_offsets.empty())
         config.set_key_value("extruder_offset", new ConfigOptionPoints(settings.extruder_offsets));
     return config;
@@ -427,6 +428,7 @@ void check_passes_on_distinct_layers(const TowerMetrics &metrics)
 
 TEST_CASE("Temperature drop tower scales and slows only its final 10 mm", "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     // Arm length in mm for the temperature drop: 80 mm up to 30 degC, then one mm per degree, at most 110.
     const auto [normal_temperature, expected_size] = GENERATE(table<int, double>({ { 200, 80.0 }, { 201, 81.0 }, { 220, 100.0 }, { 260, 110.0 } }));
     DYNAMIC_SECTION("normal " << normal_temperature) {
@@ -475,6 +477,7 @@ TEST_CASE("Temperature drop tower scales and slows only its final 10 mm", "[LowT
 
 TEST_CASE("Temperature drop tower stays inside rear-left bed bounds", "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     // Bed, its x range, the highest tower y and the largest tower size, mm.
     const std::array<std::tuple<std::vector<Vec2d>, double, double, double, double>, 2> beds{ {
         { { Vec2d(0., 0.), Vec2d(200., 0.), Vec2d(200., 70.), Vec2d(0., 70.) }, 0.0, 200.0, 67.0, 64.0 },
@@ -496,6 +499,7 @@ TEST_CASE("Temperature drop tower stays inside rear-left bed bounds", "[LowTempe
 
 TEST_CASE("Temperature drop tower clamps a configured position to the bed", "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     TowerSettings settings;
     settings.tower_x           = 500.0;
     settings.tower_y           = 100.0;
@@ -508,6 +512,7 @@ TEST_CASE("Temperature drop tower clamps a configured position to the bed", "[Lo
 
 TEST_CASE("Temperature drop tower honors every activation guard", "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     std::vector<std::pair<std::string, TowerSettings>> disabled_cases;
     TowerSettings                                      settings;
     settings.tower_enabled = false;
@@ -548,6 +553,7 @@ TEST_CASE("Temperature drop tower honors every activation guard", "[LowTemperatu
 TEST_CASE("Temperature drop tower keeps its brim across a 36-setting slicing matrix",
           "[LowTemperatureInterface][TemperatureDropTower][Matrix]")
 {
+    OfficialMods mods;
     struct NozzleCase {
         double diameter;
         double layer_height;
@@ -596,13 +602,12 @@ TEST_CASE("Temperature drop tower keeps its brim across a 36-setting slicing mat
                     CHECK(brim_end < first_tower_layer);
                     CHECK(count_substring(output, "; temperature drop tower brim begin") == 1);
                     CHECK(count_substring(output, "; temperature drop tower brim end") == 1);
-                    CHECK(count_substring(output, "; temperature drop tower brim line") ==
-                          TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT);
+                    // Five brim loops (line 1).
+                    CHECK(count_substring(output, "; temperature drop tower brim line") == 5);
                     CHECK(count_extruding_moves_between(
                               output,
                               "; temperature drop tower brim begin",
-                              "; temperature drop tower brim end") >=
-                          TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT);
+                              "; temperature drop tower brim end") >= 5);
                     CHECK(std::isfinite(metrics.min_x));
                     CHECK(std::isfinite(metrics.min_y));
                     CHECK(std::isfinite(metrics.max_x));
@@ -625,6 +630,7 @@ TEST_CASE("Temperature drop tower keeps its brim across a 36-setting slicing mat
 TEST_CASE("Temperature drop tower keeps five brim lines across nozzle diameters",
           "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     const std::array<std::pair<double, double>, 3> nozzle_cases {{
         { 0.15, 0.08 },
         { 0.4, 0.2 },
@@ -654,6 +660,7 @@ TEST_CASE("Temperature drop tower keeps five brim lines across nozzle diameters"
 TEST_CASE("Temperature drop tower G-code follows a manual project move exactly",
           "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     TowerSettings before_move;
     before_move.tower_x = 20.0;
     before_move.tower_y = 25.0;
@@ -681,6 +688,7 @@ TEST_CASE("Temperature drop tower G-code follows a manual project move exactly",
 TEST_CASE("Temperature drop tower follows the standard extruder offset transform",
           "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     TowerSettings settings;
     settings.extruder_offsets = { Vec2d(-32.0, 0.0) };
     const TowerMetrics metrics = analyze_tower(
@@ -696,6 +704,7 @@ TEST_CASE("Temperature drop tower follows the standard extruder offset transform
 TEST_CASE("Temperature drop tower keeps its configured position when a model overlaps it",
           "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     TowerSettings settings;
     settings.tower_x = 5.0;
     settings.tower_y = 145.0;
@@ -775,12 +784,11 @@ DynamicPrintConfig sublayer_temperature_config(bool low_temperature_interface, i
     config.set_deserialize_strict({
         { "support_type", "normal(auto)" },
         { "support_interface_top_layers", 4 },
-        { "support_interface_temperature", 200 },
     });
-    // The sublayers are the support extras mod's (support.style slot); its rule writes their temperature into
-    // support_interface_sublayer_temperature while they are on.
+    // The sublayers are the support extras mod's (support.style slot), which also gives their temperature.
     set_mod_params(config, { { "support_extras.sublayer_start", 2 }, { "support_extras.sublayer_end", 3 },
                              { "support_extras.sublayer_temperature", sublayer_temperature_c } });
+    process_params(config, { { "temperature", 200 } });
     return config;
 }
 
@@ -788,8 +796,6 @@ DynamicPrintConfig sublayer_temperature_config(bool low_temperature_interface, i
 
 TEST_CASE("Interface sublayers print at their own temperature and the model at the filament temperature", "[LowTemperatureInterface][Sublayer]")
 {
-    // The official native mods' manifests only: the bundled low_temp_interface rules would reset the
-    // interface settings this test sets directly.
     OfficialMods mods;
     const bool low_temperature_interface = GENERATE(false, true);
     CAPTURE(low_temperature_interface);
@@ -808,8 +814,6 @@ TEST_CASE("Interface sublayers print at their own temperature and the model at t
 
 TEST_CASE("Interface sublayers apply to Cura and to slim and hybrid tree support", "[LowTemperatureInterface][Sublayer][SupportExtras]")
 {
-    // The official native mods' manifests only: the bundled low_temp_interface rules would reset the
-    // interface settings this test sets directly.
     OfficialMods mods;
     // Before: Cura emits no contact layers, so no interface was ever numbered and none became a sublayer;
     // the slim and hybrid tree toolpaths did not know the sublayer at all. Line 1 applied it to every generator.
@@ -831,9 +835,31 @@ TEST_CASE("Interface sublayers apply to Cura and to slim and hybrid tree support
 }
 
 
+TEST_CASE("An object's own interface sublayers print at their temperature", "[LowTemperatureInterface][Sublayer][SupportExtras]")
+{
+    OfficialMods mods;
+    // The sublayers are on for the object only (object-scope support_extras parameters); their temperature is the
+    // process's. Before: the temperature reached the G-code through a rule on the process values, which saw no
+    // sublayers, so the object's sublayers printed at the filament temperature.
+    DynamicPrintConfig config = sublayer_temperature_config(false, 185);
+    set_mod_params(config, { { "support_extras.sublayer_start", 0 }, { "support_extras.sublayer_end", 0 } });
+    Print print;
+    Model model;
+    init_print({ TestMesh::overhang }, print, model, config);
+    model.objects.front()->config.set_key_value("object_mod_settings",
+        new ConfigOptionString(nlohmann::json{ { "support_extras.sublayer_start", 2 }, { "support_extras.sublayer_end", 3 } }.dump()));
+    print.apply(model, config);
+    const TemperatureTrace trace = trace_temperatures(Slic3r::Test::gcode(print), config);
+    CHECK(std::count(trace.targets.begin(), trace.targets.end(), 185) > 0);
+    REQUIRE_FALSE(trace.model_temperatures.empty());
+    for (const int temperature_c : trace.model_temperatures)
+        CHECK(temperature_c == 220);
+}
+
 // MAGPIE: line 1 (Beta 7) temperature drop tower tests for printers with several physical tools.
 TEST_CASE("Tower placement intersects only participating physical tool areas", "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     // Rectangles spanning x = left..right mm and y = 0..200 mm.
     auto rectangle = [](double left, double right) {
         return Polygons{ Polygon{ Points{ Point::new_scale(left, 0.), Point::new_scale(right, 0.), Point::new_scale(right, 200.),
@@ -843,17 +869,18 @@ TEST_CASE("Tower placement intersects only participating physical tool areas", "
     const std::vector<Polygons> areas{ rectangle(0., 150.), rectangle(50., 200.) };
     const double                mm2 = SCALING_FACTOR * SCALING_FACTOR; // scaled area to mm2
     for (const auto &tools : { std::vector<size_t>{ 0, 1 }, std::vector<size_t>{ 1, 0 }, std::vector<size_t>{ 0, 1, 1 } }) {
-        const Polygons common = temperature_drop_tower_common_area(bed, areas, tools);
+        const Polygons common = aux_tower_common_area(bed, areas, tools);
         CHECK(area(common) * mm2 == Catch::Approx(20000.)); // 100 x 200 mm
         CHECK(diff_ex(common, rectangle(50., 150.)).empty());
     }
-    CHECK(temperature_drop_tower_common_area(bed, { rectangle(0., 80.), rectangle(120., 200.) }, { 0, 1 }).empty());
-    CHECK(area(temperature_drop_tower_common_area(bed, areas, { 0 })) * mm2 == Catch::Approx(30000.));
-    CHECK(area(temperature_drop_tower_common_area(bed, {}, { 0, 1 })) * mm2 == Catch::Approx(40000.));
+    CHECK(aux_tower_common_area(bed, { rectangle(0., 80.), rectangle(120., 200.) }, { 0, 1 }).empty());
+    CHECK(area(aux_tower_common_area(bed, areas, { 0 })) * mm2 == Catch::Approx(30000.));
+    CHECK(area(aux_tower_common_area(bed, {}, { 0, 1 })) * mm2 == Catch::Approx(40000.));
 }
 
 TEST_CASE("Temperature drop tower automatic placement respects the mapped extruder area", "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     TowerSettings settings; // automatic placement (tower_x, tower_y = -1)
     const std::vector<std::vector<Vec2d>> extruder_areas{
         settings.printable_area,
@@ -874,46 +901,85 @@ TEST_CASE("Temperature drop tower automatic placement respects the mapped extrud
     CHECK(metrics.max_y < 188.0);
 }
 
+namespace {
+
+mp_flow_v1 core_flow(const Flow &f)
+{
+    mp_flow_v1 out{};
+    out.size       = sizeof(out);
+    out.width      = f.width();
+    out.height     = f.height();
+    out.spacing    = f.spacing();
+    out.nozzle     = f.nozzle_diameter();
+    out.mm3_per_mm = f.mm3_per_mm();
+    return out;
+}
+
+// A writer with only the core's flow service, as the export's writer computes it (GCodeEventHost.cpp).
+const mp_gcode_writer_v1 &core_flow_writer()
+{
+    static const mp_gcode_writer_v1 writer = [] {
+        mp_gcode_writer_v1 w{};
+        w.size              = sizeof(w);
+        w.flow_with_spacing = [](void *, const mp_flow_v1 *in, double spacing_mm, mp_flow_v1 *out) -> int32_t {
+            Flow f(in->width, in->height, in->nozzle);
+            f.set_spacing(in->spacing);
+            try {
+                *out = core_flow(f.with_spacing(float(spacing_mm)));
+            } catch (const std::exception &) {
+                return MP_ERR_ARGUMENT;
+            }
+            return MP_OK;
+        };
+        return w;
+    }();
+    return writer;
+}
+
+} // namespace
+
 TEST_CASE("Multi-nozzle tower fill preserves its fixed physical band", "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     for (double maximum : { 0.4, 0.8, 1.2 })                    // largest nozzle, mm
         for (double nozzle : { 0.15, 0.2, 0.4, 0.6, 0.8, 1.2 })  // mm
             for (double height : { 0.04, 0.08, 0.12, 0.2, 0.28 }) { // mm
                 if (nozzle > maximum || height >= nozzle)
                     continue;
                 CAPTURE(maximum, nozzle, height);
-                const double band = 4. * temperature_drop_tower_multi_pitch(maximum); // mm
-                const Flow   nominal(Flow::auto_extrusion_width(frPerimeter, float(nozzle)), float(height), float(nozzle));
-                const auto   fill = temperature_drop_tower_fill(nominal, band);
+                const double     band    = 4. * 1.125 * maximum; // mm: four automatic perimeter widths of the largest nozzle
+                const mp_flow_v1 nominal = core_flow(Flow(Flow::auto_extrusion_width(frPerimeter, float(nozzle)), float(height), float(nozzle)));
+                const auto       fill    = lti::drop_tower_fill(core_flow_writer(), nominal, band);
                 CHECK(fill.line_count >= 4);
-                CHECK(fill.flow.width() + (fill.line_count - 1) * double(fill.flow.spacing()) == Catch::Approx(band).margin(0.000002));
-                CHECK(fill.flow.mm3_per_mm() > 0.);
-                CHECK(fill.flow.width() > 0.9 * nozzle);
-                CHECK(fill.flow.width() < 1.5 * nozzle);
+                CHECK(fill.flow.width + (fill.line_count - 1) * double(fill.flow.spacing) == Catch::Approx(band).margin(0.000002));
+                CHECK(fill.flow.mm3_per_mm > 0.);
+                CHECK(fill.flow.width > 0.9 * nozzle);
+                CHECK(fill.flow.width < 1.5 * nozzle);
             }
-    const Flow flow(0.45f, 0.2f, 0.4f);
-    CHECK_THROWS(temperature_drop_tower_fill(flow, 0.));
-    CHECK_THROWS(temperature_drop_tower_fill(flow, std::numeric_limits<double>::infinity()));
+    const mp_flow_v1 flow = core_flow(Flow(0.45f, 0.2f, 0.4f));
+    CHECK_THROWS(lti::drop_tower_fill(core_flow_writer(), flow, 0.));
+    CHECK_THROWS(lti::drop_tower_fill(core_flow_writer(), flow, std::numeric_limits<double>::infinity()));
 }
 
 // MAGPIE: per-plate tower positions (project options), ported from line 1's ProjectConfigService tests.
 TEST_CASE("Temperature drop tower follows an instance to an automatic destination plate", "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     DynamicConfig config;
     config.set_key_value("support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ 10.0, -1.0, 70.0 }));
     config.set_key_value("support_interface_temperature_drop_tower_y", new ConfigOptionFloats({ 20.0, -1.0, 80.0 }));
     SECTION("moving the last instance off the source plate moves the manual position") {
-        transfer_temperature_drop_tower_plate(config, 0, 1, 3, true);
+        transfer_aux_tower_plate(config, 0, 1, 3, true);
         CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ -1.0, 10.0, 70.0 });
         CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y")->values == std::vector<double>{ -1.0, 20.0, 80.0 });
     }
     SECTION("a source plate with other instances keeps its position") {
-        transfer_temperature_drop_tower_plate(config, 0, 1, 3, false);
+        transfer_aux_tower_plate(config, 0, 1, 3, false);
         CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ 10.0, 10.0, 70.0 });
         CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y")->values == std::vector<double>{ 20.0, 20.0, 80.0 });
     }
     SECTION("a manual destination position wins") {
-        transfer_temperature_drop_tower_plate(config, 0, 2, 3, true);
+        transfer_aux_tower_plate(config, 0, 2, 3, true);
         CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ -1.0, -1.0, 70.0 });
         CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y")->values == std::vector<double>{ -1.0, -1.0, 80.0 });
     }
@@ -921,57 +987,62 @@ TEST_CASE("Temperature drop tower follows an instance to an automatic destinatio
 
 TEST_CASE("Temperature drop tower plate vectors are normalized together", "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     DynamicConfig config;
     config.set_key_value("support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ 10.0, 20.0 }));
     config.set_key_value("support_interface_temperature_drop_tower_y",
                          new ConfigOptionFloats({ 30.0, std::numeric_limits<double>::quiet_NaN(), 50.0, 60.0 }));
-    CHECK(normalize_temperature_drop_tower_positions(config, 4).size() == 2);
+    CHECK(normalize_aux_tower_positions(config, 4).size() == 2);
     CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ 10.0, 20.0, -1.0, -1.0 });
     CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y")->values == std::vector<double>{ 30.0, -1.0, 50.0, 60.0 });
     DynamicConfig empty;
-    normalize_temperature_drop_tower_positions(empty, 0);
+    normalize_aux_tower_positions(empty, 0);
     CHECK(empty.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ -1.0 });
 }
 
 TEST_CASE("Temperature drop tower positions survive plate deletion by index", "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     DynamicConfig config;
     config.set_key_value("support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ 10.0, 20.0, 30.0 }));
     config.set_key_value("support_interface_temperature_drop_tower_y", new ConfigOptionFloats({ 40.0, 50.0, 60.0 }));
-    erase_temperature_drop_tower_plate(config, 1, 3);
+    erase_aux_tower_plate(config, 1, 3);
     CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ 10.0, 30.0 });
     CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y")->values == std::vector<double>{ 40.0, 60.0 });
 }
 
 TEST_CASE("Temperature drop tower reads are safe for short vectors", "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     const ConfigOptionFloats positions({ 12.5 });
-    CHECK(temperature_drop_tower_position_at(&positions, 0) == 12.5);
-    CHECK(temperature_drop_tower_position_at(&positions, 4) == -1.0);
-    CHECK(temperature_drop_tower_position_at(nullptr, 0) == -1.0);
+    CHECK(aux_tower_position_at(&positions, 0) == 12.5);
+    CHECK(aux_tower_position_at(&positions, 4) == -1.0);
+    CHECK(aux_tower_position_at(nullptr, 0) == -1.0);
 }
 
 TEST_CASE("Temperature drop tower placement clamps into the bed and refuses what does not fit", "[LowTemperatureInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     const BoundingBoxf bed(Vec2d(0., 0.), Vec2d(200., 200.)); // mm
     const double       brim = 2.0;                            // mm
     // Automatic: rear left, 3 mm inside the bed.
-    const auto automatic = place_temperature_drop_tower(bed, -1., -1., 80., brim);
+    const auto automatic = place_aux_tower(bed, -1., -1., 80., brim);
     REQUIRE(automatic);
     CHECK(automatic->origin_x == Catch::Approx(3.0));
     CHECK(automatic->origin_y == Catch::Approx(200. - 3. - (80. + 2. * brim)));
     CHECK(automatic->tower_size == Catch::Approx(80.0));
     // An explicit position past the bed edge is clamped back inside.
-    const auto clamped = place_temperature_drop_tower(bed, 500., 1., 80., brim); // (below zero would mean automatic)
+    const auto clamped = place_aux_tower(bed, 500., 1., 80., brim); // (below zero would mean automatic)
     REQUIRE(clamped);
     CHECK(clamped->origin_x == Catch::Approx(200. - 3. - clamped->footprint_size));
     CHECK(clamped->origin_y == Catch::Approx(3.0));
     // A bed too small for the shortest (8 mm) tower gives nothing.
-    CHECK_FALSE(place_temperature_drop_tower(BoundingBoxf(Vec2d(0., 0.), Vec2d(15., 15.)), -1., -1., 80., brim));
+    CHECK_FALSE(place_aux_tower(BoundingBoxf(Vec2d(0., 0.), Vec2d(15., 15.)), -1., -1., 80., brim));
 }
 
 TEST_CASE("Waiting for the lower interface temperature uses M109 R on Marlin only", "[LowTempInterface]")
 {
+    OfficialMods mods;
     // Marlin's M109 S does not wait while the nozzle cools, so the interface printed hot. Klipper and the
     // other firmwares wait in both directions with their usual command.
     TowerSettings settings;
@@ -991,6 +1062,7 @@ TEST_CASE("Waiting for the lower interface temperature uses M109 R on Marlin onl
 
 TEST_CASE("The temperature drop tower stops at the last support interface", "[LowTempInterface][TemperatureDropTower]")
 {
+    OfficialMods mods;
     // Before: the tower grew on every layer up to the top of the print, which on a tall part with low
     // support added hours. Above the last interface no layer cools down, so no tower layer is needed.
     const std::string output = tower_gcode(TowerSettings{});
@@ -1009,4 +1081,22 @@ TEST_CASE("The temperature drop tower stops at the last support interface", "[Lo
     CHECK(top_z > last_interface_z + 1.);    // the overhang model goes on above its support
     CHECK(last_tower_z <= last_interface_z + EPSILON);
     CHECK(last_tower_z > 0.);
+}
+
+TEST_CASE("The tower preview shows the tower the G-code prints", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    OfficialMods mods;
+    // The 3D scene previews (and drags) the tower the export prints: a drop tower without a configured nozzle brush.
+    // Before: the preview hid the tower whenever brushing was switched on, even with no brush set up (no positions),
+    // while the G-code printed it.
+    const auto [brush_on, brush_set] = GENERATE(table<bool, bool>({ { false, false }, { true, false }, { true, true } }));
+    CAPTURE(brush_on, brush_set);
+    TowerSettings settings;
+    settings.configured_wiper = brush_on;
+    DynamicPrintConfig config = tower_config(settings);
+    if (!brush_set)
+        config.set_key_value("printer_mod_settings", new ConfigOptionString("{}"));
+    const bool printed = slice({ TestMesh::overhang }, config).find("; temperature drop tower layer") != std::string::npos;
+    CHECK(printed == !(brush_on && brush_set));
+    CHECK(ModHost::gcode_events_tower_preview(config).has_value() == printed);
 }

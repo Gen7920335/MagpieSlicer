@@ -2070,7 +2070,7 @@ void generate_support_toolpaths(
                         support_params.keep_narrow_islands);
                     if (! sublayer_extrusions.empty()) {
                         auto *sublayer = new ExtrusionEntityCollection();
-                        sublayer->interface_sublayer = true;
+                        sublayer->interface_temperature = support_params.sublayer_temperature;
                         sublayer->entities = std::move(sublayer_extrusions);
                         layer_ex.extrusions.emplace_back(sublayer);
                     }
@@ -2258,7 +2258,7 @@ void generate_support_toolpaths(
                 // MAGPIE: the modulation takes plain paths, so a marked sublayer collection is modulated on its own.
                 auto is_sublayer = [](const ExtrusionEntity *ee) {
                     const auto *collection = dynamic_cast<const ExtrusionEntityCollection*>(ee);
-                    return collection != nullptr && collection->interface_sublayer;
+                    return collection != nullptr && collection->interface_temperature > 0;
                 };
                 if (std::any_of(extrusions.begin(), extrusions.end(), is_sublayer)) {
                     ExtrusionEntitiesPtr sublayers;

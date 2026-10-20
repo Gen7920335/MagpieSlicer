@@ -1710,11 +1710,6 @@ bool PrintObject::invalidate_state_by_config_options(
         } else if (
         	   opt_key == "support_type"
             || opt_key == "support_generator"
-            // MAGPIE: switching the sublayer temperature on or off regroups the support fills; another
-            // value only changes the G-code (handled below with the other temperatures).
-            || (opt_key == "support_interface_sublayer_temperature" &&
-                (old_config.option(opt_key) == nullptr || new_config.option(opt_key) == nullptr ||
-                 (old_config.option(opt_key)->getInt() > 0) != (new_config.option(opt_key)->getInt() > 0)))
             || opt_key == "support_half_layer_height"
             || opt_key == "support_angle"
             || opt_key == "support_on_build_plate_only"
@@ -1943,16 +1938,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "seam_slope_inner_walls"
             || opt_key == "support_speed"
             || opt_key == "support_interface_speed"
-            || opt_key == "single_nozzle_low_temperature_interface"
-            || opt_key == "support_interface_temperature_drop_tower"
             || opt_key == "support_interface_temperature_drop_tower_x"
             || opt_key == "support_interface_temperature_drop_tower_y"
-            || opt_key == "support_interface_temperature"
-            || opt_key == "support_interface_sublayer_temperature"
-            || opt_key == "support_interface_heating_time"
-            || opt_key == "support_interface_auxiliary_fan_cooling_on_temperature_change"
-            || opt_key == "support_interface_auxiliary_fan_speed"
-            || opt_key == "support_interface_nozzle_wiping_on_temperature_change"
             || opt_key == "overhang_1_4_speed"
             || opt_key == "overhang_2_4_speed"
             || opt_key == "overhang_3_4_speed"

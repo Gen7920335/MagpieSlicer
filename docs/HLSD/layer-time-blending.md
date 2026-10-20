@@ -51,8 +51,8 @@ G-code is written:
 5. The export's own processor runs over the file as written, so statistics, M73 and the preview
    match it.
 
-Orca counts an M109 as no time. While blending runs with the low temperature support interface the
-estimate follows each nozzle's temperature (`layer_time_blend_heat_rate` / `_cool_rate`) and counts
+Orca counts an M109 as no time. While blending runs with a G-code event mod that changes nozzle temperatures within
+layers (the low temperature support interface; gcode.events `MP_GCODE_CHANGES_TEMPERATURE`) the estimate follows each nozzle's temperature (`layer_time_blend_heat_rate` / `_cool_rate`) and counts
 the M109 waits; those layers, and layers with a tool change, are flagged as estimated and reported
 when a wait is next to them.
 

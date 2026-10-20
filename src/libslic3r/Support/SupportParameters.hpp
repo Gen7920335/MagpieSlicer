@@ -178,7 +178,7 @@ struct SupportParameters {
             this->contact_fill_pattern       = *this->style.interface_pattern;
             this->interface_pattern_override = true;
         }
-        this->sublayer_temperature = std::max(0, object_config.support_interface_sublayer_temperature.value);
+        this->sublayer_temperature = this->style.interface_temperature;
 
         this->raft_angle_1st_layer  = 0.f;
         this->raft_angle_base       = 0.f;
@@ -321,8 +321,8 @@ struct SupportParameters {
     int                     tree_wall_loops { -1 };
     bool                    interface_pattern_override { false };
     // Nozzle temperature of the interface sublayers (the interface layers the style restyles) in degC; 0
-    // keeps the filament temperature. When set, the sublayer fills are grouped in a collection marked
-    // interface_sublayer for G-code export.
+    // keeps the filament temperature. When set, the sublayer fills are grouped in a collection carrying it
+    // (ExtrusionEntityCollection::interface_temperature) for G-code export.
     int                     sublayer_temperature { 0 };
     // Whether some interface layer has a pattern and angle of its own (an interface sublayer).
     bool                    sublayer_enabled() const { return style.any_interface_layer(); }

@@ -6,7 +6,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <cstddef>
 #include <algorithm>
-#include "libslic3r/Support/TemperatureDropTower.hpp"
+#include "libslic3r/GCode/AuxiliaryTower.hpp"
 #include "libslic3r/Color.hpp"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/Config.hpp"
@@ -5546,7 +5546,7 @@ void PartPlateList::set_default_wipe_tower_pos_for_plate(int plate_idx, bool ini
     wipe_tower_x->values.resize(m_plate_list.size(), wipe_tower_x->values.front());
     wipe_tower_y->values.resize(m_plate_list.size(), wipe_tower_y->values.front());
     // MAGPIE: one temperature drop tower position per plate, automatic for a new plate.
-    normalize_temperature_drop_tower_positions(proj_cfg, m_plate_list.size());
+    normalize_aux_tower_positions(proj_cfg, m_plate_list.size());
 
     auto printer_structure_opt = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionEnum<PrinterStructure>>("printer_structure");
     // set the default position, the same with print config(left top)
@@ -5949,7 +5949,7 @@ int PartPlateList::delete_plate(int index)
 		if (index < wipe_tower_y->values.size())
 			wipe_tower_y->values.erase(wipe_tower_y->values.begin() + index);
 		// MAGPIE: the temperature drop tower positions follow the plates.
-		erase_temperature_drop_tower_plate(proj_cfg, size_t(index), m_plate_list.size());
+		erase_aux_tower_plate(proj_cfg, size_t(index), m_plate_list.size());
 	}
 
 	int cols = compute_colum_count(m_plate_list.size() - 1);
@@ -6444,9 +6444,9 @@ int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_n
 	{
 		object = m_model->objects[obj_id];
 	}
-	else if ((obj_id >= 1000 && obj_id < 1000 + m_plate_count) || is_temperature_drop_tower_object_id(obj_id, m_plate_count)) {
+	else if ((obj_id >= 1000 && obj_id < 1000 + m_plate_count) || is_aux_tower_object_id(obj_id, m_plate_count)) {
 		//wipe tower updates (MAGPIE: and temperature drop towers, 2000 + plate)
-		PartPlate* plate = m_plate_list[obj_id >= TEMPERATURE_DROP_TOWER_OBJECT_ID_BASE ? temperature_drop_tower_plate_index(obj_id) : obj_id - 1000];
+		PartPlate* plate = m_plate_list[obj_id >= AUX_TOWER_OBJECT_ID_BASE ? aux_tower_plate_index(obj_id) : obj_id - 1000];
 		plate->update_slice_result_valid_state( false );
 		plate->thumbnail_data.reset();
         plate->no_light_thumbnail_data.reset();
@@ -6536,7 +6536,7 @@ int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_n
 			//found a new plate, add it to plate
 			plate->add_instance(obj_id, instance_id, false, &boundingbox);
 			if (m_plater != nullptr && previous_plate_index >= 0 && previous_plate_index != int(i))
-				transfer_temperature_drop_tower_plate(wxGetApp().preset_bundle->project_config, size_t(previous_plate_index), size_t(i),
+				transfer_aux_tower_plate(wxGetApp().preset_bundle->project_config, size_t(previous_plate_index), size_t(i),
 				                                      m_plate_list.size(), previous_plate_became_empty);
 
 			// spiral mode, update object setting

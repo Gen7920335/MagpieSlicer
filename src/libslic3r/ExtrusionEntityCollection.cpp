@@ -36,7 +36,7 @@ ExtrusionEntityCollection& ExtrusionEntityCollection::operator=(const ExtrusionE
     for (size_t i = 0; i < this->entities.size(); ++i)
         this->entities[i] = this->entities[i]->clone();
     this->no_sort       = other.no_sort;
-    this->interface_sublayer = other.interface_sublayer;
+    this->interface_temperature = other.interface_temperature;
     return *this;
 }
 
@@ -44,7 +44,7 @@ void ExtrusionEntityCollection::swap(ExtrusionEntityCollection &c)
 {
     std::swap(this->entities, c.entities);
     std::swap(this->no_sort, c.no_sort);
-    std::swap(this->interface_sublayer, c.interface_sublayer);
+    std::swap(this->interface_temperature, c.interface_temperature);
 }
 
 void ExtrusionEntityCollection::clear()

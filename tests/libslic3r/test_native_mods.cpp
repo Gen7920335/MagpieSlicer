@@ -131,7 +131,7 @@ TEST_CASE("The bundled test mod loads and fills its slot; builds for another API
 
     const NativeMod *mod = result.native->find("magpie_test_mod");
     REQUIRE(mod != nullptr);
-    CHECK(mod->query() == "magpie_test_mod 1.0.0 1 0 fp=precise");
+    CHECK(mod->query() == "magpie_test_mod 1.0.0 1 1 fp=precise");
     CHECK(result.native->find_slot("test.math", "test", 1) != nullptr);
     CHECK(result.native->find_slot("test.math", "test", 2) == nullptr); // no newer interface version
     CHECK(result.native->find_service("magpie_test_mod.echo", 1) != nullptr);

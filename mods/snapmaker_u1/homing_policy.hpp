@@ -1,5 +1,7 @@
-#ifndef slic3r_GCode_SnapmakerHomingPolicy_hpp_
-#define slic3r_GCode_SnapmakerHomingPolicy_hpp_
+#pragma once
+
+// The Snapmaker U1 start G-code policy of Magpie line 1, moved from the core (GCode/SnapmakerHomingPolicy.hpp)
+// unchanged: which printer is a U1, the stock pre-print sequence, and the homing a start G-code needs.
 
 #include <algorithm>
 #include <array>
@@ -7,7 +9,7 @@
 #include <string>
 #include <string_view>
 
-namespace Slic3r {
+namespace u1 {
 
 namespace detail {
 
@@ -264,6 +266,4 @@ inline bool ensure_snapmaker_u1_safe_homing(std::string &gcode)
     return true;
 }
 
-} // namespace Slic3r
-
-#endif
+} // namespace u1

@@ -1770,7 +1770,7 @@ void TreeSupport::generate_toolpaths()
                     const ExtrusionRole role = interface_as_base ? erSupportMaterial : erSupportMaterialInterface;
                     if (use_sublayer && m_support_params.sublayer_temperature > 0) {
                         auto *sublayer = new ExtrusionEntityCollection();
-                        sublayer->interface_sublayer = true;
+                        sublayer->interface_temperature = m_support_params.sublayer_temperature;
                         fill_expolygons_generate_paths(sublayer->entities, areas, filler, fill_params, role, flow);
                         if (sublayer->entities.empty())
                             delete sublayer;

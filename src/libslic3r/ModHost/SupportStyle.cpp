@@ -76,6 +76,14 @@ int wall_loops_of(int32_t loops, const NativeEntry &entry)
     return loops;
 }
 
+int temperature_of(int32_t degc, const NativeEntry &entry)
+{
+    // A nozzle temperature, degC: 0 (the filament's) or a positive number; Print::validate checks its range.
+    if (degc < 0)
+        throw SlicingError(entry.mod->id() + ": the support style returned a negative temperature " + std::to_string(degc));
+    return degc;
+}
+
 } // namespace
 
 SupportStyle support_style(const PrintObject &object, const std::vector<int> &totals)
@@ -115,6 +123,7 @@ SupportStyle support_style(const PrintObject &object, const std::vector<int> &to
         style.interface_pattern = pattern_of(out.interface_pattern, *entry);
         style.normal_wall_loops = wall_loops_of(out.normal_wall_loops, *entry);
         style.tree_wall_loops   = wall_loops_of(out.tree_wall_loops, *entry);
+        style.interface_temperature = temperature_of(out.sublayer_temperature, *entry);
         for (const int total : totals) {
             if (total <= 0 || style.interface_layers.count(total))
                 continue;
@@ -135,6 +144,42 @@ SupportStyle support_style(const PrintObject &object, const std::vector<int> &to
             object.note_native_mod(entry->mod->id());
     }
     return style;
+}
+
+} // namespace ModHost
+} // namespace Slic3r
+
+namespace Slic3r {
+namespace ModHost {
+
+int style_interface_temperature(const DynamicPrintConfig &print_config, const ConfigBase *object_config)
+{
+    std::shared_ptr<const NativeModSet> mods = active_native_mods();
+    if (!mods)
+        return 0;
+    for (const NativeEntry *entry : mods->slots(MP_SUPPORT_STYLE_SLOT)) {
+        if (entry->version < MP_SUPPORT_STYLE_VERSION || entry->table_size < sizeof(mp_support_style_v1))
+            continue;
+        const mp_support_style_v1 &t = table_of(*entry);
+        mp_ctx ctx;
+        ctx.mod           = entry->mod;
+        ctx.print_config  = &print_config;
+        ctx.object_config = object_config;
+        ctx.cancelled     = []() { return false; };
+        mp_support_style_object_v1 out{};
+        out.size = sizeof(out);
+        void *state = nullptr;
+        call(*entry, [&]() { return t.open(entry->user, &ctx, &out, &state); });
+        if (state == nullptr)
+            continue;
+        entry->mod->guarded_call([&]() {
+            t.close(entry->user, state);
+            return int32_t(MP_OK);
+        });
+        // The first implementation that styles these settings, as support_style() would refuse a second one.
+        return temperature_of(out.sublayer_temperature, *entry);
+    }
+    return 0;
 }
 
 } // namespace ModHost

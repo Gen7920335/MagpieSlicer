@@ -1047,7 +1047,7 @@ int GLVolumeCollection::load_wipe_tower_preview(
     return int(volumes.size() - 1);
 }
 
-int GLVolumeCollection::load_temperature_drop_tower_preview(int obj_idx, float pos_x, float pos_y, float size, float arm_width, float brim_width, float height)
+int GLVolumeCollection::load_aux_tower_preview(int obj_idx, float pos_x, float pos_y, float size, float arm_width, float brim_width, float height)
 {
     if (size <= 0.0f || arm_width <= 0.0f)
         return int(this->volumes.size() - 1);

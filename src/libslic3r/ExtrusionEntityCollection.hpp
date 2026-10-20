@@ -38,18 +38,19 @@ public:
 
     ExtrusionEntitiesPtr entities;     // we own these entities
     bool no_sort;
-    // MAGPIE: support interface sublayer fills printed at their own temperature (support_extras mod).
-    bool interface_sublayer { false };
+    // MAGPIE: support interface fills printed at a nozzle temperature of their own (a support style's restyled
+    // interface layers), degC; 0 = the filament's.
+    int interface_temperature { 0 };
     ExtrusionEntityCollection(): no_sort(false) {}
-    ExtrusionEntityCollection(const ExtrusionEntityCollection &other) : no_sort(other.no_sort), interface_sublayer(other.interface_sublayer), is_reverse(other.is_reverse) { this->append(other.entities); }
-    ExtrusionEntityCollection(ExtrusionEntityCollection &&other) : entities(std::move(other.entities)), no_sort(other.no_sort), interface_sublayer(other.interface_sublayer), is_reverse(other.is_reverse) {}
+    ExtrusionEntityCollection(const ExtrusionEntityCollection &other) : no_sort(other.no_sort), interface_temperature(other.interface_temperature), is_reverse(other.is_reverse) { this->append(other.entities); }
+    ExtrusionEntityCollection(ExtrusionEntityCollection &&other) : entities(std::move(other.entities)), no_sort(other.no_sort), interface_temperature(other.interface_temperature), is_reverse(other.is_reverse) {}
     explicit ExtrusionEntityCollection(const ExtrusionPaths &paths);
     ExtrusionEntityCollection& operator=(const ExtrusionEntityCollection &other);
     ExtrusionEntityCollection& operator=(ExtrusionEntityCollection &&other)
     {
         this->entities = std::move(other.entities);
         this->no_sort  = other.no_sort;
-        this->interface_sublayer = other.interface_sublayer;
+        this->interface_temperature = other.interface_temperature;
         is_reverse     = other.is_reverse;
         return *this;
     }

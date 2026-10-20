@@ -37,7 +37,9 @@
 #include <memory>
 #include "FilamentGroupUtils.hpp"
 #include "MultiNozzleUtils.hpp"
+#include "ModHost/GCodeEvents.hpp"
 #include "ModHost/ObjectZOffset.hpp"
+#include "ModHost/SupportStyle.hpp"
 #include "ModHost/WallPlanner.hpp"
 #include <chrono>
 #include <optional>
@@ -190,12 +192,6 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "belt_printer_infinite_y",
         //BBS
         "additional_cooling_fan_speed",
-        "support_interface_cooling_position",
-        "support_interface_brush_start",
-        "support_interface_brush_end",
-        "support_interface_brush_repetitions",
-        "support_interface_brush_speed",
-        "snapmaker_u1_start_guard",
         "layer_time_planner",
         "layer_time_blend_log",
         "layer_time_blend_max_diff",
@@ -2073,6 +2069,9 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
         }
         if (object.has_support() || object.has_raft()) {
             const double support_mm = config.support_half_layer_height.value ? 0.5 * full_mm : full_mm;
+            // An auxiliary tower of a G-code event mod prints full layers with the support filament (line 1's
+            // temperature drop tower).
+            const bool aux_tower = ModHost::gcode_events_tower_requested(object);
             for (const int filament : { config.support_filament.value, config.support_interface_filament.value }) {
                 std::vector<int> candidates;
                 if (filament > 0)
@@ -2089,8 +2088,7 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
                                                           sp.interface_raft_layer_height, sp.contact_raft_layer_height });
                         check(candidate, config, "support_line_width", raft_mm, true);
                     }
-                    // The temperature drop tower prints full layers with the interface filament (line 1).
-                    if (config.single_nozzle_low_temperature_interface.value && config.support_interface_temperature_drop_tower.value)
+                    if (aux_tower)
                         check(candidate, config, "support_line_width", full_mm, first);
                 }
             }
@@ -2417,47 +2415,31 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         }
     }
 
-    // MAGPIE: the low temperature support interface waits on its target with M109, so a typo either stalls on the
-    // firmware cold-extrusion guard or overheats the support filament (Magpie line 1).
-    for (const PrintObject *object : m_objects) {
-        const PrintObjectConfig &oc = object->config();
-        if (!object->has_support_material() || !oc.single_nozzle_low_temperature_interface.value || oc.support_interface_filament.value != 0)
-            continue;
-        // Marlin EXTRUDE_MINTEMP and Klipper min_extrude_temp both default to 170 degC.
-        constexpr int firmware_min_extrude_temperature_c = 170;
-        const int     temperature_c                      = oc.support_interface_temperature.value;
-        if (temperature_c < firmware_min_extrude_temperature_c)
-            return {Slic3r::format(_u8L("Support interface temperature %1% °C is below the firmware cold-extrusion limit of %2% °C."),
-                                   temperature_c, firmware_min_extrude_temperature_c), object, "support_interface_temperature"};
-        const std::vector<unsigned int> support_filaments = oc.support_filament.value > 0 ?
-            std::vector<unsigned int>{ unsigned(oc.support_filament.value - 1) } : object->object_extruders();
-        for (const unsigned int filament : support_filaments) {
-            const int max_temperature_c = m_config.nozzle_temperature_range_high.get_at(filament);
-            if (max_temperature_c > 0 && temperature_c > max_temperature_c)
-                return {Slic3r::format(_u8L("Support interface temperature %1% °C exceeds the maximum nozzle temperature %2% °C of filament %3%."),
-                                       temperature_c, max_temperature_c, filament + 1), object, "support_interface_temperature"};
-        }
-    }
+    // MAGPIE: what G-code event mods find wrong with an object's settings (gcode.events validate), such as a support
+    // interface temperature the firmware will not extrude at.
+    for (const PrintObject *object : m_objects)
+        if (std::optional<std::pair<std::string, std::string>> problem = ModHost::validate_gcode_events(*object))
+            return {problem->first, object, problem->second};
 
-    // MAGPIE: the interface sublayer temperature (support_extras mod, whose rule sets it only while its sublayers are
-    // on), checked like the interface temperature above.
+    // MAGPIE: the nozzle temperature a support style gives restyled interface layers (support.style slot): a typo
+    // stalls on the firmware cold-extrusion guard or overheats the support filament.
     for (const PrintObject *object : m_objects) {
         const PrintObjectConfig &oc = object->config();
-        const int temperature_c = oc.support_interface_sublayer_temperature.value; // degC, 0 = filament temperature
+        const int temperature_c = ModHost::style_interface_temperature(this->full_print_config(), &oc); // degC, 0 = filament temperature
         if (!object->has_support_material() || temperature_c <= 0)
             continue;
         // Marlin EXTRUDE_MINTEMP and Klipper min_extrude_temp both default to 170 degC.
         constexpr int firmware_min_extrude_temperature_c = 170;
         if (temperature_c < firmware_min_extrude_temperature_c)
             return {Slic3r::format(_u8L("Support interface sublayer temperature %1% °C is below the firmware cold-extrusion limit of %2% °C."),
-                                   temperature_c, firmware_min_extrude_temperature_c), object, "support_interface_sublayer_temperature"};
+                                   temperature_c, firmware_min_extrude_temperature_c), object, ""};
         const std::vector<unsigned int> support_filaments = oc.support_filament.value > 0 ?
             std::vector<unsigned int>{ unsigned(oc.support_filament.value - 1) } : object->object_extruders();
         for (const unsigned int filament : support_filaments) {
             const int max_temperature_c = m_config.nozzle_temperature_range_high.get_at(filament);
             if (max_temperature_c > 0 && temperature_c > max_temperature_c)
                 return {Slic3r::format(_u8L("Support interface sublayer temperature %1% °C exceeds the maximum nozzle temperature %2% °C of filament %3%."),
-                                       temperature_c, max_temperature_c, filament + 1), object, "support_interface_sublayer_temperature"};
+                                       temperature_c, max_temperature_c, filament + 1), object, ""};
         }
     }
 

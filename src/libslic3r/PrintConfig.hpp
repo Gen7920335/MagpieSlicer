@@ -1305,15 +1305,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionString,              support_generator))
     // MAGPIE: this object's values of object-scope mod parameters (JSON, see PrintConfig.cpp).
     ((ConfigOptionString,              object_mod_settings))
-    ((ConfigOptionInt,                 support_interface_sublayer_temperature))
-    // MAGPIE: low temperature support interface (resources/mods/low_temp_interface.json).
-    ((ConfigOptionBool,                single_nozzle_low_temperature_interface))
-    ((ConfigOptionInt,                 support_interface_temperature))
-    ((ConfigOptionFloat,               support_interface_heating_time))
-    ((ConfigOptionBool,                support_interface_auxiliary_fan_cooling_on_temperature_change))
-    ((ConfigOptionInt,                 support_interface_auxiliary_fan_speed))
-    ((ConfigOptionBool,                support_interface_nozzle_wiping_on_temperature_change))
-    ((ConfigOptionBool,                support_interface_temperature_drop_tower))
+    // MAGPIE: the stored per-plate position of an auxiliary tower (GCode/AuxiliaryTower.hpp).
     ((ConfigOptionFloats,              support_interface_temperature_drop_tower_x))
     ((ConfigOptionFloats,              support_interface_temperature_drop_tower_y))
     // Direction of the support pattern (in XY plane).`
@@ -1865,13 +1857,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionInt,                 nozzle_hrc))
     ((ConfigOptionBool,                auxiliary_fan))
     // MAGPIE: printer positions for the low temperature support interface's nozzle cooling and brushing.
-    ((ConfigOptionPoint,               support_interface_cooling_position))
-    ((ConfigOptionPoint,               support_interface_brush_start))
-    ((ConfigOptionPoint,               support_interface_brush_end))
-    ((ConfigOptionInt,                 support_interface_brush_repetitions))
-    ((ConfigOptionFloat,               support_interface_brush_speed))
     // MAGPIE: Snapmaker U1 start G-code guard.
-    ((ConfigOptionBool,                snapmaker_u1_start_guard))
     ((ConfigOptionEnum<FanDirection>,  fan_direction))
     ((ConfigOptionBool,                support_air_filtration))
     ((ConfigOptionBool,                support_cooling_filter))

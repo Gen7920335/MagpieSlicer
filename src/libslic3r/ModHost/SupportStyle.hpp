@@ -13,6 +13,8 @@
 
 namespace Slic3r {
 
+class ConfigBase;
+class DynamicPrintConfig;
 class PrintObject;
 
 namespace ModHost {
@@ -29,6 +31,8 @@ struct SupportStyle
     std::optional<InfillPattern> interface_pattern;
     int                          normal_wall_loops = -1; // -1 keeps Orca's walls
     int                          tree_wall_loops   = -1;
+    // Nozzle temperature of the restyled interface layers, degC; 0 keeps the filament's.
+    int                          interface_temperature = 0;
     // Per interface stack size, per layer number - 1 (the contact layer is 1): the restyled layers.
     std::map<int, std::vector<std::optional<InterfaceLayerStyle>>> interface_layers;
 
@@ -41,6 +45,10 @@ struct SupportStyle
 // the stack sizes `totals`. No implementation, or none with anything to change: the default style. Throws
 // SlicingError when two implementations style the object or one fails.
 SupportStyle support_style(const PrintObject &object, const std::vector<int> &totals);
+
+// The nozzle temperature (degC) a support.style implementation gives restyled interface layers for these settings
+// (object_config: an object's, or null for the print's), 0 for none. Nothing is noted as used.
+int style_interface_temperature(const DynamicPrintConfig &print_config, const ConfigBase *object_config);
 
 } // namespace ModHost
 } // namespace Slic3r

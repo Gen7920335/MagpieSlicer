@@ -1,0 +1,16 @@
+{
+    "description": "The overhang model with normal support: the interface prints last at 175 degC, cooled on the temperature drop tower, and the next layer heats back.",
+    "args": [
+        "--load-settings",
+        "presets/machine.json;presets/process.json",
+        "overhang.obj"
+    ],
+    "contains": [
+        "; low-temperature support interface begin",
+        "; low-temperature support interface temperature drop tower cooling pass",
+        "; temperature drop tower brim begin",
+        "; low-temperature support interface end",
+        "M104 S175",
+        "; mods: low_temp_interface 2.0.0"
+    ]
+}

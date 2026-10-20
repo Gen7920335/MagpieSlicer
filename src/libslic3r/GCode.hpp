@@ -31,9 +31,11 @@
 #include "GCode/AdaptivePAProcessor.hpp"
 
 #include "GCode/TimelapsePosPicker.hpp"
+#include "ModHost/GCodeEvents.hpp"
 #include "libslic3r_version.h"
 
 #include <cstddef>
+#include <exception>
 #include <limits>
 #include <cstdio>
 #include <array>
@@ -523,8 +525,6 @@ protected:
         const bool                       last_layer,
         const size_t                     single_object_instance_idx);
 
-    // MAGPIE: LESIC ring labels and inner brim, printed on the first layer (Magpie line 1).
-    std::string emit_lesic_ring_annotations(const Calib_Params &params);
     // Emit the apron bands carried by these layers whose brim filament is extruder_id
     // (0-based).  Called from both the brim-only branch and the ordinary path, since a
     // band's print_z can coincide with another object's layer on a multi-object belt.
@@ -703,20 +703,17 @@ protected:
     std::string     extrude_support(const ExtrusionEntityCollection& support_fills, const ExtrusionRole support_extrusion_role);
     std::string     extrude_support_entities(const ExtrusionEntitiesPtr& support_entities, ExtrusionRole support_extrusion_role,
                                              bool preserve_order);
-    // MAGPIE: low temperature support interface.
-    bool            low_temperature_interface_enabled() const;
-    bool            has_configured_low_temperature_nozzle_wiper() const;
-    bool            temperature_drop_tower_enabled() const;
-    bool            read_temperature_drop_tower_enabled() const;
+    // MAGPIE: G-code event mods (gcode.events slot, ModHost/GCodeEvents.hpp; the writer they get is
+    // GCode/GCodeEventHost.cpp). An event's G-code is returned; without open mods nothing happens.
+    std::string     raise_gcode_event(int32_t kind, int32_t filament = -1);
+    // Whether a mod prints the current object's support after its other extrusions (mixed support by role).
+    bool            support_prints_last();
+    // The highest support layer with interface paths over every object (mm, object frame), found once per export.
     double          top_support_interface_z() const;
-    bool            build_temperature_drop_tower_path(ExtrusionPath &path);
-    bool            build_temperature_drop_tower_brim_paths(std::vector<ExtrusionPath> &paths);
-    std::string     extrude_temperature_drop_tower(const ExtrusionPath &path, bool cooling_transition);
-    // target_temperature in degC; 0 uses support_interface_temperature.
-    std::string     start_low_temperature_interface(int target_temperature = 0);
-    // MAGPIE: interface sublayer temperature (support_extras mod) when the low temperature interface is off.
-    std::string     finish_interface_sublayer_temperature();
-    std::string     finish_low_temperature_interface();
+    // MAGPIE: a support collection's own interface temperature (support style) when no mod owns it.
+    std::string     finish_tagged_temperature();
+    // MAGPIE: where an auxiliary tower goes on this plate (design E17), for the writer's place_tower.
+    void            place_aux_tower(const mp_tower_request_v1 &request, mp_tower_place_v1 &out) const;
 
     // Farthest-point timelapse: find the extrusion point farthest from camera (0,0)
     void compute_farthest_point(const std::vector<LayerToPrint> &layers, int most_used_extruder,
@@ -793,35 +790,25 @@ protected:
     FullPrintConfig                     m_config;
     // MAGPIE: the wall planner nozzle of the loop or multi-path being extruded (wall.plan slot).
     ExtrusionToolHint                   m_wall_tool_hint { ExtrusionToolHint::Auto };
-    // MAGPIE: low temperature support interface. Active from the first interface path until the next non-interface
-    // extrusion, which restores the filament's own temperature.
-    bool                                m_low_temperature_interface_active { false };
-    int                                 m_low_temperature_interface_target { 0 };      // degC
-    unsigned int                        m_low_temperature_interface_filament { unsigned(-1) };
-    int                                 m_low_temperature_interface_normal { 0 };      // degC
-    double                              m_low_temperature_interface_heating_time { 0. }; // s
+    // MAGPIE: the G-code event mods open for this export, and where their G-code goes while one runs: the string
+    // being built at the event, the depth of event calls (extrusions a mod asks for raise no events of their own)
+    // and whether it made free moves (the wipe path is then dropped).
+    std::unique_ptr<ModHost::GCodeEvents> m_gcode_events;
+    std::string                        *m_gcode_event_output { nullptr };
+    int                                 m_gcode_event_depth { 0 };
+    bool                                m_gcode_event_moved { false };
+    // What a writer function could not complete, rethrown once the mod's call returns.
+    std::exception_ptr                  m_gcode_event_error;
     // Depth of extrude_support() calls, so support ironing counts as interface.
     int                                 m_support_extrusion_context_depth { 0 };
     // Set while extrude_support() prints one role of mixed support, so mixed sub-collections are entered.
     bool                                m_support_role_pass { false };
-    // MAGPIE: inside a support collection marked interface_sublayer, and whether the sublayer
-    // temperature is set while the low temperature interface is off.
-    bool                                m_in_interface_sublayer { false };
-    bool                                m_interface_sublayer_temperature_active { false };
-    // MAGPIE: the temperature drop tower, one path per layer in plate coordinates (mm), placed on first use.
-    coordf_t                            m_temperature_drop_tower_last_print_z { -std::numeric_limits<coordf_t>::max() };
-    bool                                m_temperature_drop_tower_path_initialized { false };
-    // Decided once per export: m_config holds the last processed object's settings, so asking it on
-    // every layer could switch the tower off and on between layers.
-    mutable std::optional<bool>         m_temperature_drop_tower_enabled;
+    // MAGPIE: the interface temperature of the support collection being printed (degC, 0 = none), and whether
+    // the core set it (no event mod owning the support's temperatures).
+    int                                 m_path_temperature_tag { 0 };
+    bool                                m_tagged_temperature_active { false };
     // The highest support layer with interface paths (mm, object frame), found once per export.
     mutable std::optional<double>       m_top_support_interface_z;
-    bool                                m_temperature_drop_tower_brim_printed { false };
-    std::vector<Vec2d>                  m_temperature_drop_tower_plate_path;
-    double                              m_temperature_drop_tower_left { 0.0 };    // mm
-    double                              m_temperature_drop_tower_rear { 0.0 };    // mm
-    double                              m_temperature_drop_tower_size { 0.0 };    // mm
-    double                              m_temperature_drop_tower_spacing { 0.0 }; // mm
     DynamicConfig                       m_calib_config;
     // scaled G-code resolution
     double                              m_scaled_resolution;
@@ -1145,6 +1132,8 @@ protected:
     friend class PressureEqualizer;
     friend class Print;
     friend class SmallAreaInfillFlowCompensator;
+    friend struct GCodeEventHost;
+    friend struct GCodeEventWriter;
 };
 
 std::vector<const PrintInstance*> sort_object_instances_by_model_order(const Print& print, bool init_order = false);

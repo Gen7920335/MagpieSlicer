@@ -2347,15 +2347,17 @@ TEST_CASE("Half-layer dispatcher retains auxiliary and sequential workflows", "[
         CHECK(output.find("printing object") != std::string::npos);
     }
     SECTION("low-temperature support interface") {
+        // The low temperature interface is a native mod (mods/low_temp_interface): its parameters are read while the
+        // official mods' manifests are the active set.
+        Slic3r::Test::OfficialMods mods;
         auto config = DynamicPrintConfig::full_print_config();
         config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
             {"support_half_layer_height", true}, {"enable_support", true}, {"support_threshold_angle", 60},
             {"support_interface_top_layers", 2}, {"support_interface_filament", 0},
-            {"single_nozzle_low_temperature_interface", true}, {"support_interface_temperature", 170},
-            {"support_interface_heating_time", 0.0}, {"support_interface_temperature_drop_tower", false},
-            {"support_interface_auxiliary_fan_cooling_on_temperature_change", false},
-            {"support_interface_nozzle_wiping_on_temperature_change", false},
             {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+        Slic3r::Test::set_mod_params(config, {{"low_temp_interface.enable", true}, {"low_temp_interface.temperature", 170},
+            {"low_temp_interface.heating_time", 0.0}, {"low_temp_interface.tower", false}, {"low_temp_interface.aux_fan", false},
+            {"low_temp_interface.brush", false}});
         config.set_key_value("nozzle_temperature", new ConfigOptionInts({220}));
         config.set_key_value("nozzle_temperature_initial_layer", new ConfigOptionInts({220}));
         Print print;

@@ -95,6 +95,8 @@ function(magpie_use_official_mods TARGET)
         add_dependencies(${TARGET} ${MAGPIE_OFFICIAL_MOD_TARGETS})
     endif ()
     target_compile_definitions(${TARGET} PRIVATE MAGPIE_OFFICIAL_MODS_DIR=R"\(${MAGPIE_OFFICIAL_MODS_DIR}\)")
+    # The SDK's C headers, for tests that call a mod's header-only helpers with the core's own services.
+    target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR}/mods/sdk/include)
 endfunction()
 
 add_subdirectory(libnest2d)

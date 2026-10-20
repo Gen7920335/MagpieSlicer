@@ -1,0 +1,14 @@
+{
+    "description": "A U1 whose start G-code moves before homing and lacks the stock pre-print sequence: the guard (on by default) prints the stock sequence instead and says so. (The configured start G-code still appears in the settings at the end of the file.)",
+    "args": [
+        "--load-settings",
+        "presets/machine.json",
+        "20mm_cube.obj"
+    ],
+    "contains": [
+        "; Magpie: the start G-code lacked the Snapmaker U1 pre-print sequence; the stock U1 start G-code replaced it",
+        "BED_MESH_CALIBRATE",
+        "G28 Z I140 J140",
+        "; mods: snapmaker_u1 2.0.0"
+    ]
+}

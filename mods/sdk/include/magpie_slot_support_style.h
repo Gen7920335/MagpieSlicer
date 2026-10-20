@@ -40,6 +40,10 @@ typedef struct mp_support_style_object_v1 {
     int32_t normal_wall_loops;
     /* Walls around each tree branch as far as it has room, 0-10; -1 keeps Orca's. */
     int32_t tree_wall_loops;
+    /* Appended in API 1.1 (write it only when size covers it): the nozzle temperature of the restyled
+     * interface layers, degC; 0 keeps the filament's. The core groups those layers' paths and prints them
+     * at it (a gcode.events mod may take that over, magpie_slot_gcode_events.h). */
+    int32_t sublayer_temperature;
 } mp_support_style_object_v1;
 
 typedef struct mp_support_interface_style_v1 {

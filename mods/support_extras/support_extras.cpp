@@ -2,20 +2,20 @@
 // sublayers (interface layers counted from the contact printed with their own pattern and angle) and separate
 // wall counts for normal and tree support, for every support generator. Ported from Magpie line 1, then from the
 // core's settings onto the support.style slot: this mod answers how an object's support is styled, the core's
-// support toolpaths print it. The sublayer temperature stays a rule on a core setting (mod.json). Built with
-// the SDK only.
+// support toolpaths print it, the sublayers at their own temperature when one is set. Built with the SDK only.
 
 #include <magpie_mod.hpp>
 #include <magpie_slot_support_style.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 
 #define EXTRAS_MOD_ID "support_extras"
 
-MAGPIE_MOD_DEFINE(EXTRAS_MOD_ID, "2.0.0")
+MAGPIE_MOD_DEFINE(EXTRAS_MOD_ID, "2.1.0")
 
 namespace extras {
 
@@ -29,6 +29,7 @@ struct State
     double  sublayer_angle    = 0.; // degrees
     int     normal_wall_loops = -1;
     int     tree_wall_loops   = -1;
+    int     sublayer_temperature = 0; // degC, 0 = the filament's
 };
 
 // "triangles", "grid", "rectilinear", "concentric"; anything else keeps the core's pattern.
@@ -74,6 +75,8 @@ mp_status open(void *, mp_ctx *ctx, mp_support_style_object_v1 *out, void **stat
             s->normal_wall_loops = wall_loops(*v);
         if (auto v = magpie::param_i64(ctx, "tree_wall_loops"))
             s->tree_wall_loops = wall_loops(*v);
+        if (auto v = magpie::param_i64(ctx, "sublayer_temperature"))
+            s->sublayer_temperature = int(std::clamp<int64_t>(*v, 0, INT32_MAX));
         // Nothing set: Orca's support, and the mod is not used for this object.
         if (s->interface_pattern == MP_SUPPORT_PATTERN_KEEP && s->sublayer_start == 0 && s->normal_wall_loops == -1 &&
             s->tree_wall_loops == -1)
@@ -81,6 +84,9 @@ mp_status open(void *, mp_ctx *ctx, mp_support_style_object_v1 *out, void **stat
         out->interface_pattern = s->interface_pattern;
         out->normal_wall_loops = s->normal_wall_loops;
         out->tree_wall_loops   = s->tree_wall_loops;
+        // The sublayers' own temperature, while they are on (a field of API 1.1: only when the core's struct has it).
+        if (out->size >= offsetof(mp_support_style_object_v1, sublayer_temperature) + sizeof(out->sublayer_temperature))
+            out->sublayer_temperature = s->sublayer_start > 0 ? s->sublayer_temperature : 0;
         *state                 = s.release();
     });
 }

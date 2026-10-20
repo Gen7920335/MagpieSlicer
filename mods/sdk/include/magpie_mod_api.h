@@ -29,7 +29,7 @@
 #include <stdint.h>
 
 #define MAGPIE_MOD_API_MAJOR 1
-#define MAGPIE_MOD_API_MINOR 0
+#define MAGPIE_MOD_API_MINOR 1
 
 #if defined(_WIN32)
 #define MAGPIE_EXPORT __declspec(dllexport)
@@ -97,7 +97,8 @@ typedef struct MagpieHostApi {
 
     /* Read a slicer setting by its key. index picks an element of a list setting (per filament or per
      * extruder), -1 for a single value. The value is the context's region or object setting when the
-     * context has one. A percentage reads as its number from config_f64 and as "50%" from config_str. */
+     * context has one. A percentage reads as its number from config_f64 and as "50%" from config_str; a text
+     * setting reads as it is (line breaks and quotes included), any other in its file form. */
     int (*config_f64)(mp_ctx *ctx, const char *key, int32_t index, double *out);
     int (*config_str)(mp_ctx *ctx, const char *key, int32_t index, char *buf, uint32_t cap);
 

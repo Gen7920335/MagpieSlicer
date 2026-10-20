@@ -287,8 +287,14 @@ int host_config_str(mp_ctx *ctx, const char *key, int32_t index, char *buf, uint
     const ConfigOption *opt = context_option(ctx, key);
     if (opt == nullptr)
         return MP_ERR_NOT_FOUND;
-    if (!opt->is_vector())
-        return index == -1 ? copy_string(opt->serialize(), buf, cap) : MP_ERR_ARGUMENT;
+    if (!opt->is_vector()) {
+        if (index != -1)
+            return MP_ERR_ARGUMENT;
+        // A text setting as it is (a start G-code with its line breaks), not in its escaped file form.
+        if (const auto *text = dynamic_cast<const ConfigOptionString *>(opt))
+            return copy_string(text->value, buf, cap);
+        return copy_string(opt->serialize(), buf, cap);
+    }
     const std::vector<std::string> items = static_cast<const ConfigOptionVectorBase *>(opt)->vserialize();
     if (index < 0 || size_t(index) >= items.size())
         return MP_ERR_ARGUMENT;

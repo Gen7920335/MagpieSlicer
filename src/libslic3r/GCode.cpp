@@ -13,9 +13,9 @@
 #include "LineWidths.hpp"
 #include "GCode/ThumbnailData.hpp"
 #include "GCode/ToolOrdering.hpp"
-#include "GCode/SnapmakerHomingPolicy.hpp"
-#include "GCode/LesicAnnotations.hpp"
-#include "Support/TemperatureDropTower.hpp"
+#include "GCode/AuxiliaryTower.hpp"
+#include "GCode/GCodeEventHost.hpp"
+#include "ModHost/GCodeEvents.hpp"
 #include "GCode/SpiralVase.hpp"
 #include "GCode/PressureEqualizer.hpp"
 #include "GCode/SmallAreaInfillFlowCompensator.hpp"
@@ -3322,13 +3322,12 @@ namespace DoExport {
 }
 
 // MAGPIE: layer time blending.
-// The estimate counts temperature waits while layer times are blended around the low temperature support
-// interface, where those waits vary between layers. Elsewhere it stays Orca's.
-static bool layer_time_blend_estimates_temperature_waits(const Print &print)
+// The estimate counts temperature waits while layer times are blended around a G-code event mod that changes
+// nozzle temperatures within layers (gcode.events, MP_GCODE_CHANGES_TEMPERATURE), where those waits vary between
+// layers. Elsewhere it stays Orca's.
+static bool layer_time_blend_estimates_temperature_waits(const Print &print, const ModHost::GCodeEvents *events)
 {
-    return !print.config().layer_time_planner.value.empty() &&
-           std::any_of(print.objects().begin(), print.objects().end(),
-                       [](const PrintObject *object) { return object->config().single_nozzle_low_temperature_interface.value; });
+    return !print.config().layer_time_planner.value.empty() && events != nullptr && events->changes_temperature();
 }
 
 namespace LayerTimeBlendExport {
@@ -3487,9 +3486,9 @@ static double rest_to_rest_time(double distance, double speed, double accel)
 
 bool GCode::layer_time_tower_visited(const Print &print, coordf_t print_z) const
 {
-    // The temperature drop tower is printed on every layer up to the last support interface (process_layer,
-    // start_low_temperature_interface); the prime tower on every layer up to its height.
-    if (this->temperature_drop_tower_enabled() && print_z <= this->top_support_interface_z() + EPSILON)
+    // An auxiliary tower of a G-code event mod (gcode.events tower_on_layer); the prime tower on every layer up to
+    // its height.
+    if (m_gcode_events && !m_gcode_events->empty() && m_gcode_events->tower_on_layer(print_z))
         return true;
     return m_wipe_tower && print.has_wipe_tower() && print_z <= double(print.wipe_tower_data().height) + EPSILON;
 }
@@ -3526,6 +3525,9 @@ std::optional<Vec2d> GCode::layer_time_park_position(const Print &print, coordf_
     return position;
 }
 
+// Brim loops around the layer time tower (as many as the cooling tower of the low temperature interface had).
+static constexpr int LAYER_TIME_TOWER_BRIM_LINES = 5;
+
 bool GCode::place_layer_time_tower(const Print &print)
 {
     m_layer_time_tower_placed = true; // tried once; m_layer_time_tower_side stays 0 when it does not fit
@@ -3540,7 +3542,7 @@ bool GCode::place_layer_time_tower(const Print &print)
     }
     const double nozzle  = m_config.nozzle_diameter.get_at(this->cur_extruder_index()); // mm
     const double spacing = Flow(Flow::auto_extrusion_width(frPerimeter, float(nozzle)), float(nozzle * 0.5), float(nozzle)).spacing();
-    const double brim    = TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT * spacing; // mm
+    const double brim    = LAYER_TIME_TOWER_BRIM_LINES * spacing;           // mm
     const double side    = m_config.layer_time_blend_tower_size.value;       // mm
     const double foot    = side + 2. * brim;                                 // mm
 
@@ -3575,8 +3577,8 @@ bool GCode::place_layer_time_tower(const Print &print)
         for (const Vec2d &corner : { box.min, box.max, Vec2d(box.min.x(), box.max.y()), Vec2d(box.max.x(), box.min.y()) })
             if (!bed_polygon.contains(Point::new_scale(corner.x(), corner.y())))
                 return false;
-        if (box.min.x() < bed.min.x() + TEMPERATURE_DROP_TOWER_BED_MARGIN || box.min.y() < bed.min.y() + TEMPERATURE_DROP_TOWER_BED_MARGIN ||
-            box.max.x() > bed.max.x() - TEMPERATURE_DROP_TOWER_BED_MARGIN || box.max.y() > bed.max.y() - TEMPERATURE_DROP_TOWER_BED_MARGIN)
+        if (box.min.x() < bed.min.x() + AUX_TOWER_BED_MARGIN || box.min.y() < bed.min.y() + AUX_TOWER_BED_MARGIN ||
+            box.max.x() > bed.max.x() - AUX_TOWER_BED_MARGIN || box.max.y() > bed.max.y() - AUX_TOWER_BED_MARGIN)
             return false;
         return std::none_of(keep_out.begin(), keep_out.end(), [&box](const BoundingBoxf &k) {
             return box.min.x() < k.max.x() && k.min.x() < box.max.x() && box.min.y() < k.max.y() && k.min.y() < box.max.y();
@@ -3584,12 +3586,12 @@ bool GCode::place_layer_time_tower(const Print &print)
     };
 
     const size_t plate        = size_t(std::max(0, print.get_plate_index()));
-    const double configured_x = temperature_drop_tower_position_at(&m_config.layer_time_blend_tower_x, plate);
-    const double configured_y = temperature_drop_tower_position_at(&m_config.layer_time_blend_tower_y, plate);
+    const double configured_x = aux_tower_position_at(&m_config.layer_time_blend_tower_x, plate);
+    const double configured_y = aux_tower_position_at(&m_config.layer_time_blend_tower_y, plate);
     std::optional<Vec2d> origin;
     if (configured_x >= 0. && configured_y >= 0.) {
         // A position the user chose is kept as given, only clamped onto the bed.
-        if (std::optional<TemperatureDropTowerPlacement> placement = place_temperature_drop_tower(bed, configured_x, configured_y, side, brim);
+        if (std::optional<AuxTowerPlacement> placement = Slic3r::place_aux_tower(bed, configured_x, configured_y, side, brim);
             placement && placement->tower_size >= side - EPSILON)
             origin = Vec2d(placement->origin_x, placement->origin_y);
     } else if (objects.defined) {
@@ -3643,7 +3645,7 @@ std::string GCode::extrude_layer_time_tower(coordf_t print_z)
     const double bottom  = m_layer_time_tower_origin.y() + m_layer_time_tower_brim;
     std::string  gcode;
     if (!m_layer_time_tower_brim_done) {
-        for (int line = TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT; line >= 1; --line) {
+        for (int line = LAYER_TIME_TOWER_BRIM_LINES; line >= 1; --line) {
             const double offset = line * double(flow.spacing()) - half; // mm, outward from the tower's outline
             gcode += this->_extrude(square(left - offset, bottom - offset, m_layer_time_tower_side + 2. * offset), "layer time tower brim", tower_speed);
         }
@@ -3743,7 +3745,7 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
         DoExport::init_gcode_processor(print.config(), processor, silent, print.get_layered_nozzle_group_result());
         processor.set_print(&print);
         processor.set_xy_offset(offset.x(), offset.y());
-        processor.set_temperature_wait_estimate(layer_time_blend_estimates_temperature_waits(print));
+        processor.set_temperature_wait_estimate(layer_time_blend_estimates_temperature_waits(print, m_gcode_events.get()));
         processor.initialize(path);
     };
     const std::function<void()> throw_if_canceled = [&print]() { print.throw_if_canceled(); };
@@ -4064,7 +4066,12 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     DoExport::init_gcode_processor(print.config(), m_processor, m_silent_time_estimator_enabled,
                                    print.get_layered_nozzle_group_result());
     set_mass_locator(m_processor, print);
-    m_processor.set_temperature_wait_estimate(layer_time_blend_estimates_temperature_waits(print));
+    // MAGPIE: the G-code event mods of this export (gcode.events slot), open before anything is written.
+    m_gcode_events.reset();
+    m_gcode_event_error = nullptr;
+    m_gcode_events = std::make_unique<ModHost::GCodeEvents>(print, m_config, GCodeEventHost::writer_table(), this,
+                                                           ModHost::calibration_name(print), [this]() { GCodeEventHost::rethrow_pending(*this); });
+    m_processor.set_temperature_wait_estimate(layer_time_blend_estimates_temperature_waits(print, m_gcode_events.get()));
     const bool is_bbl_printers = print.is_BBL_printer();
     const bool skip_config_block = print.config().gcode_skip_config_block;
     const WipeTowerType wipe_tower_type = print.wipe_tower_type();
@@ -4924,6 +4931,10 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     }
     if (const std::string accelerator = Accel::session_mod(); !accelerator.empty())
         m_native_mods_used.insert(accelerator);
+    // The G-code event mods that affect this export (open flag MP_GCODE_USED or mark_used so far).
+    if (m_gcode_events)
+        for (const std::string &id : m_gcode_events->used())
+            m_native_mods_used.insert(id);
     const std::string native_mods = ModHost::native_mod_summary(m_native_mods_used);
     if (has_BTT_thumbnail && !native_mods.empty())
         file.write_format("; mods: %s\n", native_mods.c_str());
@@ -5073,29 +5084,16 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         file.write(m_writer.set_additional_fan(0));
     }
 
-    // MAGPIE: on a Snapmaker U1 the guard puts back the stock pre-print sequence when the start G-code
-    // lacks it, and homes after PRINT_START when the start G-code would move unhomed (Magpie line 1).
-    const bool u1_start_guard = print.config().snapmaker_u1_start_guard.value &&
-                                is_snapmaker_u1_model(print.config().printer_model.value);
-    const bool u1_start_replaced = u1_start_guard && !snapmaker_u1_has_native_start(print.config().machine_start_gcode.value);
-    const std::string machine_start_template = u1_start_guard ?
-        snapmaker_u1_start_gcode_template(print.config().machine_start_gcode.value) : print.config().machine_start_gcode.value;
+    // MAGPIE: G-code event mods may filter the start G-code, before and after its placeholders are filled in
+    // (gcode.events start_gcode, official mods only). They say so: a slicing warning, and a comment line where the
+    // start G-code begins (audit decision C).
+    std::vector<std::string> start_gcode_notes;
+    std::string machine_start_template = print.config().machine_start_gcode.value;
+    if (m_gcode_events && m_gcode_events->wants_start_gcode())
+        m_gcode_events->start_gcode(MP_START_TEMPLATE, machine_start_template, start_gcode_notes);
     std::string machine_start_gcode = this->placeholder_parser_process("machine_start_gcode", machine_start_template, initial_extruder_id);
-    const bool u1_homing_added = u1_start_guard && !snapmaker_u1_has_native_start(machine_start_gcode) &&
-                                 ensure_snapmaker_u1_safe_homing(machine_start_gcode);
-    // MAGPIE: audit decision C. The guard never edits the user's start G-code in silence: a slicing
-    // warning, and a comment in the G-code where the start G-code begins.
-    std::string u1_guard_note;
-    if (u1_start_replaced) {
-        u1_guard_note = "; Magpie: the start G-code lacked the Snapmaker U1 pre-print sequence; the stock U1 start G-code replaced it\n";
-        print.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL,
-            _u8L("The start G-code lacks the Snapmaker U1 pre-print sequence, so the stock U1 start G-code was used instead. "
-                 "Turn off the Snapmaker U1 start guard on the printer's Mods page to keep your own."));
-    } else if (u1_homing_added) {
-        u1_guard_note = "; Magpie: the start G-code moved before homing; a G28 was added after PRINT_START\n";
-        print.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL,
-            _u8L("The start G-code moves the Snapmaker U1 before homing, so a G28 was added after PRINT_START."));
-    }
+    if (m_gcode_events && m_gcode_events->wants_start_gcode())
+        m_gcode_events->start_gcode(MP_START_PROCESSED, machine_start_gcode, start_gcode_notes);
     if (print.config().gcode_flavor != gcfKlipper) {
         // Set bed temperature if the start G-code does not contain any bed temp control G-codes.
         this->_print_first_layer_bed_temperature(file, print, machine_start_gcode, initial_extruder_id, true);
@@ -5118,8 +5116,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         file.writeln(imex_processed_gcode);
 
     // Write the custom start G-code
-    if (!u1_guard_note.empty())
-        file.write(u1_guard_note);
+    for (const std::string &note : start_gcode_notes)
+        file.write(note);
     file.writeln(machine_start_gcode);
     // Mark the end of the machine start g-code so the GCodeProcessor usage-block builder knows where user
     // g-code ends and can start attributing filament/extruder usage. Gated on enable_pre_heating: only the
@@ -7653,72 +7651,6 @@ std::string GCode::generate_timelapse_gcode(const Print &print, coordf_t print_z
     return timelapse_gcode;
 }
 
-// MAGPIE: LESIC ring labels and inner brim (Magpie line 1).
-std::string GCode::emit_lesic_ring_annotations(const Calib_Params &params)
-{
-    if (params.lesic_circle_diameter <= 0.0 || params.mvs_end <= params.mvs_start || m_writer.filament() == nullptr)
-        return {};
-
-    const unsigned int filament_id = m_writer.filament()->id();
-    const double filament_diameter = m_config.filament_diameter.get_at(filament_id);
-    const double filament_area = M_PI * sqr(filament_diameter * 0.5);
-    if (filament_area <= EPSILON)
-        return {};
-
-    const double layer_height = params.lesic_layer_height > 0.0 ? params.lesic_layer_height : std::max(0.05, double(m_last_height));
-    const double flow_scale = layer_height * m_config.print_flow_ratio / filament_area;
-    std::vector<LesicAnnotationSegment> segments = lesic_bottom_label_segments(params, m_config, filament_id);
-    const std::vector<LesicAnnotationSegment> ring_segments = lesic_ring_annotation_segments(params);
-    segments.insert(segments.end(), ring_segments.begin(), ring_segments.end());
-    const size_t label_and_ring_segment_count = segments.size();
-    const std::vector<LesicAnnotationSegment> inner_brim_segments = lesic_inner_brim_segments(params, segments);
-    segments.insert(segments.end(), inner_brim_segments.begin(), inner_brim_segments.end());
-    if (segments.empty() || flow_scale <= EPSILON)
-        return {};
-
-    std::ostringstream gcode;
-    gcode << "\n; ---------- LESIC labels and ring annotations ----------\n";
-    const std::vector<std::string> label_lines = lesic_label_lines(params, m_config, filament_id);
-    gcode << "; lesic_bottom_label_lines=";
-    for (size_t i = 0; i < label_lines.size(); ++i) {
-        if (i > 0)
-            gcode << " | ";
-        gcode << label_lines[i];
-    }
-    gcode << "\n";
-    gcode << "; lesic_ring_mvs_values=";
-    const std::vector<double> label_values = lesic_ring_label_values(params.mvs_start, params.mvs_end);
-    for (size_t i = 0; i < label_values.size(); ++i) {
-        if (i > 0)
-            gcode << ",";
-        gcode << lesic_format_label_value(label_values[i]);
-    }
-    gcode << "\n";
-    gcode << "; lesic_bottom_label_height=" << lesic_format_label_value(lesic_bottom_label_height(params, label_lines)) << "\n";
-    gcode << "; lesic_bottom_label_stroke_width=" << lesic_format_label_value(lesic_bottom_label_stroke_width(params)) << "\n";
-    gcode << "; lesic_annotation_segments=" << segments.size() << "\n";
-    gcode << "; lesic_label_and_ring_segments=" << label_and_ring_segment_count << "\n";
-    gcode << "; lesic_inner_brim_lines=" << LESIC_INNER_BRIM_LINES << "\n";
-    gcode << "; lesic_inner_brim_segments=" << inner_brim_segments.size() << "\n";
-    gcode << m_writer.set_speed(20.0 * 60.0, "LESIC annotation speed");
-    this->set_origin(0., 0.);
-
-    for (const LesicAnnotationSegment &segment : segments) {
-        const double length = (segment.b - segment.a).norm();
-        if (length <= EPSILON)
-            continue;
-
-        gcode << m_writer.travel_to_xy(segment.a, "LESIC annotation travel");
-        this->set_last_pos(this->gcode_to_point(segment.a));
-        gcode << m_writer.extrude_to_xy(segment.b, flow_scale * segment.width * length, "LESIC annotation");
-        this->set_last_pos(this->gcode_to_point(segment.b));
-    }
-
-    gcode << "; ---------- end LESIC labels and ring annotations ----------\n\n";
-    m_wipe.reset_path();
-    return gcode.str();
-}
-
 // In sequential mode, process_layer is called once per each object and its copy,
 // therefore layers will contain a single entry and single_object_instance_idx will point to the copy of the object.
 // In non-sequential mode, process_layer is called per each print_z height with all object and support layers accumulated.
@@ -8004,17 +7936,6 @@ LayerResult GCode::process_layer(
             m_calib_config.set_key_value("outer_wall_speed", new ConfigOptionFloatsNullable({std::round(_speed)}));
             break;
         }
-        case CalibMode::Calib_LESIC: {
-            // MAGPIE: LESIC ring (Magpie line 1): one temperature per band of layers_per_temp layers.
-            const Calib_Params &params = print.calib_params();
-            const int layers_per_temp = std::max(1, params.lesic_layers_per_temp);
-            const int temp_band = std::max(0, m_layer_index) / layers_per_temp;
-            const double temp = lesic_temperature_for_band(params.start, params.end, params.step, temp_band);
-            gcode += writer().set_temperature(static_cast<unsigned int>(std::lround(temp)));
-            sprintf(buf, "; LESIC: TEMP:%g BAND:%d MVS:%g-%g\n", temp, temp_band, params.mvs_start, params.mvs_end);
-            gcode += buf;
-            break;
-        }
         case CalibMode::Calib_Retraction_tower: {
             auto _length = print.calib_params().start + std::floor(std::max(0.0,calib_z-0.4)) * print.calib_params().step;
             DynamicConfig _cfg;
@@ -8065,6 +7986,8 @@ LayerResult GCode::process_layer(
             break;
         }
     }
+    // MAGPIE: G-code event mods set the layer's values here as the calibrations above do (gcode.events).
+    gcode += this->raise_gcode_event(MP_GCODE_EV_LAYER_BEGIN);
 
     //BBS
     if (first_layer) {
@@ -8889,12 +8812,9 @@ LayerResult GCode::process_layer(
             const bool visit_changes_tool = m_writer.need_toolchange(visit.tool.filament);
             const double visit_source_nominal_z = m_writer.get_position().z() - m_writer.get_zhop();
 
-            // A low-temperature interval belongs to the material/configuration
-            // that opened it. Restore that saved target before a tool/material
-            // visit changes writer or object context.
-            if (m_low_temperature_interface_active &&
-                (m_writer.filament() == nullptr || m_writer.filament()->id() != visit.tool.filament))
-                gcode += this->finish_low_temperature_interface();
+            // MAGPIE: a temperature a G-code event mod set belongs to the material and settings it was set
+            // for: the mod ends it before a visit changes the tool or the object (gcode.events TOOL_AHEAD).
+            gcode += this->raise_gcode_event(MP_GCODE_EV_TOOL_AHEAD, int32_t(visit.tool.filament));
 
             close_object_label();
             set_logical_auxiliary_context(*visit_task);
@@ -9026,7 +8946,7 @@ LayerResult GCode::process_layer(
             }
         }
         close_object_label();
-        gcode += this->finish_low_temperature_interface();
+        gcode += this->raise_gcode_event(MP_GCODE_EV_OBJECTS_END);
     } else for (unsigned int extruder_id : layer_tools.extruders)
     {
         if (print.config().skirt_type == stCombined && !print.skirt_brim_groups().empty()) {
@@ -9234,9 +9154,9 @@ LayerResult GCode::process_layer(
                 m_last_obj_copy = this_object_copy;
                 this->set_origin(unscale(offset));
                 this->on_set_origin(&instance_to_print.print_object, offset);
-                // MAGPIE: with a low temperature support interface the support prints after the object, so the
-                // interface is the last extrusion of the object on this layer and the temperature drops once.
-                const bool defer_support_for_low_temperature_interface = this->low_temperature_interface_enabled();
+                // MAGPIE: a G-code event mod may print the support after the object (gcode.events support_last), so
+                // the interface is the object's last extrusion on this layer and a temperature it sets changes once.
+                const bool support_last = this->support_prints_last();
                 auto extrude_instance_support = [&]() {
                 if (visit.first_visit && instance_to_print.object_by_extruder.support != nullptr) {
                     m_layer = layers[instance_to_print.layer_id].support_layer;
@@ -9268,15 +9188,15 @@ LayerResult GCode::process_layer(
                         if (support_extrusion_role == erMixed || support_extrusion_role == erSupportMaterialInterface) {
                             gcode += this->extrude_support(*instance_to_print.object_by_extruder.support, erIroning);
                         }
-                        if (defer_support_for_low_temperature_interface)
-                            gcode += this->finish_low_temperature_interface();
+                        if (support_last)
+                            gcode += this->raise_gcode_event(MP_GCODE_EV_SUPPORT_END);
                     }
 
                     m_layer = layer_to_print.layer();
                     m_object_layer_over_raft = object_layer_over_raft;
                 }
                 };
-                if (! defer_support_for_low_temperature_interface)
+                if (! support_last)
                     extrude_instance_support();
                 // Sequential tool path ordering of multiple parts within the same object, aka. perimeter tracking (#5511)
                 // Island print order. Use the islands the tour assigned to this visit; if none,
@@ -9358,7 +9278,7 @@ LayerResult GCode::process_layer(
                     // ironing
                     gcode += this->extrude_infill(print,by_region_specific, true);
                 }
-                if (defer_support_for_low_temperature_interface)
+                if (support_last)
                     extrude_instance_support();
 
                 if (this->config().gcode_label_objects) {
@@ -9741,22 +9661,12 @@ LayerResult GCode::process_layer(
             if (!iter->second.empty())
                 m_initial_layer_extruders.insert(iter->first);
         }
-        // MAGPIE: LESIC ring labels and inner brim (Magpie line 1).
-        if (print.calib_mode() == CalibMode::Calib_LESIC)
-            gcode += this->emit_lesic_ring_annotations(print.calib_params());
+        // MAGPIE: G-code event mods add to the end of the first layer (a calibration's marks).
+        gcode += this->raise_gcode_event(MP_GCODE_EV_FIRST_LAYER_END);
     }
 
-    // MAGPIE: no low temperature may outlive its layer (it would reach the next layer's change_layer and
-    // a later tool change); every path finishes the interface itself, this only closes what one missed.
-    gcode += this->finish_low_temperature_interface();
-    // MAGPIE: the temperature drop tower grows by one layer on every layer that did not use it to cool down,
-    // up to the last support interface: above it no layer cools down, so the tower would only cost time.
-    if (this->temperature_drop_tower_enabled() &&
-        m_nominal_z - m_config.z_offset.value <= this->top_support_interface_z() + EPSILON && std::abs(m_temperature_drop_tower_last_print_z - m_nominal_z) >= EPSILON) {
-        ExtrusionPath temperature_drop_tower_path;
-        if (this->build_temperature_drop_tower_path(temperature_drop_tower_path))
-            gcode += this->extrude_temperature_drop_tower(temperature_drop_tower_path, false);
-    }
+    // MAGPIE: G-code event mods end the layer: nothing they set outlives it, and their auxiliary towers grow.
+    gcode += this->raise_gcode_event(MP_GCODE_EV_LAYER_END);
     // MAGPIE: layer time blending (purge_tower): a layer expected to visit a tower that did not; the next site
     // parks instead.
     if (m_layer_time_visit_wanted) {
@@ -9952,24 +9862,10 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "region_mod_settings"sv,
         "wall_planner"sv,
         "crisp_corner_small_nozzle_wall_speed"sv,
-        "support_interface_sublayer_temperature"sv,
-        "single_nozzle_low_temperature_interface"sv,
         "outer_wall_half_layer_height"sv,
         "support_half_layer_height"sv,
-        "support_interface_temperature_drop_tower"sv,
         "support_interface_temperature_drop_tower_x"sv,
         "support_interface_temperature_drop_tower_y"sv,
-        "support_interface_temperature"sv,
-        "support_interface_heating_time"sv,
-        "support_interface_auxiliary_fan_cooling_on_temperature_change"sv,
-        "support_interface_auxiliary_fan_speed"sv,
-        "support_interface_nozzle_wiping_on_temperature_change"sv,
-        "support_interface_cooling_position"sv,
-        "support_interface_brush_start"sv,
-        "support_interface_brush_end"sv,
-        "support_interface_brush_repetitions"sv,
-        "support_interface_brush_speed"sv,
-        "snapmaker_u1_start_guard"sv,
         "layer_time_planner"sv,
         "layer_time_blend_log"sv,
         "layer_time_blend_max_diff"sv,
@@ -10665,9 +10561,9 @@ std::string GCode::extrude_support(const ExtrusionEntityCollection &support_fill
 std::string GCode::extrude_support_entities(const ExtrusionEntitiesPtr &support_entities, const ExtrusionRole support_extrusion_role,
                                             bool preserve_order)
 {
-    // MAGPIE: with a low temperature interface, mixed support prints by role so the interface comes last and the
-    // temperature changes once per layer and object (Magpie line 1). Support ironing follows from the caller.
-    if (support_extrusion_role == erMixed && ! m_support_role_pass && this->low_temperature_interface_enabled()) {
+    // MAGPIE: when a G-code event mod prints the support last, mixed support prints by role so the interface comes
+    // last and a temperature the mod sets changes once per layer and object. Support ironing follows from the caller.
+    if (support_extrusion_role == erMixed && ! m_support_role_pass && this->support_prints_last()) {
         m_support_role_pass = true;
         ScopeGuard end_role_pass([this]() { m_support_role_pass = false; });
         std::string gcode;
@@ -10745,9 +10641,10 @@ std::string GCode::extrude_support_entities(const ExtrusionEntitiesPtr &support_
                 gcode += extrude_loop(*loop, label, speed_for_path(loop->length(), role));
             }
             else if (collection) {
-                const bool was_sublayer = m_in_interface_sublayer;
-                m_in_interface_sublayer = was_sublayer || collection->interface_sublayer;
-                ScopeGuard restore_sublayer([this, was_sublayer]() { m_in_interface_sublayer = was_sublayer; });
+                const int outer_tag = m_path_temperature_tag;
+                if (outer_tag == 0)
+                    m_path_temperature_tag = collection->interface_temperature;
+                ScopeGuard restore_tag([this, outer_tag]() { m_path_temperature_tag = outer_tag; });
                 gcode += extrude_support(*collection, support_extrusion_role);
             }
             else {
@@ -10755,9 +10652,9 @@ std::string GCode::extrude_support_entities(const ExtrusionEntitiesPtr &support_
             }
         }
     }
-    // MAGPIE: the sublayer temperature ends with the support it belongs to.
+    // MAGPIE: a support collection's own temperature ends with the support it belongs to.
     if (m_support_extrusion_context_depth == 1)
-        gcode += this->finish_interface_sublayer_temperature();
+        gcode += this->finish_tagged_temperature();
     return gcode;
 }
 
@@ -11047,32 +10944,6 @@ static bool overhang_fan_active(float overlap, int overhang_fan_threshold, Extru
     return overlap_threshold >= 0.f && overlap <= overlap_threshold;
 }
 
-// MAGPIE: low temperature support interface (Magpie line 1), for a support interface printed with the support's
-// own filament.
-bool GCode::low_temperature_interface_enabled() const
-{
-    return m_config.single_nozzle_low_temperature_interface.value && m_config.support_interface_filament.value == 0 &&
-           m_writer.filament() != nullptr;
-}
-
-bool GCode::has_configured_low_temperature_nozzle_wiper() const
-{
-    const Vec2d brush_start = m_config.support_interface_brush_start.value;
-    const Vec2d brush_end   = m_config.support_interface_brush_end.value;
-    return m_config.support_interface_nozzle_wiping_on_temperature_change.value && m_config.support_interface_brush_repetitions.value > 0 &&
-           brush_start.x() >= 0.0 && brush_start.y() >= 0.0 && brush_end.x() >= 0.0 && brush_end.y() >= 0.0 &&
-           std::isfinite(brush_start.x()) && std::isfinite(brush_start.y()) && std::isfinite(brush_end.x()) && std::isfinite(brush_end.y()) &&
-           (brush_start - brush_end).norm() > 1e-6; // mm
-}
-
-// The tower replaces the wait for cooling when there is no brush, printing layer by layer.
-bool GCode::temperature_drop_tower_enabled() const
-{
-    if (! m_temperature_drop_tower_enabled)
-        m_temperature_drop_tower_enabled = this->read_temperature_drop_tower_enabled();
-    return *m_temperature_drop_tower_enabled;
-}
-
 static bool has_support_interface(const ExtrusionEntity &entity)
 {
     if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
@@ -11098,434 +10969,115 @@ double GCode::top_support_interface_z() const
     return *m_top_support_interface_z;
 }
 
-bool GCode::read_temperature_drop_tower_enabled() const
+std::string GCode::raise_gcode_event(int32_t kind, int32_t filament)
 {
-    if (! m_config.support_interface_temperature_drop_tower.value || ! m_config.single_nozzle_low_temperature_interface.value ||
-        m_config.support_interface_filament.value != 0 || m_config.print_sequence.value != PrintSequence::ByLayer ||
-        this->has_configured_low_temperature_nozzle_wiper())
-        return false;
-    if (m_print == nullptr || std::none_of(m_print->objects().begin(), m_print->objects().end(),
-                                           [](const PrintObject *object) { return object != nullptr && ! object->support_layers().empty(); }))
-        return false;
-    const int interface_temperature = Slic3r::lowest_low_temperature_interface_target(m_config); // degC
-    if (interface_temperature <= 0)
-        return false;
-    auto hotter = [interface_temperature](int t) { return t > interface_temperature; };
-    return std::any_of(m_config.nozzle_temperature.values.begin(), m_config.nozzle_temperature.values.end(), hotter) ||
-           std::any_of(m_config.nozzle_temperature_initial_layer.values.begin(), m_config.nozzle_temperature_initial_layer.values.end(), hotter);
-}
-
-namespace {
-struct TemperatureDropTowerTools
-{
-    std::vector<size_t> physical_tools;
-    double              maximum_nozzle_mm   = 0.;
-    double              minimum_nozzle_mm   = std::numeric_limits<double>::max();
-    int                 maximum_temperature = 0; // degC
-    bool                multiple_widths() const { return maximum_nozzle_mm != minimum_nozzle_mm; }
-};
-
-TemperatureDropTowerTools temperature_drop_tower_tools(const Print &print, const GCodeWriter &writer, const FullPrintConfig &config)
-{
-    TemperatureDropTowerTools tools;
-    // GCodeWriter was initialized from the final ToolOrdering, including custom changes. Do not infer future tools
-    // from just the currently active nozzle.
-    for (const Extruder &filament : writer.extruders()) {
-        const size_t physical_tool = print.get_extruder_id(filament.id());
-        if (std::find(tools.physical_tools.begin(), tools.physical_tools.end(), physical_tool) == tools.physical_tools.end())
-            tools.physical_tools.push_back(physical_tool);
-        const double nozzle_mm  = config.nozzle_diameter.get_at(physical_tool);
-        tools.maximum_nozzle_mm = std::max(tools.maximum_nozzle_mm, nozzle_mm);
-        tools.minimum_nozzle_mm = std::min(tools.minimum_nozzle_mm, nozzle_mm);
-        tools.maximum_temperature = std::max({ tools.maximum_temperature, config.nozzle_temperature.get_at(filament.id()),
-                                               config.nozzle_temperature_initial_layer.get_at(filament.id()) });
-    }
-    return tools;
-}
-} // namespace
-
-bool GCode::build_temperature_drop_tower_path(ExtrusionPath &path)
-{
-    if (! this->temperature_drop_tower_enabled() || m_layer == nullptr || m_writer.filament() == nullptr)
-        return false;
-    const unsigned int filament_id          = m_writer.filament()->id();
-    const size_t       physical_extruder_id = this->cur_extruder_index();
-    if (m_config.nozzle_diameter.values.empty() || m_config.nozzle_temperature.values.empty() || m_config.nozzle_temperature_initial_layer.values.empty())
-        return false;
-    const float nozzle_diameter = float(m_config.nozzle_diameter.get_at(physical_extruder_id));
-    // The tower layer is as tall as the Z step since the tower's last layer (mm). Under H/2 the cooling
-    // pass prints it at mid-layer, so the end-of-layer pass above it is only half a layer tall; m_layer's
-    // full height would extrude twice the plastic. A larger step keeps the layer height as before.
-    float       layer_height    = float(m_layer->height);
-    if (const double step = m_nominal_z - m_temperature_drop_tower_last_print_z; step > EPSILON && step < layer_height)
-        layer_height = float(step);
-    if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
-        return false;
-
-    const auto tower_tools     = temperature_drop_tower_tools(*m_print, m_writer, m_config);
-    const bool multiple_widths = tower_tools.multiple_widths();
-    Flow       flow(Flow::auto_extrusion_width(frPerimeter, nozzle_diameter), layer_height, nozzle_diameter);
-    if (! m_temperature_drop_tower_path_initialized) {
-        m_temperature_drop_tower_path_initialized = true;
-        const std::vector<Vec2d> &printable_area  = m_config.printable_area.values;
-        if (printable_area.size() < 3)
-            return false;
-        Polygon printable_polygon;
-        printable_polygon.points.reserve(printable_area.size());
-        for (const Vec2d &point : printable_area)
-            printable_polygon.points.emplace_back(Point::new_scale(point.x(), point.y()));
-
-        const size_t plate_index  = size_t(std::max(0, m_print->get_plate_index()));
-        const double configured_x = temperature_drop_tower_position_at(&m_config.support_interface_temperature_drop_tower_x, plate_index);
-        const double configured_y = temperature_drop_tower_position_at(&m_config.support_interface_temperature_drop_tower_y, plate_index);
-
-        // Keep one position for the entire tower. Automatic multi-tool placement uses the intersection of every
-        // participating tool's reachable area; explicit positions keep their whole-bed clamp and are checked below.
-        const bool     automatic_placement = configured_x < 0.0 || configured_y < 0.0;
-        Polygon        extruder_placement_polygon;
-        const Polygon *placement_polygon = &printable_polygon;
-        if (automatic_placement) {
-            const size_t                extruder_id                 = m_print->get_extruder_id(filament_id);
-            const std::vector<Polygons> extruder_printable_polygons = m_print->get_extruder_printable_polygons();
-            if (extruder_id < extruder_printable_polygons.size() && ! extruder_printable_polygons[extruder_id].empty()) {
-                extruder_placement_polygon = extruder_printable_polygons[extruder_id].front();
-                placement_polygon          = &extruder_placement_polygon;
-            }
-        }
-        const bool     multiple_tools   = tower_tools.physical_tools.size() > 1;
-        const Polygons common_area      = multiple_tools ?
-            temperature_drop_tower_common_area(Polygons{ printable_polygon }, m_print->get_extruder_printable_polygons(), tower_tools.physical_tools) :
-            Polygons{ *placement_polygon };
-        if (multiple_tools && common_area.empty())
-            throw SlicingError(_u8L("The temperature drop tower has no printable area shared by all participating tools."));
-        const Polygons placement_bounds = multiple_tools && automatic_placement ? common_area : Polygons{ *placement_polygon };
-
-        BoundingBoxf bounds; // mm
-        for (const Polygon &region : placement_bounds)
-            for (const Point &point : region.points)
-                bounds.merge(unscale(point));
-
-        const int    normal_temperature    = tower_tools.maximum_temperature;                // degC
-        const int    interface_temperature = Slic3r::lowest_low_temperature_interface_target(m_config); // degC
-        const double requested_tower_size  = temperature_drop_tower_size(std::max(normal_temperature - interface_temperature, 0)); // mm
-        const double spacing               = multiple_widths ? temperature_drop_tower_multi_pitch(tower_tools.maximum_nozzle_mm) :
-                                                               std::max(double(nozzle_diameter), double(flow.spacing())); // mm
-        const double brim_width            = TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT * spacing;                            // mm
-        const std::optional<TemperatureDropTowerPlacement> placement =
-            place_temperature_drop_tower(bounds, configured_x, configured_y, requested_tower_size, brim_width);
-        if (! placement) {
-            if (multiple_tools)
-                throw SlicingError(_u8L("The temperature drop tower does not fit inside the printable area shared by all participating tools."));
-            return false;
-        }
-        const double tower_size     = placement->tower_size;
-        const double footprint_size = placement->footprint_size;
-        const double origin_x       = placement->origin_x;
-        const double origin_y       = placement->origin_y;
-
-        const std::array<Vec2d, 4> footprint_corners = { Vec2d(origin_x, origin_y), Vec2d(origin_x + footprint_size, origin_y),
-                                                         Vec2d(origin_x, origin_y + footprint_size),
-                                                         Vec2d(origin_x + footprint_size, origin_y + footprint_size) };
-        if (! std::all_of(footprint_corners.begin(), footprint_corners.end(), [&](const Vec2d &corner) {
-                const Point scaled_corner = Point::new_scale(corner.x(), corner.y());
-                return printable_polygon.contains(scaled_corner) && placement_polygon->contains(scaled_corner);
-            }))
-            return false;
-        if (multiple_tools) {
-            Polygon footprint;
-            footprint.points = { Point::new_scale(origin_x, origin_y), Point::new_scale(origin_x + footprint_size, origin_y),
-                                 Point::new_scale(origin_x + footprint_size, origin_y + footprint_size),
-                                 Point::new_scale(origin_x, origin_y + footprint_size) };
-            if (! diff_ex(Polygons{ footprint }, common_area).empty())
-                throw SlicingError(_u8L("The temperature drop tower does not fit inside the printable area shared by all participating tools."));
-        }
-
-        const double tower_left = origin_x + brim_width;
-        const double tower_rear = origin_y + brim_width + tower_size;
-        m_temperature_drop_tower_left    = tower_left;
-        m_temperature_drop_tower_rear    = tower_rear;
-        m_temperature_drop_tower_size    = tower_size;
-        m_temperature_drop_tower_spacing = spacing;
-
-        if (! multiple_widths) {
-            m_temperature_drop_tower_plate_path.emplace_back(tower_left, tower_rear - tower_size);
-            for (int line = 0; line < TEMPERATURE_DROP_TOWER_LINE_COUNT; ++line) {
-                const double vertical_x   = tower_left + line * spacing;
-                const double horizontal_y = tower_rear - line * spacing;
-                if ((line & 1) == 0) {
-                    m_temperature_drop_tower_plate_path.emplace_back(vertical_x, horizontal_y);
-                    m_temperature_drop_tower_plate_path.emplace_back(tower_left + tower_size, horizontal_y);
-                    if (line + 1 < TEMPERATURE_DROP_TOWER_LINE_COUNT)
-                        m_temperature_drop_tower_plate_path.emplace_back(tower_left + tower_size, horizontal_y - spacing);
-                } else {
-                    m_temperature_drop_tower_plate_path.emplace_back(vertical_x, horizontal_y);
-                    m_temperature_drop_tower_plate_path.emplace_back(vertical_x, tower_rear - tower_size);
-                    if (line + 1 < TEMPERATURE_DROP_TOWER_LINE_COUNT)
-                        m_temperature_drop_tower_plate_path.emplace_back(vertical_x + spacing, tower_rear - tower_size);
-                }
-            }
-        }
-    }
-
-    if (multiple_widths && m_temperature_drop_tower_spacing > 0.) {
-        const double band_width_mm = TEMPERATURE_DROP_TOWER_LINE_COUNT * m_temperature_drop_tower_spacing;
-        const auto   fill          = temperature_drop_tower_fill(flow, band_width_mm);
-        flow                       = fill.flow;
-        const double spacing       = flow.spacing();
-        const double radius        = 0.5 * flow.width();
-        const double left          = m_temperature_drop_tower_left + radius;
-        const double rear          = m_temperature_drop_tower_rear - radius;
-        const double right         = m_temperature_drop_tower_left + m_temperature_drop_tower_size - radius;
-        const double bottom        = m_temperature_drop_tower_rear - m_temperature_drop_tower_size + radius;
-        m_temperature_drop_tower_plate_path.clear();
-        m_temperature_drop_tower_plate_path.emplace_back(left, bottom);
-        for (int line = 0; line < fill.line_count; ++line) {
-            const double x = left + line * spacing;
-            const double y = rear - line * spacing;
-            m_temperature_drop_tower_plate_path.emplace_back(x, y);
-            if ((line & 1) == 0) {
-                m_temperature_drop_tower_plate_path.emplace_back(right, y);
-                if (line + 1 < fill.line_count)
-                    m_temperature_drop_tower_plate_path.emplace_back(right, y - spacing);
-            } else {
-                m_temperature_drop_tower_plate_path.emplace_back(x, bottom);
-                if (line + 1 < fill.line_count)
-                    m_temperature_drop_tower_plate_path.emplace_back(x + spacing, bottom);
-            }
-        }
-    }
-    if (m_temperature_drop_tower_plate_path.size() < 2)
-        return false;
-
-    Polyline polyline;
-    polyline.points.reserve(m_temperature_drop_tower_plate_path.size());
-    for (const Vec2d &point : m_temperature_drop_tower_plate_path)
-        polyline.points.emplace_back(scaled<coord_t>(Vec2d(point - m_origin)));
-    if ((m_layer_index & 1) != 0)
-        polyline.reverse();
-    path          = ExtrusionPath(erWipeTower, flow.mm3_per_mm(), flow.width(), layer_height);
-    path.polyline = Polyline3(std::move(polyline));
-    return true;
-}
-
-bool GCode::build_temperature_drop_tower_brim_paths(std::vector<ExtrusionPath> &paths)
-{
-    if (! m_temperature_drop_tower_path_initialized || m_layer == nullptr || m_writer.filament() == nullptr || m_temperature_drop_tower_spacing <= 0.0)
-        return false;
-    const size_t physical_extruder_id = this->cur_extruder_index();
-    if (m_config.nozzle_diameter.values.empty())
-        return false;
-    const float nozzle_diameter = float(m_config.nozzle_diameter.get_at(physical_extruder_id));
-    const float layer_height    = float(m_layer->height);
-    if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
-        return false;
-
-    const auto   tower_tools     = temperature_drop_tower_tools(*m_print, m_writer, m_config);
-    const bool   multiple_widths = tower_tools.multiple_widths();
-    Flow         flow(Flow::auto_extrusion_width(frPerimeter, nozzle_diameter), layer_height, nozzle_diameter);
-    const double left   = m_temperature_drop_tower_left;
-    const double rear   = m_temperature_drop_tower_rear;
-    const double bottom = rear - m_temperature_drop_tower_size;
-    if (multiple_widths)
-        flow = temperature_drop_tower_fill(flow, TEMPERATURE_DROP_TOWER_LINE_COUNT * m_temperature_drop_tower_spacing).flow;
-    const double band_width_mm = (multiple_widths ? TEMPERATURE_DROP_TOWER_LINE_COUNT : TEMPERATURE_DROP_TOWER_LINE_COUNT - 1) * m_temperature_drop_tower_spacing;
-    const double inner_right  = left + band_width_mm;
-    const double inner_bottom = rear - band_width_mm;
-    const double right        = left + m_temperature_drop_tower_size;
-
-    paths.clear();
-    paths.reserve(TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT);
-    auto plate_to_point = [this](const Vec2d &point) { return Point(scaled<coord_t>(Vec2d(point - m_origin))); };
-    for (int line = 1; line <= TEMPERATURE_DROP_TOWER_BRIM_LINE_COUNT; ++line) {
-        const double offset = multiple_widths ? line * double(flow.spacing()) - 0.5 * double(flow.width()) : line * m_temperature_drop_tower_spacing;
-        Polyline     polyline;
-        polyline.points = { plate_to_point(Vec2d(left - offset, bottom - offset)),       plate_to_point(Vec2d(inner_right + offset, bottom - offset)),
-                            plate_to_point(Vec2d(inner_right + offset, inner_bottom - offset)), plate_to_point(Vec2d(right + offset, inner_bottom - offset)),
-                            plate_to_point(Vec2d(right + offset, rear + offset)),        plate_to_point(Vec2d(left - offset, rear + offset)),
-                            plate_to_point(Vec2d(left - offset, bottom - offset)) };
-        if ((line & 1) == 0)
-            polyline.reverse();
-        ExtrusionPath brim_path(erWipeTower, flow.mm3_per_mm(), flow.width(), layer_height);
-        brim_path.polyline = Polyline3(std::move(polyline));
-        paths.emplace_back(std::move(brim_path));
-    }
-    return ! paths.empty();
-}
-
-std::string GCode::extrude_temperature_drop_tower(const ExtrusionPath &path, bool cooling_transition)
-{
-    // Tower speeds, mm/s: layers at 30, the final 10 mm of a cooling pass at 10.
-    constexpr double tower_speed = 30.0, slow_tail_speed = 10.0, slow_tail_length_mm = 10.0;
+    if (!m_gcode_events || m_gcode_events->empty())
+        return {};
+    mp_gcode_event_v1 ev{};
+    ev.size     = sizeof(ev);
+    ev.kind     = kind;
+    ev.filament = filament;
     std::string gcode;
-    // MAGPIE: layer time blending (purge_tower): wait over the tower before its first line of this layer.
-    if (m_layer_time_visit_wanted && ! path.polyline.empty()) {
-        const ExtrusionPath *first = &path;
-        std::vector<ExtrusionPath> brim_paths;
-        if (! cooling_transition && ! m_temperature_drop_tower_brim_printed && this->build_temperature_drop_tower_brim_paths(brim_paths) &&
-            ! brim_paths.empty())
-            first = &brim_paths.front();
-        gcode += this->travel_to(first->first_point(), first->role(), "travel to the temperature drop tower");
-        gcode += this->layer_time_tower_arrival();
-    }
-    // The auxiliary tower owns its brim; object/support layer IDs do not define its first pass.
-    if (! cooling_transition && ! m_temperature_drop_tower_brim_printed) {
-        std::vector<ExtrusionPath> brim_paths;
-        if (this->build_temperature_drop_tower_brim_paths(brim_paths)) {
-            gcode += "; temperature drop tower brim begin\n";
-            for (const ExtrusionPath &brim_path : brim_paths) {
-                gcode += "; temperature drop tower brim line\n";
-                gcode += this->_extrude(brim_path, "temperature drop tower brim", tower_speed);
-            }
-            gcode += "; temperature drop tower brim end\n";
-            m_temperature_drop_tower_brim_printed = true;
-        }
-    }
-    if (! cooling_transition) {
-        gcode += "; temperature drop tower layer\n";
-        gcode += this->_extrude(path, "temperature drop tower", tower_speed);
-    } else {
-        gcode += "; low-temperature support interface temperature drop tower cooling pass\n";
-        const double path_length_mm = path.polyline.length() * SCALING_FACTOR;
-        Polyline3    fast_polyline, slow_polyline;
-        if (path_length_mm > slow_tail_length_mm + EPSILON &&
-            path.polyline.split_at_length(scale_(path_length_mm - slow_tail_length_mm), &fast_polyline, &slow_polyline) &&
-            fast_polyline.points.size() >= 2 && slow_polyline.points.size() >= 2) {
-            gcode += "; temperature drop tower cooling fast section\n";
-            gcode += this->_extrude(ExtrusionPath(std::move(fast_polyline), path), "temperature drop tower", tower_speed);
-            gcode += "; temperature drop tower cooling final 10 mm\n";
-            gcode += this->_extrude(ExtrusionPath(std::move(slow_polyline), path), "temperature drop tower", slow_tail_speed);
-        } else {
-            gcode += "; temperature drop tower cooling final 10 mm\n";
-            gcode += this->_extrude(path, "temperature drop tower", slow_tail_speed);
-        }
-        gcode += "; temperature drop tower cooling pass end\n";
-    }
-    m_temperature_drop_tower_last_print_z = m_nominal_z;
+    GCodeEventHost::raise(*this, ev, gcode);
     return gcode;
 }
 
-std::string GCode::start_low_temperature_interface(int target_temperature)
+bool GCode::support_prints_last()
 {
-    if (m_low_temperature_interface_active || m_writer.filament() == nullptr)
-        return {};
-    const unsigned int      filament_id = m_writer.filament()->id();
-    const ConfigOptionInts &normal      = this->on_first_layer() ? m_config.nozzle_temperature_initial_layer : m_config.nozzle_temperature;
-    if (normal.values.empty())
-        return {};
-    const int normal_temperature    = normal.get_at(filament_id); // degC
-    const int interface_temperature = target_temperature > 0 ? target_temperature : m_config.support_interface_temperature.value; // degC
-
-    std::string gcode;
-    if (interface_temperature > 0 && interface_temperature != normal_temperature) {
-        gcode += "; low-temperature support interface begin\n";
-        // The temperature drop tower cools the nozzle while printing, once per layer, instead of waiting in place.
-        ExtrusionPath temperature_drop_tower_path;
-        const bool    use_temperature_drop_tower = normal_temperature > interface_temperature &&
-                                                std::abs(m_temperature_drop_tower_last_print_z - m_nominal_z) >= EPSILON &&
-                                                this->build_temperature_drop_tower_path(temperature_drop_tower_path);
-        // Cooling the nozzle down with the auxiliary fan: on the tower when there is one (line 1), otherwise at the
-        // cooling position (rear left of the bed by default).
-        bool auxiliary_fan_started = false;
-        if (m_config.support_interface_auxiliary_fan_cooling_on_temperature_change.value && m_config.auxiliary_fan.value &&
-            m_config.support_interface_auxiliary_fan_speed.value > 0 && ! m_config.additional_cooling_fan_speed.values.empty() &&
-            normal_temperature > interface_temperature && use_temperature_drop_tower) {
-            gcode += "; low-temperature support interface auxiliary cooling\n";
-            gcode += m_writer.set_additional_fan(m_config.support_interface_auxiliary_fan_speed.value);
-            auxiliary_fan_started = true;
-        } else if (m_config.support_interface_auxiliary_fan_cooling_on_temperature_change.value && m_config.auxiliary_fan.value &&
-            m_config.support_interface_auxiliary_fan_speed.value > 0 && ! m_config.additional_cooling_fan_speed.values.empty() &&
-            normal_temperature > interface_temperature && m_last_pos_defined) {
-            Vec2d position = m_config.support_interface_cooling_position.value;
-            bool  valid    = position.x() >= 0. && position.y() >= 0. && std::isfinite(position.x()) && std::isfinite(position.y());
-            if (! valid && ! m_config.printable_area.values.empty()) {
-                position = m_config.printable_area.values.front();
-                for (const Vec2d &p : m_config.printable_area.values) {
-                    position.x() = std::min(position.x(), p.x());
-                    position.y() = std::max(position.y(), p.y());
-                }
-                valid = std::isfinite(position.x()) && std::isfinite(position.y());
-            }
-            if (valid) {
-                gcode += this->travel_to(this->gcode_to_point(position), erSupportMaterialInterface,
-                                         "move to low-temperature interface cooling position");
-                gcode += "; low-temperature support interface auxiliary cooling\n";
-                gcode += m_writer.set_additional_fan(m_config.support_interface_auxiliary_fan_speed.value);
-                auxiliary_fan_started = true;
-            }
-        }
-        if (use_temperature_drop_tower) {
-            gcode += m_writer.set_temperature(interface_temperature, false, filament_id);
-            gcode += this->extrude_temperature_drop_tower(temperature_drop_tower_path, true);
-        } else {
-            std::string wait = m_writer.set_temperature(interface_temperature, true, filament_id);
-            // Marlin's M109 S waits only while heating; cooling down to the interface temperature
-            // needs M109 R, which waits in both directions.
-            const GCodeFlavor flavor = m_config.gcode_flavor.value;
-            if ((flavor == gcfMarlinLegacy || flavor == gcfMarlinFirmware) && normal_temperature > interface_temperature &&
-                boost::starts_with(wait, "M109 S"))
-                wait[5] = 'R';
-            gcode += wait;
-        }
-        if (auxiliary_fan_started)
-            gcode += m_writer.set_additional_fan(m_config.additional_cooling_fan_speed.get_at(filament_id));
-
-        const Vec2d brush_start = m_config.support_interface_brush_start.value;
-        const Vec2d brush_end   = m_config.support_interface_brush_end.value;
-        const int   repetitions = m_config.support_interface_brush_repetitions.value;
-        if (this->has_configured_low_temperature_nozzle_wiper() && m_last_pos_defined) {
-            gcode += "; low-temperature support interface nozzle brushing\n";
-            gcode += m_writer.travel_to_xy(brush_start, "move to nozzle brush");
-            gcode += m_writer.set_speed(m_config.support_interface_brush_speed.value * 60., "set nozzle brush speed");
-            for (int i = 0; i < repetitions; ++i) {
-                gcode += m_writer.extrude_to_xy(brush_end, 0., "brush nozzle", true);
-                gcode += m_writer.extrude_to_xy(brush_start, 0., "brush nozzle", true);
-            }
-            this->set_last_pos(this->gcode_to_point(brush_start));
-            m_wipe.reset_path();
-        }
-    }
-    m_low_temperature_interface_active       = true;
-    m_low_temperature_interface_target       = interface_temperature;
-    m_low_temperature_interface_filament     = filament_id;
-    m_low_temperature_interface_normal       = normal_temperature;
-    m_low_temperature_interface_heating_time = m_config.support_interface_heating_time.value;
-    return gcode;
+    return m_gcode_events && !m_gcode_events->empty() && m_gcode_events->support_last();
 }
 
-std::string GCode::finish_low_temperature_interface()
+std::string GCode::finish_tagged_temperature()
 {
-    if (! m_low_temperature_interface_active)
+    if (! m_tagged_temperature_active)
         return {};
-    std::string gcode;
-    if (m_low_temperature_interface_normal > 0 && m_low_temperature_interface_normal != m_low_temperature_interface_target) {
-        gcode += "; low-temperature support interface end\n";
-        // Heat toward the filament temperature without waiting for it, then dwell for the heating time.
-        gcode += m_writer.set_temperature(m_low_temperature_interface_normal, false, m_low_temperature_interface_filament);
-        if (m_low_temperature_interface_heating_time > 0.) {
-            // Klipper's G4 reads only P (milliseconds); wait_command writes the dwell each flavor honours.
-            std::string dwell = wait_command(m_config.gcode_flavor.value, float(m_low_temperature_interface_heating_time));
-            dwell.pop_back();
-            gcode += dwell + " ; heat before next layer\n";
-        }
-    }
-    m_low_temperature_interface_active       = false;
-    m_low_temperature_interface_target       = 0;
-    m_low_temperature_interface_filament     = unsigned(-1);
-    m_low_temperature_interface_normal       = 0;
-    m_low_temperature_interface_heating_time = 0.;
-    return gcode;
-}
-
-std::string GCode::finish_interface_sublayer_temperature()
-{
-    if (! m_interface_sublayer_temperature_active)
-        return {};
-    m_interface_sublayer_temperature_active = false;
+    m_tagged_temperature_active = false;
     if (m_writer.filament() == nullptr)
         return {};
     const unsigned int      filament_id = m_writer.filament()->id();
     const ConfigOptionInts &normal      = this->on_first_layer() ? m_config.nozzle_temperature_initial_layer : m_config.nozzle_temperature;
     return normal.values.empty() ? std::string() : m_writer.set_temperature(normal.get_at(filament_id), false, filament_id);
+}
+
+void GCode::place_aux_tower(const mp_tower_request_v1 &request, mp_tower_place_v1 &out) const
+{
+    out.result = MP_TOWER_DOES_NOT_FIT;
+    const std::vector<Vec2d> &printable_area = m_config.printable_area.values;
+    if (printable_area.size() < 3 || m_print == nullptr)
+        return;
+    Polygon printable_polygon;
+    printable_polygon.points.reserve(printable_area.size());
+    for (const Vec2d &point : printable_area)
+        printable_polygon.points.emplace_back(Point::new_scale(point.x(), point.y()));
+
+    const size_t plate_index  = size_t(std::max(0, m_print->get_plate_index()));
+    const double configured_x = aux_tower_position_at(m_config.option<ConfigOptionFloats>(AUX_TOWER_POSITION_KEYS[0]), plate_index);
+    const double configured_y = aux_tower_position_at(m_config.option<ConfigOptionFloats>(AUX_TOWER_POSITION_KEYS[1]), plate_index);
+
+    // One position for the entire tower. Automatic placement for several nozzles uses the area every participating
+    // nozzle reaches; explicit positions keep their whole-bed clamp and are checked below.
+    const bool     automatic_placement = configured_x < 0.0 || configured_y < 0.0;
+    Polygon        extruder_placement_polygon;
+    const Polygon *placement_polygon = &printable_polygon;
+    if (automatic_placement && request.filament >= 0) {
+        const size_t                extruder_id                 = m_print->get_extruder_id(unsigned(request.filament));
+        const std::vector<Polygons> extruder_printable_polygons = m_print->get_extruder_printable_polygons();
+        if (extruder_id < extruder_printable_polygons.size() && ! extruder_printable_polygons[extruder_id].empty()) {
+            extruder_placement_polygon = extruder_printable_polygons[extruder_id].front();
+            placement_polygon          = &extruder_placement_polygon;
+        }
+    }
+    std::vector<size_t> tools;
+    for (uint32_t i = 0; i < request.n_nozzles && request.nozzles != nullptr; ++i)
+        if (request.nozzles[i] >= 0)
+            tools.push_back(size_t(request.nozzles[i]));
+    const bool     multiple_tools = tools.size() > 1;
+    const Polygons common_area    = multiple_tools ?
+        aux_tower_common_area(Polygons{ printable_polygon }, m_print->get_extruder_printable_polygons(), tools) :
+        Polygons{ *placement_polygon };
+    if (multiple_tools && common_area.empty()) {
+        out.result = MP_TOWER_NO_COMMON_AREA;
+        return;
+    }
+    const Polygons placement_bounds = multiple_tools && automatic_placement ? common_area : Polygons{ *placement_polygon };
+
+    BoundingBoxf bounds; // mm
+    for (const Polygon &region : placement_bounds)
+        for (const Point &point : region.points)
+            bounds.merge(unscale(point));
+    const std::optional<AuxTowerPlacement> placement =
+        Slic3r::place_aux_tower(bounds, configured_x, configured_y, request.requested_size, request.brim_width);
+    if (! placement) {
+        out.result = multiple_tools ? MP_TOWER_OUTSIDE_COMMON : MP_TOWER_DOES_NOT_FIT;
+        return;
+    }
+    const double footprint_size = placement->footprint_size;
+    const double origin_x       = placement->origin_x;
+    const double origin_y       = placement->origin_y;
+
+    const std::array<Vec2d, 4> footprint_corners = { Vec2d(origin_x, origin_y), Vec2d(origin_x + footprint_size, origin_y),
+                                                     Vec2d(origin_x, origin_y + footprint_size),
+                                                     Vec2d(origin_x + footprint_size, origin_y + footprint_size) };
+    if (! std::all_of(footprint_corners.begin(), footprint_corners.end(), [&](const Vec2d &corner) {
+            const Point scaled_corner = Point::new_scale(corner.x(), corner.y());
+            return printable_polygon.contains(scaled_corner) && placement_polygon->contains(scaled_corner);
+        }))
+        return;
+    if (multiple_tools) {
+        Polygon footprint;
+        footprint.points = { Point::new_scale(origin_x, origin_y), Point::new_scale(origin_x + footprint_size, origin_y),
+                             Point::new_scale(origin_x + footprint_size, origin_y + footprint_size),
+                             Point::new_scale(origin_x, origin_y + footprint_size) };
+        if (! diff_ex(Polygons{ footprint }, common_area).empty()) {
+            out.result = MP_TOWER_OUTSIDE_COMMON;
+            return;
+        }
+    }
+    out.result         = MP_TOWER_PLACED;
+    out.origin_x       = origin_x;
+    out.origin_y       = origin_y;
+    out.tower_size     = placement->tower_size;
+    out.footprint_size = footprint_size;
 }
 
 // MAGPIE: the widest configured line width as a share of the nozzle: a percentage as set, an absolute width
@@ -11603,34 +11155,30 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
     std::string gcode;
     this->check_extrusion_width(path);
 
-    // MAGPIE: low temperature support interface. Interface paths (and support ironing) print at the interface
-    // temperature; the first other extrusion restores the filament temperature.
-    // MAGPIE: interface sublayers with their own temperature (support_extras mod), in degC; 0 = none.
-    const int sublayer_temperature = m_in_interface_sublayer && path.role() == erSupportMaterialInterface ?
-                                         m_config.support_interface_sublayer_temperature.value : 0;
-    if (m_low_temperature_interface_active || m_config.single_nozzle_low_temperature_interface.value) {
-        const bool interface_role = path.role() == erSupportMaterialInterface ||
-                                    (path.role() == erIroning && m_support_extrusion_context_depth > 0);
-        if (interface_role && this->low_temperature_interface_enabled()) {
-            if (! m_low_temperature_interface_active)
-                gcode += this->start_low_temperature_interface(sublayer_temperature);
-            else {
-                // Between sublayer and contact interface the target changes without another cooling wait.
-                const int target = sublayer_temperature > 0 ? sublayer_temperature : m_config.support_interface_temperature.value;
-                if (target > 0 && target != m_low_temperature_interface_target && m_writer.filament() != nullptr) {
-                    gcode += m_writer.set_temperature(target, false, m_writer.filament()->id());
-                    m_low_temperature_interface_target = target;
-                }
-            }
-        } else if (m_low_temperature_interface_active)
-            gcode += this->finish_low_temperature_interface();
+    // MAGPIE: the interface temperature of the support collection this path belongs to (a support style's
+    // restyled interface layers), degC; 0 = none.
+    const int tagged_temperature = path.role() == erSupportMaterialInterface ? m_path_temperature_tag : 0;
+    // G-code event mods see every path before it prints (gcode.events PATH), except the extrusions they ask for
+    // themselves, whose temperatures are theirs.
+    bool temperature_owned = m_gcode_event_depth > 0;
+    if (m_gcode_event_depth == 0 && m_gcode_events && m_gcode_events->wants_paths()) {
+        mp_gcode_event_v1 ev{};
+        ev.size               = sizeof(ev);
+        ev.kind               = MP_GCODE_EV_PATH;
+        ev.role               = GCodeEventHost::role_to_mod(path.role());
+        ev.in_support         = m_support_extrusion_context_depth > 0 ? 1 : 0;
+        ev.tagged_temperature = tagged_temperature;
+        ev.filament           = m_writer.filament() != nullptr ? int32_t(m_writer.filament()->id()) : -1;
+        GCodeEventHost::raise(*this, ev, gcode);
+        temperature_owned = ev.owns_temperature != 0;
     }
-    if (! this->low_temperature_interface_enabled()) {
-        if (sublayer_temperature > 0 && ! m_interface_sublayer_temperature_active && m_writer.filament() != nullptr) {
-            gcode += m_writer.set_temperature(sublayer_temperature, false, m_writer.filament()->id());
-            m_interface_sublayer_temperature_active = true;
-        } else if (sublayer_temperature == 0 && m_interface_sublayer_temperature_active)
-            gcode += this->finish_interface_sublayer_temperature();
+    // A tagged path no mod owns prints at its temperature without a wait; the support's end restores the filament's.
+    if (! temperature_owned) {
+        if (tagged_temperature > 0 && ! m_tagged_temperature_active && m_writer.filament() != nullptr) {
+            gcode += m_writer.set_temperature(tagged_temperature, false, m_writer.filament()->id());
+            m_tagged_temperature_active = true;
+        } else if (tagged_temperature == 0 && m_tagged_temperature_active)
+            gcode += this->finish_tagged_temperature();
     }
 
     const std::string  bridge_description = is_bridge(path.role()) ? path_description + " (bridge)" : std::string();
@@ -12088,48 +11636,40 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
             }
     }
 
-    // MAGPIE: LESIC ring (Magpie line 1). Above the first layer the walls of the ring print at a volumetric
-    // speed that grows with the angle around the ring, from mvs_start to mvs_end mm3/s.
-    if (m_curr_print != nullptr &&
-        m_curr_print->calib_mode() == CalibMode::Calib_LESIC &&
-        !this->on_first_layer() &&
-        !object_layer_over_raft() &&
-        _mm3_per_mm > EPSILON &&
-        (path.role() == erExternalPerimeter || path.role() == erPerimeter) &&
+    // MAGPIE: G-code event mods may give a path speeds of their own, per point (gcode.events path_speeds; a
+    // calibration ring's angle-dependent speed). Not for the extrusions they ask for themselves.
+    if (m_gcode_event_depth == 0 && m_gcode_events && m_gcode_events->wants_path_speeds() && _mm3_per_mm > EPSILON &&
         path.polyline.points.size() > 1) {
-        const Calib_Params &params = m_curr_print->calib_params();
-        BoundingBoxf bed_ext = get_extents(m_config.printable_area.values);
-        const Vec2d center = params.lesic_circle_diameter > 0.0 ?
-            Vec2d(params.lesic_center_x, params.lesic_center_y) :
-            bed_ext.center();
-        const double mvs_start = params.mvs_start;
-        const double mvs_range = params.mvs_end - params.mvs_start;
-
-        new_points.clear();
-        new_points.reserve(path.polyline.points.size());
-        for (size_t i = 0; i < path.polyline.points.size(); ++i) {
-            const Point3 &point = path.polyline.points[i];
-            const Point3 &next_point = path.polyline.points[std::min(i + 1, path.polyline.points.size() - 1)];
-            const Vec2d a = this->point_to_gcode(point.to_point());
-            const Vec2d b = this->point_to_gcode(next_point.to_point());
-            const Vec2d mid = (a + b) * 0.5;
-            const double angle = std::atan2(mid.y() - center.y(), mid.x() - center.x()) * 180.0 / M_PI;
-            const double ratio = lesic_angle_progress(angle);
-            const double target_mvs = mvs_start + mvs_range * ratio;
-            // Slowest speed, mm/s.
-            const double segment_speed = std::max(1.0, target_mvs / _mm3_per_mm);
-
-            ProcessedPoint processed_point;
-            processed_point.p = point;
-            processed_point.speed = static_cast<float>(segment_speed);
-            processed_point.overlap = 1.0f;
-            new_points.emplace_back(processed_point);
+        std::vector<double> xy;
+        xy.reserve(2 * path.polyline.points.size());
+        for (const Point3 &point : path.polyline.points) {
+            const Vec2d p = this->point_to_gcode(point.to_point());
+            xy.push_back(p.x());
+            xy.push_back(p.y());
         }
-
-        // Speed differences under 1 mm/s do not split the path.
-        requires_segmented_extrusion = new_points.size() > 1 &&
-            std::any_of(new_points.begin(), new_points.end(),
-                        [speed](const ProcessedPoint &p) { return fabs(double(p.speed) - speed) > 1; });
+        mp_gcode_speed_query_v1 query{};
+        query.size       = sizeof(query);
+        query.role       = GCodeEventHost::role_to_mod(path.role());
+        query.mm3_per_mm = _mm3_per_mm;
+        query.speed      = speed;
+        query.xy         = xy.data();
+        query.n          = uint32_t(path.polyline.points.size());
+        std::vector<double> point_speeds;
+        if (GCodeEventHost::path_speeds(*this, query, point_speeds)) {
+            new_points.clear();
+            new_points.reserve(path.polyline.points.size());
+            for (size_t i = 0; i < path.polyline.points.size(); ++i) {
+                ProcessedPoint processed_point;
+                processed_point.p       = path.polyline.points[i];
+                processed_point.speed   = static_cast<float>(point_speeds[i]);
+                processed_point.overlap = 1.0f;
+                new_points.emplace_back(processed_point);
+            }
+            // Speed differences under 1 mm/s do not split the path.
+            requires_segmented_extrusion = new_points.size() > 1 &&
+                std::any_of(new_points.begin(), new_points.end(),
+                            [speed](const ProcessedPoint &p) { return fabs(double(p.speed) - speed) > 1; });
+        }
     }
 
     double F = speed * 60;  // convert mm/sec to mm/min

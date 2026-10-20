@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <optional>
+#include <set>
+#include <utility>
 
 namespace Slic3r {
 namespace ModHost {
@@ -35,13 +37,18 @@ struct LegacyKey
 const LegacyKey legacy_keys[] = {
     { "outer_wall_half_layer_height", "half_layer.outer_walls", Kind::Bool, true },
     { "support_half_layer_height", "half_layer.support", Kind::Bool, true },
-    { "single_nozzle_low_temperature_interface", "low_temp_interface.enable", Kind::Bool, true },
-    { "support_interface_temperature", "low_temp_interface.temperature", Kind::Int, true },
-    { "support_interface_heating_time", "low_temp_interface.heating_time", Kind::Float, true },
-    { "support_interface_auxiliary_fan_cooling_on_temperature_change", "low_temp_interface.aux_fan", Kind::Bool, true },
-    { "support_interface_auxiliary_fan_speed", "low_temp_interface.aux_fan_speed", Kind::Int, true },
-    { "support_interface_nozzle_wiping_on_temperature_change", "low_temp_interface.brush", Kind::Bool, true },
-    { "support_interface_temperature_drop_tower", "low_temp_interface.tower", Kind::Bool, true },
+    // The low temperature interface (a native mod since M6). Line 2 saved these keys as its rule wrote them, from
+    // the parameters mod_settings keeps; their defaults carry nothing.
+    { "single_nozzle_low_temperature_interface", "low_temp_interface.enable", Kind::Bool, false, "0" },
+    { "support_interface_temperature", "low_temp_interface.temperature", Kind::Int, false, "170" },
+    { "support_interface_heating_time", "low_temp_interface.heating_time", Kind::Float, false, "5" },
+    { "support_interface_auxiliary_fan_cooling_on_temperature_change", "low_temp_interface.aux_fan", Kind::Bool, false, "0" },
+    { "support_interface_auxiliary_fan_speed", "low_temp_interface.aux_fan_speed", Kind::Int, false, "100" },
+    { "support_interface_nozzle_wiping_on_temperature_change", "low_temp_interface.brush", Kind::Bool, false, "0" },
+    { "support_interface_temperature_drop_tower", "low_temp_interface.tower", Kind::Bool, false, "0" },
+    // Its printer settings (line 1's, never written by a rule): the brush's round trips and speed.
+    { "support_interface_brush_repetitions", "low_temp_interface.brush_repetitions", Kind::Int, false, "0" },
+    { "support_interface_brush_speed", "low_temp_interface.brush_speed", Kind::Float, false, "80" },
     { "use_smaller_nozzles_in_crisp_corners", "multi_nozzle_walls.enable", Kind::Bool, false, "0" },
     { "crisp_corner_small_nozzle_wall_count", "multi_nozzle_walls.small_wall_count", Kind::Int, false, "0" },
     { "crisp_corner_nozzle_wall_overlap", "multi_nozzle_walls.wall_overlap", Kind::Percent, false, "15%" },
@@ -50,7 +57,7 @@ const LegacyKey legacy_keys[] = {
     { "crisp_corner_small_nozzle_wall_speed", "multi_nozzle_walls.small_wall_speed", Kind::FloatOrPercent, true },
     { "crisp_corner_large_nozzle_override_regions", "multi_nozzle_walls.override_regions", Kind::String, false, "" },
     { "support_interface_sublayer_angle", "support_extras.sublayer_angle", Kind::Float, false, "0" },
-    { "support_interface_sublayer_temperature", "support_extras.sublayer_temperature", Kind::Int, true },
+    { "support_interface_sublayer_temperature", "support_extras.sublayer_temperature", Kind::Int, false, "0" },
     { "cura_support_join_distance", "cura_support.join_distance", Kind::Float, false },
     { "cura_solid_support_raft", "cura_support.solid_first_layer", Kind::Bool, false },
     { "mixed_normal_coverage_threshold", "mixed_support.coverage_threshold", Kind::Percent, false },
@@ -68,7 +75,40 @@ const LegacyKey legacy_keys[] = {
 const char *const removed_rule_keys[] = {
     "support_interface_pattern_override", "support_interface_sublayer_start", "support_interface_sublayer_end",
     "support_wall_loops", "tree_support_wall_loops", "object_elevation",
+    // The Snapmaker U1 start guard's switch, which its rule wrote from the printer's mod parameter.
+    "snapmaker_u1_start_guard",
 };
+
+// Line 1 printer settings holding an X/Y position ("XxY" or "X,Y", mm), each the two parameters <param>_x, <param>_y.
+// A negative coordinate is their automatic position, the default, and carries nothing.
+struct LegacyPoint { const char *key; const char *param; };
+const LegacyPoint legacy_points[] = {
+    { "support_interface_cooling_position", "low_temp_interface.cooling_position" },
+    { "support_interface_brush_start", "low_temp_interface.brush_start" },
+    { "support_interface_brush_end", "low_temp_interface.brush_end" },
+};
+
+const LegacyPoint *find_point(const std::string &key)
+{
+    for (const LegacyPoint &p : legacy_points)
+        if (key == p.key)
+            return &p;
+    return nullptr;
+}
+
+// "100x200" or "100,200" as two numbers; nothing for anything else.
+std::optional<std::pair<double, double>> parse_point(const std::string &value)
+{
+    const size_t sep = value.find_first_of("x,");
+    if (sep == std::string::npos)
+        return std::nullopt;
+    const std::string a = value.substr(0, sep), b = value.substr(sep + 1);
+    char *end_a = nullptr, *end_b = nullptr;
+    const double x = std::strtod(a.c_str(), &end_a), y = std::strtod(b.c_str(), &end_b);
+    if (end_a == a.c_str() || end_b == b.c_str())
+        return std::nullopt;
+    return std::make_pair(x, y);
+}
 
 // Line 1 settings handled below by hand (value maps, conditions), or not reproducible here.
 const char *const special_keys[] = {
@@ -250,7 +290,7 @@ bool stash_legacy_setting(std::string &opt_key, std::string &value, std::map<std
             opt_key.clear();
         return true;
     }
-    if (in(special_keys, opt_key) || in(toolhead_width_keys, opt_key) || resin_param(opt_key)) {
+    if (in(special_keys, opt_key) || in(toolhead_width_keys, opt_key) || resin_param(opt_key) || find_point(opt_key)) {
         stash[opt_key] = value;
         opt_key.clear();
         return true;
@@ -314,6 +354,12 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
         }
         else if (auto r = resin_param(key))
             set(r->first, convert(value, r->second));
+        else if (const LegacyPoint *point = find_point(key)) {
+            if (auto xy = parse_point(value); xy && (xy->first >= 0. || xy->second >= 0.)) {
+                params[std::string(point->param) + "_x"] = xy->first;
+                params[std::string(point->param) + "_y"] = xy->second;
+            }
+        }
         else if (auto m = manifest_legacy_param(key)) {
             const Kind kind = m->second == "bool" ? Kind::Bool : m->second == "int" ? Kind::Int : m->second == "float" ? Kind::Float :
                               m->second == "float_or_percent" ? Kind::FloatOrPercent : Kind::String;
@@ -367,17 +413,8 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
     }
     stash.clear();
 
-    // Keep values the file's mod_settings already holds; leave out values equal to the default.
-    json stored = json::object();
-    if (const auto *opt = config.option<ConfigOptionString>("mod_settings"); opt && !opt->value.empty()) {
-        try {
-            stored = json::parse(opt->value);
-        } catch (const json::parse_error &) {
-            stored = json::object();
-        }
-        if (!stored.is_object())
-            stored = json::object();
-    }
+    // Keep values the file's mod_settings (printer_mod_settings for a printer parameter) already holds; leave out values
+    // equal to the default.
     const auto mods = active_mods();
     auto default_of = [&mods](const std::string &param) -> std::optional<json> {
         if (!mods)
@@ -393,18 +430,47 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
                     }
         return std::nullopt;
     };
-    bool changed = false;
+    auto store_of = [&mods](const std::string &param) -> const char * {
+        // The printer parameters this table migrates, for when their mod is not loaded.
+        static const std::set<std::string> printer_params = {
+            "low_temp_interface.cooling_position_x", "low_temp_interface.cooling_position_y", "low_temp_interface.brush_start_x",
+            "low_temp_interface.brush_start_y",      "low_temp_interface.brush_end_x",        "low_temp_interface.brush_end_y",
+            "low_temp_interface.brush_repetitions",  "low_temp_interface.brush_speed" };
+        const ModParam *p = mods ? mods->find_param(param) : nullptr;
+        const bool printer = p != nullptr ? p->scope == "printer" : printer_params.count(param) > 0;
+        return printer ? "printer_mod_settings" : "mod_settings";
+    };
+    std::map<std::string, json> stored;
+    auto stored_values = [&config, &stored](const char *store) -> json & {
+        auto it = stored.find(store);
+        if (it != stored.end())
+            return it->second;
+        json values = json::object();
+        if (const auto *opt = config.option<ConfigOptionString>(store); opt && !opt->value.empty()) {
+            try {
+                values = json::parse(opt->value);
+            } catch (const json::parse_error &) {
+                values = json::object();
+            }
+            if (!values.is_object())
+                values = json::object();
+        }
+        return stored.emplace(store, std::move(values)).first->second;
+    };
+    std::set<std::string> changed;
     for (const auto &[param, v] : params) {
-        if (stored.contains(param))
+        const char *store  = store_of(param);
+        json       &values = stored_values(store);
+        if (values.contains(param))
             continue;
         if (auto d = default_of(param); d && (*d == v || (d->is_number() && v.is_number() && d->get<double>() == v.get<double>())))
             continue;
-        stored[param] = v;
+        values[param] = v;
         result.migrated.push_back(param);
-        changed = true;
+        changed.insert(store);
     }
-    if (changed)
-        config.set_key_value("mod_settings", new ConfigOptionString(stored.dump()));
+    for (const std::string &store : changed)
+        config.set_key_value(store, new ConfigOptionString(stored[store].dump()));
     for (const std::string &key : result.dropped)
         BOOST_LOG_TRIVIAL(warning) << "Magpie line 1 setting not supported by this build, ignored: " << key;
     return result;

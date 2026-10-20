@@ -118,7 +118,9 @@ TEST_CASE("Line 1 feature settings become mod parameters and line 1 only keys ar
     CHECK_FALSE(config.has("resin_branching_support_pillar_diameter"));
     // A setting this build also defines goes back to its default: the mod's rule writes it from now on.
     CHECK_FALSE(config.opt_bool("outer_wall_half_layer_height"));
-    CHECK_FALSE(config.opt_bool("single_nozzle_low_temperature_interface"));
+    // One it no longer defines (the low temperature interface is a native mod) is dropped.
+    CHECK_FALSE(config.has("single_nozzle_low_temperature_interface"));
+    CHECK_FALSE(config.has("support_interface_temperature"));
 }
 
 TEST_CASE("A migrated line 1 feature turns off with its mod parameter", "[LegacySettings]")
@@ -127,19 +129,19 @@ TEST_CASE("A migrated line 1 feature turns off with its mod parameter", "[Legacy
     // Before: the line 1 key kept its value 1, differed from the system preset, and so counted as a
     // user change; the mod's rule skipped it and the feature stayed on with the parameter off.
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.apply(load({ { "single_nozzle_low_temperature_interface", "1" }, { "support_interface_temperature", "175" } }));
-    REQUIRE(mod_settings(config)["low_temp_interface.enable"] == true);
+    config.apply(load({ { "outer_wall_half_layer_height", "1" } }));
+    REQUIRE(mod_settings(config)["half_layer.outer_walls"] == true);
     config.set_key_value("different_settings_to_system", new ConfigOptionStrings({ "", "", "" }));
 
     DynamicPrintConfig on = config;
     REQUIRE(ModHost::active_mods()->resolve(on).empty());
-    CHECK(on.opt_bool("single_nozzle_low_temperature_interface"));
+    CHECK(on.opt_bool("outer_wall_half_layer_height"));
 
     nlohmann::json m = mod_settings(config);
-    m["low_temp_interface.enable"] = false;
+    m["half_layer.outer_walls"] = false;
     config.set_key_value("mod_settings", new ConfigOptionString(m.dump()));
     REQUIRE(ModHost::active_mods()->resolve(config).empty());
-    CHECK_FALSE(config.opt_bool("single_nozzle_low_temperature_interface"));
+    CHECK_FALSE(config.opt_bool("outer_wall_half_layer_height"));
 }
 
 TEST_CASE("A line 2 file that stores a mod-owned key at its default adds no mod parameter", "[LegacySettings]")
@@ -236,4 +238,34 @@ TEST_CASE("Line 1 toolhead line widths without process settings to land in are d
     });
     CHECK_FALSE(config.has("toolhead_outer_wall_line_width"));
     CHECK_FALSE(config.has("outer_wall_line_width_per_nozzle"));
+}
+
+TEST_CASE("Line 1 brush and cooling positions become the low temperature interface's printer parameters", "[LegacySettings]")
+{
+    BundledMods mods;
+    // Line 1's printer settings: positions as "XxY" (mm), the brush's round trips and speed. The U1 guard's switch was a
+    // rule output of line 2 and carries nothing (the printer's mod parameter does).
+    const DynamicPrintConfig config = load({
+        { "support_interface_brush_start", "10x12" },
+        { "support_interface_brush_end", "30x12" },
+        { "support_interface_cooling_position", "-1x-1" }, // the default: not written
+        { "support_interface_brush_repetitions", "3" },
+        { "support_interface_brush_speed", "80" },          // the default: not written
+        { "snapmaker_u1_start_guard", "0" },
+    });
+    const auto *printer = config.option<ConfigOptionString>("printer_mod_settings");
+    REQUIRE(printer != nullptr);
+    const nlohmann::json p = nlohmann::json::parse(printer->value);
+    CHECK(p["low_temp_interface.brush_start_x"] == 10.);
+    CHECK(p["low_temp_interface.brush_start_y"] == 12.);
+    CHECK(p["low_temp_interface.brush_end_x"] == 30.);
+    CHECK(p["low_temp_interface.brush_end_y"] == 12.);
+    CHECK(p["low_temp_interface.brush_repetitions"] == 3);
+    CHECK_FALSE(p.contains("low_temp_interface.cooling_position_x"));
+    CHECK_FALSE(p.contains("low_temp_interface.brush_speed"));
+    CHECK_FALSE(p.contains("snapmaker_u1.start_guard"));
+    CHECK_FALSE(mod_settings(config).contains("low_temp_interface.brush_repetitions"));
+    for (const char *key : { "support_interface_brush_start", "support_interface_brush_end", "support_interface_cooling_position",
+                             "support_interface_brush_repetitions", "support_interface_brush_speed", "snapmaker_u1_start_guard" })
+        CHECK_FALSE(config.has(key));
 }
