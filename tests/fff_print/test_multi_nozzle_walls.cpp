@@ -1185,3 +1185,72 @@ TEST_CASE("Detail and large walls overlap on single-wall-top layers as on other 
         CHECK(std::abs(step_gap - plain_gap) < 0.005);
     }
 }
+
+TEST_CASE("A narrow island's outer wall at the detail width is printed by the detail nozzle", "[MultiNozzleWalls][Classic]")
+{
+    // Classic prints the outer wall of a narrow island (narrower than two large outer walls, BBS's narrow loop) at
+    // the narrow-loop width, which the wall planner makes the detail nozzle's. A thin round tube has a hole and no
+    // corner sharp enough for the detail nozzle, so island_needs_detail() leaves its wall plan off; its narrow walls
+    // must still go to the detail nozzle. Before the fix they went to the 0.4 mm nozzle at 0.17 mm.
+    const bool h2 = GENERATE(false, true);
+    DYNAMIC_SECTION("H/2 " << h2) {
+        // Nozzle 1 0.15 mm (detail), nozzle 2 0.4 mm (the walls' filament).
+        DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "classic", true);
+        config.set_deserialize_strict({
+            { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+            { "outer_wall_half_layer_height", h2 },
+        });
+        // A tube 4 mm across with a 0.6 mm wall (narrower than two 0.4 mm outer walls; 6.4 mm2, under the narrow
+        // loop area limit), 1.2 mm tall, in 180 sectors.
+        constexpr int    sectors = 180;
+        constexpr double r_out = 2.0, r_in = 1.4, height = 1.2; // mm
+        indexed_triangle_set tube;
+        for (int i = 0; i < sectors; ++i) {
+            const double a = 2. * PI * i / sectors;
+            for (const double z : { 0., height })
+                for (const double r : { r_out, r_in })
+                    tube.vertices.emplace_back(float(r * std::cos(a)), float(r * std::sin(a)), float(z));
+        }
+        // Vertex of sector i: 4 i + 2 (top) + (inner).
+        auto v = [](int i, bool top, bool inner) { return (i % sectors) * 4 + (top ? 2 : 0) + (inner ? 1 : 0); };
+        for (int i = 0; i < sectors; ++i) {
+            const int j = i + 1;
+            tube.indices.emplace_back(v(i, false, false), v(j, false, false), v(j, true, false)); // outside
+            tube.indices.emplace_back(v(i, false, false), v(j, true, false), v(i, true, false));
+            tube.indices.emplace_back(v(i, false, true), v(i, true, true), v(j, true, true)); // inside
+            tube.indices.emplace_back(v(i, false, true), v(j, true, true), v(j, false, true));
+            tube.indices.emplace_back(v(i, true, false), v(j, true, false), v(j, true, true)); // top
+            tube.indices.emplace_back(v(i, true, false), v(j, true, true), v(i, true, true));
+            tube.indices.emplace_back(v(i, false, false), v(j, false, true), v(j, false, false)); // bottom
+            tube.indices.emplace_back(v(i, false, false), v(i, false, true), v(j, false, true));
+        }
+        TriangleMesh mesh(std::move(tube));
+        REQUIRE(mesh.volume() > 0.);
+        Print print;
+        Model model;
+        init_print({ mesh }, print, model, config);
+        const std::string gcode = Slic3r::Test::gcode(print);
+
+        int                   tool  = -1;
+        bool                  outer = false;
+        double                width = 0.; // mm, the last ;WIDTH (G-code repeats it only when it changes)
+        std::map<int, size_t> narrow_moves; // tool -> outer wall moves narrower than 0.25 mm
+        std::istringstream    lines(gcode);
+        for (std::string line; std::getline(lines, line);) {
+            if (line.size() >= 2 && line[0] == 'T' && std::isdigit((unsigned char) line[1]))
+                tool = std::stoi(line.substr(1));
+            else if (line.rfind(";TYPE:", 0) == 0)
+                outer = line == ";TYPE:Outer wall";
+            else if (line.rfind(";WIDTH:", 0) == 0)
+                width = std::stod(line.substr(7));
+            else if (outer && line.rfind("G1 ", 0) == 0 && line.find(" E") != std::string::npos &&
+                     line.find('X') != std::string::npos && width > 0. && width < 0.25) // mm; the 0.4 mm walls are 0.4 or more
+                ++narrow_moves[tool];
+        }
+        INFO("narrow outer wall moves on the 0.15 mm tool: " << narrow_moves[0] << ", on the 0.4 mm tool: " << narrow_moves[1]);
+        // The tube's walls are printed at the detail width...
+        CHECK(narrow_moves[0] > 0);
+        // ...and none of it by the 0.4 mm nozzle (a 0.17 mm line from a 0.4 mm nozzle).
+        CHECK(narrow_moves[1] == 0);
+    }
+}

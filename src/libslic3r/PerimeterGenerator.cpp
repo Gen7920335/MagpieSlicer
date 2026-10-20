@@ -377,6 +377,10 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
         ExtrusionLoop extrusion_loop(std::move(paths), loop_role);
         if (perimeter_generator.detail_wall_routing)
             extrusion_loop.tool_hint = use_detail_wall_flow ? ExtrusionToolHint::DetailWall : ExtrusionToolHint::LargeWall;
+        else if (is_small_width && perimeter_generator.narrow_loops_use_detail_flow)
+            // MAGPIE: a narrow loop is printed at the detail nozzle's width, so by the detail nozzle; without the
+            // hint it went to the large nozzle at the detail width.
+            extrusion_loop.tool_hint = ExtrusionToolHint::DetailWall;
         coll.append(std::move(extrusion_loop));
     }
 
@@ -1688,6 +1692,7 @@ void PerimeterGenerator::process_classic()
         planner_detail_flow = this->wall_planner->detail_flow(*this);
     if (planner_detail_flow)
         this->smaller_ext_perimeter_flow = *planner_detail_flow;
+    this->narrow_loops_use_detail_flow = planner_detail_flow.has_value();
     m_ext_mm3_per_mm_smaller_width = this->smaller_ext_perimeter_flow.mm3_per_mm();
 
     // prepare grown lower layer slices for overhang detection
