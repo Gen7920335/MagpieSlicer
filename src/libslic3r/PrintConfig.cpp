@@ -7480,65 +7480,15 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionInt(-1));
 
-    // MAGPIE: wall.plan slot and the multi-nozzle wall settings of Magpie line 1 (same keys, so line-1
-    // projects keep them). Driven by resources/mods/multi_nozzle_walls.json; defaults change nothing.
+    // MAGPIE: wall.plan slot (the planner a native mod provides, see ModHost/WallPlanner.hpp) and the speed of the
+    // walls a planner prints with its detail nozzle (line 1's key). The multi_nozzle_walls mod's rules write both;
+    // its other parameters (line 1's other crisp_corner_* keys, LegacySettings) are read by the mod itself.
     def = this->add("wall_planner", coString);
     def->label = L("Wall planner module");
     def->category = L("Quality");
     def->tooltip = L("Name of a wall planner module that splits walls between two nozzles. Empty keeps Orca's walls.");
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionString(""));
-
-    def = this->add("use_smaller_nozzles_in_crisp_corners", coBool);
-    def->label = L("Use smaller nozzles in crisp corners");
-    def->category = L("Quality");
-    def->tooltip = L("Print crisp outer details such as sharp corners and text outlines with a smaller nozzle toolhead when one is available.");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionBool(false));
-
-    def = this->add("crisp_corner_detail_toolhead", coInt);
-    def->label = L("Crisp corner toolhead");
-    def->category = L("Quality");
-    def->tooltip = L("Toolhead used when no smaller nozzle with the same colour and material is found. 0 (Auto) keeps the assigned filament.");
-    def->min = 0;
-    def->max = 16;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionInt(0));
-
-    def = this->add("crisp_corner_small_nozzle_wall_count", coInt);
-    def->label = L("Small nozzle wall count");
-    def->category = L("Quality");
-    def->tooltip = L("Number of outer walls printed with the smaller nozzle. Zero counts as one.");
-    def->min = 0;
-    def->max = 100;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionInt(0));
-
-    def = this->add("crisp_corner_nozzle_wall_overlap", coPercent);
-    def->label = L("Small/large nozzle wall overlap");
-    def->category = L("Quality");
-    def->tooltip = L("Overlap between the walls of the small and the large nozzle, as a share of the narrower wall spacing.");
-    def->sidetext = "%";
-    def->min = 0;
-    def->max = 80;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionPercent(15));
-
-    def = this->add("crisp_corner_interlace_small_nozzle_walls", coBool);
-    def->label = L("Multi-nozzle interlocking layers");
-    def->category = L("Quality");
-    def->tooltip = L("Print one small-nozzle wall fewer on every other layer, so the small and large nozzle walls interlock between layers.");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionBool(false));
-
-    def = this->add("crisp_corner_large_nozzle_override_regions", coStrings);
-    def->label = L("Large nozzle override");
-    def->category = L("Quality");
-    def->tooltip = L("Inclusive layer ranges first:last:toolhead whose walls are printed with that toolhead, separated by ';'. "
-                     "Layers count from 1; where ranges overlap the last one wins.");
-    def->mode = comDevelop;
-    // One element, so a mod rule (which writes every element) can set it.
-    def->set_default_value(new ConfigOptionStrings { "" });
 
     def = this->add("crisp_corner_small_nozzle_wall_speed", coFloatOrPercent);
     def->label = L("Small nozzle wall speed");

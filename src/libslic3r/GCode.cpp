@@ -1,6 +1,7 @@
 #include "libslic3r/StageTimer.hpp"
 #include "ModHost/NativeMods.hpp"
 #include "ModHost/SlotRegistry.hpp"
+#include "ModHost/WallPlanner.hpp"
 #include "ArcFitter.hpp"
 #include "BoundingBox.hpp"
 #include "Circle.hpp"
@@ -6429,8 +6430,9 @@ void append_half_layer_model_tasks(const PrintObject &object, size_t parent_inde
             const auto &region_config = region->region().config();
             // MAGPIE: walls a wall planner (wall.plan slot) routes to other nozzles, as GCode::process_layer routes them.
             const unsigned base_filament = unsigned(std::max(1, region_config.outer_wall_filament_id.value));
-            const ModHost::WallPlanner *planner = region_config.wall_planner.value.empty() ? nullptr :
-                                                  ModHost::find_wall_planner(region_config.wall_planner.value);
+            const std::unique_ptr<const ModHost::WallPlanner> planner =
+                ModHost::open_wall_planner(region_config.wall_planner.value, object.print()->full_print_config(), print_config, &object.config(),
+                                           region_config);
             auto collect_root = [&](const ExtrusionEntityCollection &root, bool perimeter) {
                 auto collect = [&](auto &&self, const ExtrusionEntity &entity) -> void {
                     if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
@@ -6449,14 +6451,13 @@ void append_half_layer_model_tasks(const PrintObject &object, size_t parent_inde
                         if (is_inner_wall(entity) && region_config.outer_wall_filament_id.value != region_config.inner_wall_filament_id.value &&
                             region_config.inner_wall_filament_id.value > 0)
                             filament = unsigned(region_config.inner_wall_filament_id.value - 1);
-                        if (planner != nullptr && planner->wall_filament)
-                            if (const unsigned int f = planner->wall_filament(print_config, region_config, parent.id(), entity.tool_hint, base_filament))
+                        if (planner)
+                            if (const unsigned int f = planner->wall_filament(parent.id(), entity.tool_hint, base_filament))
                                 filament = f - 1;
-                    } else if (root.role() == erGapFill && planner != nullptr && entity.tool_hint == ExtrusionToolHint::DetailWall &&
-                               planner->wall_filament) {
+                    } else if (root.role() == erGapFill && planner && entity.tool_hint == ExtrusionToolHint::DetailWall) {
                         // MAGPIE: gap fill between two detail walls (make_perimeter_gap_fill); the rest keeps Orca's route.
                         // The hint decides: with H/2 the detail walls are on the phase layers, not in this region.
-                        if (const unsigned int f = planner->wall_filament(print_config, region_config, parent.id(), ExtrusionToolHint::DetailWall, base_filament))
+                        if (const unsigned int f = planner->wall_filament(parent.id(), ExtrusionToolHint::DetailWall, base_filament))
                             filament = f - 1;
                     }
                     const size_t physical_tool = get_extruder_index(config, filament);
@@ -8277,6 +8278,12 @@ LayerResult GCode::process_layer(
                 // identify the content of PrintRegion accross the whole print uniquely. Translate to a Print specific PrintRegion.
                 const PrintRegion &region = print.get_print_region(layerm->region().print_region_id());
 
+                // MAGPIE: the region's wall planner (wall.plan slot), which routes walls and the gap fill between detail
+                // walls to its nozzles below.
+                const std::unique_ptr<const ModHost::WallPlanner> wall_planner =
+                    ModHost::open_wall_planner(region.config().wall_planner.value, print.full_print_config(), print.config(),
+                                               &layer.object()->config(), region.config());
+
                 // Now we must process perimeters and infills and create islands of extrusions in by_region std::map.
                 // It is also necessary to save which extrusions are part of MM wiping and which are not.
                 // The process is almost the same for perimeters and infills - we will do it in a cycle that repeats twice:
@@ -8351,11 +8358,10 @@ LayerResult GCode::process_layer(
                         // MAGPIE: gap fill between two detail walls goes to the detail nozzle (make_perimeter_gap_fill
                         // tags it); other gap fill, sized for the large walls, keeps Orca's route.
                         if (entity_type == ObjectByExtruder::Island::Region::INFILL && extrusions->role() == erGapFill &&
-                            ! region.config().wall_planner.value.empty() && has_detail_wall(*extrusions)) {
-                            if (const ModHost::WallPlanner *planner = ModHost::find_wall_planner(region.config().wall_planner.value);
-                                planner != nullptr && planner->wall_filament) {
+                            wall_planner && has_detail_wall(*extrusions)) {
+                            {
                                 const unsigned int base = unsigned(std::max(1, region.config().outer_wall_filament_id.value));
-                                if (const unsigned int f = planner->wall_filament(print.config(), region.config(), layer.id(), ExtrusionToolHint::DetailWall, base)) {
+                                if (const unsigned int f = wall_planner->wall_filament(layer.id(), ExtrusionToolHint::DetailWall, base)) {
                                     auto detail = std::make_unique<ExtrusionEntityCollection>();
                                     auto rest   = std::make_unique<ExtrusionEntityCollection>();
                                     for (const ExtrusionEntity *entity : extrusions->entities)
@@ -8373,9 +8379,8 @@ LayerResult GCode::process_layer(
 
                         // MAGPIE: walls a wall planner assigned to other nozzles (wall.plan slot) go to those
                         // filaments; the rest keep Orca's routing below.
-                        if (entity_type == ObjectByExtruder::Island::Region::PERIMETERS && ! region.config().wall_planner.value.empty()) {
-                            if (const ModHost::WallPlanner *planner = ModHost::find_wall_planner(region.config().wall_planner.value);
-                                planner != nullptr && planner->wall_filament) {
+                        if (entity_type == ObjectByExtruder::Island::Region::PERIMETERS && wall_planner) {
+                            {
                                 const unsigned int base = unsigned(std::max(1, region.config().outer_wall_filament_id.value));
                                 auto hint_of = [](const ExtrusionEntity *entity) {
                                     if (const auto *c = dynamic_cast<const ExtrusionEntityCollection *>(entity)) {
@@ -8389,7 +8394,7 @@ LayerResult GCode::process_layer(
                                 std::map<unsigned int, std::unique_ptr<ExtrusionEntityCollection>> by_filament;
                                 auto rest = std::make_unique<ExtrusionEntityCollection>();
                                 for (const ExtrusionEntity *entity : extrusions->entities) {
-                                    if (const unsigned int f = planner->wall_filament(print.config(), region.config(), layer.id(), hint_of(entity), base)) {
+                                    if (const unsigned int f = wall_planner->wall_filament(layer.id(), hint_of(entity), base)) {
                                         auto &group = by_filament[f];
                                         if (! group)
                                             group = std::make_unique<ExtrusionEntityCollection>();
@@ -9845,12 +9850,6 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "region_mod_settings"sv,
         "object_elevation"sv,
         "wall_planner"sv,
-        "use_smaller_nozzles_in_crisp_corners"sv,
-        "crisp_corner_detail_toolhead"sv,
-        "crisp_corner_small_nozzle_wall_count"sv,
-        "crisp_corner_nozzle_wall_overlap"sv,
-        "crisp_corner_interlace_small_nozzle_walls"sv,
-        "crisp_corner_large_nozzle_override_regions"sv,
         "crisp_corner_small_nozzle_wall_speed"sv,
         "support_interface_pattern_override"sv,
         "support_interface_sublayer_start"sv,

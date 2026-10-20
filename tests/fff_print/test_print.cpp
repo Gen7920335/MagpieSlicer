@@ -1846,6 +1846,8 @@ TEST_CASE("Height ranges and modifiers count for the filament shrinkage compensa
 // validation looks at the nozzle each role actually uses.
 TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle", "[Print][validate][HalfLayer]")
 {
+    // Scenarios 7 and 8 ask the multi-nozzle walls planner (a native mod) which nozzles print the walls.
+    OfficialMods mods;
     const char *engine   = GENERATE("classic", "arachne");
     const int   scenario = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
     auto config = multifilament_config(2, {
@@ -1883,10 +1885,8 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
     }
     if (scenario == 7 || scenario == 8) {
         config.set("outer_wall_filament_id", 2);
-        config.set("use_smaller_nozzles_in_crisp_corners", true);
-        config.set("crisp_corner_detail_toolhead", 1);
-        config.set("crisp_corner_small_nozzle_wall_count", scenario == 7 ? 3 : 2);
-        config.set("crisp_corner_interlace_small_nozzle_walls", true);
+        config.set("wall_planner", "multi_nozzle");
+        multi_nozzle_params(config, {{"enable", true}, {"detail_toolhead", 1}, {"small_wall_count", scenario == 7 ? 3 : 2}, {"interlock", true}});
     }
     if (scenario == 9) {
         config.set("skirt_loops", 1);

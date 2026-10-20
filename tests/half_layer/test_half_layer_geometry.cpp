@@ -3,7 +3,8 @@
 #include "libslic3r/PerimeterGenerator.hpp"
 #include "libslic3r/ExtrusionEntityCollection.hpp"
 #include "libslic3r/HalfLayerPlan.hpp"
-#include "libslic3r/ModHost/SlotRegistry.hpp"
+#include "libslic3r/ModHost/WallPlanner.hpp"
+#include "fff_print/test_helpers.hpp"
 
 #include <algorithm>
 #include <map>
@@ -65,7 +66,6 @@ std::vector<WallSample> generate_walls(bool arachne, bool half_height, int wall_
     region_config.only_one_wall_first_layer.value = false;
     region_config.detect_overhang_wall.value = false;
     region_config.precise_outer_wall.value = false;
-    region_config.use_smaller_nozzles_in_crisp_corners.value = false;
     if (detail_count > 0) {
         print_config.nozzle_diameter.values = {0.4, 0.2};
         print_config.filament_diameter.values = {1.75, 1.75};
@@ -78,11 +78,6 @@ std::vector<WallSample> generate_walls(bool arachne, bool half_height, int wall_
         region_config.wall_planner.value = "multi_nozzle";
         region_config.outer_wall_filament_id.value = 1;
         region_config.inner_wall_filament_id.value = 1;
-        region_config.use_smaller_nozzles_in_crisp_corners.value = true;
-        region_config.crisp_corner_detail_toolhead.value = 0;
-        region_config.crisp_corner_small_nozzle_wall_count.value = detail_count;
-        region_config.crisp_corner_interlace_small_nozzle_walls.value = interlocking;
-        region_config.crisp_corner_nozzle_wall_overlap.value = 15.;
     }
     if (configure)
         configure(region_config);
@@ -107,8 +102,16 @@ std::vector<WallSample> generate_walls(bool arachne, bool half_height, int wall_
         inside.with_flow_ratio(region_config.bridge_flow.value);
     generator.solid_infill_flow = inside;
     generator.half_layer_outer_walls = half_height;
-    if (!region_config.wall_planner.value.empty())
-        generator.wall_planner = ModHost::find_wall_planner(region_config.wall_planner.value);
+    // The multi-nozzle walls planner (a native mod) reads its parameters from the print's mod settings.
+    std::unique_ptr<const ModHost::WallPlanner> planner;
+    if (!region_config.wall_planner.value.empty()) {
+        Slic3r::Test::OfficialMods mods;
+        DynamicPrintConfig         full;
+        Slic3r::Test::multi_nozzle_params(full, {{"enable", true}, {"detail_toolhead", 0}, {"small_wall_count", detail_count},
+                                                 {"interlock", interlocking}, {"wall_overlap", 15.}});
+        planner = ModHost::open_wall_planner(region_config.wall_planner.value, full, print_config, &object_config, region_config);
+        generator.wall_planner = planner.get();
+    }
     const ExPolygons lower{ExPolygon(Polygon{Point(0, 0), Point(width_scaled / 2, 0),
         Point(width_scaled / 2, side_scaled), Point(0, side_scaled)})};
     if (partial_support)

@@ -24,6 +24,7 @@
 #include <string>
 
 #include <boost/filesystem.hpp>
+#include <nlohmann/json.hpp>
 #include <libslic3r/ModelArrange.hpp>
 #include <unordered_map>
 #include <utility>
@@ -559,6 +560,26 @@ BundledMods::BundledMods() : previous(ModHost::active_mods())
 }
 
 BundledMods::~BundledMods() { ModHost::set_active_mods(previous); }
+
+OfficialMods::OfficialMods() : previous(ModHost::active_mods()) { ModHost::set_active_mods(official_mods().mods); }
+
+OfficialMods::~OfficialMods() { ModHost::set_active_mods(previous); }
+
+void set_mod_params(DynamicPrintConfig &config, const nlohmann::json &params)
+{
+    const auto    *stored = config.option<ConfigOptionString>("mod_settings");
+    nlohmann::json values = stored != nullptr && !stored->value.empty() ? nlohmann::json::parse(stored->value) : nlohmann::json::object();
+    values.update(params);
+    config.set_key_value("mod_settings", new ConfigOptionString(values.dump()));
+}
+
+void multi_nozzle_params(DynamicPrintConfig &config, const nlohmann::json &params)
+{
+    nlohmann::json prefixed = nlohmann::json::object();
+    for (const auto &[name, value] : params.items())
+        prefixed["multi_nozzle_walls." + name] = value;
+    set_mod_params(config, prefixed);
+}
 
 } } // namespace Slic3r::Test
 

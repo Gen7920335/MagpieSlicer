@@ -14,6 +14,7 @@
 #include <cstddef>
 #include "libslic3r/PrintConfig.hpp"
 #include <initializer_list>
+#include <nlohmann/json.hpp>
 #include <memory>
 #include <set>
 #include <string>
@@ -157,6 +158,22 @@ struct BundledMods
     BundledMods();
     ~BundledMods();
 };
+
+// The official native mods' manifests (official_mods()) are the active set for its lifetime, and restores the
+// previous set afterwards: a native mod's parameters are read and its rules applied, and no other mod's rules run.
+struct OfficialMods
+{
+    std::shared_ptr<const ModHost::ModSet> previous;
+    OfficialMods();
+    ~OfficialMods();
+};
+
+// Merges `params`, a JSON object of mod parameter values ({"<mod id>.<name>": value, ...}), into the mod_settings of
+// `config`, the way the settings tab stores them; later values win. A mod reads them while its manifest is active
+// (BundledMods, OfficialMods), and the mods' rules apply them when a Print is applied.
+void set_mod_params(DynamicPrintConfig &config, const nlohmann::json &params);
+// The same for parameters of the multi-nozzle walls mod: { { "<name>", value }, ... } of multi_nozzle_walls.<name>.
+void multi_nozzle_params(DynamicPrintConfig &config, const nlohmann::json &params);
 
 } } // namespace Slic3r::Test
 

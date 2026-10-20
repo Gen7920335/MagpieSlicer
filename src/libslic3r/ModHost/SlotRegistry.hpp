@@ -36,29 +36,6 @@ std::vector<const SupportGenerator *> support_generators();
 // Registers a generator; a later registration under the same name replaces the earlier one.
 void register_support_generator(SupportGenerator generator);
 
-// wall.plan: splits a region's walls between its own nozzle and a second, detail nozzle. Chosen per
-// region by the wall_planner setting; an empty setting keeps Orca's walls.
-struct WallPlanner
-{
-    std::string name;
-    std::string label;
-    // The detail nozzle's wall flow on this generator's layer, or nothing when the layer has no detail
-    // nozzle (then plan is not asked and the walls are Orca's).
-    std::function<std::optional<Flow>(const PerimeterGenerator &)> detail_flow;
-    // The plan for one island, given the wall count Orca would print (base_loop_number + 1).
-    std::function<WallPlan(const PerimeterGenerator &, const ExPolygon &island, int base_loop_number)> plan;
-    // The filament (1-based) that prints walls tagged `hint` on layer layer_id of a region whose walls
-    // would otherwise use base_filament_1based; 0 keeps Orca's choice.
-    std::function<unsigned int(const PrintConfig &, const PrintRegionConfig &, size_t layer_id, ExtrusionToolHint hint,
-                               unsigned int base_filament_1based)> wall_filament;
-    // The physical nozzle (1-based toolhead) that prints every wall of layer layer_id when the planner moves the
-    // whole layer's walls to another nozzle, so their widths are resolved on it; 0 keeps the region's own nozzle.
-    std::function<unsigned int(const PrintConfig &, const PrintRegionConfig &, size_t layer_id)> layer_wall_toolhead;
-};
-
-const WallPlanner *find_wall_planner(const std::string &name);
-void register_wall_planner(WallPlanner planner);
-
 // gcode.time_plan: decides how long to wait at each wait site of a print's G-code. A wait site sits
 // at the start of a full layer, before its first extrusion; the core marks the sites while exporting,
 // estimates their times, asks the planner and fills the waits in. Chosen by the layer_time_planner

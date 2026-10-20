@@ -79,6 +79,8 @@ TEST_CASE("Coupled candidate rejects mismatched bands and preserves surface requ
 
 TEST_CASE("Coupled core candidate stays within both hollow source sections", "[HalfLayer][Assembly][Candidate]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const auto engine = GENERATE(PerimeterGeneratorType::Classic, PerimeterGeneratorType::Arachne);
     const double parent_h_mm = GENERATE(0.1, 0.2, 0.3);
     const double ring_thickness_mm = GENERATE(0.6, 1.2, 2., 5.);
@@ -89,8 +91,8 @@ TEST_CASE("Coupled core candidate stays within both hollow source sections", "[H
         {"elefant_foot_compensation", 0.}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"wall_loops", 4}, {"detect_overhang_wall", false}, {"detect_thin_wall", true},
         {"precise_outer_wall", false}, {"outer_wall_line_width", 0.42}, {"inner_wall_line_width", 0.48},
-        {"wall_planner", "multi_nozzle"}, {"use_smaller_nozzles_in_crisp_corners", detail_nozzle}, {"crisp_corner_small_nozzle_wall_count", 2},
-        {"crisp_corner_interlace_small_nozzle_walls", true}});
+        {"wall_planner", "multi_nozzle"}});
+    multi_nozzle_params(config, { { "enable", detail_nozzle }, { "small_wall_count", 2 }, { "interlock", true } });
     config.set_key_value("wall_generator", new ConfigOptionEnum<PerimeterGeneratorType>(engine));
     if (detail_nozzle) {
         config.set_num_extruders(2);
@@ -193,6 +195,8 @@ TEST_CASE("Coupled core candidate stays within both hollow source sections", "[H
 
 TEST_CASE("Joint gaps preserve a narrow neck attached to full-height core islands", "[HalfLayer][Assembly][JointGaps]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const auto engine = GENERATE(PerimeterGeneratorType::Classic, PerimeterGeneratorType::Arachne);
     const double h_mm = GENERATE(0.1, 0.2, 0.3);
     const double shear_ratio = GENERATE(0., 1.);
@@ -203,8 +207,8 @@ TEST_CASE("Joint gaps preserve a narrow neck attached to full-height core island
         {"wall_loops", 4}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"elefant_foot_compensation", 0.}, {"detect_overhang_wall", false}, {"detect_thin_wall", true},
         {"precise_outer_wall", false}, {"outer_wall_line_width", 0.42}, {"inner_wall_line_width", 0.48},
-        {"wall_planner", "multi_nozzle"}, {"use_smaller_nozzles_in_crisp_corners", detail}, {"crisp_corner_small_nozzle_wall_count", 2},
-        {"crisp_corner_interlace_small_nozzle_walls", true}});
+        {"wall_planner", "multi_nozzle"}});
+    multi_nozzle_params(config, { { "enable", detail }, { "small_wall_count", 2 }, { "interlock", true } });
     config.set_key_value("wall_generator", new ConfigOptionEnum<PerimeterGeneratorType>(engine));
     if (detail) {
         config.set_num_extruders(2);
@@ -350,6 +354,8 @@ TEST_CASE("Shell-only half-layer gap ownership preserves physical coverage witho
 
 TEST_CASE("Coupled region candidates retain material ownership and mixed-nozzle wall counts", "[HalfLayer][Assembly][Materials]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const auto engine = GENERATE(PerimeterGeneratorType::Classic, PerimeterGeneratorType::Arachne);
     const double h_mm = GENERATE(0.1, 0.2, 0.3);
     const int requested_detail = GENERATE(1, 2, 3);
@@ -365,8 +371,8 @@ TEST_CASE("Coupled region candidates retain material ownership and mixed-nozzle 
         {"single_extruder_multi_material", false}, {"elefant_foot_compensation", 0.},
         {"wall_loops", 4}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"detect_overhang_wall", false}, {"precise_outer_wall", false},
-        {"wall_planner", "multi_nozzle"}, {"use_smaller_nozzles_in_crisp_corners", true}, {"crisp_corner_small_nozzle_wall_count", requested_detail},
-        {"crisp_corner_interlace_small_nozzle_walls", true}});
+        {"wall_planner", "multi_nozzle"}});
+    multi_nozzle_params(config, { { "enable", true }, { "small_wall_count", requested_detail }, { "interlock", true } });
     config.set_key_value("wall_generator", new ConfigOptionEnum<PerimeterGeneratorType>(engine));
     Transform3d shear = Transform3d::Identity();
     shear.matrix()(0, 2) = 1.;
@@ -501,13 +507,16 @@ TEST_CASE("Half-layer assembly merges compatible walls and restores modifier fil
 
 TEST_CASE("Half-layer zero-wall candidates preserve original parent fill boundaries", "[HalfLayer][Assembly][ZeroWalls]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const auto engine = GENERATE(PerimeterGeneratorType::Classic, PerimeterGeneratorType::Arachne);
     const double h_mm = GENERATE(0.1, 0.2, 0.3);
     const bool unavailable_detail = GENERATE(false, true);
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", h_mm}, {"initial_layer_print_height", h_mm},
-        {"wall_loops", 0}, {"wall_planner", "multi_nozzle"}, {"use_smaller_nozzles_in_crisp_corners", unavailable_detail},
+        {"wall_loops", 0}, {"wall_planner", "multi_nozzle"},
         {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false}});
+    multi_nozzle_params(config, { { "enable", unavailable_detail } });
     config.set_key_value("wall_generator", new ConfigOptionEnum<PerimeterGeneratorType>(engine));
     Transform3d shear = Transform3d::Identity();
     shear.matrix()(0, 2) = 1.;
@@ -810,6 +819,8 @@ TEST_CASE("Disabling live half-height walls restores every ordinary machine comm
 
 TEST_CASE("Live half-height walls meet generated solid infill at narrow neck transitions", "[HalfLayer][LiveWalls][SolidContact]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const bool enabled = GENERATE(false, true);
     const std::string engine = GENERATE(std::string("classic"), std::string("arachne"));
     const double h_mm = GENERATE(0.1, 0.2, 0.3);
@@ -820,8 +831,8 @@ TEST_CASE("Live half-height walls meet generated solid infill at narrow neck tra
         {"wall_generator", engine}, {"wall_loops", 4}, {"outer_wall_half_layer_height", enabled},
         {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
         {"elefant_foot_compensation", 0.}, {"sparse_infill_density", 100.}, {"sparse_infill_pattern", "rectilinear"},
-        {"wall_planner", "multi_nozzle"}, {"use_smaller_nozzles_in_crisp_corners", detail}, {"crisp_corner_small_nozzle_wall_count", 2},
-        {"crisp_corner_interlace_small_nozzle_walls", true}});
+        {"wall_planner", "multi_nozzle"}});
+    multi_nozzle_params(config, { { "enable", detail }, { "small_wall_count", 2 }, { "interlock", true } });
     if (detail) {
         config.set_num_extruders(2);
         config.set_deserialize_strict({{"single_extruder_multi_material", false}});
@@ -911,6 +922,8 @@ TEST_CASE("Live half-height walls meet generated solid infill at narrow neck tra
 
 TEST_CASE("Tool and seam consumers retain auxiliary physical walls under their logical parent", "[HalfLayer][Consumers]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const std::string engine = GENERATE(std::string("classic"), std::string("arachne"));
     const double h_mm = GENERATE(0.2, 0.3);
     const int detail_count = GENERATE(1, 2);
@@ -922,10 +935,10 @@ TEST_CASE("Tool and seam consumers retain auxiliary physical walls under their l
     config.set_deserialize_strict({{"single_extruder_multi_material", false}, {"wall_generator", engine},
         {"layer_height", h_mm}, {"initial_layer_print_height", h_mm}, {"wall_loops", 2},
         {"outer_wall_half_layer_height", true}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
-        {"detect_overhang_wall", false}, {"wall_planner", "multi_nozzle"}, {"use_smaller_nozzles_in_crisp_corners", true},
-        // This fixture intentionally needs both different-colored materials;
-        // Auto must not substitute another color just to obtain a small nozzle.
-        {"crisp_corner_detail_toolhead", 2}, {"crisp_corner_small_nozzle_wall_count", detail_count}});
+        {"detect_overhang_wall", false}, {"wall_planner", "multi_nozzle"}});
+    // This fixture intentionally needs both different-colored materials;
+    // Auto must not substitute another color just to obtain a small nozzle.
+    multi_nozzle_params(config, { { "enable", true }, { "detail_toolhead", 2 }, { "small_wall_count", detail_count } });
     config.set_key_value("seam_position", new ConfigOptionEnum<SeamPosition>(spRear));
     Print print;
     Model model;
@@ -958,6 +971,8 @@ TEST_CASE("Tool and seam consumers retain auxiliary physical walls under their l
 
 TEST_CASE("Sliced half-height paths produce a complete material-resolved execution plan", "[HalfLayer][ExecutionPaths]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const std::string engine = GENERATE(std::string("classic"), std::string("arachne"));
     const double h_mm = GENERATE(0.1, 0.3);
     const int detail_count = GENERATE(0, 1, 2);
@@ -969,8 +984,8 @@ TEST_CASE("Sliced half-height paths produce a complete material-resolved executi
         set_toolhead_nozzle_diameter(config, 1, 0.2);
         config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
         config.set_deserialize_strict({{"single_extruder_multi_material", false},
-            {"wall_planner", "multi_nozzle"}, {"use_smaller_nozzles_in_crisp_corners", true}, {"crisp_corner_detail_toolhead", 2},
-            {"crisp_corner_small_nozzle_wall_count", detail_count}});
+            {"wall_planner", "multi_nozzle"}});
+        multi_nozzle_params(config, { { "enable", true }, { "detail_toolhead", 2 }, { "small_wall_count", detail_count } });
     }
     config.set_deserialize_strict({{"wall_generator", engine}, {"layer_height", h_mm},
         {"initial_layer_print_height", h_mm}, {"wall_loops", detail_count == 0 ? 4 : 2},
@@ -2447,6 +2462,8 @@ TEST_CASE("Bunny60 exports half-height support through every native generator", 
 // before extracting the emitter's shared speed/flow calculation.
 TEST_CASE("Shared speed calculation preserves captured machine commands", "[.SpeedBaseline]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const std::string engine = GENERATE(std::string("classic"), std::string("arachne"));
     const int variant = GENERATE(0, 1, 2, 3);
     auto config = variant == 0 ? DynamicPrintConfig::full_print_config() : multifilament_config(2);
@@ -2456,12 +2473,12 @@ TEST_CASE("Shared speed calculation preserves captured machine commands", "[.Spe
     if (variant > 0) {
         config.set_num_extruders(2);
         config.set_deserialize_strict({{"single_extruder_multi_material", false},
-            {"wall_planner", "multi_nozzle"}, {"use_smaller_nozzles_in_crisp_corners", true}, {"crisp_corner_small_nozzle_wall_count", 2}});
+            {"wall_planner", "multi_nozzle"}});
+        multi_nozzle_params(config, { { "enable", true }, { "small_wall_count", 2 } });
         set_toolhead_nozzle_diameter(config, 0, 0.4);
         set_toolhead_nozzle_diameter(config, 1, 0.2);
         config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
-        config.set_key_value("crisp_corner_small_nozzle_wall_speed", new ConfigOptionFloatsOrPercents{
-            FloatOrPercent{50., true}, FloatOrPercent{20., false}});
+        multi_nozzle_params(config, { { "small_wall_speed", "50%" } });
         config.set_key_value("filament_max_volumetric_speed", new ConfigOptionFloats{12., 5.});
     }
     if (variant > 1) {

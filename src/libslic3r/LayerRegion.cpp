@@ -1,4 +1,4 @@
-#include "ModHost/SlotRegistry.hpp"
+#include "ModHost/WallPlanner.hpp"
 #include "Flow.hpp"
 #include "LineWidths.hpp"
 #include "Config.hpp"
@@ -143,10 +143,10 @@ static void make_region_perimeters(const LayerRegion &source,
 
     // MAGPIE: a wall planner that moves this layer's walls to another nozzle (wall.plan slot) has their widths
     // resolved on that nozzle, the way PrintRegion::flow() resolves them on the region's own.
-    const ModHost::WallPlanner *wall_planner = region_config.wall_planner.value.empty() ? nullptr :
-                                               ModHost::find_wall_planner(region_config.wall_planner.value);
-    const unsigned int layer_wall_toolhead = wall_planner != nullptr && wall_planner->layer_wall_toolhead ?
-        wall_planner->layer_wall_toolhead(print_config, region_config, layer.id()) : 0;
+    const std::unique_ptr<const ModHost::WallPlanner> wall_planner =
+        ModHost::open_wall_planner(region_config.wall_planner.value, layer.object()->print()->full_print_config(), print_config,
+                                   &object_config, region_config);
+    const unsigned int layer_wall_toolhead = wall_planner ? wall_planner->layer_wall_toolhead(layer.id()) : 0;
     auto wall_flow = [&](FlowRole role) {
         if (layer_wall_toolhead == 0)
             return source.flow(role, parent_height_mm);
@@ -184,7 +184,7 @@ static void make_region_perimeters(const LayerRegion &source,
 
     g.layer_id              = (int)layer.id();
     // MAGPIE: wall.plan slot.
-    g.wall_planner          = wall_planner;
+    g.wall_planner          = wall_planner.get();
     // MAGPIE: H/2 outer walls (false for the normal pass).
     g.half_layer_outer_walls = half_layer_outer_walls;
     g.gap_demands           = gap_demands;

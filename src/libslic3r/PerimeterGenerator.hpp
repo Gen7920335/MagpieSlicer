@@ -19,7 +19,7 @@
 #include "ExPolygon.hpp"
 
 namespace Slic3r { class ExtrusionEntityCollection; }
-namespace Slic3r { namespace ModHost { struct WallPlanner; } }
+namespace Slic3r { namespace ModHost { class WallPlanner; } }
 namespace Slic3r { class SurfaceCollection; }
 
 namespace Slic3r {

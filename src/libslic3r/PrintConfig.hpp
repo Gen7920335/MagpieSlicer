@@ -1571,12 +1571,6 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionString, wall_planner))
     // MAGPIE: this region's values of region-scope mod parameters (JSON, see PrintConfig.cpp).
     ((ConfigOptionString, region_mod_settings))
-    ((ConfigOptionBool, use_smaller_nozzles_in_crisp_corners))
-    ((ConfigOptionInt, crisp_corner_detail_toolhead))
-    ((ConfigOptionInt, crisp_corner_small_nozzle_wall_count))
-    ((ConfigOptionPercent, crisp_corner_nozzle_wall_overlap))
-    ((ConfigOptionBool, crisp_corner_interlace_small_nozzle_walls))
-    ((ConfigOptionStrings, crisp_corner_large_nozzle_override_regions))
     ((ConfigOptionFloatOrPercent, crisp_corner_small_nozzle_wall_speed))
     ((ConfigOptionBool, alternate_extra_wall))
     ((ConfigOptionFloat, minimum_sparse_infill_area))

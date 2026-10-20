@@ -85,7 +85,7 @@ an empty value keeps Orca's own behaviour.
 | Slot | Setting | Modules | What the module gets and gives |
 |---|---|---|---|
 | `support.generator` | `support_generator` | `orca`, `cura`, `resin`, `mixed` | fills an object's support layers |
-| `wall.plan` | `wall_planner` | `multi_nozzle` | splits a region's walls between two nozzles |
+| `wall.plan` | `wall_planner` | `multi_nozzle` (native mod `multi_nozzle_walls`) | splits a region's walls between two nozzles; a C slot ([native-mods.md](native-mods.md)) |
 | `gcode.time_plan` | `layer_time_planner` | `blend` | the wait sites of a print (estimated interval since the previous site, park trip, tower block times, chain breaks, guessed intervals) in, per-site waits, park choice, tower cut and warnings out |
 
 `gcode.time_plan` exchanges numbers only, never G-code or geometry; the core marks the sites,

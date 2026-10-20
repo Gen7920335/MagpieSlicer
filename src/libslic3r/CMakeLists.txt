@@ -115,8 +115,6 @@ set(lisbslic3r_sources
     GCodeCompatibility.hpp
     ModHost/Builtin/MixedSupport.cpp
     ModHost/Builtin/MixedSupport.hpp
-    ModHost/Builtin/MultiNozzleWalls.cpp
-    ModHost/Builtin/MultiNozzleWalls.hpp
     ModHost/Builtin/LayerTimeBlend.cpp
     ModHost/Builtin/LayerTimeBlend.hpp
     ModHost/Builtin/ResinSupport.cpp
@@ -146,6 +144,8 @@ set(lisbslic3r_sources
     ModHost/ParamGraph.cpp
     ModHost/SlotRegistry.cpp
     ModHost/SlotRegistry.hpp
+    ModHost/WallPlanner.cpp
+    ModHost/WallPlanner.hpp
     ModHost/ParamGraph.hpp
     ConnectedBodies.cpp
     ConnectedBodies.hpp

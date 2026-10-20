@@ -8,7 +8,7 @@
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/HalfLayerSources.hpp"
 #include "libslic3r/Layer.hpp"
-#include "libslic3r/ModHost/Builtin/MultiNozzleWalls.hpp"
+#include "libslic3r/ModHost/WallPlanner.hpp"
 #include "libslic3r/Print.hpp"
 
 #include "test_helpers.hpp"
@@ -112,7 +112,8 @@ std::vector<double> wall_speeds_for_tool(const std::string &gcode, int tool)
 }
 
 // Two toolheads printing the same material in the same colour; filament base_filament prints
-// everything. Multi-nozzle walls are set through the core keys when `enabled`.
+// everything. Multi-nozzle walls are turned on through the mod's parameters when `enabled` (with OfficialMods
+// active the planner reads them).
 DynamicPrintConfig two_nozzle_config(double first_nozzle, double second_nozzle, int base_filament, const char *wall_generator, bool enabled)
 {
     DynamicPrintConfig config = multifilament_config(2, {
@@ -136,12 +137,10 @@ DynamicPrintConfig two_nozzle_config(double first_nozzle, double second_nozzle, 
     config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ first_nozzle, second_nozzle });
     config.set_key_value("filament_colour", new ConfigOptionStrings{ "#FF0000", "#FF0000" });
     size_flush_to_nozzles(config);
-    if (enabled)
-        config.set_deserialize_strict({
-            { "wall_planner", "multi_nozzle" },
-            { "use_smaller_nozzles_in_crisp_corners", true },
-            { "crisp_corner_small_nozzle_wall_count", 1 },
-        });
+    if (enabled) {
+        config.set_deserialize_strict({ { "wall_planner", "multi_nozzle" } });
+        multi_nozzle_params(config, { { "enable", true }, { "small_wall_count", 1 } });
+    }
     return config;
 }
 
@@ -162,32 +161,51 @@ std::vector<const ExtrusionEntity *> walls_of(const LayerRegion &region)
     return walls;
 }
 
+// The multi-nozzle walls planner opened, as the core opens it, for a region of `config` (outer wall filament 1)
+// with the mod's parameters `params`. Needs OfficialMods.
+std::unique_ptr<const ModHost::WallPlanner> open_planner(DynamicPrintConfig config, const nlohmann::json &params)
+{
+    multi_nozzle_params(config, params);
+    PrintConfig print_config;
+    print_config.apply(config, true);
+    PrintRegionConfig region;
+    region.apply(config, true);
+    return ModHost::open_wall_planner("multi_nozzle", config, print_config, nullptr, region);
+}
+
 } // namespace
 
 TEST_CASE("Multi-nozzle walls: override ranges parse and select the last matching range", "[MultiNozzleWalls]")
 {
-    using namespace ModHost::MultiNozzleWalls;
-    CHECK_FALSE(parse_override_range("").has_value());
-    CHECK_FALSE(parse_override_range("3:6").has_value());
-    CHECK_FALSE(parse_override_range("0:6:2").has_value());
-    const auto reversed = parse_override_range("6:3:2");
-    REQUIRE(reversed.has_value());
-    CHECK(reversed->first_layer == 3);
-    CHECK(reversed->last_layer == 6);
-    CHECK(reversed->toolhead_1based == 2);
-
-    PrintRegionConfig region;
-    region.crisp_corner_large_nozzle_override_regions.values = { "3:6:2;5:5:3" };
-    CHECK(override_toolhead(region, 1, 4) == 0); // layer 2
-    CHECK(override_toolhead(region, 2, 4) == 2); // layer 3
-    CHECK(override_toolhead(region, 4, 4) == 3); // layer 5: the later range wins
-    CHECK(override_toolhead(region, 5, 4) == 2); // layer 6
-    CHECK(override_toolhead(region, 6, 4) == 0); // layer 7
-    CHECK(override_toolhead(region, 4, 2) == 2); // toolhead 3 does not exist on a two-toolhead printer
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
+    // The toolhead printing every wall of layers 1..8 (0 for the region's own) with `ranges` on a printer of
+    // `toolheads` 0.4 mm toolheads.
+    auto layer_toolheads = [](const char *ranges, int toolheads) {
+        DynamicPrintConfig config = multifilament_config(toolheads);
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats(size_t(toolheads), 0.4));
+        const auto planner = open_planner(config, { { "override_regions", ranges } });
+        std::vector<unsigned int> out;
+        for (size_t layer_id = 0; layer_id < 8; ++layer_id)
+            out.push_back(planner->layer_wall_toolhead(layer_id));
+        return out;
+    };
+    const std::vector<unsigned int> none(8, 0);
+    CHECK(layer_toolheads("", 4) == none);
+    CHECK(layer_toolheads("3:6", 4) == none);
+    CHECK(layer_toolheads("0:6:2", 4) == none);
+    // A reversed range is put in order: layers 3 to 6.
+    CHECK(layer_toolheads("6:3:2", 4) == std::vector<unsigned int>{ 0, 0, 2, 2, 2, 2, 0, 0 });
+    // Layer 5: the later range wins.
+    CHECK(layer_toolheads("3:6:2;5:5:3", 4) == std::vector<unsigned int>{ 0, 0, 2, 2, 3, 2, 0, 0 });
+    // Toolhead 3 does not exist on a two-toolhead printer.
+    CHECK(layer_toolheads("3:6:2;5:5:3", 2) == std::vector<unsigned int>{ 0, 0, 2, 2, 2, 2, 0, 0 });
 }
 
 TEST_CASE("Multi-nozzle walls off leaves wall routing to the wall filament", "[MultiNozzleWalls]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const char *wall_generator = GENERATE("classic", "arachne");
     DYNAMIC_SECTION(wall_generator) {
         const std::string output = slice({ cube(20) }, two_nozzle_config(0.4, 0.15, 1, wall_generator, false));
@@ -197,6 +215,8 @@ TEST_CASE("Multi-nozzle walls off leaves wall routing to the wall filament", "[M
 
 TEST_CASE("Classic and Arachne route detail walls to a smaller nozzle", "[MultiNozzleWalls]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const char  *wall_generator = GENERATE("classic", "arachne");
     const double detail_nozzle  = GENERATE(0.15, 0.2);
     DYNAMIC_SECTION(wall_generator << " detail nozzle " << detail_nozzle) {
@@ -208,6 +228,8 @@ TEST_CASE("Classic and Arachne route detail walls to a smaller nozzle", "[MultiN
 
 TEST_CASE("Detail tool selection reverses for a larger second nozzle", "[MultiNozzleWalls]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const char  *wall_generator = GENERATE("classic", "arachne");
     const double large_nozzle   = GENERATE(0.6, 0.8);
     DYNAMIC_SECTION(wall_generator << " base nozzle " << large_nozzle) {
@@ -219,18 +241,22 @@ TEST_CASE("Detail tool selection reverses for a larger second nozzle", "[MultiNo
 
 TEST_CASE("A different colour on the smaller nozzle is not used for detail walls", "[MultiNozzleWalls]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, "classic", true);
     config.set_key_value("filament_colour", new ConfigOptionStrings{ "#FF0000", "#00FF00" });
     CHECK(tools_for_role(slice({ cube(20) }, config), "perimeter") == std::set<int>{ 0 });
 
     SECTION("unless it is chosen as the crisp corner toolhead") {
-        config.set_deserialize_strict({ { "crisp_corner_detail_toolhead", 2 } });
+        multi_nozzle_params(config, { { "detail_toolhead", 2 } });
         CHECK(tools_for_role(slice({ cube(20) }, config), "perimeter") == std::set<int>{ 0, 1 });
     }
 }
 
 TEST_CASE("A filament with no colour of its own is not chosen for detail walls", "[MultiNozzleWalls]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // A one-entry colour list (the CLI without --filament-colour) gives filament 2 no colour; Orca
     // cannot print a filament past the list either, so automatic selection must not pick it.
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, "classic", true);
@@ -238,39 +264,42 @@ TEST_CASE("A filament with no colour of its own is not chosen for detail walls",
     CHECK(tools_for_role(slice({ cube(20) }, config), "perimeter") == std::set<int>{ 0 });
 }
 
-TEST_CASE("The multi-nozzle walls mod drives the same routing as the core keys", "[MultiNozzleWalls][Mods]")
+TEST_CASE("An object's own multi-nozzle parameters override the print's", "[MultiNozzleWalls][Mods]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const char *wall_generator = GENERATE("classic", "arachne");
     DYNAMIC_SECTION(wall_generator) {
-        // Core keys with no mod loaded (a loaded mod's rules own these keys).
-        const auto key_layers = wall_tools_per_layer(slice({ cube(20) }, two_nozzle_config(0.4, 0.15, 1, wall_generator, true)));
-
-        BundledMods mods;
-        REQUIRE(mods.errors.empty());
-        DynamicPrintConfig by_mod = two_nozzle_config(0.4, 0.15, 1, wall_generator, false);
-        by_mod.set_key_value("mod_settings", new ConfigOptionString(nlohmann::json{ { "multi_nozzle_walls.enable", true } }.dump()));
-        const auto mod_layers = wall_tools_per_layer(slice({ cube(20) }, by_mod));
-        REQUIRE(mod_layers.size() == key_layers.size());
-        for (size_t layer_id = 0; layer_id < mod_layers.size(); ++layer_id) {
-            INFO("layer " << layer_id + 1);
-            CHECK(mod_layers[layer_id] == key_layers[layer_id]);
-        }
-        CHECK(mod_layers[5] == std::set<int>{ 0, 1 });
+        // Detail walls on for the print, off for the second object (its region-scope value).
+        DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, wall_generator, true);
+        Print print;
+        Model model;
+        init_print({ cube(20), cube(20) }, print, model, config);
+        model.objects[1]->config.set_key_value("region_mod_settings",
+                                               new ConfigOptionString(nlohmann::json{ { "multi_nozzle_walls.enable", false } }.dump()));
+        print.apply(model, config);
+        print.process();
+        auto detail_walls = [&print](size_t object_id) {
+            const auto walls = walls_of(*print.objects()[object_id]->layers()[5]->regions().front());
+            return std::count_if(walls.begin(), walls.end(), [](const ExtrusionEntity *e) { return e->tool_hint == ExtrusionToolHint::DetailWall; });
+        };
+        CHECK(detail_walls(0) == 1);
+        CHECK(detail_walls(1) == 0);
     }
 }
 
 TEST_CASE("Interlocking layers alternate the detail wall count and keep the total", "[MultiNozzleWalls][Interlocking]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const char *wall_generator = GENERATE("classic", "arachne");
     DYNAMIC_SECTION(wall_generator) {
         DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, wall_generator, true);
         config.set_deserialize_strict({
             { "layer_height", 0.1 },
             { "initial_layer_print_height", 0.1 },
-            { "wall_loops", 6 },
-            { "crisp_corner_small_nozzle_wall_count", 4 },
-            { "crisp_corner_interlace_small_nozzle_walls", true },
-        });
+            { "wall_loops", 6 } });
+        multi_nozzle_params(config, { { "small_wall_count", 4 }, { "interlock", true } });
         Print print;
         Model model;
         init_print({ cube(20) }, print, model, config);
@@ -300,6 +329,8 @@ TEST_CASE("Interlocking layers alternate the detail wall count and keep the tota
 
 TEST_CASE("Small nozzle wall speed applies to the detail walls only", "[MultiNozzleWalls][Speed]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const char *wall_generator = GENERATE("classic", "arachne");
     const auto [value, percent, expected] = GENERATE(table<double, bool, double>({
         { 20., false, 20. },
@@ -309,7 +340,7 @@ TEST_CASE("Small nozzle wall speed applies to the detail walls only", "[MultiNoz
         DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, wall_generator, true);
         config.set_key_value("outer_wall_speed", new ConfigOptionFloatsNullable{ 80., 80. });
         config.set_key_value("inner_wall_speed", new ConfigOptionFloatsNullable{ 120., 120. });
-        config.set_key_value("crisp_corner_small_nozzle_wall_speed", new ConfigOptionFloatOrPercent(value, percent));
+        multi_nozzle_params(config, { { "small_wall_speed", percent ? nlohmann::json(std::to_string(int(value)) + "%") : nlohmann::json(value) } });
         config.set_key_value("filament_max_volumetric_speed", new ConfigOptionFloats{ 100., 100. });
         config.set_key_value("slow_down_for_layer_cooling", new ConfigOptionBools{ false, false });
         config.set_deserialize_strict({ { "slow_down_layers", 1 } });
@@ -327,10 +358,12 @@ TEST_CASE("Small nozzle wall speed applies to the detail walls only", "[MultiNoz
 
 TEST_CASE("Large nozzle override prints the chosen layers' walls with one toolhead", "[MultiNozzleWalls][Override]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const char *wall_generator = GENERATE("classic", "arachne");
     DYNAMIC_SECTION(wall_generator) {
         DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, wall_generator, true);
-        config.set_key_value("crisp_corner_large_nozzle_override_regions", new ConfigOptionStrings{ "5:8:1" });
+        multi_nozzle_params(config, { { "override_regions", "5:8:1" } });
         const auto layers = wall_tools_per_layer(slice({ cube(20) }, config));
         REQUIRE(layers.size() > 10);
         for (size_t layer_id = 4; layer_id < 8; ++layer_id) {
@@ -339,7 +372,7 @@ TEST_CASE("Large nozzle override prints the chosen layers' walls with one toolhe
         }
         CHECK(layers[9] == std::set<int>{ 0, 1 });
 
-        config.set_key_value("crisp_corner_large_nozzle_override_regions", new ConfigOptionStrings{ "5:8:2" });
+        multi_nozzle_params(config, { { "override_regions", "5:8:2" } });
         const auto small = wall_tools_per_layer(slice({ cube(20) }, config));
         REQUIRE(small.size() > 10);
         CHECK(small[5] == std::set<int>{ 1 });
@@ -367,6 +400,8 @@ TEST_CASE("Large nozzle override prints the chosen layers' walls with one toolhe
 
 TEST_CASE("Flush into objects keeps multi-nozzle wall routing", "[MultiNozzleWalls]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const char *wall_generator = GENERATE("classic", "arachne");
     DYNAMIC_SECTION(wall_generator) {
         DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, wall_generator, true);
@@ -380,6 +415,8 @@ TEST_CASE("Flush into objects keeps multi-nozzle wall routing", "[MultiNozzleWal
 
 TEST_CASE("Single wall on top surfaces keeps the planned walls below the top", "[MultiNozzleWalls][Arachne]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const char *wall_generator = GENERATE("classic", "arachne");
     const int   detail_walls   = GENERATE(1, 2);
     DYNAMIC_SECTION(wall_generator << " detail walls " << detail_walls) {
@@ -389,9 +426,8 @@ TEST_CASE("Single wall on top surfaces keeps the planned walls below the top", "
             { "wall_loops", 3 },
             { "layer_height", 0.2 },
             { "initial_layer_print_height", 0.2 },
-            { "only_one_wall_top", true },
-            { "crisp_corner_small_nozzle_wall_count", detail_walls },
-        });
+            { "only_one_wall_top", true } });
+        multi_nozzle_params(config, { { "small_wall_count", detail_walls } });
         Print print;
         Model model;
         init_print({ cube(20) }, print, model, config);
@@ -407,6 +443,8 @@ TEST_CASE("Single wall on top surfaces keeps the planned walls below the top", "
 
 TEST_CASE("Single wall on top surfaces gives no large nozzle wall a detail nozzle width", "[MultiNozzleWalls][Arachne][HalfLayer]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // Line 1 Hilda report (0.15/0.4 U1): Arachne's inner pass under a top surface took the single pass's
     // detail-nozzle profile, so its first bead got the 0.15 mm nozzle's width while its depth routed it to
     // the 0.4 mm nozzle. The last layer below the step of a 20 mm box carrying a 10 mm box has a top surface
@@ -421,10 +459,8 @@ TEST_CASE("Single wall on top surfaces gives no large nozzle wall a detail nozzl
             { "initial_layer_print_height", 0.12 },
             { "top_shell_layers", 3 },
             { "only_one_wall_top", true },
-            { "crisp_corner_small_nozzle_wall_count", 2 },
-            { "crisp_corner_interlace_small_nozzle_walls", true },
-            { "outer_wall_half_layer_height", h2 },
-        });
+            { "outer_wall_half_layer_height", h2 } });
+        multi_nozzle_params(config, { { "small_wall_count", 2 }, { "interlock", true } });
         TriangleMesh mesh = make_cube(20., 20., step_mm);
         TriangleMesh top  = make_cube(10., 10., 3.);
         top.translate(5.f, 5.f, float(step_mm));
@@ -482,6 +518,8 @@ TEST_CASE("Single wall on top surfaces gives no large nozzle wall a detail nozzl
 
 TEST_CASE("Gap fill between large walls stays on the base nozzle with detail walls", "[MultiNozzleWalls]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // Classic walls on a 0.6 mm base nozzle leave gap fill in the middle of a 3 mm wide bar (convex, so its corners
     // get one detail wall on the 0.4 mm nozzle). That gap lies between the large walls and is sized for them, so it
     // stays on the base nozzle with or without the detail wall (line 1 sent it to the detail nozzle; gap fill between
@@ -492,7 +530,7 @@ TEST_CASE("Gap fill between large walls stays on the base nozzle with detail wal
     REQUIRE_FALSE(gap_tools.empty());
     CHECK(gap_tools == std::set<int>{ 1 });
 
-    config.set_deserialize_strict({ { "use_smaller_nozzles_in_crisp_corners", false } });
+    multi_nozzle_params(config, { { "enable", false } });
     CHECK(tools_for_type(slice({ make_cube(20., 3., 10.) }, config), "Gap infill") == std::set<int>{ 1 });
 }
 
@@ -500,6 +538,8 @@ TEST_CASE("Gap fill between large walls stays on the base nozzle with detail wal
 TEST_CASE("Different inner and outer materials retain their actual tools with every half-layer mode",
           "[MultiNozzleWalls][HalfLayer][Line1]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const char *engine = GENERATE("classic", "arachne");
     const bool mixed_sizes = GENERATE(false, true);
     const bool reversed = GENERATE(false, true);
@@ -545,6 +585,8 @@ TEST_CASE("Different inner and outer materials retain their actual tools with ev
 TEST_CASE("Loaded STL geometry preserves mixed-nozzle wall routing",
           "[MultiNozzleWalls][Line1][LoadedMesh]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     TriangleMesh probe;
     const std::string probe_path = std::string(TEST_DATA_DIR) + "/small_nozzle_geometry_probe.stl";
     probe.ReadSTLFile(probe_path.c_str());
@@ -568,54 +610,53 @@ TEST_CASE("Loaded STL geometry preserves mixed-nozzle wall routing",
 // MAGPIE: line 1 (Beta 7) routing safety, on the detail tool chooser itself. Filament n is on
 // toolhead n; nozzle sizes 0.6, 0.4, 0.2 and 0.15 mm.
 namespace {
-PrintConfig four_nozzle_print_config(const std::vector<std::string> &colours, const std::vector<std::string> &types)
+DynamicPrintConfig four_nozzle_print_config(const std::vector<std::string> &colours, const std::vector<std::string> &types)
 {
     DynamicPrintConfig config = multifilament_config(4);
     config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.6, 0.4, 0.2, 0.15 });
     config.set_key_value("filament_colour", new ConfigOptionStrings(colours));
     config.set_key_value("filament_type", new ConfigOptionStrings(types));
     config.set_key_value("filament_soluble", new ConfigOptionBools{ false, false, false, false });
-    PrintConfig print_config;
-    print_config.apply(config, true);
-    return print_config;
+    return config;
 }
-PrintRegionConfig detail_region_config(int detail_toolhead)
+// The filament printing the detail walls of walls of filament 1, as the planner opened on `config` chooses it with
+// crisp corner toolhead `detail_toolhead` (1 when it keeps the walls' own).
+unsigned int detail_filament(const DynamicPrintConfig &config, int detail_toolhead)
 {
-    PrintRegionConfig region;
-    region.use_smaller_nozzles_in_crisp_corners.value = true;
-    region.crisp_corner_detail_toolhead.value         = detail_toolhead;
-    return region;
+    return open_planner(config, { { "enable", true }, { "detail_toolhead", detail_toolhead } })->wall_filament(0, ExtrusionToolHint::DetailWall, 1);
 }
 } // namespace
 
 TEST_CASE("Automatic detail walls do not substitute a different material", "[MultiNozzleWalls]")
 {
-    using ModHost::MultiNozzleWalls::detail_tool;
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // Same colour everywhere; filament 1 prints the walls on the 0.6 mm nozzle.
-    PrintConfig config = four_nozzle_print_config({ "#FF0000", "#FF0000", "#FF0000", "#FF0000" }, { "PLA", "PETG", "PVA", "PLA" });
+    DynamicPrintConfig config = four_nozzle_print_config({ "#FF0000", "#FF0000", "#FF0000", "#FF0000" }, { "PLA", "PETG", "PVA", "PLA" });
     // 0.15 mm (filament 4) is the same material: chosen.
-    CHECK(detail_tool(config, detail_region_config(0), 1).filament_1based == 4);
-    config.filament_type.values[3] = "PETG";
+    CHECK(detail_filament(config, 0) == 4);
+    config.option<ConfigOptionStrings>("filament_type")->values[3] = "PETG";
     // Filament 4 is now PETG and 3 is PVA: neither is PLA, so no detail nozzle is chosen automatically.
-    CHECK(detail_tool(config, detail_region_config(0), 1).filament_1based == 1);
+    CHECK(detail_filament(config, 0) == 1);
     // A chosen crisp-corner toolhead stays available for intentional combinations.
-    CHECK(detail_tool(config, detail_region_config(4), 1).filament_1based == 4);
-    config.filament_type.values[2] = "PLA";
-    config.filament_soluble.values[2] = true;
+    CHECK(detail_filament(config, 4) == 4);
+    config.option<ConfigOptionStrings>("filament_type")->values[2] = "PLA";
+    config.option<ConfigOptionBools>("filament_soluble")->values[2] = true;
     // A soluble filament is not a stand-in for the wall filament even with the same type name.
-    CHECK(detail_tool(config, detail_region_config(0), 1).filament_1based == 1);
+    CHECK(detail_filament(config, 0) == 1);
 }
 
 TEST_CASE("Detail routing applies colour priority then the chosen toolhead", "[MultiNozzleWalls]")
 {
-    using ModHost::MultiNozzleWalls::detail_tool;
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     SECTION("a smaller nozzle with the wall colour wins over the chosen toolhead") {
-        const PrintConfig config = four_nozzle_print_config({ "#0000FF", "#FF0000", "#00FF00", "#0000FF" }, { "PLA", "PLA", "PLA", "PLA" });
-        CHECK(detail_tool(config, detail_region_config(2), 1).filament_1based == 4);
+        const DynamicPrintConfig config = four_nozzle_print_config({ "#0000FF", "#FF0000", "#00FF00", "#0000FF" }, { "PLA", "PLA", "PLA", "PLA" });
+        CHECK(detail_filament(config, 2) == 4);
     }
     SECTION("the chosen toolhead is used when no smaller nozzle has the wall colour") {
-        const PrintConfig config = four_nozzle_print_config({ "#0000FF", "#FF0000", "#00FF00", "#FFFF00" }, { "PLA", "PLA", "PLA", "PLA" });
-        CHECK(detail_tool(config, detail_region_config(2), 1).filament_1based == 2);
+        const DynamicPrintConfig config = four_nozzle_print_config({ "#0000FF", "#FF0000", "#00FF00", "#FFFF00" }, { "PLA", "PLA", "PLA", "PLA" });
+        CHECK(detail_filament(config, 2) == 2);
     }
 }
 
@@ -623,15 +664,19 @@ TEST_CASE("Detail routing applies colour priority then the chosen toolhead", "[M
 // a tool even though the other object never uses it.
 TEST_CASE("Sequential detail walls register tools from every object", "[MultiNozzleWalls]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const char  *wall_generator = GENERATE("classic", "arachne");
     const size_t detail_object  = GENERATE(size_t(0), size_t(1));
     CAPTURE(wall_generator, detail_object);
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, wall_generator, true);
-    config.set_deserialize_strict({ { "print_sequence", "by object" }, { "use_smaller_nozzles_in_crisp_corners", false }, { "gcode_comments", true } });
+    config.set_deserialize_strict({ { "print_sequence", "by object" }, { "gcode_comments", true } });
+    multi_nozzle_params(config, { { "enable", false } });
     Print print;
     Model model;
     init_print({ cube(6), cube(6) }, print, model, config);
-    model.objects[detail_object]->config.set_key_value("use_smaller_nozzles_in_crisp_corners", new ConfigOptionBool(true));
+    model.objects[detail_object]->config.set_key_value("region_mod_settings",
+                                                       new ConfigOptionString(nlohmann::json{ { "multi_nozzle_walls.enable", true } }.dump()));
     print.apply(model, config);
     REQUIRE_NOTHROW(print.process());
     const std::string output = Slic3r::Test::gcode(print);
@@ -643,11 +688,14 @@ TEST_CASE("Sequential detail walls register tools from every object", "[MultiNoz
 // fresh Print gives.
 TEST_CASE("Nozzle edits reslice the same Print like a fresh Print", "[MultiNozzleWalls]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const bool half_height = GENERATE(false, true);
     CAPTURE(half_height);
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.4, 1, "arachne", true);
     config.set_deserialize_strict({ { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 },
-                                    { "crisp_corner_detail_toolhead", 2 }, { "outer_wall_half_layer_height", half_height } });
+                                    { "outer_wall_half_layer_height", half_height } });
+    multi_nozzle_params(config, { { "detail_toolhead", 2 } });
     Print print;
     Model model;
     init_print({ cube(8) }, print, model, config);
@@ -681,6 +729,8 @@ TEST_CASE("Nozzle edits reslice the same Print like a fresh Print", "[MultiNozzl
 // edit to any of them must rebuild the walls of the same Print exactly like a fresh Print.
 TEST_CASE("Material edits reslice the same Print like a fresh Print", "[MultiNozzleWalls][Invalidation]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const int edit = GENERATE(0, 1, 2); // colour, type, soluble
     CAPTURE(edit);
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, "classic", true);
@@ -725,12 +775,14 @@ TEST_CASE("Material edits reslice the same Print like a fresh Print", "[MultiNoz
 // it still slices, keeps fewer walls than planned, and the walls print only on the two nozzles.
 TEST_CASE("Narrow regions clip the wall plan and print on the two nozzles", "[MultiNozzleWalls][Narrow]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     const char  *generator = GENERATE("classic", "arachne");
     const double width_mm  = GENERATE(1.2, 2.4);
     CAPTURE(generator, width_mm);
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, generator, true);
-    config.set_deserialize_strict({ { "layer_height", 0.1 }, { "initial_layer_print_height", 0.1 }, { "wall_loops", 6 },
-                                    { "crisp_corner_small_nozzle_wall_count", 8 }, { "crisp_corner_interlace_small_nozzle_walls", true } });
+    config.set_deserialize_strict({ { "layer_height", 0.1 }, { "initial_layer_print_height", 0.1 }, { "wall_loops", 6 } });
+    multi_nozzle_params(config, { { "small_wall_count", 8 }, { "interlock", true } });
     Print print;
     Model model;
     REQUIRE_NOTHROW(init_print({ make_cube(width_mm, 20., 20.) }, print, model, config));
@@ -752,6 +804,8 @@ TEST_CASE("Narrow regions clip the wall plan and print on the two nozzles", "[Mu
 
 TEST_CASE("Every detail wall prints at the detail nozzle's width", "[MultiNozzleWalls][Classic]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // Before: Classic gave the inner detail walls (depth 1 and deeper) the large nozzle's width,
     // so the 0.15 mm nozzle printed them at about 0.45 mm. Line 1 used the detail flow for every
     // detail wall, as Arachne already does here.
@@ -761,9 +815,8 @@ TEST_CASE("Every detail wall prints at the detail nozzle's width", "[MultiNozzle
         config.set_deserialize_strict({
             { "wall_loops", 3 },
             { "layer_height", 0.2 },
-            { "initial_layer_print_height", 0.2 },
-            { "crisp_corner_small_nozzle_wall_count", 2 },
-        });
+            { "initial_layer_print_height", 0.2 } });
+        multi_nozzle_params(config, { { "small_wall_count", 2 } });
         Print print;
         Model model;
         init_print({ cube(20) }, print, model, config);
@@ -800,6 +853,8 @@ TEST_CASE("Every detail wall prints at the detail nozzle's width", "[MultiNozzle
 
 TEST_CASE("Absolute line widths keep detail walls on every layer at the detail nozzle's width", "[MultiNozzleWalls][Regression]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // Before: an absolute 0.42 mm outer wall width was used as is on the 0.15 mm nozzle. The planner then
     // saw no gain over the 0.4 mm nozzle (both beads 0.42 mm) and dropped the detail walls above the
     // first layer, and the first layer's detail walls printed 0.42 mm wide from the 0.15 mm nozzle.
@@ -855,6 +910,8 @@ TEST_CASE("Absolute line widths keep detail walls on every layer at the detail n
 
 TEST_CASE("An absolute width set on the object follows each nozzle like the print's own widths", "[MultiNozzleWalls][Regression]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // Walls on filament 2, the 0.15 mm nozzle; the print sets percentages, the object an absolute 0.42 mm.
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 2, "arachne", false);
     config.set_deserialize_strict({ { "layer_height", 0.1 }, { "initial_layer_print_height", 0.1 }, // mm
@@ -1026,6 +1083,8 @@ std::string join_lines(const std::vector<std::string> &lines)
 
 TEST_CASE("Every role on a mixed-nozzle printer prints the width resolved on its own nozzle", "[MultiNozzleWalls][Widths]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // Support on the 0.15 mm nozzle, everything else on the 0.4 mm one, with the stock U1 absolute widths of a
     // 0.4 mm process. The nozzle order is also swapped, so a nozzle looked up by the wrong index shows.
     const bool  small_first    = GENERATE(true, false);
@@ -1079,6 +1138,8 @@ TEST_CASE("Every role on a mixed-nozzle printer prints the width resolved on its
 
 TEST_CASE("Detail and large walls under a single top wall print their own nozzle's width", "[MultiNozzleWalls][Widths][HalfLayer]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // The geometry of "Single wall on top surfaces gives no large nozzle wall a detail nozzle width", judged by
     // the width harness over the whole G-code instead of one layer's extrusion entities. The step height picks
     // an odd (one detail wall) or even (two detail walls) layer below the step.
@@ -1089,9 +1150,8 @@ TEST_CASE("Detail and large walls under a single top wall print their own nozzle
         config.set_deserialize_strict({
             { "wall_loops", 2 }, { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
             { "top_shell_layers", 3 }, { "only_one_wall_top", true },
-            { "crisp_corner_small_nozzle_wall_count", 2 }, { "crisp_corner_interlace_small_nozzle_walls", true },
-            { "outer_wall_half_layer_height", h2 },
-        });
+            { "outer_wall_half_layer_height", h2 } });
+        multi_nozzle_params(config, { { "small_wall_count", 2 }, { "interlock", true } });
         TriangleMesh mesh = make_cube(20., 20., step_mm);
         TriangleMesh top  = make_cube(10., 10., 3.);
         top.translate(5.f, 5.f, float(step_mm));
@@ -1108,6 +1168,8 @@ TEST_CASE("Detail and large walls under a single top wall print their own nozzle
 
 TEST_CASE("Each object's brim is printed in the width of the nozzle of the tool that prints it", "[MultiNozzleWalls][Widths]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // One object printed by the 0.4 mm nozzle, one by the 0.15 mm nozzle, each with its brim. Orca sized every brim on
     // the nozzle of the print's first region. Stock U1 absolute widths of a 0.4 mm process: a brim is 0.5 mm on the
     // 0.4 mm nozzle and 125 % (0.1875 mm) on the 0.15 mm one.
@@ -1141,6 +1203,8 @@ TEST_CASE("Each object's brim is printed in the width of the nozzle of the tool 
 
 TEST_CASE("Each tool prints the prime tower in its own nozzle's width", "[MultiNozzleWalls][Widths][WipeTower]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // Outer walls on one nozzle, everything else on the other: a tool change and a purge on the tower every layer.
     // WipeTower2 printed the whole tower in 1.25 x the last tool's nozzle (0.5 mm from the 0.15 mm nozzle too).
     const bool small_first = GENERATE(true, false); // nozzle order
@@ -1174,10 +1238,12 @@ TEST_CASE("Each tool prints the prime tower in its own nozzle's width", "[MultiN
 
 TEST_CASE("Detail and large walls overlap on single-wall-top layers as on other layers", "[MultiNozzleWalls][Arachne]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // A 20 mm box carrying a 10 mm box flush with its left side: the last layer below the step has a U-shaped top
     // surface, so Arachne's single-wall-top
     // path prints the detail walls in one pass and the large walls in a second. On other layers one pass places
-    // the first large wall the plan's boundary overlap (crisp_corner_nozzle_wall_overlap) into the last detail wall.
+    // the first large wall the plan's boundary overlap (the mod's wall_overlap) into the last detail wall.
     // The gap between their centerlines on the box's straight left side must be the same on both kinds of layer.
     const double step_mm = GENERATE(6.0, 6.12); // the step layer is odd (one detail wall) or even (two)
     const bool   h2      = GENERATE(false, true);
@@ -1186,10 +1252,8 @@ TEST_CASE("Detail and large walls overlap on single-wall-top layers as on other 
         config.set_deserialize_strict({
             { "wall_loops", 2 }, { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
             { "top_shell_layers", 3 }, { "only_one_wall_top", true },
-            { "crisp_corner_small_nozzle_wall_count", 2 }, { "crisp_corner_interlace_small_nozzle_walls", true },
-            { "crisp_corner_nozzle_wall_overlap", "30%" },
-            { "outer_wall_half_layer_height", h2 },
-        });
+            { "outer_wall_half_layer_height", h2 } });
+        multi_nozzle_params(config, { { "small_wall_count", 2 }, { "interlock", true }, { "wall_overlap", 30 } });
         TriangleMesh mesh = make_cube(20., 20., step_mm);
         TriangleMesh top  = make_cube(10., 10., 3.);
         top.translate(0.f, 5.f, float(step_mm));
@@ -1262,6 +1326,8 @@ TEST_CASE("Detail and large walls overlap on single-wall-top layers as on other 
 
 TEST_CASE("A narrow island's outer wall at the detail width is printed by the detail nozzle", "[MultiNozzleWalls][Classic]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // Classic prints the outer wall of a narrow island (narrower than two large outer walls, BBS's narrow loop) at
     // the narrow-loop width, which the wall planner makes the detail nozzle's. A thin round tube has a hole and no
     // corner sharp enough for the detail nozzle, so island_needs_detail() leaves its wall plan off; its narrow walls
@@ -1331,6 +1397,8 @@ TEST_CASE("A narrow island's outer wall at the detail width is printed by the de
 
 TEST_CASE("Gap fill between large walls is printed by the large nozzle", "[MultiNozzleWalls][Classic]")
 {
+    // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
+    OfficialMods mods;
     // Classic sizes gap fill for the large walls (up to two large wall spacings wide). Gap fill between the large
     // walls of a wedge used to go to the detail nozzle with the rest of the region's gap fill, a 0.6 mm line from a
     // 0.15 mm nozzle, which the line width check stops. Only gap fill between two detail walls goes to it now.
@@ -1340,9 +1408,9 @@ TEST_CASE("Gap fill between large walls is printed by the large nozzle", "[Multi
         DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "classic", true);
         config.set_deserialize_strict({
             { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
-            { "wall_loops", 3 }, { "crisp_corner_small_nozzle_wall_count", 2 }, { "gap_fill_target", "everywhere" },
-            { "outer_wall_half_layer_height", h2 },
-        });
+            { "wall_loops", 3 },  { "gap_fill_target", "everywhere" },
+            { "outer_wall_half_layer_height", h2 } });
+        multi_nozzle_params(config, { { "small_wall_count", 2 } });
         // A wedge 20 mm long, 3 mm wide at its base, 1.2 mm tall: its walls converge and leave gaps of every width.
         indexed_triangle_set wedge;
         const float          z_top = 1.2f; // mm

@@ -1,0 +1,9 @@
+{
+    "description": "A 20 mm cube on a Snapmaker U1 with 0.4 mm (T1, T2) and 0.6 mm (T3, T4) nozzles, all loaded with the same PLA, walls on T3: the cube's corners get their outer walls from a 0.4 mm nozzle (T0 in the G-code), the rest of the walls stay on T2.",
+    "args": [ "cube_detail_walls.3mf" ],
+    "contains": [
+        "\nT0\n",
+        "\nT2\n",
+        "; mods: multi_nozzle_walls 2.0.0"
+    ]
+}

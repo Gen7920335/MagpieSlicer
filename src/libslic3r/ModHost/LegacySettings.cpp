@@ -27,6 +27,9 @@ struct LegacyKey
     const char *param; // "<mod>.<name>"
     Kind        kind;
     bool        owned;
+    // For a key earlier builds of this line defined and saved in every file: its default there, which
+    // carries nothing to migrate.
+    const char *saved_default = nullptr;
 };
 
 const LegacyKey legacy_keys[] = {
@@ -39,13 +42,13 @@ const LegacyKey legacy_keys[] = {
     { "support_interface_auxiliary_fan_speed", "low_temp_interface.aux_fan_speed", Kind::Int, true },
     { "support_interface_nozzle_wiping_on_temperature_change", "low_temp_interface.brush", Kind::Bool, true },
     { "support_interface_temperature_drop_tower", "low_temp_interface.tower", Kind::Bool, true },
-    { "use_smaller_nozzles_in_crisp_corners", "multi_nozzle_walls.enable", Kind::Bool, true },
-    { "crisp_corner_small_nozzle_wall_count", "multi_nozzle_walls.small_wall_count", Kind::Int, true },
-    { "crisp_corner_nozzle_wall_overlap", "multi_nozzle_walls.wall_overlap", Kind::Percent, true },
-    { "crisp_corner_interlace_small_nozzle_walls", "multi_nozzle_walls.interlock", Kind::Bool, true },
-    { "crisp_corner_detail_toolhead", "multi_nozzle_walls.detail_toolhead", Kind::Int, true },
+    { "use_smaller_nozzles_in_crisp_corners", "multi_nozzle_walls.enable", Kind::Bool, false, "0" },
+    { "crisp_corner_small_nozzle_wall_count", "multi_nozzle_walls.small_wall_count", Kind::Int, false, "0" },
+    { "crisp_corner_nozzle_wall_overlap", "multi_nozzle_walls.wall_overlap", Kind::Percent, false, "15%" },
+    { "crisp_corner_interlace_small_nozzle_walls", "multi_nozzle_walls.interlock", Kind::Bool, false, "0" },
+    { "crisp_corner_detail_toolhead", "multi_nozzle_walls.detail_toolhead", Kind::Int, false, "0" },
     { "crisp_corner_small_nozzle_wall_speed", "multi_nozzle_walls.small_wall_speed", Kind::FloatOrPercent, true },
-    { "crisp_corner_large_nozzle_override_regions", "multi_nozzle_walls.override_regions", Kind::String, true },
+    { "crisp_corner_large_nozzle_override_regions", "multi_nozzle_walls.override_regions", Kind::String, false, "" },
     { "support_interface_sublayer_angle", "support_extras.sublayer_angle", Kind::Float, true },
     { "support_interface_sublayer_temperature", "support_extras.sublayer_temperature", Kind::Int, true },
     { "cura_support_join_distance", "cura_support.join_distance", Kind::Float, false },
@@ -161,9 +164,28 @@ std::optional<json> convert(const std::string &value, Kind kind)
             return std::nullopt;
         return *end == '%' ? json(value.substr(0, size_t(end - value.c_str())) + "%") : json(v);
     }
-    case Kind::String: return json(value);
+    case Kind::String:
+        if (!value.empty() && value.front() == '"') {
+            // A list of strings (line 2's large nozzle override ranges) is stored quoted and comma-separated; its
+            // entries are ranges, which the parameter separates with ';'.
+            ConfigOptionStrings list;
+            if (!list.deserialize(value))
+                return std::nullopt;
+            std::string joined;
+            for (const std::string &entry : list.values)
+                if (!entry.empty())
+                    joined += (joined.empty() ? "" : ";") + entry;
+            return json(joined);
+        }
+        return json(value);
     }
     return std::nullopt;
+}
+
+// Whether a stored value is a key's old default. A list of strings is stored quoted ("" for an empty one).
+bool saved_default(const std::string &value, const char *default_value)
+{
+    return value == default_value || value == std::string("\"") + default_value + "\"";
 }
 
 } // namespace
@@ -273,6 +295,8 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
                         continue;
                 }
             }
+            if (!k->owned && k->saved_default != nullptr && saved_default(value, k->saved_default))
+                continue;
             set(k->param, convert(value, k->kind));
         }
         else if (auto r = resin_param(key))

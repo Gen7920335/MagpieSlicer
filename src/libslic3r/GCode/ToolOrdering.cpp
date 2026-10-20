@@ -10,7 +10,7 @@
 #include "HalfLayerSources.hpp"
 #include "HalfLayerSupportSources.hpp"
 #include "ClipperUtils.hpp"
-#include "libslic3r/ModHost/SlotRegistry.hpp"
+#include "libslic3r/ModHost/WallPlanner.hpp"
 #include "ParameterUtils.hpp"
 #include "GCode/ToolOrderUtils.hpp"
 #include "FilamentGroupUtils.hpp"
@@ -1123,18 +1123,20 @@ static bool has_wall_tool_hint(const ExtrusionEntity &entity)
 }
 
 // MAGPIE: the filaments a wall planner sends this region's walls on layer layer_id to, besides Orca's.
-static void append_planner_wall_filaments(const PrintConfig &config, const PrintRegion &region, size_t layer_id,
+static void append_planner_wall_filaments(const PrintObject &object, const PrintRegion &region, size_t layer_id,
                                           const ExtrusionEntityCollection &perimeters, std::vector<unsigned int> &out)
 {
-    const ModHost::WallPlanner *planner = region.config().wall_planner.value.empty() ? nullptr :
-                                          ModHost::find_wall_planner(region.config().wall_planner.value);
-    if (planner == nullptr || !planner->wall_filament)
+    const Print &print = *object.print();
+    const std::unique_ptr<const ModHost::WallPlanner> planner =
+        ModHost::open_wall_planner(region.config().wall_planner.value, print.full_print_config(), print.config(), &object.config(),
+                                   region.config());
+    if (!planner)
         return;
     const unsigned int base = unsigned(std::max(1, region.config().outer_wall_filament_id.value));
-    if (const unsigned int f = planner->wall_filament(config, region.config(), layer_id, ExtrusionToolHint::Auto, base))
+    if (const unsigned int f = planner->wall_filament(layer_id, ExtrusionToolHint::Auto, base))
         out.emplace_back(f);
     if (has_wall_tool_hint(perimeters))
-        if (const unsigned int f = planner->wall_filament(config, region.config(), layer_id, ExtrusionToolHint::DetailWall, base))
+        if (const unsigned int f = planner->wall_filament(layer_id, ExtrusionToolHint::DetailWall, base))
             out.emplace_back(f);
 }
 
@@ -1222,7 +1224,7 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                     if (extruder_override == 0 && region.config().wall_loops.value > 1)
                         layer_tools.extruders.emplace_back(region.config().inner_wall_filament_id.value);
                     if (extruder_override == 0)
-                        append_planner_wall_filaments(object.print()->config(), region, layer->id(), layerm->perimeters, layer_tools.extruders);
+                        append_planner_wall_filaments(object, region, layer->id(), layerm->perimeters, layer_tools.extruders);
                     if (layerCount == 0) {
                         firstLayerExtruders.emplace_back((extruder_override == 0) ? region.config().outer_wall_filament_id.value : extruder_override);
                     }

@@ -1,5 +1,5 @@
 {
- "description": "Multi-nozzle walls (resources/mods/multi_nozzle_walls.json) on a Snapmaker U1 with T1/T2 0.4 mm and T3/T4 0.6 mm, filament 3 printing the object, all four filaments the same PLA colour. *_off cases must match vanilla Orca byte for byte; *_mn cases are compared by hand with Magpie line 1 (Beta 7). --filament-colour gives every filament a colour, without which Orca's CLI cannot print a filament past the first.",
+ "description": "Multi-nozzle walls (the native mod mods/multi_nozzle_walls) on a Snapmaker U1 with T1/T2 0.4 mm and T3/T4 0.6 mm, filament 3 printing the object, all four filaments the same PLA colour. *_off cases must match vanilla Orca byte for byte; *_mn cases are compared by hand with Magpie line 1 (Beta 7). --filament-colour gives every filament a colour, without which Orca's CLI cannot print a filament past the first.",
  "printers": {
   "u1mn": {
    "machine": "presets/u1_04_machine.json",

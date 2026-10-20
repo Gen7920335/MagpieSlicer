@@ -37,7 +37,7 @@
 #include <memory>
 #include "FilamentGroupUtils.hpp"
 #include "MultiNozzleUtils.hpp"
-#include "ModHost/Builtin/MultiNozzleWalls.hpp"
+#include "ModHost/WallPlanner.hpp"
 #include <chrono>
 #include <optional>
 #include "GCode/GCodeProcessor.hpp"
@@ -2033,27 +2033,29 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
             const int outer = std::max(1, rc.outer_wall_filament_id.value);
             const int inner = rc.inner_wall_filament_id.value > 0 ? rc.inner_wall_filament_id.value : outer;
             if (rc.wall_loops.value > 0) {
-                const bool detail_walls = rc.use_smaller_nozzles_in_crisp_corners.value;
-                check(outer, rc, "outer_wall_line_width", outer_mm, first);
-                // With detail walls the large nozzle prints the inner walls even when the wall count is small.
-                if (rc.wall_loops.value > outer_count || detail_walls)
-                    check(inner, rc, "inner_wall_line_width", full_mm, first);
-                // Multi-nozzle detail walls: the detail tool (the planner's own choice) prints the outer
-                // walls; walls beyond the half-height ones print at full height.
-                if (detail_walls)
-                    if (const auto detail = ModHost::MultiNozzleWalls::detail_tool(pc, rc, unsigned(outer)); detail)
-                        check(int(detail.filament_1based), rc, "outer_wall_line_width",
-                              rc.crisp_corner_small_nozzle_wall_count.value > outer_count ? full_mm : outer_mm, first);
-                // Large-nozzle override ranges print every wall of their layers with one toolhead (line 1).
-                for (const std::string &text : rc.crisp_corner_large_nozzle_override_regions.values)
-                    if (const auto range = ModHost::MultiNozzleWalls::parse_override_range(text); range && range->toolhead_1based > 0) {
-                        const auto tool = ModHost::MultiNozzleWalls::tool_for_filament(pc, range->toolhead_1based);
-                        if (! tool)
-                            continue;
-                        check(int(tool.filament_1based), rc, "outer_wall_line_width", outer_mm, first);
-                        if (rc.wall_loops.value > outer_count)
-                            check(int(tool.filament_1based), rc, "inner_wall_line_width", full_mm, first);
+                // A wall planner (wall.plan slot) may print walls with other filaments: the planner says which.
+                std::vector<ModHost::WallToolUse> planner_uses;
+                bool                              planner_inner_walls = false;
+                if (! rc.wall_planner.value.empty()) {
+                    try {
+                        planner_uses = ModHost::open_wall_planner(rc.wall_planner.value, print.full_print_config(), pc, &config, rc)
+                                           ->tool_uses(planner_inner_walls);
+                    } catch (const SlicingError &e) {
+                        error = {e.what(), &object, "wall_planner"};
+                        return error;
                     }
+                }
+                check(outer, rc, "outer_wall_line_width", outer_mm, first);
+                // The planner may have the large nozzle print the inner walls even when the wall count is small.
+                if (rc.wall_loops.value > outer_count || planner_inner_walls)
+                    check(inner, rc, "inner_wall_line_width", full_mm, first);
+                // Outer walls past the half-height ones print at full height.
+                for (const ModHost::WallToolUse &use : planner_uses) {
+                    if (use.outer_walls > 0)
+                        check(int(use.filament_1based), rc, "outer_wall_line_width", int(use.outer_walls) > outer_count ? full_mm : outer_mm, first);
+                    if (use.inner_walls && rc.wall_loops.value > outer_count)
+                        check(int(use.filament_1based), rc, "inner_wall_line_width", full_mm, first);
+                }
             }
             if (rc.sparse_infill_density.value > 0.)
                 check(rc.sparse_infill_filament_id.value, rc, "sparse_infill_line_width", full_mm, first);

@@ -1,0 +1,499 @@
+{
+    "description": "Multi-nozzle walls parameters not in corpus_multi_nozzle: detail wall speed, a chosen detail toolhead, several override ranges, override alone, three detail walls with more overlap, single wall on top. Gate for moving the planner into the native mod multi_nozzle_walls: built-in and mod builds give the same normalized G-code apart from the '; mods:' line.",
+    "printers": {
+        "u1mn": {
+            "machine": "presets/u1_04_machine.json",
+            "process": "presets/u1_04_process.json",
+            "filaments": [
+                "presets/u1_pla.json",
+                "presets/u1_pla_2.json",
+                "presets/u1_pla_3.json",
+                "presets/u1_pla_4.json"
+            ],
+            "bed_type": "High Temp Plate"
+        }
+    },
+    "cases": [
+        {
+            "name": "frog_mn_speed_pct",
+            "printer": "u1mn",
+            "model": "tests/data/frog_legs.obj",
+            "machine": {
+                "nozzle_diameter": [
+                    "0.4",
+                    "0.4",
+                    "0.6",
+                    "0.6"
+                ],
+                "max_layer_height": [
+                    "0.32",
+                    "0.32",
+                    "0.48",
+                    "0.48"
+                ],
+                "min_layer_height": [
+                    "0.08",
+                    "0.08",
+                    "0.12",
+                    "0.12"
+                ],
+                "nozzle_type": "hardened_steel"
+            },
+            "process": {
+                "line_width": "105%",
+                "outer_wall_line_width": "105%",
+                "inner_wall_line_width": "112%",
+                "sparse_infill_line_width": "105%",
+                "internal_solid_infill_line_width": "105%",
+                "support_line_width": "105%",
+                "top_surface_line_width": "105%",
+                "ooze_prevention": "1",
+                "slowdown_for_curled_perimeters": "0",
+                "standby_temperature_delta": "-150",
+                "wipe_tower_filament": "0",
+                "preheat_time": "30",
+                "wipe_tower_cone_angle": "15",
+                "prime_tower_brim_width": "5",
+                "initial_layer_print_height": "0.25",
+                "top_shell_layers": "5",
+                "bottom_shell_layers": "3",
+                "brim_width": "0",
+                "bridge_line_width": "0.4",
+                "wall_loops": "3",
+                "outer_wall_filament_id": "3",
+                "inner_wall_filament_id": "3",
+                "sparse_infill_filament_id": "3",
+                "internal_solid_filament_id": "3",
+                "top_surface_filament_id": "3",
+                "bottom_surface_filament_id": "3",
+                "wall_generator": "classic",
+                "mod_settings": "{\"multi_nozzle_walls.enable\": true, \"multi_nozzle_walls.small_wall_speed\": \"50%\"}"
+            },
+            "cli_args": [
+                "--filament-colour",
+                "#F2754E;#F2754E;#F2754E;#F2754E"
+            ]
+        },
+        {
+            "name": "tee_mn_speed_abs",
+            "printer": "u1mn",
+            "model": "external:tee.stl",
+            "machine": {
+                "nozzle_diameter": [
+                    "0.4",
+                    "0.4",
+                    "0.6",
+                    "0.6"
+                ],
+                "max_layer_height": [
+                    "0.32",
+                    "0.32",
+                    "0.48",
+                    "0.48"
+                ],
+                "min_layer_height": [
+                    "0.08",
+                    "0.08",
+                    "0.12",
+                    "0.12"
+                ],
+                "nozzle_type": "hardened_steel"
+            },
+            "process": {
+                "line_width": "105%",
+                "outer_wall_line_width": "105%",
+                "inner_wall_line_width": "112%",
+                "sparse_infill_line_width": "105%",
+                "internal_solid_infill_line_width": "105%",
+                "support_line_width": "105%",
+                "top_surface_line_width": "105%",
+                "ooze_prevention": "1",
+                "slowdown_for_curled_perimeters": "0",
+                "standby_temperature_delta": "-150",
+                "wipe_tower_filament": "0",
+                "preheat_time": "30",
+                "wipe_tower_cone_angle": "15",
+                "prime_tower_brim_width": "5",
+                "initial_layer_print_height": "0.25",
+                "top_shell_layers": "5",
+                "bottom_shell_layers": "3",
+                "brim_width": "0",
+                "bridge_line_width": "0.4",
+                "wall_loops": "3",
+                "outer_wall_filament_id": "3",
+                "inner_wall_filament_id": "3",
+                "sparse_infill_filament_id": "3",
+                "internal_solid_filament_id": "3",
+                "top_surface_filament_id": "3",
+                "bottom_surface_filament_id": "3",
+                "wall_generator": "arachne",
+                "mod_settings": "{\"multi_nozzle_walls.enable\": true, \"multi_nozzle_walls.small_wall_speed\": 25}"
+            },
+            "cli_args": [
+                "--filament-colour",
+                "#F2754E;#F2754E;#F2754E;#F2754E"
+            ]
+        },
+        {
+            "name": "frog_mn_toolhead_manual",
+            "printer": "u1mn",
+            "model": "tests/data/frog_legs.obj",
+            "machine": {
+                "nozzle_diameter": [
+                    "0.4",
+                    "0.4",
+                    "0.6",
+                    "0.6"
+                ],
+                "max_layer_height": [
+                    "0.32",
+                    "0.32",
+                    "0.48",
+                    "0.48"
+                ],
+                "min_layer_height": [
+                    "0.08",
+                    "0.08",
+                    "0.12",
+                    "0.12"
+                ],
+                "nozzle_type": "hardened_steel"
+            },
+            "process": {
+                "line_width": "105%",
+                "outer_wall_line_width": "105%",
+                "inner_wall_line_width": "112%",
+                "sparse_infill_line_width": "105%",
+                "internal_solid_infill_line_width": "105%",
+                "support_line_width": "105%",
+                "top_surface_line_width": "105%",
+                "ooze_prevention": "1",
+                "slowdown_for_curled_perimeters": "0",
+                "standby_temperature_delta": "-150",
+                "wipe_tower_filament": "0",
+                "preheat_time": "30",
+                "wipe_tower_cone_angle": "15",
+                "prime_tower_brim_width": "5",
+                "initial_layer_print_height": "0.25",
+                "top_shell_layers": "5",
+                "bottom_shell_layers": "3",
+                "brim_width": "0",
+                "bridge_line_width": "0.4",
+                "wall_loops": "3",
+                "outer_wall_filament_id": "3",
+                "inner_wall_filament_id": "3",
+                "sparse_infill_filament_id": "3",
+                "internal_solid_filament_id": "3",
+                "top_surface_filament_id": "3",
+                "bottom_surface_filament_id": "3",
+                "wall_generator": "classic",
+                "mod_settings": "{\"multi_nozzle_walls.enable\": true, \"multi_nozzle_walls.detail_toolhead\": 2}"
+            },
+            "cli_args": [
+                "--filament-colour",
+                "#00FF00;#0000FF;#F2754E;#FF00FF"
+            ]
+        },
+        {
+            "name": "tee_mn_toolhead_manual_arachne",
+            "printer": "u1mn",
+            "model": "external:tee.stl",
+            "machine": {
+                "nozzle_diameter": [
+                    "0.4",
+                    "0.4",
+                    "0.6",
+                    "0.6"
+                ],
+                "max_layer_height": [
+                    "0.32",
+                    "0.32",
+                    "0.48",
+                    "0.48"
+                ],
+                "min_layer_height": [
+                    "0.08",
+                    "0.08",
+                    "0.12",
+                    "0.12"
+                ],
+                "nozzle_type": "hardened_steel"
+            },
+            "process": {
+                "line_width": "105%",
+                "outer_wall_line_width": "105%",
+                "inner_wall_line_width": "112%",
+                "sparse_infill_line_width": "105%",
+                "internal_solid_infill_line_width": "105%",
+                "support_line_width": "105%",
+                "top_surface_line_width": "105%",
+                "ooze_prevention": "1",
+                "slowdown_for_curled_perimeters": "0",
+                "standby_temperature_delta": "-150",
+                "wipe_tower_filament": "0",
+                "preheat_time": "30",
+                "wipe_tower_cone_angle": "15",
+                "prime_tower_brim_width": "5",
+                "initial_layer_print_height": "0.25",
+                "top_shell_layers": "5",
+                "bottom_shell_layers": "3",
+                "brim_width": "0",
+                "bridge_line_width": "0.4",
+                "wall_loops": "3",
+                "outer_wall_filament_id": "3",
+                "inner_wall_filament_id": "3",
+                "sparse_infill_filament_id": "3",
+                "internal_solid_filament_id": "3",
+                "top_surface_filament_id": "3",
+                "bottom_surface_filament_id": "3",
+                "wall_generator": "arachne",
+                "mod_settings": "{\"multi_nozzle_walls.enable\": true, \"multi_nozzle_walls.detail_toolhead\": 2}"
+            },
+            "cli_args": [
+                "--filament-colour",
+                "#00FF00;#0000FF;#F2754E;#FF00FF"
+            ]
+        },
+        {
+            "name": "frog_mn_multi_override",
+            "printer": "u1mn",
+            "model": "tests/data/frog_legs.obj",
+            "machine": {
+                "nozzle_diameter": [
+                    "0.4",
+                    "0.4",
+                    "0.6",
+                    "0.6"
+                ],
+                "max_layer_height": [
+                    "0.32",
+                    "0.32",
+                    "0.48",
+                    "0.48"
+                ],
+                "min_layer_height": [
+                    "0.08",
+                    "0.08",
+                    "0.12",
+                    "0.12"
+                ],
+                "nozzle_type": "hardened_steel"
+            },
+            "process": {
+                "line_width": "105%",
+                "outer_wall_line_width": "105%",
+                "inner_wall_line_width": "112%",
+                "sparse_infill_line_width": "105%",
+                "internal_solid_infill_line_width": "105%",
+                "support_line_width": "105%",
+                "top_surface_line_width": "105%",
+                "ooze_prevention": "1",
+                "slowdown_for_curled_perimeters": "0",
+                "standby_temperature_delta": "-150",
+                "wipe_tower_filament": "0",
+                "preheat_time": "30",
+                "wipe_tower_cone_angle": "15",
+                "prime_tower_brim_width": "5",
+                "initial_layer_print_height": "0.25",
+                "top_shell_layers": "5",
+                "bottom_shell_layers": "3",
+                "brim_width": "0",
+                "bridge_line_width": "0.4",
+                "wall_loops": "3",
+                "outer_wall_filament_id": "3",
+                "inner_wall_filament_id": "3",
+                "sparse_infill_filament_id": "3",
+                "internal_solid_filament_id": "3",
+                "top_surface_filament_id": "3",
+                "bottom_surface_filament_id": "3",
+                "wall_generator": "arachne",
+                "mod_settings": "{\"multi_nozzle_walls.enable\": true, \"multi_nozzle_walls.override_regions\": \"2:4:4;6:7:1;3:3:2\"}"
+            },
+            "cli_args": [
+                "--filament-colour",
+                "#F2754E;#F2754E;#F2754E;#F2754E"
+            ]
+        },
+        {
+            "name": "tee_mn_override_only",
+            "printer": "u1mn",
+            "model": "external:tee.stl",
+            "machine": {
+                "nozzle_diameter": [
+                    "0.4",
+                    "0.4",
+                    "0.6",
+                    "0.6"
+                ],
+                "max_layer_height": [
+                    "0.32",
+                    "0.32",
+                    "0.48",
+                    "0.48"
+                ],
+                "min_layer_height": [
+                    "0.08",
+                    "0.08",
+                    "0.12",
+                    "0.12"
+                ],
+                "nozzle_type": "hardened_steel"
+            },
+            "process": {
+                "line_width": "105%",
+                "outer_wall_line_width": "105%",
+                "inner_wall_line_width": "112%",
+                "sparse_infill_line_width": "105%",
+                "internal_solid_infill_line_width": "105%",
+                "support_line_width": "105%",
+                "top_surface_line_width": "105%",
+                "ooze_prevention": "1",
+                "slowdown_for_curled_perimeters": "0",
+                "standby_temperature_delta": "-150",
+                "wipe_tower_filament": "0",
+                "preheat_time": "30",
+                "wipe_tower_cone_angle": "15",
+                "prime_tower_brim_width": "5",
+                "initial_layer_print_height": "0.25",
+                "top_shell_layers": "5",
+                "bottom_shell_layers": "3",
+                "brim_width": "0",
+                "bridge_line_width": "0.4",
+                "wall_loops": "3",
+                "outer_wall_filament_id": "3",
+                "inner_wall_filament_id": "3",
+                "sparse_infill_filament_id": "3",
+                "internal_solid_filament_id": "3",
+                "top_surface_filament_id": "3",
+                "bottom_surface_filament_id": "3",
+                "wall_generator": "classic",
+                "mod_settings": "{\"multi_nozzle_walls.enable\": false, \"multi_nozzle_walls.override_regions\": \"5:9:1\"}"
+            },
+            "cli_args": [
+                "--filament-colour",
+                "#F2754E;#F2754E;#F2754E;#F2754E"
+            ]
+        },
+        {
+            "name": "tee_mn_3w_overlap",
+            "printer": "u1mn",
+            "model": "external:tee.stl",
+            "machine": {
+                "nozzle_diameter": [
+                    "0.4",
+                    "0.4",
+                    "0.6",
+                    "0.6"
+                ],
+                "max_layer_height": [
+                    "0.32",
+                    "0.32",
+                    "0.48",
+                    "0.48"
+                ],
+                "min_layer_height": [
+                    "0.08",
+                    "0.08",
+                    "0.12",
+                    "0.12"
+                ],
+                "nozzle_type": "hardened_steel"
+            },
+            "process": {
+                "line_width": "105%",
+                "outer_wall_line_width": "105%",
+                "inner_wall_line_width": "112%",
+                "sparse_infill_line_width": "105%",
+                "internal_solid_infill_line_width": "105%",
+                "support_line_width": "105%",
+                "top_surface_line_width": "105%",
+                "ooze_prevention": "1",
+                "slowdown_for_curled_perimeters": "0",
+                "standby_temperature_delta": "-150",
+                "wipe_tower_filament": "0",
+                "preheat_time": "30",
+                "wipe_tower_cone_angle": "15",
+                "prime_tower_brim_width": "5",
+                "initial_layer_print_height": "0.25",
+                "top_shell_layers": "5",
+                "bottom_shell_layers": "3",
+                "brim_width": "0",
+                "bridge_line_width": "0.4",
+                "wall_loops": "3",
+                "outer_wall_filament_id": "3",
+                "inner_wall_filament_id": "3",
+                "sparse_infill_filament_id": "3",
+                "internal_solid_filament_id": "3",
+                "top_surface_filament_id": "3",
+                "bottom_surface_filament_id": "3",
+                "wall_generator": "classic",
+                "mod_settings": "{\"multi_nozzle_walls.enable\": true, \"multi_nozzle_walls.small_wall_count\": 3, \"multi_nozzle_walls.wall_overlap\": 30}"
+            },
+            "cli_args": [
+                "--filament-colour",
+                "#F2754E;#F2754E;#F2754E;#F2754E"
+            ]
+        },
+        {
+            "name": "frog_mn_single_wall_top",
+            "printer": "u1mn",
+            "model": "tests/data/frog_legs.obj",
+            "machine": {
+                "nozzle_diameter": [
+                    "0.4",
+                    "0.4",
+                    "0.6",
+                    "0.6"
+                ],
+                "max_layer_height": [
+                    "0.32",
+                    "0.32",
+                    "0.48",
+                    "0.48"
+                ],
+                "min_layer_height": [
+                    "0.08",
+                    "0.08",
+                    "0.12",
+                    "0.12"
+                ],
+                "nozzle_type": "hardened_steel"
+            },
+            "process": {
+                "line_width": "105%",
+                "outer_wall_line_width": "105%",
+                "inner_wall_line_width": "112%",
+                "sparse_infill_line_width": "105%",
+                "internal_solid_infill_line_width": "105%",
+                "support_line_width": "105%",
+                "top_surface_line_width": "105%",
+                "ooze_prevention": "1",
+                "slowdown_for_curled_perimeters": "0",
+                "standby_temperature_delta": "-150",
+                "wipe_tower_filament": "0",
+                "preheat_time": "30",
+                "wipe_tower_cone_angle": "15",
+                "prime_tower_brim_width": "5",
+                "initial_layer_print_height": "0.25",
+                "top_shell_layers": "5",
+                "bottom_shell_layers": "3",
+                "brim_width": "0",
+                "bridge_line_width": "0.4",
+                "wall_loops": "3",
+                "outer_wall_filament_id": "3",
+                "inner_wall_filament_id": "3",
+                "sparse_infill_filament_id": "3",
+                "internal_solid_filament_id": "3",
+                "top_surface_filament_id": "3",
+                "bottom_surface_filament_id": "3",
+                "wall_generator": "arachne",
+                "mod_settings": "{\"multi_nozzle_walls.enable\": true, \"multi_nozzle_walls.small_wall_count\": 2, \"multi_nozzle_walls.interlock\": true}",
+                "only_one_wall_top": "1"
+            },
+            "cli_args": [
+                "--filament-colour",
+                "#F2754E;#F2754E;#F2754E;#F2754E"
+            ]
+        }
+    ]
+}

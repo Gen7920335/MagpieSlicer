@@ -1,0 +1,29 @@
+{
+    // Multi-nozzle walls (Magpie line 1 "crisp corners"): on a tool changer with nozzles of different
+    // sizes, islands with sharp detail get their outer walls from a smaller nozzle loaded with the same
+    // material and colour; the rest of the walls stay on the island's own nozzle. Also prints chosen
+    // layer ranges' walls with one toolhead (large nozzle override). A native mod filling the wall.plan
+    // slot as the "multi_nozzle" planner; the core generates the walls the plan describes. The planner
+    // reads its parameters per region, so an object, part or modifier can set its own; the rules read
+    // the process values.
+    "id": "multi_nozzle_walls",
+    "name": "Multi-nozzle walls", "name_ko": "다중 노즐 벽",
+    "version": "2.0.0",
+    "api": { "major": 1, "min_minor": 0 },
+    "binary": "multi_nozzle_walls",
+    "slots": [ { "slot": "wall.plan", "version": 1, "impl": "multi_nozzle" } ],
+    "thread_safe": true,
+    "params": {
+        "enable":            { "scope": "region", "invalidates": ["posPerimeters"], "type": "bool",   "default": false, "label": "Use smaller nozzles in crisp corners", "label_ko": "날카로운 모서리에 작은 노즐 사용" },
+        "small_wall_count":  { "scope": "region", "invalidates": ["posPerimeters"], "type": "int",    "default": 1,     "label": "Small nozzle wall count", "label_ko": "작은 노즐 벽 수" },
+        "wall_overlap":      { "scope": "region", "invalidates": ["posPerimeters"], "type": "float",  "default": 15,    "unit": "%",    "label": "Small/large nozzle wall overlap", "label_ko": "작은/큰 노즐 벽 겹침" },
+        "interlock":         { "scope": "region", "invalidates": ["posPerimeters"], "type": "bool",   "default": false, "label": "Multi-nozzle interlocking layers", "label_ko": "다중 노즐 레이어 엇갈림" },
+        "detail_toolhead":   { "scope": "region", "invalidates": ["posPerimeters"], "type": "int",    "default": 0,     "label": "Crisp corner toolhead (0 = auto)", "label_ko": "모서리 세부 툴헤드 (0 = 자동)" },
+        "small_wall_speed":  { "invalidates": ["none"], "type": "float_or_percent", "default": 0, "unit": "mm/s or %", "label": "Small nozzle wall speed (0 = wall speed, % of the wall speed)", "label_ko": "작은 노즐 벽 속도 (0 = 벽 속도, %는 벽 속도의 비율)" },
+        "override_regions":  { "scope": "region", "invalidates": ["posPerimeters"], "type": "string", "default": "",    "label": "Large nozzle override: first:last:toolhead, separated by ;", "label_ko": "큰 노즐 지정 구간: 시작:끝:툴헤드, ;로 구분" }
+    },
+    "rules": [
+        { "target": "wall_planner", "value": "\"multi_nozzle\"", "when": "multi_nozzle_walls.enable or multi_nozzle_walls.override_regions != \"\"" },
+        { "target": "crisp_corner_small_nozzle_wall_speed",       "value": "multi_nozzle_walls.small_wall_speed" }
+    ]
+}

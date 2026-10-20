@@ -7,8 +7,10 @@ set_property(TARGET half_layer_plan_tests PROPERTY FOLDER "tests")
 orcaslicer_discover_tests(half_layer_plan_tests)
 
 # Native geometry gate, without building the GUI or all integration suites.
-add_executable(half_layer_geometry_tests test_half_layer_geometry.cpp test_runtime.cpp)
+add_executable(half_layer_geometry_tests test_half_layer_geometry.cpp test_runtime.cpp ../fff_print/test_helpers.cpp)
 target_link_libraries(half_layer_geometry_tests PRIVATE test_common libslic3r Catch2::Catch2WithMain)
+# MAGPIE: the multi-nozzle wall cases plan with the multi-nozzle walls mod.
+magpie_use_official_mods(half_layer_geometry_tests)
 if(NOT SLIC3R_ENABLE_CUDA_SLICER)
     target_compile_definitions(half_layer_geometry_tests PRIVATE MAGPIE_HALF_LAYER_CPU_GATE)
 endif()

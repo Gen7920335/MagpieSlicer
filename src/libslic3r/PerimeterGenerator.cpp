@@ -1,7 +1,7 @@
 #include "libslic3r/StageTimer.hpp"
 #include "PerimeterGenerator.hpp"
 #include "LineWidths.hpp"
-#include "ModHost/SlotRegistry.hpp"
+#include "ModHost/WallPlanner.hpp"
 #include "Arachne/utils/ExtrusionLine.hpp"
 #include "Arachne/utils/ExtrusionJunction.hpp"
 #include "BridgeDetector.hpp"
@@ -1697,7 +1697,7 @@ void PerimeterGenerator::process_classic()
         (ext_perimeter_width - 0.5 * SMALLER_EXT_INSET_OVERLAP_TOLERANCE * ext_perimeter_spacing));
     // MAGPIE: a wall planner's detail nozzle replaces the narrow-loop width (wall.plan slot).
     std::optional<Flow> planner_detail_flow;
-    if (this->wall_planner != nullptr && this->wall_planner->detail_flow)
+    if (this->wall_planner != nullptr)
         planner_detail_flow = this->wall_planner->detail_flow(*this);
     if (planner_detail_flow)
         this->smaller_ext_perimeter_flow = *planner_detail_flow;
@@ -1742,7 +1742,7 @@ void PerimeterGenerator::process_classic()
         if (loop_number > 0 && only_one_wall_top && this->upper_slices == nullptr)
             loop_number = 0;
         // MAGPIE: the wall planner's split of this island's walls between two nozzles.
-        const WallPlan wall_plan = planner_detail_flow && this->wall_planner->plan ?
+        const WallPlan wall_plan = planner_detail_flow ?
             this->wall_planner->plan(*this, surface.expolygon, loop_number) : WallPlan{};
         if (wall_plan.active)
             loop_number = wall_plan.total_walls - 1;
@@ -2806,7 +2806,7 @@ void PerimeterGenerator::process_arachne()
 
     // MAGPIE: the wall planner's detail nozzle (wall.plan slot).
     std::optional<Flow> planner_detail_flow;
-    if (this->wall_planner != nullptr && this->wall_planner->detail_flow)
+    if (this->wall_planner != nullptr)
         planner_detail_flow = this->wall_planner->detail_flow(*this);
     if (planner_detail_flow) {
         this->smaller_ext_perimeter_flow = *planner_detail_flow;
@@ -2880,7 +2880,7 @@ void PerimeterGenerator::process_arachne()
         Arachne::WallToolPathsParams input_params_tmp = input_params;
         // MAGPIE: the wall planner's split of this island's walls between two nozzles. With the single wall pass,
         // the detail walls take the place of the single outer wall and the large walls follow as the inner walls.
-        const WallPlan wall_plan = planner_detail_flow && this->wall_planner->plan ?
+        const WallPlan wall_plan = planner_detail_flow ?
             this->wall_planner->plan(*this, surface.expolygon, inner_loop_number >= 0 ? full_loop_number : loop_number) : WallPlan{};
         // Walls in front of the inner walls of the single wall pass, and the wall count of the full pass.
         int single_pass_walls = 1;
