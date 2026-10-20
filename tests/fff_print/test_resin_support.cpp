@@ -145,6 +145,35 @@ TEST_CASE("Resin support lifts the object only while support is on", "[ResinSupp
     CHECK_THAT(print.objects().front()->slicing_parameters().object_print_z_min, Catch::Matchers::WithinAbs(0., 1e-9));
 }
 
+TEST_CASE("Resin support lifts only an object whose support it generates", "[ResinSupport][Elevation]")
+{
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    // Mixed support's rule outranks resin support's, so the object's support_generator is "mixed": the
+    // resin lift must not apply, as Mixed fills no gap under a lifted object.
+    DynamicPrintConfig config = resin_config({{"mixed_support.enable", true}, {"resin_support.default_object_elevation", 5.}});
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({column_under_ceiling(8.)}, print, config));
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(object.config().support_generator.value == "mixed");
+    CHECK_THAT(object.slicing_parameters().object_print_z_min, Catch::Matchers::WithinAbs(0., 1e-9));
+}
+
+TEST_CASE("Resin support with enforcers only keeps the object on the bed", "[ResinSupport][Elevation]")
+{
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    // Enforcers only gives the object's bottom no support points, so a lifted object would hang in the air.
+    DynamicPrintConfig config = resin_config({{"resin_support.enforcers_only", true}, {"resin_support.default_object_elevation", 5.}});
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({column_under_ceiling(8.)}, print, config));
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(object.config().support_generator.value == "resin");
+    CHECK_THAT(object.slicing_parameters().object_print_z_min, Catch::Matchers::WithinAbs(0., 1e-9));
+    // Its first layer is printed: nothing between the bed and the object is left empty.
+    CHECK_THAT(object.layers().front()->bottom_z(), Catch::Matchers::WithinAbs(0., 1e-9));
+}
+
 TEST_CASE("Resin support automatic points follow the support threshold angle", "[ResinSupport]")
 {
     BundledMods mods;

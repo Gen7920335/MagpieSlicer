@@ -26,6 +26,8 @@
 #include <magpie_slot_support_contacts.h>
 
 #include <boost/log/core.hpp>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 
 #include <algorithm>
 #include <cmath>
@@ -139,8 +141,24 @@ double config_f64(mp_ctx *ctx, const char *key)
     return v;
 }
 
-// The lift the object.z_offset slot reports: the selected strategy's elevation while resin support is on.
-double object_lift_mm(const ModSettings &s) { return s.enable ? s.strategy.object_elevation_mm : 0.; }
+std::string config_str(mp_ctx *ctx, const char *key)
+{
+    char buf[256] = {};
+    if (magpie::host()->config_str(ctx, key, -1, buf, uint32_t(sizeof(buf))) != MP_OK)
+        throw std::runtime_error(std::string("cannot read the setting ") + key);
+    return buf;
+}
+
+// The lift the object.z_offset slot reports: the selected strategy's elevation, only for an object
+// whose support this mod generates. Another mod's support (Mixed wins the support_generator rule when
+// both are on) does not fill the gap under a lifted object, and with enforcers only the object's
+// bottom gets no support points, so in both cases the object stays on the bed.
+double object_lift_mm(mp_ctx *ctx, const ModSettings &s)
+{
+    if (!s.enable || s.enforcers_only || config_str(ctx, "support_generator") != "resin")
+        return 0.;
+    return s.strategy.object_elevation_mm;
+}
 
 bool contains_point(const ExPolygons &polygons, const Point &point)
 {
@@ -159,22 +177,41 @@ size_t nearest_height_index(const std::vector<float> &heights, float z)
 }
 
 // The object layer a support point belongs to: the layer nearest in Z whose slices contain the
-// point, or the nearest layer in Z when none contains it.
+// point (of two equally near, the lower), or the nearest layer in Z when none contains it.
+// The layers are visited from the point's height outwards in order of their distance, so the
+// containment test runs only until the first containing layer instead of on every layer; heights
+// rise with the layer index, so the distances on each side grow monotonically. Layers at exactly
+// that distance are all looked at, and the lowest containing one wins, as a scan of every layer
+// keeping the first strictly nearer one would choose.
 size_t point_layer_index(const std::vector<ExPolygons> &slices, const std::vector<float> &heights, const resin_sla::SupportPoint &support_point)
 {
-    const Point point   = Point::new_scale(support_point.pos.x(), support_point.pos.y());
-    size_t      best    = heights.size();
-    float       best_dz = std::numeric_limits<float>::max();
-    for (size_t layer_id = 0; layer_id < heights.size(); ++layer_id) {
-        if (!contains_point(slices[layer_id], point))
-            continue;
-        const float dz = std::abs(heights[layer_id] - support_point.pos.z());
-        if (dz < best_dz) {
+    const Point point = Point::new_scale(support_point.pos.x(), support_point.pos.y());
+    const float z     = support_point.pos.z();
+    auto        dz    = [&heights, z](size_t layer_id) { return std::abs(heights[layer_id] - z); }; // mm
+    const size_t n     = heights.size();
+    size_t       above = size_t(std::lower_bound(heights.begin(), heights.end(), z) - heights.begin()); // next to visit upwards
+    size_t       below = above;                                                                     // one past the next to visit downwards
+    size_t       best  = n;
+    float        best_dz = 0.f;
+    while (below > 0 || above < n) {
+        size_t layer_id;
+        if (below == 0)
+            layer_id = above++;
+        else if (above == n)
+            layer_id = --below;
+        else if (dz(below - 1) <= dz(above))
+            layer_id = --below;
+        else
+            layer_id = above++;
+        const float d = dz(layer_id);
+        if (best < n && d > best_dz)
+            break;
+        if (contains_point(slices[layer_id], point) && (best == n || layer_id < best)) {
             best    = layer_id;
-            best_dz = dz;
+            best_dz = d;
         }
     }
-    return best < heights.size() ? best : nearest_height_index(heights, support_point.pos.z());
+    return best < n ? best : nearest_height_index(heights, z);
 }
 
 // How far, in scaled units, a layer may stick out past the layer below before it needs support at
@@ -346,7 +383,7 @@ void compute_contacts(mp_ctx *ctx, const mp_support_contacts_input_v1 &in, Outpu
 
     // Like PrusaSlicer without elevation: points on the bed-facing bottom are not needed when the
     // object sits on the bed (or the raft).
-    if (object_lift_mm(s) < EPSILON) {
+    if (object_lift_mm(ctx, s) < EPSILON) {
         const float ground = float(mesh.bounding_box().min.z() + EPSILON);
         points.erase(std::remove_if(points.begin(), points.end(), [ground](const resin_sla::SupportPoint &p) { return p.pos.z() <= ground; }),
                      points.end());
@@ -485,8 +522,12 @@ mp_status body(void *, mp_ctx *, const mp_support_contacts_output_v1 *of, uint32
             throw std::runtime_error("bad arguments");
         Output &data = *static_cast<Output *>(of->mod_data);
         data.body.assign(n, ExPolygons{});
-        for (uint32_t i = 0; i < n; ++i)
-            data.body[i] = resin_sla::slice_support_tree_at_height(data.tree, float(z[i]));
+        // Each height is cut on its own from the finished tree (a read-only walk over its parts), so the
+        // heights run in parallel and every slot of the result is written by one task.
+        tbb::parallel_for(tbb::blocked_range<uint32_t>(0, n), [&data, z](const tbb::blocked_range<uint32_t> &range) {
+            for (uint32_t i = range.begin(); i < range.end(); ++i)
+                data.body[i] = resin_sla::slice_support_tree_at_height(data.tree, float(z[i]));
+        });
         data.body_rings.assign(n, {});
         data.body_items.assign(n, {});
         for (uint32_t i = 0; i < n; ++i) {
@@ -519,7 +560,7 @@ mp_status z_offset(void *, mp_ctx *ctx, double *lift_mm)
     return run([&] {
         if (lift_mm == nullptr)
             throw std::runtime_error("bad arguments");
-        *lift_mm = object_lift_mm(read_settings(ctx));
+        *lift_mm = object_lift_mm(ctx, read_settings(ctx));
     });
 }
 
