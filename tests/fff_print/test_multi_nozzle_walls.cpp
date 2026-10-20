@@ -1456,3 +1456,112 @@ TEST_CASE("Gap fill between large walls is printed by the large nozzle", "[Multi
         CHECK(widest[0] <= 3. * nozzles[0]);
     }
 }
+
+// Detail walls take the outer wall width the routing table gives their nozzle, like every other wall on it:
+// outer_wall_line_width, then line_width, with initial_layer_line_width first on the first layer. Before, the
+// detail flow read outer_wall_line_width alone and fell back to the automatic width (1.125 x 0.15 = 0.169 mm).
+TEST_CASE("Detail walls resolve their width through the outer wall chain on the detail nozzle", "[MultiNozzleWalls][Widths]")
+{
+    OfficialMods mods;
+    const char *wall_generator = GENERATE("classic", "arachne");
+    DYNAMIC_SECTION(wall_generator) {
+        DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, wall_generator, true);
+        config.set_deserialize_strict({ { "outer_wall_line_width", "0" }, { "line_width", "150%" }, { "initial_layer_line_width", "120%" },
+                                        { "layer_height", 0.1 }, { "initial_layer_print_height", 0.1 } }); // mm
+        Print print;
+        Model model;
+        init_print({ cube(20) }, print, model, config);
+        print.process();
+        const PrintObject &object = *print.objects().front();
+        // Widths of the detail walls' paths on a layer, mm.
+        auto detail_widths = [&object](size_t layer_id) {
+            std::vector<double> out;
+            for (const ExtrusionEntity *wall : walls_of(*object.layers()[layer_id]->regions().front())) {
+                if (wall->tool_hint != ExtrusionToolHint::DetailWall)
+                    continue;
+                if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(wall))
+                    for (const ExtrusionPath &p : loop->paths) out.push_back(p.width);
+                else if (const auto *multi = dynamic_cast<const ExtrusionMultiPath *>(wall))
+                    for (const ExtrusionPath &p : multi->paths) out.push_back(p.width);
+                else if (const auto *path = dynamic_cast<const ExtrusionPath *>(wall))
+                    out.push_back(path->width);
+            }
+            return out;
+        };
+        // 150 % and 120 % of the 0.15 mm detail nozzle, mm; Arachne may narrow a bead at a corner, never widen it.
+        for (const auto &[layer_id, expected_mm] : { std::pair<size_t, double>{ 5, 0.225 }, std::pair<size_t, double>{ 0, 0.18 } }) {
+            CAPTURE(layer_id);
+            const std::vector<double> widths = detail_widths(layer_id);
+            REQUIRE_FALSE(widths.empty());
+            const double widest = *std::max_element(widths.begin(), widths.end());
+            CHECK_THAT(widest, Catch::Matchers::WithinAbs(expected_mm, 0.002));
+        }
+    }
+}
+
+// The line width checks of a half-height print look at the nozzle of every large nozzle override range. Before,
+// a value with several ranges ("1:2:1;3:4:2") was read as one malformed range and its nozzles went unchecked.
+TEST_CASE("Every large nozzle override range is checked against the nozzle that prints it", "[MultiNozzleWalls][Override][validate]")
+{
+    OfficialMods mods;
+    const auto [ranges, valid] = GENERATE(table<const char *, bool>({ { "1:2:1", true }, { "3:4:2", false }, { "1:2:1;3:4:2", false } }));
+    CAPTURE(ranges);
+    DynamicPrintConfig config = multifilament_config(2, {
+        { "layer_height", 0.16 }, { "initial_layer_print_height", 0.16 }, // mm
+        { "wall_loops", 4 }, { "outer_wall_half_layer_height", true },
+        { "outer_wall_filament_id", 1 }, { "inner_wall_filament_id", 1 }, { "sparse_infill_filament_id", 1 },
+        { "internal_solid_filament_id", 1 }, { "top_surface_filament_id", 1 }, { "bottom_surface_filament_id", 1 },
+        { "initial_layer_line_width", 0. }, { "line_width", 0. },
+        { "skirt_loops", 0 }, { "brim_type", "no_brim" }, { "enable_prime_tower", false },
+        { "use_relative_e_distances", true }, { "layer_change_gcode", "G92 E0\n" },
+    });
+    // The second nozzle (0.15 mm) is thinner than the 0.16 mm layer its inner walls print at.
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.4, 0.15 }); // mm
+    config.set_key_value("filament_map", new ConfigOptionInts{ 1, 2 });
+    config.set_key_value("max_layer_height", new ConfigOptionFloats{ 0.4, 0.4 }); // mm
+    config.set_deserialize_strict({ { "outer_wall_line_width", "100%" }, { "inner_wall_line_width", "100%" } });
+    multi_nozzle_params(config, { { "override_regions", ranges } });
+    Print print;
+    Model model;
+    init_print({ cube(10) }, print, model, config);
+    const StringObjectException error = print.validate();
+    CAPTURE(error.string);
+    CHECK(error.string.empty() == valid);
+}
+
+// The first layer's tool order measures each region's islands with the width of the nozzle printing it. A
+// 0.12 mm wide plate on the 0.15 mm nozzle is a printable island there (less 2 x 0.2 x 0.15 mm it keeps 0.06 mm);
+// measured with the 0.4 mm nozzle (less 2 x 0.08 mm) it vanished and the plate's filament lost its place in the
+// order. Its 9.6 mm2 first layer outweighs the 1 mm2 cube's, so its tool starts the print.
+TEST_CASE("The first layer tool order measures islands with their own nozzle's width", "[MultiNozzleWalls][ToolOrdering]")
+{
+    DynamicPrintConfig config = multifilament_config(2, {
+        { "layer_height", 0.1 }, { "initial_layer_print_height", 0.1 }, // mm
+        { "initial_layer_line_width", "100%" }, { "line_width", "100%" },
+        { "skirt_loops", 0 }, { "brim_type", "no_brim" }, { "enable_prime_tower", false }, { "slice_closing_radius", 0.001 },
+    });
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.4, 0.15 }); // mm
+    config.set_key_value("filament_map", new ConfigOptionInts{ 1, 2 });
+    TriangleMesh plate = make_cube(80., 0.12, 2.); // mm
+    TriangleMesh dot   = make_cube(1., 1., 2.);    // mm
+    Print print;
+    Model model;
+    init_print({ plate, dot }, print, model, config);
+    for (const char *key : { "outer_wall_filament_id", "inner_wall_filament_id", "sparse_infill_filament_id", "internal_solid_filament_id",
+                             "top_surface_filament_id", "bottom_surface_filament_id" })
+        model.objects[0]->config.set_key_value(key, new ConfigOptionInt(2));
+    print.apply(model, config);
+    print.process();
+    const std::string gcode = Slic3r::Test::gcode(print);
+    // The tool of the first extrusion.
+    int first_tool = -1, current_tool = 0;
+    GCodeReader reader;
+    reader.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const std::string cmd(line.cmd());
+        if (cmd.size() >= 2 && cmd[0] == 'T' && std::isdigit((unsigned char) cmd[1]))
+            current_tool = std::stoi(cmd.substr(1));
+        else if (first_tool < 0 && line.extruding(self) && line.dist_XY(self) > 0)
+            first_tool = current_tool;
+    });
+    CHECK(first_tool == 1);
+}

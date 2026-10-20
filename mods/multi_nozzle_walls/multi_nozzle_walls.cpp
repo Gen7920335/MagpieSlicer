@@ -21,7 +21,7 @@
 
 #define MNW_MOD_ID "multi_nozzle_walls"
 
-MAGPIE_MOD_DEFINE(MNW_MOD_ID, "2.0.0")
+MAGPIE_MOD_DEFINE(MNW_MOD_ID, "2.0.1")
 
 namespace mnw {
 
@@ -423,10 +423,13 @@ mp_status tool_uses(void *, void *state, mp_wall_tool_use *out, uint32_t cap, ui
         if (s.enable)
             if (const WallTool detail = detail_tool_for(s, s.base_filament))
                 uses.push_back({detail.filament, uint32_t(std::max(1, s.small_wall_count)), 0});
-        // Large-nozzle override ranges print every wall of their layers with one toolhead (line 1).
-        if (const auto range = parse_override_range(s.override_regions); range && range->toolhead > 0)
-            if (const WallTool tool = tool_for_filament(s, range->toolhead))
-                uses.push_back({tool.filament, 1, 1});
+        // Large-nozzle override ranges print every wall of their layers with one toolhead (line 1): every range, with
+        // the filament the walls of its layers get (layer_toolhead, wall_filament).
+        for (const std::string &text : override_entries(s.override_regions))
+            if (const auto range = parse_override_range(text); range && range->toolhead <= s.nozzle_mm.size())
+                if (const WallTool tool = tool_for_toolhead(s, range->toolhead, s.base_filament))
+                    if (std::none_of(uses.begin(), uses.end(), [&tool](const mp_wall_tool_use &u) { return u.filament == tool.filament && u.inner_walls; }))
+                        uses.push_back({tool.filament, 1, 1});
         if (uses.size() > cap)
             throw std::runtime_error("more tool uses than room for them");
         std::copy(uses.begin(), uses.end(), out);

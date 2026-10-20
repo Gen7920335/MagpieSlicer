@@ -11,6 +11,7 @@
 #include "HalfLayerSupportSources.hpp"
 #include "ClipperUtils.hpp"
 #include "libslic3r/ModHost/WallPlanner.hpp"
+#include "LineWidths.hpp"
 #include "ParameterUtils.hpp"
 #include "GCode/ToolOrderUtils.hpp"
 #include "FilamentGroupUtils.hpp"
@@ -956,6 +957,15 @@ static void apply_first_layer_order(const DynamicPrintConfig* config, std::vecto
 }
 
 // BBS
+// MAGPIE: width_key of `holder` (initial_layer_line_width of the print, line_width of an object) on the nozzle that
+// prints filament_id (1-based; the region's outer wall filament), its per-nozzle value included, mm. On a printer whose
+// nozzles differ in size the first-layer heuristics below measure each region's islands with its own nozzle's width.
+static double width_on_filament_nozzle(const Print &print, const ConfigOptionResolver &holder, const char *width_key, int filament_id)
+{
+    const size_t nozzle = printing_nozzle_index(print.config(), filament_id, print.is_BBL_printer());
+    return line_width_setting_on_nozzle(holder, width_key, nozzle).get_abs_value(print.config().nozzle_diameter.get_at(nozzle));
+}
+
 std::vector<unsigned int> ToolOrdering::generate_first_layer_tool_order(const Print& print)
 {
     std::vector<unsigned int> tool_order;
@@ -966,9 +976,11 @@ std::vector<unsigned int> ToolOrdering::generate_first_layer_tool_order(const Pr
         const Layer* target_layer = nullptr;
         for(auto layer : object->layers()){
             for(auto layerm : layer->regions()){
+                // MAGPIE: the width on the nozzle printing the region, not a percentage's number read as mm.
+                const double initial_layer_line_width = width_on_filament_nozzle(print, print.config(), "initial_layer_line_width",
+                                                                                 layerm->region().config().outer_wall_filament_id.value);
                 for(auto& expoly : layerm->raw_slices){
-                    // MAGPIE: resolve a percentage width instead of reading its number as mm.
-                    if (!offset_ex(expoly, -0.2 * scale_(print.config().initial_layer_line_width.get_abs_value(print.shared_line_width_nozzle()))).empty()) {
+                    if (!offset_ex(expoly, -0.2 * scale_(initial_layer_line_width)).empty()) {
                         target_layer = layer;
                         break;
                     }
@@ -986,9 +998,9 @@ std::vector<unsigned int> ToolOrdering::generate_first_layer_tool_order(const Pr
         for (auto layerm : target_layer->regions()) {
             int extruder_id = layerm->region().config().option("outer_wall_filament_id")->getInt();
 
+            // MAGPIE: on the nozzle printing the region.
+            const coordf_t initial_layer_line_width = width_on_filament_nozzle(print, print.config(), "initial_layer_line_width", extruder_id);
             for (auto expoly : layerm->raw_slices) {
-                const double nozzle_diameter = print.shared_line_width_nozzle();
-                const coordf_t initial_layer_line_width = print.config().get_abs_value("initial_layer_line_width", nozzle_diameter);
 
                 if (offset_ex(expoly, -0.2 * scale_(initial_layer_line_width)).empty())
                     continue;
@@ -1031,9 +1043,11 @@ std::vector<unsigned int> ToolOrdering::generate_first_layer_tool_order(const Pr
     const Layer* target_layer = nullptr;
     for(auto layer : object.layers()){
         for(auto layerm : layer->regions()){
+            // MAGPIE: the width on the nozzle printing the region, not a percentage's number read as mm.
+            const double line_width = width_on_filament_nozzle(*object.print(), object.config(), "line_width",
+                                                               layerm->region().config().outer_wall_filament_id.value);
             for(auto& expoly : layerm->raw_slices){
-                // MAGPIE: resolve a percentage width instead of reading its number as mm.
-                if (!offset_ex(expoly, -0.2 * scale_(object.config().line_width.get_abs_value(object.print()->shared_line_width_nozzle()))).empty()) {
+                if (!offset_ex(expoly, -0.2 * scale_(line_width)).empty()) {
                     target_layer = layer;
                     break;
                 }
@@ -1050,9 +1064,9 @@ std::vector<unsigned int> ToolOrdering::generate_first_layer_tool_order(const Pr
 
     for (auto layerm : target_layer->regions()) {
         int extruder_id = layerm->region().config().option("outer_wall_filament_id")->getInt();
+        // MAGPIE: on the nozzle printing the region.
+        const coordf_t line_width = width_on_filament_nozzle(*object.print(), object.config(), "line_width", extruder_id);
         for (auto expoly : layerm->raw_slices) {
-            const double nozzle_diameter = object.print()->shared_line_width_nozzle();
-            const coordf_t line_width = object.config().get_abs_value("line_width", nozzle_diameter);
 
             if (offset_ex(expoly, -0.2 * scale_(line_width)).empty())
                 continue;

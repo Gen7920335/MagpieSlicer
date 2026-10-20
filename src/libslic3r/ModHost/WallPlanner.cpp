@@ -114,16 +114,17 @@ std::optional<Flow> WallPlanner::detail_flow(const PerimeterGenerator &g) const
     const WallTool detail = this->detail_tool(size_t(g.layer_id));
     if (!detail)
         return std::nullopt;
-    // The outer wall width resolved on the detail nozzle (its per-nozzle value, a percent of it, or Orca's
-    // automatic width). Unlike the routing table's outer wall chain, no line_width or first layer width.
-    // Resolved on the double diameter, as before the per-nozzle fields.
-    const ConfigOptionFloatOrPercent width = line_width_setting_on_nozzle(*g.config, "outer_wall_line_width", detail.toolhead_1based - 1);
-    double width_mm = (!width.percent && width.value <= 0.) ? Flow::auto_extrusion_width(frExternalPerimeter, float(detail.nozzle_diameter)) :
-                                                              width.get_abs_value(detail.nozzle_diameter);
+    // The outer wall flow on the detail nozzle by the routing table, as every other wall on that nozzle resolves it
+    // (outer_wall_line_width, then line_width, the first layer's initial_layer_line_width first, each with its
+    // per-nozzle value, else the automatic width).
+    Flow flow = feature_flow(WidthFeature::OuterWall, {g.print_config, g.object_config, g.config}, detail.toolhead_1based - 1,
+                             float(g.layer_height), g.layer_id == 0);
     // Narrowest width with a positive spacing at this layer height, mm.
-    width_mm = std::max(width_mm, g.layer_height * (1. - 0.25 * PI) + EPSILON);
-    return Flow::new_from_config_width(frExternalPerimeter, ConfigOptionFloatOrPercent(width_mm, false), float(detail.nozzle_diameter),
-                                       float(g.layer_height));
+    const double min_width_mm = g.layer_height * (1. - 0.25 * PI) + EPSILON;
+    if (double(flow.width()) < min_width_mm)
+        flow = Flow::new_from_config_width(frExternalPerimeter, ConfigOptionFloatOrPercent(min_width_mm, false), float(detail.nozzle_diameter),
+                                           float(g.layer_height));
+    return flow;
 }
 
 WallPlan WallPlanner::plan(const PerimeterGenerator &g, const ExPolygon &island, int base_loop_number) const

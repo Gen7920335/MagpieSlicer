@@ -8,7 +8,7 @@
     // the process values.
     "id": "multi_nozzle_walls",
     "name": "Multi-nozzle walls", "name_ko": "다중 노즐 벽",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "api": { "major": 1, "min_minor": 0 },
     "binary": "multi_nozzle_walls",
     "slots": [ { "slot": "wall.plan", "version": 1, "impl": "multi_nozzle" } ],
