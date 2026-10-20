@@ -416,6 +416,26 @@ TEST_CASE("Temperature waits count while blending around the low temperature int
     CHECK_THAT(marks[1].time_s - marks[0].time_s, WithinAbs(20. + off / 2., 0.5));
 }
 
+// Without blending, a wait inside the print (after the first layer change) still takes its time; the start
+// G-code heat-up before it stays at none, as in Orca.
+TEST_CASE("Temperature waits inside the print count without blending", "[LayerTimeBlend][GCodeProcessor]")
+{
+    // The layer change tag as the processor reads it (it differs between Bambu and other printers).
+    const std::string layer_change = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Layer_Change) + "\n";
+    // Heat to 200 degC before the first layer (not counted), set 170 degC and move for 10 s (the nozzle cools
+    // 10 degC at 1 degC/s), then wait for 170 degC: 20 s more.
+    const std::string inside = "G90\nM83\nG1 X0 Y0 F600\nM109 S200\n" + layer_change + "M104 S170\nG1 X100 F600\nM109 R170\n"
+                               "G1 X0 F600\n";
+    const std::string before = "G90\nM83\nG1 X0 Y0 F600\nM109 S200\nM104 S170\nG1 X100 F600\nM109 R170\n"
+                               "G1 X0 F600\n";
+    const double moves_only = estimated_time(before, false);
+    CHECK(moves_only < 25.);
+    CHECK_THAT(estimated_time(inside, false) - moves_only, WithinAbs(20., 0.5));
+    // An M109 that only confirms the temperature already reached adds nothing.
+    const std::string reached = "G90\nM83\nG1 X0 Y0 F600\nM109 S200\n" + layer_change + "G1 X100 F600\nM109 S200\nG1 X0 F600\n";
+    CHECK_THAT(estimated_time(reached, false), WithinAbs(moves_only, 0.5));
+}
+
 TEST_CASE("Under H/2 a wait site starts each full layer only", "[LayerTimeBlend]")
 {
     DynamicPrintConfig config = blend_config("blend", 1e6);
