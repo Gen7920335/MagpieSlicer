@@ -3834,7 +3834,10 @@ int CLI::run(int argc, char **argv)
             //computing
             ConfigOptionBools* filament_is_support = m_print_config.option<ConfigOptionBools>("filament_is_support", true);
 
-            const std::vector<int> &min_flush_volumes = Slic3r::GUI::get_min_flush_volumes(m_print_config, 0);
+            // ORCA: one volume per project filament even when the config's filament lists are shorter (ORCA_PATCHES.md).
+            std::vector<int> min_flush_volumes = Slic3r::GUI::get_min_flush_volumes(m_print_config, 0);
+            if (min_flush_volumes.size() < project_filament_count)
+                min_flush_volumes.resize(project_filament_count, min_flush_volumes.empty() ? 0 : min_flush_volumes.back());
 
             if (filament_is_support->size() != project_filament_count)
             {

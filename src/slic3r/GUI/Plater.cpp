@@ -1257,12 +1257,19 @@ std::vector<int> get_min_flush_volumes(const DynamicPrintConfig &full_config, si
     }
     const ConfigOptionBools* long_retractions_when_cut_opt = full_config.option<ConfigOptionBools>("long_retractions_when_cut");
     bool machine_activated = false;
-    if (long_retractions_when_cut_opt) {
+    // ORCA: a config of only the keys a hand-written CLI preset sets lacks most lists (ORCA_PATCHES.md): read them
+    // only where they have the entry.
+    if (long_retractions_when_cut_opt && nozzle_id < long_retractions_when_cut_opt->values.size()) {
         machine_activated = long_retractions_when_cut_opt->values[nozzle_id] == 1;
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": get long_retractions_when_cut from config, value=%1%, activated=%2%")%long_retractions_when_cut_opt->values[0] %machine_activated;
     }
 
-    size_t filament_size = full_config.option<ConfigOptionFloats>("filament_diameter")->values.size();
+    // One volume per filament: filament_diameter's count, else filament_colour's (the CLI's project config can hold
+    // the colours alone), else one.
+    const ConfigOptionFloats  *filament_diameter_opt = full_config.option<ConfigOptionFloats>("filament_diameter");
+    const ConfigOptionStrings *filament_colour_opt   = full_config.option<ConfigOptionStrings>("filament_colour");
+    size_t filament_size = filament_diameter_opt ? filament_diameter_opt->values.size() :
+                           filament_colour_opt   ? filament_colour_opt->values.size() : 1;
     std::vector<double> filament_retraction_distance_when_cut(filament_size, 18.0f), printer_retraction_distance_when_cut(filament_size, 18.0f);
     std::vector<unsigned char> filament_long_retractions_when_cut(filament_size, 0);
     const ConfigOptionFloats* filament_retraction_distances_when_cut_opt = full_config.option<ConfigOptionFloats>("filament_retraction_distances_when_cut");
@@ -1283,20 +1290,24 @@ std::vector<int> get_min_flush_volumes(const DynamicPrintConfig &full_config, si
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": get filament_long_retractions_when_cut from config, size=%1%, values=%2%")%filament_long_retractions_when_cut.size() %filament_long_retractions_when_cut_opt->serialize();
     }
 
+    // ORCA: lists shorter than the filament or nozzle count read as their defaults (18 mm, off).
+    auto printer_retract_mm = [&printer_retraction_distance_when_cut](size_t nozzle) {
+        return nozzle < printer_retraction_distance_when_cut.size() ? printer_retraction_distance_when_cut[nozzle] : 18.;
+    };
     for (size_t idx = 0; idx < filament_size; ++idx) {
         int extra_flush_volume = nozzle_volume_val;
-        int retract_length = machine_enabled_level && machine_activated ? printer_retraction_distance_when_cut[nozzle_id] : 0;
+        int retract_length = machine_enabled_level && machine_activated ? printer_retract_mm(nozzle_id) : 0;
 
-        unsigned char filament_activated = filament_long_retractions_when_cut[idx];
-        double filament_retract_length = filament_retraction_distance_when_cut[idx];
+        unsigned char filament_activated = idx < filament_long_retractions_when_cut.size() ? filament_long_retractions_when_cut[idx] : 0;
+        double filament_retract_length = idx < filament_retraction_distance_when_cut.size() ? filament_retraction_distance_when_cut[idx] : 18.;
 
         if (filament_activated == 0)
             retract_length = 0;
         else if (filament_activated == 1 && machine_enabled_level == LongRectrationLevel::EnableFilament) {
             if (!std::isnan(filament_retract_length))
-                retract_length = (int)filament_retraction_distance_when_cut[idx];
+                retract_length = (int)filament_retract_length;
             else
-                retract_length = printer_retraction_distance_when_cut[nozzle_id];
+                retract_length = printer_retract_mm(nozzle_id);
         }
 
         extra_flush_volume -= PI * 1.75 * 1.75 / 4 * retract_length;

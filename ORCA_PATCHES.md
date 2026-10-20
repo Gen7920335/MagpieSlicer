@@ -65,6 +65,18 @@ Format: what was wrong, what changed, where, the guard test.
   misread (deps_src/admesh/stlinit.cpp).
 - Check: a 4.6 GB binary STL loads (manual run; no unit test, the file would be too large for the suite).
 
+## CLI colour mapping with a config of only a preset's own keys
+
+- Wrong: when a loaded filament preset sets `filament_colour`, the CLI maps colours and recomputes the flush
+  volumes on its project config (`OrcaSlicer.cpp`, the colour block before slicing). That config holds only the
+  keys the loaded presets set; a hand-written "from User" filament preset without `filament_diameter` made
+  `GUI::get_min_flush_volumes` (Plater.cpp) dereference a null option, and short retraction lists were indexed
+  past their end. The CLI crashed with an access violation before slicing (vanilla Orca too).
+- Change: `get_min_flush_volumes` sizes its result by `filament_diameter`, else `filament_colour`, else one
+  filament, and reads lists shorter than the filament or nozzle index as their defaults (18 mm, off); the CLI
+  pads the volumes to the project's filament count.
+- Test: "Minimum flush volumes from a config that lacks the filament lists" (tests/slic3rutils).
+
 ## Earlier core fixes (commits on magpie-next)
 
 - 0f401f7ce8: a layer height range without `layer_height` (3MF material-only range) inherits the object's
