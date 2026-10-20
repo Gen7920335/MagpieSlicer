@@ -25,6 +25,9 @@
 #include <string.h>
 #include <math.h>
 #include <assert.h>
+#include <stdint.h>
+
+#include <limits>
 
 #include <boost/log/trivial.hpp>
 #include <boost/nowide/cstdio.hpp>
@@ -55,9 +58,20 @@ static FILE *stl_open_count_facets(stl_file *stl, const char *file, unsigned int
 		BOOST_LOG_TRIVIAL(error) << "stl_open_count_facets: Couldn't open " << file << " for reading";
     	return nullptr;
   	}
-  	// Find size of file.
-  	fseek(fp, 0, SEEK_END);
-  	long file_size = ftell(fp);
+  	// Find size of file. Orca: 64-bit, because long is 32 bits on Windows and ftell() fails on a file
+  	// over 2 GB, which made such a binary STL fail the size check below.
+#ifdef _WIN32
+  	_fseeki64(fp, 0, SEEK_END);
+  	const int64_t file_size = _ftelli64(fp);
+#else
+  	fseeko(fp, 0, SEEK_END);
+  	const int64_t file_size = int64_t(ftello(fp));
+#endif
+  	if (file_size < 0) {
+		BOOST_LOG_TRIVIAL(error) << "stl_open_count_facets: Couldn't find the size of " << file;
+    	fclose(fp);
+    	return nullptr;
+  	}
 
   	// Check for binary or ASCII file.
     int header_size = custom_header_length + NUM_FACET_SIZE;
@@ -101,7 +115,13 @@ static FILE *stl_open_count_facets(stl_file *stl, const char *file, unsigned int
       		fclose(fp);
       		return nullptr;
     	}
-        num_facets = (file_size - header_size) / SIZEOF_STL_FACET;
+        // A binary STL counts its facets in 32 bits.
+        if ((file_size - header_size) / SIZEOF_STL_FACET > int64_t(std::numeric_limits<uint32_t>::max())) {
+			BOOST_LOG_TRIVIAL(error) << "stl_open_count_facets: The file " << file << " has more facets than a binary STL can hold.";
+      		fclose(fp);
+      		return nullptr;
+        }
+        num_facets = uint32_t((file_size - header_size) / SIZEOF_STL_FACET);
 
     	// Read the header.
         if (fread(stl->stats.header.data(), custom_header_length, 1, fp) > custom_header_length -1)

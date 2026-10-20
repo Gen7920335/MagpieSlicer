@@ -1345,6 +1345,8 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
             double time_s  = 0.;
         };
         bool                           m_estimate_temperature_waits { false };
+        // Orca: set while a BBL VM109 (a virtual wait the firmware does not perform) goes through process_M109.
+        bool                           m_virtual_temperature_wait { false };
         float                          m_heat_rate { 2.f }, m_cool_rate { 1.f };
         std::vector<NozzleTemperature> m_nozzle_temperatures;
         // The estimated time of the G-code processed so far, s.
