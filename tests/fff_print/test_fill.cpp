@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include "libslic3r/Fill/FillBase.hpp"
+#include "libslic3r/Arachne/WallToolPaths.hpp"
 #include "libslic3r/Polyline.hpp"
 #include "libslic3r/Surface.hpp"
 #include "libslic3r/Point.hpp"
@@ -2352,4 +2353,13 @@ TEST_CASE("Adaptive TPMS anchors match the printed infill", "[Fill][InternalBrid
         for (const Point &point : path.equally_spaced_points(scale_(0.25)))
             max_distance = std::max(max_distance, printed_tree.distance_from_lines<false>(point));
     CHECK(unscale<double>(max_distance) <= 0.012);
+}
+
+// FillConcentricInternal fills only part of WallToolPathsParams; removeSmallLines() still reads
+// min_length_factor and is_top_or_bottom_layer, so they must have defined defaults.
+TEST_CASE("Arachne parameters left unset by FillConcentricInternal have defined defaults", "[Fill][ArachneParams]")
+{
+    Arachne::WallToolPathsParams params; // default-initialized, as FillConcentricInternal does
+    CHECK_THAT(params.min_length_factor, Catch::Matchers::WithinAbs(0.5f, 1e-6f));
+    CHECK_FALSE(params.is_top_or_bottom_layer);
 }
