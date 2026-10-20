@@ -6,6 +6,8 @@
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Flow.hpp"
+#include "libslic3r/LineWidths.hpp"
+#include "libslic3r/Print.hpp"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/Polygon.hpp"
 #include "libslic3r/Surface.hpp"
@@ -92,23 +94,25 @@ Generator::Generator(const PrintObject &print_object, const std::function<void()
     const PrintConfig         &print_config         = print_object.print()->config();
     const PrintObjectConfig   &object_config        = print_object.config();
     const PrintRegionConfig   &region_config        = print_object.shared_regions()->all_regions.front()->config();
-    const std::vector<double> &nozzle_diameters     = print_config.nozzle_diameter.values;
-    double                     max_nozzle_diameter  = *std::max_element(nozzle_diameters.begin(), nozzle_diameters.end());
+    // MAGPIE: widths on the nozzle printing the sparse infill (routing table, per-nozzle fields included), where Orca
+    // took the largest nozzle; the same on a printer with one nozzle size. The name is kept from Orca.
+    const size_t               width_nozzle         = print_object.shared_regions()->all_regions.front()->printing_nozzle(print_object, WidthFeature::SparseInfill);
+    double                     max_nozzle_diameter  = print_config.nozzle_diameter.get_at(width_nozzle);
     const int                  n_multiline          = region_config.fill_multiline.value;
 //    const int                  infill_extruder      = region_config.infill_extruder.value;
     const double               default_infill_extrusion_width = Flow::auto_extrusion_width(FlowRole::frInfill, float(max_nozzle_diameter));
     // Note: There's not going to be a layer below the first one, so the 'initial layer height' doesn't have to be taken into account.
     const double               layer_thickness      = scaled<double>(object_config.layer_height.value);
 
-    m_infill_extrusion_width = scaled<float>(region_config.sparse_infill_line_width.get_abs_value(max_nozzle_diameter));
+    m_infill_extrusion_width = scaled<float>(line_width_setting_on_nozzle(region_config, "sparse_infill_line_width", width_nozzle).get_abs_value(max_nozzle_diameter));
     // Orca: fix lightning infill divide by zero when infill line width is set to 0.
     // firstly attempt to set it to the default line width. If that is not provided either, set it to a sane default
     // based on the nozzle diameter.
     if (m_infill_extrusion_width < EPSILON)
         m_infill_extrusion_width = scaled<float>(
-            object_config.line_width.get_abs_value(max_nozzle_diameter) < EPSILON ?
+            line_width_setting_on_nozzle(object_config, "line_width", width_nozzle).get_abs_value(max_nozzle_diameter) < EPSILON ?
             default_infill_extrusion_width :
-            object_config.line_width.get_abs_value(max_nozzle_diameter)
+            line_width_setting_on_nozzle(object_config, "line_width", width_nozzle).get_abs_value(max_nozzle_diameter)
         );
     
     m_supporting_radius = coord_t(m_infill_extrusion_width) * 100 * n_multiline / region_config.sparse_infill_density;
@@ -129,22 +133,24 @@ Generator::Generator(PrintObject* m_object, std::vector<Polygons>& contours, std
     const PrintConfig         &print_config         = m_object->print()->config();
     const PrintObjectConfig   &object_config        = m_object->config();
     const PrintRegionConfig   &region_config        = m_object->shared_regions()->all_regions.front()->config();
-    const std::vector<double> &nozzle_diameters     = print_config.nozzle_diameter.values;
-    double                     max_nozzle_diameter  = *std::max_element(nozzle_diameters.begin(), nozzle_diameters.end());
+    // MAGPIE: lightning support is printed by the support filament: widths on its nozzle (per-nozzle fields included),
+    // where Orca took the largest nozzle; the same on a printer with one nozzle size. The name is kept from Orca.
+    const size_t               width_nozzle         = feature_printing_nozzle(WidthFeature::Support, { &print_config, &object_config, nullptr }, m_object->print()->is_BBL_printer());
+    double                     max_nozzle_diameter  = print_config.nozzle_diameter.get_at(width_nozzle);
 //    const int                  infill_extruder      = region_config.infill_extruder.value;
     const double               default_infill_extrusion_width = Flow::auto_extrusion_width(FlowRole::frInfill, float(max_nozzle_diameter));
     // Note: There's not going to be a layer below the first one, so the 'initial layer height' doesn't have to be taken into account.
     const double               layer_thickness      = scaled<double>(object_config.layer_height.value);
 
-    m_infill_extrusion_width = scaled<float>(region_config.sparse_infill_line_width.get_abs_value(max_nozzle_diameter));
+    m_infill_extrusion_width = scaled<float>(line_width_setting_on_nozzle(region_config, "sparse_infill_line_width", width_nozzle).get_abs_value(max_nozzle_diameter));
     // Orca: fix lightning infill divide by zero when infill line width is set to 0.
     // firstly attempt to set it to the default line width. If that is not provided either, set it to a sane default
     // based on the nozzle diameter.
     if (m_infill_extrusion_width < EPSILON)
         m_infill_extrusion_width = scaled<float>(
-            object_config.line_width.get_abs_value(max_nozzle_diameter) < EPSILON ?
+            line_width_setting_on_nozzle(object_config, "line_width", width_nozzle).get_abs_value(max_nozzle_diameter) < EPSILON ?
             default_infill_extrusion_width :
-            object_config.line_width.get_abs_value(max_nozzle_diameter)
+            line_width_setting_on_nozzle(object_config, "line_width", width_nozzle).get_abs_value(max_nozzle_diameter)
         );
     //m_supporting_radius: against to the density of lightning, failures may happen if set to high density
     //higher density lightning makes support harder, more time-consuming on computing and printing, but more reliable on supporting overhangs

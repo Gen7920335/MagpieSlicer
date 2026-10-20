@@ -1310,6 +1310,11 @@ static std::vector<std::string> s_Preset_print_options{
     "skeleton_infill_line_width",
     "top_surface_line_width",
     "support_line_width",
+    // MAGPIE: per-nozzle line widths (LineWidths.hpp).
+    "line_width_per_nozzle", "initial_layer_line_width_per_nozzle", "inner_wall_line_width_per_nozzle",
+    "outer_wall_line_width_per_nozzle", "sparse_infill_line_width_per_nozzle", "internal_solid_infill_line_width_per_nozzle",
+    "skin_infill_line_width_per_nozzle", "skeleton_infill_line_width_per_nozzle", "top_surface_line_width_per_nozzle",
+    "support_line_width_per_nozzle", "bridge_line_width_per_nozzle",
     "infill_wall_overlap",
     "top_bottom_infill_wall_overlap",
     "bridge_flow",

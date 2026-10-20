@@ -4,6 +4,7 @@
 #include "EdgeGrid.hpp"
 #include "ExPolygon.hpp"
 #include "Flow.hpp"
+#include "LineWidths.hpp"
 #include "Geometry.hpp"
 #include "ExtrusionEntity.hpp"
 #include "Layer.hpp"
@@ -436,14 +437,39 @@ static ExPolygons make_brim_ears(const PrintObject* object)
     return mouse_ears_ex;
 }
 
+// MAGPIE: the brim flow per object. On a printer whose nozzles differ in size each object's brim is sized for the
+// nozzle of the tool that prints it (brim_tool()); elsewhere every brim takes Orca's one brim flow, as before.
+class BrimFlows
+{
+public:
+    explicit BrimFlows(const Print &print) : m_print(print), m_mixed(print.line_width_reference_mm() > 0.) {}
+    const Flow &of(const PrintObject &object)
+    {
+        if (!m_mixed) {
+            if (m_flows.empty())
+                m_flows.emplace(nullptr, m_print.brim_flow());
+            return m_flows.begin()->second;
+        }
+        auto it = m_flows.find(&object);
+        if (it == m_flows.end())
+            it = m_flows.emplace(&object, brim_flow_on_nozzle(m_print, object,
+                                     printing_nozzle_index(m_print.config(), int(brim_tool(m_print, object)) + 1, m_print.is_BBL_printer()))).first;
+        return it->second;
+    }
+
+private:
+    const Print                          &m_print;
+    const bool                            m_mixed;
+    std::map<const PrintObject *, Flow>   m_flows;
+};
+
 //BBS: create all brims
 static ExPolygons outer_inner_brim_area(const Print& print,
     const float no_brim_offset, std::map<ObjectInstanceID, ExPolygons>& brimAreaMap,
     std::vector<std::pair<ObjectID, unsigned int>>& objPrintVec,
-    std::vector<unsigned int>& printExtruders)
+    std::vector<unsigned int>& printExtruders, BrimFlows& brim_flows)
 {
     unsigned int support_material_extruder = printExtruders.front() + 1;
-    Flow flow = print.brim_flow();
 
     ExPolygons brim_area;
     ExPolygons no_brim_area;
@@ -464,9 +490,10 @@ static ExPolygons outer_inner_brim_area(const Print& print,
             const PrintObject* object = print.get_object(objectWithExtruder.first);
             const BrimType     brim_type = object->config().brim_type.value;
             float              brim_offset = scale_(object->config().brim_object_gap.value);
-            double             flowWidth = print.brim_flow().scaled_spacing() * SCALING_FACTOR;
+            const Flow&        flow = brim_flows.of(*object);
+            double             flowWidth = flow.scaled_spacing() * SCALING_FACTOR;
             float              brim_width = scale_(floor(object->config().brim_width.value / flowWidth / 2) * flowWidth * 2);
-            const float        scaled_flow_width = print.brim_flow().scaled_spacing();
+            const float        scaled_flow_width = flow.scaled_spacing();
             const float        scaled_additional_brim_width = scale_(floor(5 / flowWidth / 2) * flowWidth * 2);
             const float        scaled_half_min_adh_length = scale_(1.1);
             bool               has_brim_auto = object->config().brim_type == btAutoBrim;
@@ -701,7 +728,7 @@ static ExPolygons outer_inner_brim_area(const Print& print,
                 for (int iao = 0; iao != tempArea.size(); ++iao)
                     if (iao != ia) otherExPoly.push_back(tempArea[iao]);
 
-                auto offsetedTa = offset_ex(tempArea[ia], print.brim_flow().scaled_spacing() * 2, jtRound, SCALED_RESOLUTION);
+                auto offsetedTa = offset_ex(tempArea[ia], brim_flows.of(*object).scaled_spacing() * 2, jtRound, SCALED_RESOLUTION);
                 if (!intersection_ex(offsetedTa, objectIslands).empty() ||
                     !intersection_ex(offsetedTa, otherExPoly).empty() ||
                     !intersection_ex(offsetedTa, otherExPolys).empty())
@@ -807,12 +834,11 @@ static Polylines connect_brim_lines(Polylines &&polylines, const Polygons &brim_
     return std::move(polylines);
 }
 //BBS: generate out brim by offseting ExPolygons 'islands_area_ex'
-Polygons tryExPolygonOffset(const ExPolygons& islandAreaEx, const Print& print)
+Polygons tryExPolygonOffset(const ExPolygons& islandAreaEx, const Print& print, const Flow& flow)
 {
     const auto scaled_resolution = scaled<double>(print.config().resolution.value);
     Polygons   loops;
     ExPolygons islands_ex;
-    Flow       flow = print.brim_flow();
 
     double resolution = 0.0125 / SCALING_FACTOR;
     islands_ex = islandAreaEx;
@@ -830,9 +856,8 @@ Polygons tryExPolygonOffset(const ExPolygons& islandAreaEx, const Print& print)
     }
     return loops;
 }
-static ExtrusionEntityCollection makeBrimInfillImpl(const ExPolygons& singleBrimArea, const Print& print, const Polygons& islands_area, bool apply_plate_offset) {
-    Polygons        loops = tryExPolygonOffset(singleBrimArea, print);
-    Flow  flow = print.brim_flow();
+static ExtrusionEntityCollection makeBrimInfillImpl(const ExPolygons& singleBrimArea, const Print& print, const Polygons& islands_area, bool apply_plate_offset, const Flow& flow) {
+    Polygons        loops = tryExPolygonOffset(singleBrimArea, print, flow);
     loops = union_pt_chained_outside_in(loops);
 
     std::vector<Polylines> loops_pl_by_levels;
@@ -875,12 +900,12 @@ static ExtrusionEntityCollection makeBrimInfillImpl(const ExPolygons& singleBrim
 //BBS: a function creates the ExtrusionEntityCollection from the brim area defined by ExPolygons
 ExtrusionEntityCollection makeBrimInfill(const ExPolygons& singleBrimArea, const Print& print, const Polygons& islands_area)
 {
-    return makeBrimInfillImpl(singleBrimArea, print, islands_area, true);
+    return makeBrimInfillImpl(singleBrimArea, print, islands_area, true, print.brim_flow());
 }
 
-ExtrusionEntityCollection makeBrimInfillFromPlateCoordinates(const ExPolygons& singleBrimArea, const Print& print, const Polygons& islands_area)
+ExtrusionEntityCollection makeBrimInfillFromPlateCoordinates(const ExPolygons& singleBrimArea, const Print& print, const Polygons& islands_area, const Flow& flow)
 {
-    return makeBrimInfillImpl(singleBrimArea, print, islands_area, false);
+    return makeBrimInfillImpl(singleBrimArea, print, islands_area, false, flow);
 }
 
 //BBS: an overload of the orignal brim generator that generates the brim by obj and by extruders
@@ -904,8 +929,9 @@ void make_brim(const Print& print, PrintTryCancel try_cancel, Polygons& islands_
 
     std::map<ObjectInstanceID, ExPolygons> brimAreaMap;
     Flow                 flow = print.brim_flow();
+    BrimFlows            brim_flows(print);
     ExPolygons           islands_area_ex = outer_inner_brim_area(print,
-        float(flow.scaled_spacing()), brimAreaMap, objPrintVec, printExtruders);
+        float(flow.scaled_spacing()), brimAreaMap, objPrintVec, printExtruders, brim_flows);
 
     if (!print.config().combine_brims) {
         ExPolygons claimed_area;
@@ -965,7 +991,7 @@ void make_brim(const Print& print, PrintTryCancel try_cancel, Polygons& islands_
     // Print::_make_skirt() will join the touching ones.
     for (auto iter = brimAreaMap.begin(); iter != brimAreaMap.end(); ++iter) {
         if (!iter->second.empty()) {
-            ExtrusionEntityCollection brim = makeBrimInfill(iter->second, print, islands_area);
+            ExtrusionEntityCollection brim = makeBrimInfillImpl(iter->second, print, islands_area, true, brim_flows.of(*print.get_object(iter->first.object_id)));
             brimMap[iter->first.object_id].append(brim.entities);
             brimMapByInstance.emplace(iter->first, std::move(brim));
         };

@@ -7,6 +7,7 @@
 #include "GCodeCompatibility.hpp"
 #include "GCode/GCodeProcessor.hpp"
 #include "Flow.hpp"
+#include "LineWidths.hpp"
 #include "GCode/ThumbnailData.hpp"
 #include "GCode/ToolOrdering.hpp"
 #include "GCode/SnapmakerHomingPolicy.hpp"
@@ -743,9 +744,10 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         const double filament_diameter = config.filament_diameter.get_at(filament_id);
         // MAGPIE: a percentage width is a share of the nozzle, not of the filament.
         const double nozzle_diameter = config.nozzle_diameter.get_at(extruder_id);
-        float outer_wall_line_width = print.default_region_config().get_abs_value("outer_wall_line_width", nozzle_diameter);
+        // MAGPIE: and per-nozzle line width fields of this nozzle win.
+        float outer_wall_line_width = line_width_setting_on_nozzle(print.default_region_config(), "outer_wall_line_width", size_t(extruder_id)).get_abs_value(nozzle_diameter);
         if (outer_wall_line_width == 0.0) {
-            float default_line_width = print.default_object_config().get_abs_value("line_width", nozzle_diameter);
+            float default_line_width = line_width_setting_on_nozzle(print.default_object_config(), "line_width", size_t(extruder_id)).get_abs_value(nozzle_diameter);
             outer_wall_line_width = default_line_width == 0.0 ? filament_diameter : default_line_width;
         }
         Flow outer_wall_flow = Flow(outer_wall_line_width, config.layer_height, config.nozzle_diameter.get_at(extruder_id));
@@ -6939,7 +6941,11 @@ std::string GCode::generate_skirt(const Print &print,
         set_origin(unscaled(offset));
 
         m_avoid_crossing_perimeters.use_external_mp();
-        Flow layer_skirt_flow = print.skirt_flow().with_height(float(skirt_done.back() - (skirt_done.size() == 1 ? 0. : skirt_done[skirt_done.size() - 2])));
+        // MAGPIE: on a printer whose nozzles differ in size, this layer's skirt in the width of the tool printing it.
+        const bool mixed_nozzles = print.line_width_reference_mm() > 0.;
+        const Flow skirt_flow    = mixed_nozzles ?
+            skirt_flow_on_nozzle(print, printing_nozzle_index(print.config(), int(extruder_id) + 1, print.is_BBL_printer())) : print.skirt_flow();
+        Flow layer_skirt_flow = skirt_flow.with_height(float(skirt_done.back() - (skirt_done.size() == 1 ? 0. : skirt_done[skirt_done.size() - 2])));
         double mm3_per_mm = layer_skirt_flow.mm3_per_mm();
         // Decide where to start looping:
         // - If it’s the first layer or if we do NOT want a single-wall skirt/draft shield,
@@ -6957,6 +6963,8 @@ std::string GCode::generate_skirt(const Print &print,
             for (ExtrusionPath &path : loop.paths) {
                 path.height = layer_skirt_flow.height();
                 path.mm3_per_mm = mm3_per_mm;
+                if (mixed_nozzles)
+                    path.width = layer_skirt_flow.width();
             }
 
             //FIXME using the support_speed of the 1st object printed.
@@ -10073,8 +10081,10 @@ std::string GCode::extrude_loop(const ExtrusionLoop&                       loop_
     }
 
     if (enable_seam_slope && m_config.seam_slope_conditional.value && m_config.scarf_overhang_threshold.value > 0.0f) {
-        const auto _line_width = loop.role() == erExternalPerimeter ? m_config.outer_wall_line_width.get_abs_value(nozzle_diameter) :
-                                                                      m_config.inner_wall_line_width.get_abs_value(nozzle_diameter);
+        // MAGPIE: on the nozzle printing the loop, per-nozzle line width fields included.
+        const size_t nozzle     = m_writer.filament()->extruder_id();
+        const auto   _line_width = line_width_setting_on_nozzle(m_config, loop.role() == erExternalPerimeter ? "outer_wall_line_width" : "inner_wall_line_width", nozzle)
+                                     .get_abs_value(nozzle_diameter);
         enable_seam_slope      = seam_overhang < m_config.scarf_overhang_threshold.value * 0.01f * _line_width;
     }
 
@@ -11383,10 +11393,16 @@ static double widest_configured_width_ratio(const Print &print)
     const std::vector<double> &nozzles     = print.config().nozzle_diameter.values;
     const double               largest_mm  = nozzles.empty() ? 0. : *std::max_element(nozzles.begin(), nozzles.end());
     double                     widest      = 0.;
-    auto visit = [&widest, largest_mm](const ConfigBase &config) {
+    auto visit = [&widest, largest_mm, &nozzles](const ConfigBase &config) {
         for (const std::string &key : nozzle_relative_line_width_keys())
             if (const auto *width = config.option<ConfigOptionFloatOrPercent>(key); width != nullptr && width->value > 0.)
                 widest = std::max(widest, width->percent ? 0.01 * width->value : largest_mm > 0. ? width->value / largest_mm : 0.);
+        // A per-nozzle line width is a width for its own nozzle.
+        for (const char *key : per_nozzle_line_width_base_keys())
+            if (const auto *values = config.option<ConfigOptionFloats>(per_nozzle_line_width_key(key)); values != nullptr)
+                for (size_t nozzle = 0; nozzle < values->values.size() && nozzle < nozzles.size(); ++nozzle)
+                    if (values->values[nozzle] > 0. && nozzles[nozzle] > 0.)
+                        widest = std::max(widest, values->values[nozzle] / nozzles[nozzle]);
     };
     visit(print.config());
     visit(print.default_object_config());
@@ -11417,7 +11433,8 @@ void GCode::check_extrusion_width(const ExtrusionPath &path)
 {
     // MAGPIE: output invariant. Every extrusion is compared with the nozzle of the tool printing it, so a line
     // width resolved on another nozzle (a 0.42 mm wall from a 0.15 mm nozzle) stops the slice instead of
-    // reaching the printer. Brim and skirt only warn: Orca sizes them on one filament's nozzle for every tool.
+    // reaching the printer. Brim and skirt only warn: their geometry is laid out before G-code export for the tool
+    // expected to print them (brim_tool(), the first layer's first tool), so a mismatch means that expectation failed.
     if (m_writer.filament() == nullptr)
         return;
     const double nozzle_mm = EXTRUDER_CONFIG(nozzle_diameter);
@@ -11429,7 +11446,7 @@ void GCode::check_extrusion_width(const ExtrusionPath &path)
         if (!m_extrusion_width_warned && m_print != nullptr) {
             m_extrusion_width_warned = true;
             m_print->active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL,
-                (boost::format(_(L("%1% is printed %2% mm wide by the %3% mm nozzle of tool %4%: brim and skirt widths follow one filament's nozzle on a printer with nozzles of different sizes."))) %
+                (boost::format(_(L("%1% is printed %2% mm wide by the %3% mm nozzle of tool %4%: it was laid out for another tool's nozzle."))) %
                  _(role) % path.width % nozzle_mm % (tool + 1)).str());
         }
         return;

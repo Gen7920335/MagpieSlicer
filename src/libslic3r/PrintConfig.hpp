@@ -23,6 +23,7 @@
 #include "Polygon.hpp"
 #include <boost/container_hash/hash.hpp>
 #include <algorithm>
+#include <array>
 #include <boost/preprocessor/facilities/empty.hpp>
 #include <boost/preprocessor/punctuation/comma_if.hpp>
 #include <boost/preprocessor/seq/for_each.hpp>
@@ -1281,6 +1282,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionPercent,             elefant_foot_layers_density))
     ((ConfigOptionFloat,               max_bridge_length))
     ((ConfigOptionFloatOrPercent,      line_width))
+    ((ConfigOptionFloats,              line_width_per_nozzle)) // MAGPIE: mm per physical nozzle, 0 = line_width
     // Force the generation of solid shells between adjacent materials/volumes.
     ((ConfigOptionBool,                interface_shells))
     ((ConfigOptionFloat,               layer_height))
@@ -1330,6 +1332,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionInt,                 enforce_support_layers))
     ((ConfigOptionInt,                 support_filament))
     ((ConfigOptionFloatOrPercent,      support_line_width))
+    ((ConfigOptionFloats,              support_line_width_per_nozzle)) // MAGPIE: mm per physical nozzle, 0 = support_line_width
     ((ConfigOptionBool,                support_interface_not_for_body))
     ((ConfigOptionBool,                support_interface_loop_pattern))
     ((ConfigOptionInt,                 support_interface_filament))
@@ -1465,6 +1468,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                 relative_bridge_angle)) // ORCA: Relative bridge angle flag
     ((ConfigOptionFloat,                bridge_flow))
     ((ConfigOptionFloatOrPercent,       bridge_line_width))
+    ((ConfigOptionFloats,              bridge_line_width_per_nozzle)) // MAGPIE: mm per physical nozzle, 0 = bridge_line_width
     ((ConfigOptionFloat,                internal_bridge_flow))
     ((ConfigOptionFloatsNullable,       bridge_speed))
     ((ConfigOptionFloatsOrPercentsNullable, internal_bridge_speed))
@@ -1477,6 +1481,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionEnum<SurfaceFillOrder>, bottom_surface_fill_order))
     ((ConfigOptionEnum<InfillPattern>, internal_solid_infill_pattern))
     ((ConfigOptionFloatOrPercent,       outer_wall_line_width))
+    ((ConfigOptionFloats,              outer_wall_line_width_per_nozzle)) // MAGPIE: mm per physical nozzle, 0 = outer_wall_line_width
     ((ConfigOptionFloatsNullable,       outer_wall_speed))
     ((ConfigOptionFloat,                infill_direction))
     ((ConfigOptionFloat,                solid_infill_direction))
@@ -1515,6 +1520,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatsNullable,       gap_infill_speed))
     ((ConfigOptionInt,                  sparse_infill_filament_id))
     ((ConfigOptionFloatOrPercent,       sparse_infill_line_width))
+    ((ConfigOptionFloats,              sparse_infill_line_width_per_nozzle)) // MAGPIE: mm per physical nozzle, 0 = sparse_infill_line_width
     ((ConfigOptionPercent,              infill_wall_overlap))
     ((ConfigOptionPercent,              top_bottom_infill_wall_overlap))
     ((ConfigOptionFloatsNullable,       sparse_infill_speed))
@@ -1523,7 +1529,9 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat, infill_lock_depth))
     ((ConfigOptionFloat, skin_infill_depth))
     ((ConfigOptionFloatOrPercent, skin_infill_line_width))
+    ((ConfigOptionFloats,              skin_infill_line_width_per_nozzle)) // MAGPIE: mm per physical nozzle, 0 = skin_infill_line_width
     ((ConfigOptionFloatOrPercent, skeleton_infill_line_width))
+    ((ConfigOptionFloats,              skeleton_infill_line_width_per_nozzle)) // MAGPIE: mm per physical nozzle, 0 = skeleton_infill_line_width
     ((ConfigOptionBool, infill_combination))
     // Orca:
     ((ConfigOptionFloatOrPercent,                infill_combination_max_layer_height))
@@ -1553,6 +1561,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionInt, outer_wall_filament_id))
     ((ConfigOptionInt, inner_wall_filament_id))
     ((ConfigOptionFloatOrPercent, inner_wall_line_width))
+    ((ConfigOptionFloats,              inner_wall_line_width_per_nozzle)) // MAGPIE: mm per physical nozzle, 0 = inner_wall_line_width
     ((ConfigOptionFloatsNullable, inner_wall_speed))
     // Total number of perimeters.
     ((ConfigOptionInt, wall_loops))
@@ -1571,10 +1580,12 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionInt, top_surface_filament_id))
     ((ConfigOptionInt, bottom_surface_filament_id))
     ((ConfigOptionFloatOrPercent, internal_solid_infill_line_width))
+    ((ConfigOptionFloats,              internal_solid_infill_line_width_per_nozzle)) // MAGPIE: mm per physical nozzle, 0 = internal_solid_infill_line_width
     ((ConfigOptionFloatsNullable, internal_solid_infill_speed))
     // Detect thin walls.
     ((ConfigOptionBool, detect_thin_wall))
     ((ConfigOptionFloatOrPercent, top_surface_line_width))
+    ((ConfigOptionFloats,              top_surface_line_width_per_nozzle)) // MAGPIE: mm per physical nozzle, 0 = top_surface_line_width
     ((ConfigOptionInt, top_shell_layers))
     ((ConfigOptionFloat, top_shell_thickness))
     ((ConfigOptionFloat, top_surface_expansion))
@@ -2083,6 +2094,7 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionInts,               during_print_exhaust_fan_speed))
     ((ConfigOptionInts,               complete_print_exhaust_fan_speed))
     ((ConfigOptionFloatOrPercent,     initial_layer_line_width))
+    ((ConfigOptionFloats,              initial_layer_line_width_per_nozzle)) // MAGPIE: mm per physical nozzle, 0 = initial_layer_line_width
     ((ConfigOptionFloat,              initial_layer_print_height))
     ((ConfigOptionFloatsNullable,     initial_layer_speed))
 
@@ -2769,7 +2781,7 @@ double nozzle_diameter_for_filament(const PrintConfig& config, int filament_id, 
 
 // MAGPIE: the nozzle an absolute line width was set for (printer_variant when it is one of the printer's
 // nozzle diameters, else the largest nozzle), in mm; 0 when every nozzle has the same diameter.
-double absolute_line_width_reference_nozzle(const DynamicPrintConfig &config);
+double absolute_line_width_reference_nozzle(const ConfigBase &config);
 // MAGPIE: restates the absolute line widths of `config` as a percentage of reference_mm (mm); nothing
 // when reference_mm is 0. Used for the print config and for per-object, part and layer range overrides.
 // Returns the number of widths restated; their values as set are copied to `as_set` when given.
@@ -2782,6 +2794,32 @@ const std::vector<std::string> &nozzle_relative_line_width_keys();
 // MAGPIE: on a printer with nozzles of different diameters, restates absolute line widths (keys whose
 // percentage is over nozzle_diameter) as a percentage of the reference nozzle. Does nothing otherwise.
 void scale_absolute_line_widths_to_nozzles(DynamicPrintConfig &config);
+
+// MAGPIE: the 11 line width settings that have a per-nozzle field (one value per physical nozzle, mm, 0 = the
+// setting), and that field's key. Read them only through line_width_setting_on_nozzle() (LineWidths.hpp).
+const std::array<const char *, 11> &per_nozzle_line_width_base_keys();
+std::string per_nozzle_line_width_key(const std::string &width_key);
+// MAGPIE: opt_keys with every per-nozzle line width key replaced by its line width key, for the invalidation
+// tables: a per-nozzle field invalidates exactly what its line width does.
+std::vector<t_config_option_key> per_nozzle_keys_as_width_keys(const std::vector<t_config_option_key> &opt_keys);
+
+// MAGPIE: what prepare_line_widths() needs from the printer: its nozzle count, and the reference nozzle of
+// absolute_line_width_reference_nozzle() (mm, 0 when every nozzle has one size).
+struct LineWidthContext
+{
+    size_t nozzle_count { 0 };
+    double reference_mm { 0. };
+};
+LineWidthContext line_width_context(const ConfigBase &config);
+
+// MAGPIE: makes the line widths of `config` what slicing reads. Per-nozzle fields get one entry per nozzle (cut, or
+// padded with 0); on a printer with one nozzle size they are cleared (ignored). A per-nozzle field is cleared too
+// when `overrides` (the object, part, material and layer range configs applied over `config`, in that order) set
+// its line width after the last one that set the field: an override of the width beats the per-nozzle field.
+// Then absolute widths are scaled (scale_absolute_line_widths). Values changed here are copied to `as_set` when
+// given. Returns the number of widths scaled.
+size_t prepare_line_widths(ConfigBase &config, const LineWidthContext &context, const std::vector<const ConfigBase *> &overrides = {},
+                           DynamicConfig *as_set = nullptr);
 
 } // namespace Slic3r
 

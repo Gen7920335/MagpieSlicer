@@ -1,5 +1,6 @@
 #include "ModHost/SlotRegistry.hpp"
 #include "Flow.hpp"
+#include "LineWidths.hpp"
 #include "Config.hpp"
 #include "ExPolygon.hpp"
 #include "ExtrusionEntity.hpp"
@@ -63,10 +64,11 @@ static Flow region_bridging_flow(const LayerRegion &source, FlowRole role, bool 
     const PrintRegionConfig &region_config  = region.config();
     const PrintObject       &print_object   = *source.layer()->object();
     Flow bridge_flow;
-    // Here this->extruder(role) - 1 may underflow to MAX_INT, but then the get_at() will fall back to zero'th element, so everything is all right.
-    auto nozzle_diameter = float(nozzle_diameter_for_filament(print_object.print()->config(), region.extruder(role), print_object.print()->is_BBL_printer()));
-    const ConfigOptionFloatOrPercent& bridge_width_opt = region_config.bridge_line_width;
-    const double                      bridge_width      = bridge_width_opt.get_abs_value(nozzle_diameter);
+    // MAGPIE: the bridge prints with the bridged feature's nozzle (routing table), and its width setting is read on
+    // that nozzle, its per-nozzle field included.
+    const size_t nozzle          = region.printing_nozzle(print_object, PrintRegion::width_feature(role));
+    auto         nozzle_diameter = float(print_object.print()->config().nozzle_diameter.get_at(nozzle));
+    const double bridge_width    = bridge_line_width_mm(print_object.print()->config(), region_config, nozzle);
     const bool                        has_bridge_width  = bridge_width > 0.;
     const double                      bridge_flow_ratio = region_config.bridge_flow;
 
@@ -143,17 +145,13 @@ static void make_region_perimeters(const LayerRegion &source,
     // resolved on that nozzle, the way PrintRegion::flow() resolves them on the region's own.
     const ModHost::WallPlanner *wall_planner = region_config.wall_planner.value.empty() ? nullptr :
                                                ModHost::find_wall_planner(region_config.wall_planner.value);
-    const double layer_wall_nozzle = wall_planner != nullptr && wall_planner->layer_wall_nozzle ?
-        wall_planner->layer_wall_nozzle(print_config, region_config, layer.id()) : 0.;
+    const unsigned int layer_wall_toolhead = wall_planner != nullptr && wall_planner->layer_wall_toolhead ?
+        wall_planner->layer_wall_toolhead(print_config, region_config, layer.id()) : 0;
     auto wall_flow = [&](FlowRole role) {
-        if (layer_wall_nozzle <= 0.)
+        if (layer_wall_toolhead == 0)
             return source.flow(role, parent_height_mm);
-        ConfigOptionFloatOrPercent width = layer.id() == 0 && print_config.initial_layer_line_width.value > 0 ?
-            print_config.initial_layer_line_width :
-            (role == frExternalPerimeter ? region_config.outer_wall_line_width : region_config.inner_wall_line_width);
-        if (width.value == 0)
-            width = object_config.line_width;
-        return Flow::new_from_config_width(role, width, float(layer_wall_nozzle), float(parent_height_mm));
+        return feature_flow(PrintRegion::width_feature(role), { &print_config, &object_config, &region_config }, layer_wall_toolhead - 1,
+                            float(parent_height_mm), layer.id() == 0);
     };
 
     PerimeterGenerator g(

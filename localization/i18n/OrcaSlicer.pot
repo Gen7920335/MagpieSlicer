@@ -31358,3 +31358,36 @@ msgstr ""
 #, boost-format
 msgid "%1% is printed %2% mm wide by the %3% mm nozzle of tool %4%: brim and skirt widths follow one filament's nozzle on a printer with nozzles of different sizes."
 msgstr ""
+
+msgid "Line width for each nozzle, in mm, on a printer whose nozzles differ in size. 0 uses the line width setting, scaled to that nozzle."
+msgstr ""
+
+#, boost-format
+msgid "%1% is %2% mm wide on nozzle %3% (%4% mm), narrower than %5% mm (0.1 mm plus 0.4 times the nozzle), and may not extrude reliably."
+msgstr ""
+
+#, boost-format
+msgid "The line width of %1% mm set for nozzle %2% (%3% mm) is not wider than the layer height of %4% mm."
+msgstr ""
+
+#, boost-format
+msgid "The line width of %1% mm set for nozzle %2% (%3% mm) is more than %4% times that nozzle."
+msgstr ""
+
+msgid "Line width per nozzle"
+msgstr ""
+
+msgid "Line width for each nozzle, in mm, on a printer whose nozzles differ in size. An empty cell uses the line width setting, scaled to that nozzle; the greyed value is the width that gives."
+msgstr ""
+
+#, boost-format
+msgid "Nozzle %1% (%2% mm)"
+msgstr ""
+
+#, boost-format
+msgid "%1% on nozzle %2% (%3% mm), in mm. Leave empty to use the line width setting."
+msgstr ""
+
+#, boost-format
+msgid "%1% is printed %2% mm wide by the %3% mm nozzle of tool %4%: it was laid out for another tool's nozzle."
+msgstr ""

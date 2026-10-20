@@ -12,6 +12,7 @@
 
 namespace Slic3r {
 
+class Flow;
 class Print;
 class ExtrusionEntityCollection;
 class PrintTryCancel;
@@ -26,7 +27,8 @@ void make_brim(const Print& print, PrintTryCancel try_cancel,
     std::map<ObjectInstanceID, ExPolygons>* objectBrimAreasByInstanceOut = nullptr);
 
 ExtrusionEntityCollection makeBrimInfill(const ExPolygons& singleBrimArea, const Print& print, const Polygons& islands_area);
-ExtrusionEntityCollection makeBrimInfillFromPlateCoordinates(const ExPolygons& singleBrimArea, const Print& print, const Polygons& islands_area);
+// MAGPIE: `flow` is the brim flow of the tool printing this brim (brim_tool()).
+ExtrusionEntityCollection makeBrimInfillFromPlateCoordinates(const ExPolygons& singleBrimArea, const Print& print, const Polygons& islands_area, const Flow& flow);
 
 // BBS: automatically make brim
 ExtrusionEntityCollection make_brim_auto(const Print &print, PrintTryCancel try_cancel, Polygons &islands_area);

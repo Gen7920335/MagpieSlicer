@@ -13,6 +13,7 @@
 #include "../Flow.hpp"
 #include "../Layer.hpp"
 #include "../Print.hpp"
+#include "../LineWidths.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Slicing.hpp"
 #include "libslic3r/Point.hpp"
@@ -210,9 +211,11 @@ struct SupportParameters {
             assert(slicing_params.raft_layers() == 0);
         }
 
-	    const auto     nozzle_diameter = print_config.nozzle_diameter.get_at(object_config.support_interface_filament - 1);
-        const coordf_t extrusion_width = object_config.line_width.get_abs_value(nozzle_diameter);
-        support_extrusion_width        = object_config.support_line_width.get_abs_value(nozzle_diameter);
+        // MAGPIE: on the support interface nozzle (as Orca), per-nozzle line width fields included.
+        const size_t   width_nozzle    = printing_nozzle_index(print_config, object_config.support_interface_filament.value, false);
+	    const auto     nozzle_diameter = print_config.nozzle_diameter.get_at(width_nozzle);
+        const coordf_t extrusion_width = line_width_setting_on_nozzle(object_config, "line_width", width_nozzle).get_abs_value(nozzle_diameter);
+        support_extrusion_width        = line_width_setting_on_nozzle(object_config, "support_line_width", width_nozzle).get_abs_value(nozzle_diameter);
         support_extrusion_width        = support_extrusion_width > 0 ? support_extrusion_width : extrusion_width;
         // MAGPIE (Magpie line 1): with both widths automatic the above is 0; use the flow's real width.
         if (support_extrusion_width <= 0)
