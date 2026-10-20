@@ -4,7 +4,8 @@
 // object's support out of the core's generators: it asks for support demand, runs Orca's normal support, a
 // support.areas mod or Orca's tree support on masks of its own, and merges two of the results into the
 // object's support layers (a layer of both is a multi-channel layer, Layer.hpp). The core owns every support
-// layer; the mod only names sets of them. The support_generator setting picks the implementation by name.
+// layer; the mod only names sets of them. The active mods pick the implementation
+// per object (ModHost::support_generator_name, SlotChoice.hpp).
 
 #include <string>
 

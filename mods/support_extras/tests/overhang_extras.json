@@ -8,6 +8,6 @@
     "contains": [
         ";TYPE:Support",
         ";TYPE:Support interface",
-        "; mods: support_extras 2.1.0"
+        "; mods: support_extras 2.1.1"
     ]
 }

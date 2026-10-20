@@ -94,7 +94,26 @@ struct ModSlotDecl
 {
     std::string slot;        // "layer.bands"
     uint32_t    version = 0; // the slot interface version
-    std::string impl;        // the value of the setting that picks it
+    std::string impl;        // the name the mod registers the implementation under
+    // For the slots the core picks one implementation of (ModSet::choose_slot): the implementation is picked
+    // where `when` holds, and of several that hold, the one with the highest `priority`. Without `when` it is
+    // never picked that way; slots whose every implementation is asked (gcode.events, layer.bands, ...) need none.
+    std::optional<Expr>         when;
+    int                         priority = 0;
+    // Values the core reads for the picked implementation, by the names its slot gives ("settings").
+    std::map<std::string, Expr> settings;
+};
+
+// "legacy_keys": a setting of an earlier build (Magpie line 1, or this line before the feature was a mod) that loads
+// as a parameter of the mod (LegacySettings.hpp). The value converts by the parameter's type.
+struct ModLegacyKey
+{
+    std::string                param;          // the parameter name in this mod; for a point, the name before _x/_y
+    // The key's default in the earlier build, which every file of it saved and which carries nothing.
+    std::optional<std::string> saved_default;
+    // A position "XxY" or "X,Y" (mm) that becomes the two parameters <param>_x and <param>_y; a negative coordinate
+    // was the automatic position and carries nothing.
+    bool                       point = false;
 };
 
 // "depends": another mod (or "core", the mod API) that must be loaded first, at least `min`.
@@ -150,7 +169,7 @@ struct Mod
     std::vector<ModDependency>         depends;
     std::vector<std::string>           conflicts;
     bool                               thread_safe = false;
-    std::map<std::string, std::string> legacy_keys; // old setting key -> parameter name of this mod
+    std::map<std::string, ModLegacyKey> legacy_keys; // old setting key -> how it loads
     ModGui                             gui;
 
     // Set by the loader, not read from the file.
@@ -188,7 +207,8 @@ public:
     // The same for each directory in turn, checked as one set.
     static ModSet load_dirs(const std::vector<boost::filesystem::path> &dirs, std::vector<std::string> &errors);
 
-    bool empty() const { return m_order.empty(); }
+    // No mods (a set of mods without rules is not empty: their parameters still change what they slice).
+    bool empty() const { return m_mods.empty(); }
     const std::vector<Mod> &mods() const { return m_mods; }
 
     // Applies the rules to a full print config. Parameter values come from the config's
@@ -201,7 +221,7 @@ public:
     // values (several support generators turned on), and whose value is used.
     struct RuleClash
     {
-        std::string              setting;    // "support_generator", or "<key>[i]" for one element
+        std::string              setting;    // "<key>", or "<key>[i]" for one element
         std::string              used_mod;   // the mod whose rule applied last and stays
         std::string              used_value;
         std::vector<std::string> other_mods; // mods whose different values were overwritten
@@ -228,6 +248,23 @@ public:
     std::optional<ExprValue> value_of(const std::string &key, const ValueSources &sources, std::optional<size_t> filament = {},
                                       std::string *error = nullptr) const;
 
+    // The implementation picked for a job one of `slots` does (Orca's support is replaced by one of support.areas,
+    // support.compose and support.contacts): among the slot declarations with a "when" that holds, read with the
+    // parameter values `sources` give (an object's or region's own where they have one) and the print config's
+    // settings, the one with the highest "priority". None picked: mod is null.
+    struct SlotChoice
+    {
+        const Mod               *mod  = nullptr;
+        const ModSlotDecl       *decl = nullptr;
+        std::vector<std::string> other_mods; // other mods whose "when" holds too, at a lower priority (not used)
+        std::string              error;      // a "when" that could not be read, or two that hold at one priority
+    };
+    SlotChoice choose_slot(const std::vector<std::string> &slots, const ValueSources &sources) const;
+    // The picked implementation's setting `name` ("settings" in its slot declaration), read as its "when" is.
+    // Nothing when it declares no such setting or the expression fails (then `error` says why).
+    std::optional<ExprValue> slot_setting(const SlotChoice &choice, const std::string &name, const ValueSources &sources,
+                                          std::string *error = nullptr) const;
+
     // The slicing steps to redo when a stored-values object changes from `old_json` to `new_json`
     // (mod_settings, printer_mod_settings, one filament's filament_mod_settings, object_mod_settings or
     // region_mod_settings): the union of the "invalidates" of every parameter whose value changed,
@@ -236,6 +273,8 @@ public:
     std::set<std::string> invalidated_steps(const std::string &old_json, const std::string &new_json) const;
 
 private:
+    ExprLookup slot_lookup(const ValueSources &sources) const;
+
     // Indices rather than pointers, so a ModSet stays valid when copied or moved.
     using Ref = std::pair<size_t, size_t>; // (mod, rule or param)
     std::vector<Mod>           m_mods;
@@ -247,6 +286,10 @@ private:
 // which case Print::apply leaves the config exactly as it came.
 std::shared_ptr<const ModSet> active_mods();
 void set_active_mods(std::shared_ptr<const ModSet> mods);
+// Every mod manifest the last load found, turned-off mods' included: LegacySettings reads their legacy_keys, so a
+// file from an earlier build keeps a feature's values while its mod is off. Null before a load.
+std::shared_ptr<const std::vector<Mod>> known_mods();
+void set_known_mods(std::shared_ptr<const std::vector<Mod>> mods);
 // Loads the mods bundled in <resources>/mods, then <data_dir>/mods, and makes them the active set;
 // a mod that fails to load is logged and left out.
 void load_active_mods_from_data_dir();

@@ -119,6 +119,7 @@ struct ModLoadResult
     std::shared_ptr<NativeModSet> native;   // null when native code was not loaded
     std::vector<std::string>      errors;   // mods left out, one line each
     std::vector<std::string>      notes;    // turned off, waiting for a restart
+    std::vector<Mod>              known;    // every manifest that parsed, turned-off mods' included
 };
 
 // Finds, checks, orders (dependencies first) and loads the bundled and installed mods.

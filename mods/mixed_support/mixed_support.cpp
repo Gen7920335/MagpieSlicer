@@ -20,7 +20,7 @@
 
 #define MIXED_MOD_ID "mixed_support"
 
-MAGPIE_MOD_DEFINE(MIXED_MOD_ID, "2.0.0")
+MAGPIE_MOD_DEFINE(MIXED_MOD_ID, "2.1.0")
 
 namespace mixed {
 

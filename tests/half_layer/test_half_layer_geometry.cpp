@@ -75,7 +75,6 @@ std::vector<WallSample> generate_walls(bool arachne, bool half_height, int wall_
         print_config.filament_soluble.values = {false, false};
         // MAGPIE: the detail nozzle's outer wall width comes from outer_wall_line_width resolved on it (no per-toolhead widths).
         region_config.outer_wall_line_width = ConfigOptionFloatOrPercent(0.22, false);
-        region_config.wall_planner.value = "multi_nozzle";
         region_config.outer_wall_filament_id.value = 1;
         region_config.inner_wall_filament_id.value = 1;
     }
@@ -104,12 +103,12 @@ std::vector<WallSample> generate_walls(bool arachne, bool half_height, int wall_
     generator.half_layer_outer_walls = half_height;
     // The multi-nozzle walls planner (a native mod) reads its parameters from the print's mod settings.
     std::unique_ptr<const ModHost::WallPlanner> planner;
-    if (!region_config.wall_planner.value.empty()) {
+    if (detail_count > 0) {
         Slic3r::Test::OfficialMods mods;
         DynamicPrintConfig         full;
         Slic3r::Test::multi_nozzle_params(full, {{"enable", true}, {"detail_toolhead", 0}, {"small_wall_count", detail_count},
                                                  {"interlock", interlocking}, {"wall_overlap", 15.}});
-        planner = ModHost::open_wall_planner(region_config.wall_planner.value, full, print_config, &object_config, region_config);
+        planner = ModHost::open_wall_planner(full, print_config, &object_config, region_config);
         generator.wall_planner = planner.get();
     }
     const ExPolygons lower{ExPolygon(Polygon{Point(0, 0), Point(width_scaled / 2, 0),

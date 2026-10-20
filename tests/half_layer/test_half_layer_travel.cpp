@@ -74,12 +74,12 @@ TEST_CASE("Half-layer estimates share nozzle material and role speed limits", "[
     config.set_other_flow_ratios.value = true;
     config.outer_wall_flow_ratio.value = 0.5;
     config.slow_down_layers.value = 0;
-    config.crisp_corner_small_nozzle_wall_speed = ConfigOptionFloatOrPercent(50., true); // MAGPIE: one value, % of the outer wall speed
     ExtrusionPath path(erExternalPerimeter, 0.1, 0.5f, 0.2f);
     path.polyline.points = {Point3(scale_(0.), scale_(0.), 0.), Point3(scale_(100.), scale_(0.), 0.)};
     for (size_t nozzle : {size_t(0), size_t(1)}) {
         for (unsigned filament : {0u, 1u}) {
-            const ExtrusionSpeedContext context{nozzle, filament, 5, false, false, false};
+            // MAGPIE: detail walls at 50 % of the outer wall speed (the wall planner's detail_wall_speed).
+            const ExtrusionSpeedContext context{nozzle, filament, 5, false, false, false, 50., true};
             const double area_mm2 = filament == 0 ? 0.0625 : 0.05;
             const double nominal_mm_s = nozzle == 0 ? 100. : 40.;
             const double volume_mm3_s = filament == 0 ? 20. : 2.;

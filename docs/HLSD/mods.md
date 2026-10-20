@@ -77,17 +77,25 @@ priority wins and slicing warns which mod's value is used.
 
 Keep the defaults neutral, so that installing a mod changes nothing until the user turns it on.
 
-## Built-in modules behind slots
+## Implementations behind slots
 
-Some settings a mod writes choose a built-in module at a slot of the slicer (`ModHost/SlotRegistry`);
-an empty value keeps Orca's own behaviour.
+For some jobs the core runs one implementation a native mod provides, picked from the active mods' slot
+declarations (`ModHost/SlotChoice.*`, `ModSet::choose_slot`): the declaration whose `"when"` holds,
+read with the parameter values of the object or region the job is for, and of several that hold, the
+one with the highest `"priority"`; two that hold at one priority stop the slice, a lower one that also
+holds is reported. None picked keeps Orca's own behaviour. A declaration's `"settings"` are values the
+core reads for the picked implementation. No setting of the print config carries the choice.
 
-| Slot | Setting | Modules | What the module gets and gives |
-|---|---|---|---|
-| `support.generator` | `support_generator` | `orca`; `cura` (native mod `cura_support`, C slot `support.areas`), `mixed` (native mod `mixed_support`, C slot `support.compose`), `resin` (native mod `resin_support`, C slot `support.contacts`) | fills an object's support layers |
-| `support.style` | (every loaded implementation) | `extras` (native mod `support_extras`) | how an object's support is printed: interface pattern, normal and tree wall counts, interface sublayers; a C slot ([native-mods.md](native-mods.md)) |
-| `wall.plan` | `wall_planner` | `multi_nozzle` (native mod `multi_nozzle_walls`) | splits a region's walls between two nozzles; a C slot ([native-mods.md](native-mods.md)) |
-| `gcode.time_plan` | `layer_time_planner` | `blend` (native mod `layer_time_blend`) | the wait sites of a print (estimated interval since the previous site, park trip, tower block times, chain breaks, guessed intervals) in, per-site waits, park choice, tower cut and warnings out |
+| Job | Slots | Picked per | Implementations | What it gets and gives |
+|---|---|---|---|---|
+| support | `support.areas`, `support.compose`, `support.contacts` | object | `mixed` (native mod `mixed_support`, priority 2), `resin` (`resin_support`, 1), `cura` (`cura_support`, 0) | fills an object's support layers |
+| walls | `wall.plan` | region | `multi_nozzle` (native mod `multi_nozzle_walls`); setting `detail_wall_speed` | splits a region's walls between two nozzles; a C slot ([native-mods.md](native-mods.md)) |
+| layer time | `gcode.time_plan` | print | `blend` (native mod `layer_time_blend`); settings `wait_at`, `tower_size`, `park_x`, `park_y`, `heat_rate`, `cool_rate` | the wait sites of a print (estimated interval since the previous site, park trip, tower block times, chain breaks, guessed intervals) in, per-site waits, park choice, tower cut and warnings out |
+
+`support.style` (`extras`, native mod `support_extras`), `layer.bands` and `gcode.events` ask every
+loaded implementation instead; each answers whether it applies. A parameter a `"when"` or a setting
+reads must name the steps it changes (`"invalidates"`), since no setting written from it invalidates
+them.
 
 `gcode.time_plan` is a C slot filled by native mods only ([native-mods.md](native-mods.md)); the
 core has no module of its own there. It exchanges numbers only, never G-code or geometry; the core

@@ -8,6 +8,6 @@
     "contains": [
         ";TYPE:Support",
         ";TYPE:Support interface",
-        "resin_support 2.0.0"
+        "resin_support 2.1.0"
     ]
 }

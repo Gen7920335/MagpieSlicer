@@ -15,7 +15,7 @@
 
 #define EXTRAS_MOD_ID "support_extras"
 
-MAGPIE_MOD_DEFINE(EXTRAS_MOD_ID, "2.1.0")
+MAGPIE_MOD_DEFINE(EXTRAS_MOD_ID, "2.1.1")
 
 namespace extras {
 

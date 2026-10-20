@@ -3,8 +3,9 @@
  * A time planner decides how long the print waits at each wait site of its G-code. The core marks the
  * sites while it exports (at the start of a full layer, before its first extrusion), estimates the
  * G-code's times, asks the planner, then writes the waits and re-estimates. The planner sees numbers
- * only: it never touches G-code or geometry. The slicer setting layer_time_planner names the
- * implementation (the impl_name a mod registers); an empty setting marks no sites.
+ * only: it never touches G-code or geometry. The core picks the implementation among the mods' slot
+ * declarations (mod.json "slots": "when", "priority"); none picked marks no sites. Its "settings" give
+ * what the export reads: wait_at, tower_size, park_x, park_y (mm), heat_rate, cool_rate (degC/s).
  *
  * Units: times s. Indices count sites from 0 in G-code order.
  */

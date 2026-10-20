@@ -543,9 +543,10 @@ static TriangleMesh support_tee()
 
 TEST_CASE("The Cura support generator fills the overhangs of a tee and keeps clear of the stem", "[SupportMaterial]")
 {
+    Slic3r::Test::OfficialMods mods;
     Slic3r::Print print;
     Slic3r::Test::init_and_process_print({ support_tee() }, print, {
-        { "enable_support", 1 }, { "support_type", "normal(auto)" }, { "support_generator", "cura" },
+        { "enable_support", 1 }, { "support_type", "normal(auto)" }, { "mod_settings", R"({"cura_support.enable": true})" },
         { "layer_height", 0.2 }, { "first_layer_height", 0.2 },
         { "support_top_z_distance", 0.2 }, { "support_object_xy_distance", 0.35 }, { "support_expansion", 0 },
         { "support_interface_top_layers", 3 }, { "support_interface_bottom_layers", 0 } });
@@ -581,9 +582,11 @@ TEST_CASE("The Cura support generator prints its first layer with the same lines
     // Cura prints the bed layer of its support at the support line distance and does not widen it
     // (support_initial_layer_line_distance defaults to the support line distance). Orca's own
     // generator instead lays a dense, widened flange there.
+    Slic3r::Test::BundledMods mods;
+    REQUIRE(mods.errors.empty());
     Slic3r::Print print;
     Slic3r::Test::init_and_process_print({ support_tee() }, print, {
-        { "enable_support", 1 }, { "support_type", "normal(auto)" }, { "support_generator", "cura" },
+        { "enable_support", 1 }, { "support_type", "normal(auto)" }, { "mod_settings", R"({"cura_support.enable": true})" },
         { "layer_height", 0.2 }, { "first_layer_height", 0.2 }, { "raft_first_layer_density", 90 },
         { "raft_first_layer_expansion", 2 } });
     const auto layers = print.objects().front()->support_layers();
@@ -602,13 +605,11 @@ TEST_CASE("The Cura support generator prints its first layer with the same lines
     CHECK(first < 1.1 * second);
 
     // The cura_support mod's solid_first_layer asks for the dense flange instead.
-    Slic3r::Test::BundledMods mods;
-    REQUIRE(mods.errors.empty());
     Slic3r::Print solid;
     Slic3r::Test::init_and_process_print({ support_tee() }, solid, {
-        { "enable_support", 1 }, { "support_type", "normal(auto)" }, { "support_generator", "cura" },
+        { "enable_support", 1 }, { "support_type", "normal(auto)" },
         { "layer_height", 0.2 }, { "first_layer_height", 0.2 }, { "raft_first_layer_expansion", 2 },
-        { "mod_settings", R"({"cura_support.solid_first_layer": true})" } });
+        { "mod_settings", R"({"cura_support.enable": true, "cura_support.solid_first_layer": true})" } });
     const auto solid_layers = solid.objects().front()->support_layers();
     REQUIRE(solid_layers.size() > 3);
     CHECK(path_length_mm(solid_layers[0]) > 1.5 * path_length_mm(solid_layers[1]));

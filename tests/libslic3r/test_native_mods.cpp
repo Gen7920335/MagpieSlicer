@@ -312,6 +312,40 @@ TEST_CASE("Installed native code loads only with a trusted signature, from a cac
     }
 }
 
+TEST_CASE("A bundled package loads unsigned, and with a signature only when it verifies", "[NativeMods]")
+{
+    // The installer signs the official mods it bundles; a file changed in the installation afterwards is caught.
+    TempDir        dir;
+    const fs::path bundled = dir.path / "bundled";
+    const fs::path package = bundled / "magpie_test_mod";
+    copy_dir(test_mods_dir() / "magpie_test_mod", package);
+    ModLoadOptions options;
+    options.bundled_dir   = bundled.string();
+    options.installed_dir = (dir.path / "mods").string();
+    options.cache_dir     = (dir.path / "cache").string();
+
+    SECTION("unsigned") {
+        const ModLoadResult result = load_mods(options);
+        INFO(joined(result.errors));
+        CHECK(result.native->find("magpie_test_mod") != nullptr);
+    }
+    SECTION("signed") {
+        TestKey key("test-official", KeyRole::Official);
+        sign_package(package.string(), key.key.private_pem, key.id);
+        const ModLoadResult result = load_mods(options);
+        INFO(joined(result.errors));
+        CHECK(result.native->find("magpie_test_mod") != nullptr);
+    }
+    SECTION("changed after signing") {
+        TestKey key("test-official", KeyRole::Official);
+        sign_package(package.string(), key.key.private_pem, key.id);
+        boost::nowide::ofstream((package / "mod.json").string(), std::ios::app) << "\n";
+        const ModLoadResult result = load_mods(options);
+        CHECK(result.mods->find_mod("magpie_test_mod") == nullptr);
+        CHECK(any_contains(result.errors, "its signature does not verify"));
+    }
+}
+
 TEST_CASE("A signature covers every file of the package", "[NativeMods]")
 {
     TempDir dir;

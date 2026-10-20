@@ -45,6 +45,7 @@
 #include "ModHost/NativeSupport.hpp"
 #include "ModHost/LayerBands.hpp"
 #include "ModHost/ObjectZOffset.hpp"
+#include "ModHost/SlotChoice.hpp"
 #include "ModHost/SlotRegistry.hpp"
 #include "AABBTreeIndirect.hpp"
 #include "AABBTreeLines.hpp"
@@ -1613,8 +1614,6 @@ bool PrintObject::invalidate_state_by_config_options(
             }
         } else if (
                opt_key == "wall_loops"
-            || opt_key == "wall_planner"
-            || opt_key == "crisp_corner_small_nozzle_wall_speed"
             || opt_key == "alternate_extra_wall"
             || opt_key == "top_one_wall_type"
             || opt_key == "min_width_top_surface"
@@ -1709,7 +1708,6 @@ bool PrintObject::invalidate_state_by_config_options(
 	        }
         } else if (
         	   opt_key == "support_type"
-            || opt_key == "support_generator"
             || opt_key == "support_angle"
             || opt_key == "support_on_build_plate_only"
             || opt_key == "support_critical_regions_only"
@@ -5080,11 +5078,13 @@ void PrintObject::_generate_support_material()
         std::lock_guard<std::mutex> lock(m_native_mods_mutex);
         m_native_mods_used.clear();
     }
-    // MAGPIE: support.generator slot. An empty support_generator runs Orca's generators unchanged,
-    // and so does a raft without support: the modules build support, Orca builds the bare raft. A name
-    // no built-in module has is looked up among the native mods' support.areas implementations, then
-    // their support.compose implementations.
-    if (const std::string &name = m_config.support_generator.value; !name.empty() && this->has_support()) {
+    // MAGPIE: support generation by a mod. The implementation the active mods pick for this object (support.areas,
+    // support.compose or support.contacts, ModHost::support_generator_name), or none, which runs Orca's generators
+    // unchanged; so does a raft without support: the modules build support, Orca builds the bare raft. The name is
+    // looked up among the built-in modules, then the native mods' support.areas, support.compose and
+    // support.contacts implementations.
+    if (const std::string name = this->has_support() ? ModHost::support_generator_name(this->print()->full_print_config(), m_config) : std::string();
+        !name.empty()) {
         if (const ModHost::SupportGenerator *generator = ModHost::find_support_generator(name)) {
             generator->generate(*this);
             return;

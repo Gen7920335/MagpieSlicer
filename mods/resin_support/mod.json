@@ -8,10 +8,11 @@
     // widened to it.
     "id": "resin_support",
     "name": "Resin support", "name_ko": "레진 서포트",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "api": { "major": 1, "min_minor": 0 },
     "binary": "resin_support",
-    "slots": [ { "slot": "support.contacts", "version": 1, "impl": "resin" },
+    // Priority 1 puts it above cura_support's: with both mods on, resin support is used.
+    "slots": [ { "slot": "support.contacts", "version": 1, "impl": "resin", "when": "resin_support.enable", "priority": 1 },
                { "slot": "object.z_offset", "version": 1, "impl": "resin" } ],
     "thread_safe": true,
     // enable, tree_type and the two elevations decide the object's lift (object.z_offset), which moves
@@ -56,8 +57,42 @@
         "branching_max_pillar_link_distance":      { "invalidates": ["posSupportMaterial"], "type": "float",  "default": 10.0,      "unit": "mm",  "label": "Branching: max pillar linking distance", "label_ko": "가지형: 최대 기둥 연결 거리" },
         "branching_object_elevation":              { "invalidates": ["posSlice"], "type": "float",  "default": 5.0,       "unit": "mm",  "label": "Branching: object elevation", "label_ko": "가지형: 출력물 띄우기" }
     },
-    "rules": [
-        // Priority 1 puts this rule above cura_support's: with both mods on, resin support is used.
-        { "target": "support_generator", "value": "\"resin\"", "when": "resin_support.enable", "priority": 1 }
-    ]
+    // Line 1 settings: resin_support_<x> is the default tree's, resin_branching_support_<x> the branching tree's.
+    "legacy_keys": {
+        "resin_support_tree_type": "tree_type",
+        "resin_support_points_density_relative": "points_density",
+        "resin_support_enforcers_only": "enforcers_only",
+        "resin_support_head_front_diameter": "default_head_front_diameter",
+        "resin_branching_support_head_front_diameter": "branching_head_front_diameter",
+        "resin_support_head_width": "default_head_width",
+        "resin_branching_support_head_width": "branching_head_width",
+        "resin_support_pillar_diameter": "default_pillar_diameter",
+        "resin_branching_support_pillar_diameter": "branching_pillar_diameter",
+        "resin_support_small_pillar_diameter_percent": "default_small_pillar_diameter_percent",
+        "resin_branching_support_small_pillar_diameter_percent": "branching_small_pillar_diameter_percent",
+        "resin_support_max_bridges_on_pillar": "default_max_bridges_on_pillar",
+        "resin_branching_support_max_bridges_on_pillar": "branching_max_bridges_on_pillar",
+        "resin_support_max_weight_on_model": "default_max_weight_on_model",
+        "resin_branching_support_max_weight_on_model": "branching_max_weight_on_model",
+        "resin_support_pillar_connection_mode": "default_pillar_connection_mode",
+        "resin_branching_support_pillar_connection_mode": "branching_pillar_connection_mode",
+        "resin_support_buildplate_only": "default_buildplate_only",
+        "resin_branching_support_buildplate_only": "branching_buildplate_only",
+        "resin_support_pillar_widening_factor": "default_pillar_widening_factor",
+        "resin_branching_support_pillar_widening_factor": "branching_pillar_widening_factor",
+        "resin_support_base_diameter": "default_base_diameter",
+        "resin_branching_support_base_diameter": "branching_base_diameter",
+        "resin_support_base_height": "default_base_height",
+        "resin_branching_support_base_height": "branching_base_height",
+        "resin_support_base_safety_distance": "default_base_safety_distance",
+        "resin_branching_support_base_safety_distance": "branching_base_safety_distance",
+        "resin_support_critical_angle": "default_critical_angle",
+        "resin_branching_support_critical_angle": "branching_critical_angle",
+        "resin_support_max_bridge_length": "default_max_bridge_length",
+        "resin_branching_support_max_bridge_length": "branching_max_bridge_length",
+        "resin_support_max_pillar_link_distance": "default_max_pillar_link_distance",
+        "resin_branching_support_max_pillar_link_distance": "branching_max_pillar_link_distance",
+        "resin_support_object_elevation": "default_object_elevation",
+        "resin_branching_support_object_elevation": "branching_object_elevation"
+    }
 }

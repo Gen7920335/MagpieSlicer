@@ -824,7 +824,9 @@ TEST_CASE("Interface sublayers apply to Cura and to slim and hybrid tree support
     }));
     CAPTURE(support_type, support_style, generator);
     DynamicPrintConfig config = sublayer_temperature_config(false, 185);
-    config.set_deserialize_strict({ { "support_type", support_type }, { "support_style", support_style }, { "support_generator", generator } });
+    config.set_deserialize_strict({ { "support_type", support_type }, { "support_style", support_style } });
+    if (std::string(generator) == "cura")
+        set_mod_params(config, { { "cura_support.enable", true } });
     Print print;
     init_and_process_print({ TestMesh::overhang }, print, config);
     const TemperatureTrace trace = trace_temperatures(Slic3r::Test::gcode(print), config);

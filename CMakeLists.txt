@@ -1289,6 +1289,36 @@ endif()
 # Resources install target, configure fhs.hpp on UNIX
 if (WIN32)
     install(DIRECTORY "${SLIC3R_RESOURCES_DIR}/" DESTINATION "./resources")
+    # MAGPIE: the official mods ship in <resources>/mods (bundled: loaded at start, on by default where their
+    # parameters say so). Signed with the official key when MAGPIE_MOD_SIGN_KEY names its PEM file at install time
+    # (scripts/build_installer.ps1 -ModSignKey); a bundled package's signature, when present, must verify.
+    if (MAGPIE_OFFICIAL_MODS_DIR)
+        install(DIRECTORY "${MAGPIE_OFFICIAL_MODS_DIR}/" DESTINATION "./resources/mods")
+        install(CODE "
+            set(_key \"\$ENV{MAGPIE_MOD_SIGN_KEY}\")
+            # The build's own application signs (the install rules of src/ may run after this one).
+            set(_exe \"${CMAKE_BINARY_DIR}/src/\${CMAKE_INSTALL_CONFIG_NAME}/${SLIC3R_APP_CMD}.exe\")
+            if (NOT EXISTS \"\${_exe}\")
+                set(_exe \"${CMAKE_BINARY_DIR}/src/${SLIC3R_APP_CMD}.exe\")
+            endif ()
+            file(GLOB _mods LIST_DIRECTORIES true \"\${CMAKE_INSTALL_PREFIX}/resources/mods/*\")
+            if (_key STREQUAL \"\")
+                message(WARNING \"MAGPIE_MOD_SIGN_KEY is not set: the bundled official mods are installed unsigned\")
+            else ()
+                foreach (_mod IN LISTS _mods)
+                    if (IS_DIRECTORY \"\${_mod}\")
+                        file(REMOVE \"\${_mod}/SIGNATURE\")
+                        execute_process(COMMAND \"\${_exe}\" --mod-sign \"\${_mod}\" --mod-sign-key \"\${_key}\"
+                                        RESULT_VARIABLE _rc OUTPUT_VARIABLE _out ERROR_VARIABLE _out)
+                        if (NOT _rc EQUAL 0 OR NOT _out MATCHES \"this application trusts it\")
+                            message(FATAL_ERROR \"Signing \${_mod} failed (\${_rc}): \${_out}\")
+                        endif ()
+                        message(STATUS \"Signed \${_mod}\")
+                    endif ()
+                endforeach ()
+            endif ()
+        ")
+    endif ()
     if(ORCA_BUNDLED_UV_EXECUTABLE)
         install(PROGRAMS "${ORCA_BUNDLED_UV_EXECUTABLE}" DESTINATION "./resources/tools/uv" RENAME "${ORCA_BUNDLED_UV_FILENAME}")
     endif()

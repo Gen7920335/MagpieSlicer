@@ -3,8 +3,9 @@
 // MAGPIE: the support.areas slot (mods/sdk/include/magpie_support.h). A native mod decides where an
 // object's support goes, as three areas per object layer (body, top and bottom interface); the core
 // gives it the object's layers and turns its areas into Orca support layers: raft, interfaces and
-// toolpaths as for Orca's normal support. The support_generator setting picks the implementation by
-// name, as it picks the built-in generators (SlotRegistry.hpp).
+// toolpaths as for Orca's normal support. The active mods pick the implementation
+// per object (ModHost::support_generator_name, SlotChoice.hpp); its name is looked up after the built-in
+// generators (SlotRegistry.hpp).
 
 #include <string>
 #include <vector>

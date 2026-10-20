@@ -21,55 +21,6 @@ namespace {
 
 enum class Kind { Bool, Int, Float, Percent, FloatOrPercent, String };
 
-// One line 1 setting and the mod parameter that now carries it. `owned` marks keys this build
-// also defines (a mod rule writes them); the others are dropped from the loaded config.
-struct LegacyKey
-{
-    const char *key;
-    const char *param; // "<mod>.<name>"
-    Kind        kind;
-    bool        owned;
-    // For a key earlier builds of this line defined and saved in every file: its default there, which
-    // carries nothing to migrate.
-    const char *saved_default = nullptr;
-};
-
-const LegacyKey legacy_keys[] = {
-    // H/2 (a native mod since M7). Line 2 saved these keys as its rule wrote them, from the parameters mod_settings
-    // keeps; their defaults carry nothing.
-    { "outer_wall_half_layer_height", "half_layer.outer_walls", Kind::Bool, false, "0" },
-    { "support_half_layer_height", "half_layer.support", Kind::Bool, false, "0" },
-    // The low temperature interface (a native mod since M6). Line 2 saved these keys as its rule wrote them, from
-    // the parameters mod_settings keeps; their defaults carry nothing.
-    { "single_nozzle_low_temperature_interface", "low_temp_interface.enable", Kind::Bool, false, "0" },
-    { "support_interface_temperature", "low_temp_interface.temperature", Kind::Int, false, "170" },
-    { "support_interface_heating_time", "low_temp_interface.heating_time", Kind::Float, false, "5" },
-    { "support_interface_auxiliary_fan_cooling_on_temperature_change", "low_temp_interface.aux_fan", Kind::Bool, false, "0" },
-    { "support_interface_auxiliary_fan_speed", "low_temp_interface.aux_fan_speed", Kind::Int, false, "100" },
-    { "support_interface_nozzle_wiping_on_temperature_change", "low_temp_interface.brush", Kind::Bool, false, "0" },
-    { "support_interface_temperature_drop_tower", "low_temp_interface.tower", Kind::Bool, false, "0" },
-    // Its printer settings (line 1's, never written by a rule): the brush's round trips and speed.
-    { "support_interface_brush_repetitions", "low_temp_interface.brush_repetitions", Kind::Int, false, "0" },
-    { "support_interface_brush_speed", "low_temp_interface.brush_speed", Kind::Float, false, "80" },
-    { "use_smaller_nozzles_in_crisp_corners", "multi_nozzle_walls.enable", Kind::Bool, false, "0" },
-    { "crisp_corner_small_nozzle_wall_count", "multi_nozzle_walls.small_wall_count", Kind::Int, false, "0" },
-    { "crisp_corner_nozzle_wall_overlap", "multi_nozzle_walls.wall_overlap", Kind::Percent, false, "15%" },
-    { "crisp_corner_interlace_small_nozzle_walls", "multi_nozzle_walls.interlock", Kind::Bool, false, "0" },
-    { "crisp_corner_detail_toolhead", "multi_nozzle_walls.detail_toolhead", Kind::Int, false, "0" },
-    { "crisp_corner_small_nozzle_wall_speed", "multi_nozzle_walls.small_wall_speed", Kind::FloatOrPercent, true },
-    { "crisp_corner_large_nozzle_override_regions", "multi_nozzle_walls.override_regions", Kind::String, false, "" },
-    { "support_interface_sublayer_angle", "support_extras.sublayer_angle", Kind::Float, false, "0" },
-    { "support_interface_sublayer_temperature", "support_extras.sublayer_temperature", Kind::Int, false, "0" },
-    { "cura_support_join_distance", "cura_support.join_distance", Kind::Float, false },
-    { "cura_solid_support_raft", "cura_support.solid_first_layer", Kind::Bool, false },
-    { "mixed_normal_coverage_threshold", "mixed_support.coverage_threshold", Kind::Percent, false },
-    { "mixed_selective_merge", "mixed_support.selective_merge", Kind::Bool, false },
-    { "mixed_tree_support_style", "mixed_support.tree_style", Kind::String, false },
-    { "resin_support_tree_type", "resin_support.tree_type", Kind::String, false },
-    { "resin_support_points_density_relative", "resin_support.points_density", Kind::Int, false },
-    { "resin_support_enforcers_only", "resin_support.enforcers_only", Kind::Bool, false },
-};
-
 // Settings earlier builds of this line defined only for a mod's rules to write (support_extras before it became a
 // native mod, and the resin support's object_elevation, now the object.z_offset slot). The mod's parameters, which mod_settings carries, are what the user set, so these are dropped
 // without migrating: a vendor profile that happens to carry one of the names (SeeMeCNC's support_wall_loops, a key
@@ -79,24 +30,14 @@ const char *const removed_rule_keys[] = {
     "support_wall_loops", "tree_support_wall_loops", "object_elevation",
     // The Snapmaker U1 start guard's switch, which its rule wrote from the printer's mod parameter.
     "snapmaker_u1_start_guard",
+    // The settings mod rules wrote to pick a mod's implementation and to pass its values to the core's export: the
+    // active mods' slot declarations do both now ("when", "settings"; ModHost/SlotChoice.hpp).
+    "support_generator", "wall_planner", "layer_time_planner", "layer_time_blend_log", "layer_time_blend_max_diff",
+    "layer_time_blend_max_ratio", "layer_time_blend_ease_layers", "layer_time_blend_start_layer", "layer_time_blend_wait_cap",
+    "layer_time_blend_warn_total", "layer_time_blend_warn_single", "layer_time_blend_wait_at", "layer_time_blend_in_place_max",
+    "layer_time_blend_tower_size", "layer_time_blend_park_x", "layer_time_blend_park_y", "layer_time_blend_heat_rate",
+    "layer_time_blend_cool_rate",
 };
-
-// Line 1 printer settings holding an X/Y position ("XxY" or "X,Y", mm), each the two parameters <param>_x, <param>_y.
-// A negative coordinate is their automatic position, the default, and carries nothing.
-struct LegacyPoint { const char *key; const char *param; };
-const LegacyPoint legacy_points[] = {
-    { "support_interface_cooling_position", "low_temp_interface.cooling_position" },
-    { "support_interface_brush_start", "low_temp_interface.brush_start" },
-    { "support_interface_brush_end", "low_temp_interface.brush_end" },
-};
-
-const LegacyPoint *find_point(const std::string &key)
-{
-    for (const LegacyPoint &p : legacy_points)
-        if (key == p.key)
-            return &p;
-    return nullptr;
-}
 
 // "100x200" or "100,200" as two numbers; nothing for anything else.
 std::optional<std::pair<double, double>> parse_point(const std::string &value)
@@ -112,7 +53,8 @@ std::optional<std::pair<double, double>> parse_point(const std::string &value)
     return std::make_pair(x, y);
 }
 
-// Line 1 settings handled below by hand (value maps, conditions), or not reproducible here.
+// Line 1 settings handled below by hand: value maps and settings read together, which a mod's "legacy_keys" (one key,
+// one parameter) cannot say. The plain ones are in the mods' manifests.
 const char *const special_keys[] = {
     "mixed_normal_support_generator", "support_interface_sublayer_pattern", "support_interface_sublayer_pattern_type",
     "support_interface_sublayer_start_layer", "support_interface_sublayer_end_layer", "support_wall_count",
@@ -151,38 +93,57 @@ std::vector<double> toolhead_widths_mm(const std::string &value, const std::vect
     return out;
 }
 
-// Line 1's resin support parameters: resin_support_<x> (default tree) and resin_branching_support_<x>.
-struct ResinKey { const char *suffix; Kind kind; };
-const ResinKey resin_keys[] = {
-    { "head_front_diameter", Kind::Float }, { "head_width", Kind::Float }, { "pillar_diameter", Kind::Float },
-    { "small_pillar_diameter_percent", Kind::Percent }, { "max_bridges_on_pillar", Kind::Int },
-    { "max_weight_on_model", Kind::Float }, { "pillar_connection_mode", Kind::String }, { "buildplate_only", Kind::Bool },
-    { "pillar_widening_factor", Kind::Float }, { "base_diameter", Kind::Float }, { "base_height", Kind::Float },
-    { "base_safety_distance", Kind::Float }, { "critical_angle", Kind::Float }, { "max_bridge_length", Kind::Float },
-    { "max_pillar_link_distance", Kind::Float }, { "object_elevation", Kind::Float },
+// A legacy key a mod's manifest declares: the mod (active, else known and turned off) and how the key loads.
+struct LegacyTarget
+{
+    const Mod          *mod = nullptr;
+    const ModLegacyKey *key = nullptr;
 };
 
-// Maps a line 1 resin key to its mod parameter, or nothing.
-std::optional<std::pair<std::string, Kind>> resin_param(const std::string &key)
+// The mods to read legacy keys and parameters from: the active ones first, then every known one (turned off).
+struct LegacyMods
 {
-    for (const char *prefix : { "resin_support_", "resin_branching_support_" }) {
-        const std::string p(prefix);
-        if (key.compare(0, p.size(), p) != 0)
-            continue;
-        const std::string suffix = key.substr(p.size());
-        for (const ResinKey &r : resin_keys)
-            if (suffix == r.suffix)
-                return std::make_pair(std::string("resin_support.") + (p == "resin_support_" ? "default_" : "branching_") + suffix, r.kind);
-    }
-    return std::nullopt;
-}
+    std::shared_ptr<const ModSet>           active = active_mods();
+    std::shared_ptr<const std::vector<Mod>> known  = known_mods();
 
-const LegacyKey *find_key(const std::string &key)
+    template<class F> const Mod *find_mod(F &&pred) const
+    {
+        if (active)
+            for (const Mod &mod : active->mods())
+                if (pred(mod))
+                    return &mod;
+        if (known)
+            for (const Mod &mod : *known)
+                if (pred(mod))
+                    return &mod;
+        return nullptr;
+    }
+    LegacyTarget find_key(const std::string &key) const
+    {
+        const Mod *mod = find_mod([&key](const Mod &m) { return m.legacy_keys.count(key) > 0; });
+        return mod ? LegacyTarget{ mod, &mod->legacy_keys.at(key) } : LegacyTarget{};
+    }
+    // The parameter "<mod>.<name>".
+    const ModParam *find_param(const std::string &param) const
+    {
+        const size_t dot = param.find('.');
+        if (dot == std::string::npos)
+            return nullptr;
+        const std::string id = param.substr(0, dot), name = param.substr(dot + 1);
+        const Mod *mod = find_mod([&id](const Mod &m) { return m.id == id; });
+        if (mod == nullptr)
+            return nullptr;
+        for (const ModParam &p : mod->params)
+            if (p.name == name)
+                return &p;
+        return nullptr;
+    }
+};
+
+Kind kind_of(const ModParam &p)
 {
-    for (const LegacyKey &k : legacy_keys)
-        if (key == k.key)
-            return &k;
-    return nullptr;
+    return p.type == "bool" ? Kind::Bool : p.type == "int" ? Kind::Int : p.type == "float" ? Kind::Float :
+           p.type == "float_or_percent" ? Kind::FloatOrPercent : Kind::String;
 }
 
 template<size_t N> bool in(const char *const (&list)[N], const std::string &key)
@@ -241,17 +202,6 @@ bool saved_default(const std::string &value, const char *default_value)
 
 } // namespace
 
-// The parameter ("<mod>.<name>") and its type that a loaded mod's "legacy_keys" give for `key`.
-static std::optional<std::pair<std::string, std::string>> manifest_legacy_param(const std::string &key)
-{
-    if (const auto mods = active_mods())
-        for (const Mod &mod : mods->mods())
-            if (auto it = mod.legacy_keys.find(key); it != mod.legacy_keys.end())
-                if (const ModParam *p = mods->find_param(mod.id + "." + it->second))
-                    return std::make_pair(mod.id + "." + it->second, p->type);
-    return std::nullopt;
-}
-
 bool stash_legacy_setting(std::string &opt_key, std::string &value, std::map<std::string, std::string> &stash)
 {
     if (opt_key == "support_type") {
@@ -286,39 +236,19 @@ bool stash_legacy_setting(std::string &opt_key, std::string &value, std::map<std
         opt_key.clear();
         return true;
     }
-    if (const LegacyKey *k = find_key(opt_key)) {
-        stash[opt_key] = value;
-        if (!k->owned)
-            opt_key.clear();
-        return true;
-    }
-    if (in(special_keys, opt_key) || in(toolhead_width_keys, opt_key) || resin_param(opt_key) || find_point(opt_key)) {
+    if (in(special_keys, opt_key) || in(toolhead_width_keys, opt_key)) {
         stash[opt_key] = value;
         opt_key.clear();
         return true;
     }
-    // A key a loaded mod's manifest names in "legacy_keys". Kept when this build still defines it.
-    if (manifest_legacy_param(opt_key)) {
+    // A key a mod's manifest names in "legacy_keys" (an active mod's, else a turned-off one's). Kept when this build
+    // still defines it.
+    if (LegacyMods().find_key(opt_key).key != nullptr) {
         stash[opt_key] = value;
         if (print_config_def.get(opt_key) == nullptr)
             opt_key.clear();
         return true;
     }
-    return false;
-}
-
-// Whether the active mods define `param` ("<mod>.<name>").
-static bool mod_param_loaded(const std::string &param)
-{
-    const auto   mods = active_mods();
-    const size_t dot  = param.find('.');
-    if (!mods || dot == std::string::npos)
-        return false;
-    for (const Mod &mod : mods->mods())
-        if (mod.id == param.substr(0, dot))
-            for (const ModParam &p : mod.params)
-                if (p.name == param.substr(dot + 1))
-                    return true;
     return false;
 }
 
@@ -333,39 +263,22 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
         if (v)
             params[param] = *v;
     };
+    const LegacyMods mods;
     for (const auto &[key, value] : stash) {
-        if (const LegacyKey *k = find_key(key)) {
-            if (k->owned && mod_param_loaded(k->param)) {
-                // A key this build defines is written by the mod's rule from now on. Back to its
-                // default, it no longer counts as a user change, which would make the rule skip it
-                // and keep the feature on after the mod parameter is turned off. Its default value
-                // carries nothing to migrate (line 2 files save these keys too). Without the mod
-                // loaded (a test, a CLI without resources) the key keeps driving the feature.
-                const ConfigOptionDef *def = print_config_def.get(key);
-                if (def != nullptr && def->default_value) {
-                    const std::string default_value = def->default_value->serialize();
-                    if (ConfigOption *opt = config.option(key))
-                        opt->set(def->default_value.get());
-                    if (value == default_value)
-                        continue;
-                }
-            }
-            if (!k->owned && k->saved_default != nullptr && saved_default(value, k->saved_default))
+        if (const LegacyTarget t = mods.find_key(key); t.key != nullptr) {
+            const ModLegacyKey &k = *t.key;
+            if (k.saved_default && saved_default(value, k.saved_default->c_str()))
                 continue;
-            set(k->param, convert(value, k->kind));
-        }
-        else if (auto r = resin_param(key))
-            set(r->first, convert(value, r->second));
-        else if (const LegacyPoint *point = find_point(key)) {
-            if (auto xy = parse_point(value); xy && (xy->first >= 0. || xy->second >= 0.)) {
-                params[std::string(point->param) + "_x"] = xy->first;
-                params[std::string(point->param) + "_y"] = xy->second;
+            if (k.point) {
+                if (auto xy = parse_point(value); xy && (xy->first >= 0. || xy->second >= 0.)) {
+                    params[t.mod->id + "." + k.param + "_x"] = xy->first;
+                    params[t.mod->id + "." + k.param + "_y"] = xy->second;
+                }
+                continue;
             }
-        }
-        else if (auto m = manifest_legacy_param(key)) {
-            const Kind kind = m->second == "bool" ? Kind::Bool : m->second == "int" ? Kind::Int : m->second == "float" ? Kind::Float :
-                              m->second == "float_or_percent" ? Kind::FloatOrPercent : Kind::String;
-            set(m->first, convert(value, kind));
+            const std::string param = t.mod->id + "." + k.param;
+            if (const ModParam *p = mods.find_param(param))
+                set(param, convert(value, kind_of(*p)));
         }
         else if (in(toolhead_width_keys, key)) {
             if (!toolhead_width_set(value))
@@ -417,30 +330,17 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
 
     // Keep values the file's mod_settings (printer_mod_settings for a printer parameter) already holds; leave out values
     // equal to the default.
-    const auto mods = active_mods();
     auto default_of = [&mods](const std::string &param) -> std::optional<json> {
-        if (!mods)
-            return std::nullopt;
-        const size_t dot = param.find('.');
-        for (const Mod &mod : mods->mods())
-            if (mod.id == param.substr(0, dot))
-                for (const ModParam &p : mod.params)
-                    if (p.name == param.substr(dot + 1)) {
-                        if (const bool *b = std::get_if<bool>(&p.default_value)) return json(*b);
-                        if (const double *d = std::get_if<double>(&p.default_value)) return json(*d);
-                        if (const std::string *s = std::get_if<std::string>(&p.default_value)) return json(*s);
-                    }
+        if (const ModParam *p = mods.find_param(param)) {
+            if (const bool *b = std::get_if<bool>(&p->default_value)) return json(*b);
+            if (const double *d = std::get_if<double>(&p->default_value)) return json(*d);
+            if (const std::string *s = std::get_if<std::string>(&p->default_value)) return json(*s);
+        }
         return std::nullopt;
     };
     auto store_of = [&mods](const std::string &param) -> const char * {
-        // The printer parameters this table migrates, for when their mod is not loaded.
-        static const std::set<std::string> printer_params = {
-            "low_temp_interface.cooling_position_x", "low_temp_interface.cooling_position_y", "low_temp_interface.brush_start_x",
-            "low_temp_interface.brush_start_y",      "low_temp_interface.brush_end_x",        "low_temp_interface.brush_end_y",
-            "low_temp_interface.brush_repetitions",  "low_temp_interface.brush_speed" };
-        const ModParam *p = mods ? mods->find_param(param) : nullptr;
-        const bool printer = p != nullptr ? p->scope == "printer" : printer_params.count(param) > 0;
-        return printer ? "printer_mod_settings" : "mod_settings";
+        const ModParam *p = mods.find_param(param);
+        return p != nullptr && p->scope == "printer" ? "printer_mod_settings" : "mod_settings";
     };
     std::map<std::string, json> stored;
     auto stored_values = [&config, &stored](const char *store) -> json & {

@@ -4,9 +4,10 @@
  * nozzles: on each layer it may give the outermost walls of an island to a second, "detail" nozzle and
  * leave the rest to the region's own, and it may move a whole layer's walls to another nozzle. The
  * core generates the walls (Classic and Arachne) with the widths and spacings of the plan, tags each
- * wall as a detail or a large wall, and asks the planner which filament prints each tag. The slicer
- * setting wall_planner names the implementation (the impl_name a mod registers); an empty setting
- * keeps Orca's walls.
+ * wall as a detail or a large wall, and asks the planner which filament prints each tag. The core picks
+ * the implementation per region among the mods' slot declarations (mod.json "slots": "when", "priority",
+ * read with the region's parameter values); none picked keeps Orca's walls. Setting "detail_wall_speed"
+ * (mm/s, or "<n>%" of the outer wall speed) is the speed of the walls tagged detail.
  *
  * Calls come per region: the core opens a planner state for one region of one print (open), asks
  * the other functions with that state from any thread, and closes it. Everything a planner needs

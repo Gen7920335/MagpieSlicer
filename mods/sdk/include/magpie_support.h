@@ -4,8 +4,8 @@
  * The core hands the generator one object's layers (its islands, the painted or modifier enforcers
  * and blockers, the printable area) and gets back three areas per object layer: the support body, the
  * top interface (roof) and the bottom interface. The core turns them into its support layers (raft,
- * interface, toolpaths) as Orca's normal support does. The impl name of the slot is the value of the
- * support_generator setting that selects it.
+ * interface, toolpaths) as Orca's normal support does. The core picks one support implementation per
+ * object among the mods' slot declarations (mod.json "slots": "when", "priority").
  *
  * Every coordinate is in integer units (1 = host->scaling_factor_mm mm) and in object coordinates.
  * Slicer settings the generator needs (layer height, support distances, support type) it reads with

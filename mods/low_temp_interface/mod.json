@@ -6,7 +6,7 @@
     // on the gcode.events slot; the defaults change nothing.
     "id": "low_temp_interface",
     "name": "Low temperature support interface", "name_ko": "저온 서포트 접점",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "api": { "major": 1, "min_minor": 1 },
     "binary": "low_temp_interface",
     "slots": [ { "slot": "gcode.events", "version": 1, "impl": "low_temp_interface" } ],
@@ -29,5 +29,20 @@
         "brush_end_y":        { "invalidates": ["psGCodeExport"], "type": "float", "default": -1, "unit": "mm", "scope": "printer", "label": "Nozzle brush end Y", "label_ko": "노즐 브러시 끝 Y" },
         "brush_repetitions":  { "invalidates": ["psGCodeExport"], "type": "int",   "default": 0,  "scope": "printer", "label": "Nozzle brush round trips (0 = no brushing)", "label_ko": "노즐 브러시 왕복 횟수 (0 = 닦지 않음)" },
         "brush_speed":        { "invalidates": ["psGCodeExport"], "type": "float", "default": 80, "unit": "mm/s", "scope": "printer", "label": "Nozzle brush speed", "label_ko": "노즐 브러시 속도" }
+    },
+    // Line 1 settings (line 2 saved them as the rule wrote them); their defaults carry nothing. Positions are "XxY", mm.
+    "legacy_keys": {
+        "single_nozzle_low_temperature_interface": {"param": "enable", "saved_default": "0"},
+        "support_interface_temperature": {"param": "temperature", "saved_default": "170"},
+        "support_interface_heating_time": {"param": "heating_time", "saved_default": "5"},
+        "support_interface_auxiliary_fan_cooling_on_temperature_change": {"param": "aux_fan", "saved_default": "0"},
+        "support_interface_auxiliary_fan_speed": {"param": "aux_fan_speed", "saved_default": "100"},
+        "support_interface_nozzle_wiping_on_temperature_change": {"param": "brush", "saved_default": "0"},
+        "support_interface_temperature_drop_tower": {"param": "tower", "saved_default": "0"},
+        "support_interface_brush_repetitions": {"param": "brush_repetitions", "saved_default": "0"},
+        "support_interface_brush_speed": {"param": "brush_speed", "saved_default": "80"},
+        "support_interface_cooling_position": {"point": "cooling_position"},
+        "support_interface_brush_start": {"point": "brush_start"},
+        "support_interface_brush_end": {"point": "brush_end"}
     }
 }

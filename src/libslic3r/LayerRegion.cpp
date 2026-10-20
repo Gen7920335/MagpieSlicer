@@ -144,8 +144,7 @@ static void make_region_perimeters(const LayerRegion &source,
     // MAGPIE: a wall planner that moves this layer's walls to another nozzle (wall.plan slot) has their widths
     // resolved on that nozzle, the way PrintRegion::flow() resolves them on the region's own.
     const std::unique_ptr<const ModHost::WallPlanner> wall_planner =
-        ModHost::open_wall_planner(region_config.wall_planner.value, layer.object()->print()->full_print_config(), print_config,
-                                   &object_config, region_config);
+        ModHost::open_wall_planner(layer.object()->print()->full_print_config(), print_config, &object_config, region_config);
     const unsigned int layer_wall_toolhead = wall_planner ? wall_planner->layer_wall_toolhead(layer.id()) : 0;
     auto wall_flow = [&](FlowRole role) {
         if (layer_wall_toolhead == 0)

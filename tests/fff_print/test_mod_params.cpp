@@ -123,3 +123,28 @@ TEST_CASE("Object and region mod values reach the object, region values joining 
     CHECK(s.perimeters);
     CHECK_FALSE(s.support);
 }
+
+TEST_CASE("A changed parameter of mods without rules still redoes the steps it declares", "[ModHost]")
+{
+    // The official mods have no rules since their selection moved into their slot declarations. Before: Print::apply
+    // asked ModSet::empty(), which counted rules, so with only such mods loaded a changed parameter redid nothing and
+    // the old support stayed. Counterfactual: with empty() counting rules again, s.support stays true.
+    std::shared_ptr<const ModHost::ModSet> previous = ModHost::active_mods();
+    ModHost::set_active_mods(std::make_shared<const ModHost::ModSet>(ModHost::ModSet::build({ModHost::ModSet::parse_mod(R"({
+        "id": "norules", "version": "1",
+        "params": { "support": {"type": "float", "default": 1, "invalidates": ["posSupportMaterial"]} }
+    })")})));
+    Print              print;
+    Model              model;
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"layer_height", 0.2}});
+    init_print({cube(20.)}, print, model, config);
+    print.process();
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"norules.support": 2})"));
+    print.apply(model, config);
+    const Steps s = done(*print.objects().front());
+    ModHost::set_active_mods(previous);
+    CHECK(s.slice);
+    CHECK(s.perimeters);
+    CHECK_FALSE(s.support);
+}

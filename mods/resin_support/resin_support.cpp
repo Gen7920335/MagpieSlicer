@@ -39,7 +39,7 @@
 #include <vector>
 
 #define RESIN_MOD_ID "resin_support"
-#define RESIN_MOD_VERSION "2.0.0"
+#define RESIN_MOD_VERSION "2.1.0"
 
 MAGPIE_MOD_DEFINE(RESIN_MOD_ID, RESIN_MOD_VERSION)
 
@@ -150,8 +150,8 @@ std::string config_str(mp_ctx *ctx, const char *key)
 }
 
 // The lift the object.z_offset slot reports: the selected strategy's elevation, only for an object
-// whose support this mod generates. Another mod's support (Mixed wins the support_generator rule when
-// both are on) does not fill the gap under a lifted object, and with enforcers only the object's
+// whose support this mod generates. Another mod's support (Mixed is picked over resin support when
+// both are on; the host gives the picked name as "support_generator") does not fill the gap under a lifted object, and with enforcers only the object's
 // bottom gets no support points, so in both cases the object stays on the bed.
 double object_lift_mm(mp_ctx *ctx, const ModSettings &s)
 {

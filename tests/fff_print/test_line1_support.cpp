@@ -1,5 +1,6 @@
 // MAGPIE: Magpie line 1 (Beta 7) support tests, run on this build's support modules with line 1's
 // settings set through the line 1 migration (line1_settings.hpp).
+#include <libslic3r/ModHost/SlotChoice.hpp>
 #include <catch2/catch_all.hpp>
 
 #include "libslic3r/ClipperUtils.hpp"
@@ -166,7 +167,7 @@ TEST_CASE("Resin style Default and Branching generate printable FFF support",
         REQUIRE(print.objects().size() == 1);
         const PrintObject *object = print.objects().front();
         CHECK(object->config().enable_support.value);
-        CHECK(object->config().support_generator.value == "resin");
+        CHECK(ModHost::support_generator_name(print.full_print_config(), object->config()) == "resin");
         CHECK(object->is_step_done(posSupportMaterial));
         const auto support_layers = object->support_layers();
         REQUIRE_FALSE(support_layers.empty());
@@ -1081,7 +1082,7 @@ TEST_CASE("Cura support prints a full raft under the object", "[CuraSupport][Raf
     const PrintObject &object = *print.objects().front();
     const SlicingParameters &slicing = object.slicing_parameters();
     CAPTURE(raft_layers, overhang);
-    REQUIRE(object.config().support_generator.value == "cura");
+    REQUIRE(ModHost::support_generator_name(print.full_print_config(), object.config()) == "cura");
     size_t raft_with_paths = 0;
     for (const SupportLayer *layer : object.support_layers())
         if (layer->print_z <= slicing.raft_contact_top_z + EPSILON)

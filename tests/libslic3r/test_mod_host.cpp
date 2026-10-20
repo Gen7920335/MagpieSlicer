@@ -7,6 +7,8 @@
 #include <libslic3r/ModHost/SlotRegistry.hpp>
 #include <libslic3r/PrintConfig.hpp>
 
+#include <boost/filesystem/path.hpp>
+
 #include <map>
 #include <set>
 #include <string>
@@ -449,11 +451,11 @@ TEST_CASE("A float_or_percent parameter takes a number or a percentage and passe
 {
     const ModSet mods = build_one(R"({"id": "demo", "version": "1",
         "params": {"speed": {"type": "float_or_percent", "default": 0, "invalidates": ["none"]}},
-        "rules": [ {"target": "crisp_corner_small_nozzle_wall_speed", "value": "demo.speed"} ]})");
+        "rules": [ {"target": "initial_layer_line_width", "value": "demo.speed"} ]})");
     DynamicPrintConfig config = full_config();
     config.set_key_value("mod_settings", new ConfigOptionString(R"({"demo.speed": "50%"})"));
     REQUIRE(mods.resolve(config).empty());
-    const auto *speed = config.option<ConfigOptionFloatOrPercent>("crisp_corner_small_nozzle_wall_speed");
+    const auto *speed = config.option<ConfigOptionFloatOrPercent>("initial_layer_line_width");
     CHECK(speed->percent);
     CHECK(speed->value == 50.);
     config.set_key_value("mod_settings", new ConfigOptionString(R"({"demo.speed": 30})"));
@@ -554,16 +556,16 @@ TEST_CASE("Only official mods write printer G-code settings", "[ModHost]")
 TEST_CASE("When two mods set one setting differently, the one used is reported", "[ModHost]")
 {
     const Mod a = ModSet::parse_mod(R"({"id": "aaa", "version": "1", "params": {"on": {"type": "bool", "default": true, "invalidates": ["none"]}},
-        "rules": [ {"target": "support_generator", "value": "\"cura\"", "when": "aaa.on", "priority": 0} ]})");
+        "rules": [ {"target": "filename_format", "value": "\"cura\"", "when": "aaa.on", "priority": 0} ]})");
     const Mod b = ModSet::parse_mod(R"({"id": "bbb", "version": "1", "params": {"on": {"type": "bool", "default": true, "invalidates": ["none"]}},
-        "rules": [ {"target": "support_generator", "value": "\"mixed\"", "when": "bbb.on", "priority": 2} ]})");
+        "rules": [ {"target": "filename_format", "value": "\"mixed\"", "when": "bbb.on", "priority": 2} ]})");
     const ModSet mods = ModSet::build({a, b});
     DynamicPrintConfig config = full_config();
     std::vector<ModSet::RuleClash> clashes;
     REQUIRE(mods.resolve(config, {}, &clashes).empty());
-    CHECK(config.opt_string("support_generator") == "mixed");
+    CHECK(config.opt_string("filename_format") == "mixed");
     REQUIRE(clashes.size() == 1);
-    CHECK(clashes[0].setting == "support_generator");
+    CHECK(clashes[0].setting == "filename_format");
     CHECK(clashes[0].used_mod == "bbb");
     CHECK(clashes[0].used_value == "mixed");
     CHECK(clashes[0].other_mods == std::vector<std::string>{"aaa"});
@@ -591,7 +593,7 @@ TEST_CASE("A package manifest is read and checked", "[ModHost]")
     CHECK(mod.depends.size() == 2);
     CHECK(mod.conflicts == std::vector<std::string>{"rival"});
     CHECK(mod.thread_safe);
-    CHECK(mod.legacy_keys.at("outer_wall_half_layer_height") == "outer");
+    CHECK(mod.legacy_keys.at("outer_wall_half_layer_height").param == "outer");
     REQUIRE(mod.gui.paint_channels.size() == 1);
     CHECK(mod.gui.paint_channels[0].labels.at("ko") == "Ilban");
     CHECK(mod.gui.object_params == std::vector<std::string>{"outer"});
@@ -609,4 +611,102 @@ TEST_CASE("A package manifest is read and checked", "[ModHost]")
     CHECK_THROWS_WITH(ModSet::build({mod, rival}), ContainsSubstring("conflicts with mod 'rival'"));
     CHECK(compare_versions("1.10.0", "1.9") > 0);
     CHECK(compare_versions("2", "2.0.0") == 0);
+}
+
+namespace {
+// A mod "<id>" with a wall.plan declaration given by `slot_fields` (JSON members after "impl").
+Mod slot_mod(const std::string &id, const std::string &slot_fields)
+{
+    return ModSet::parse_mod(R"({"id": ")" + id + R"(", "version": "1", "api": {"major": 1, "min_minor": 0}, "binary": ")" + id + R"(",
+        "params": {"on": {"type": "bool", "default": false, "scope": "region", "invalidates": ["posPerimeters"]},
+                   "speed": {"type": "float_or_percent", "default": "50%", "invalidates": ["psGCodeExport"]},
+                   "quiet": {"type": "bool", "default": true, "invalidates": ["none"]}},
+        "slots": [ {"slot": "wall.plan", "version": 1, "impl": ")" + id + R"(_impl")" + slot_fields + "} ]}");
+}
+} // namespace
+
+TEST_CASE("The slot implementation whose condition holds is picked, the higher priority first", "[ModHost]")
+{
+    const ModSet mods = ModSet::build({ slot_mod("aaa", R"(, "when": "aaa.on", "settings": {"detail_wall_speed": "aaa.speed"})"),
+                                        slot_mod("bbb", R"(, "when": "bbb.on", "priority": 1)"),
+                                        slot_mod("ccc", "") });
+    DynamicPrintConfig   config = full_config();
+    ModSet::ValueSources sources;
+    sources.print = &config;
+    const std::vector<std::string> slots{ "wall.plan" };
+    // Nothing on: none picked; a declaration without "when" (ccc) is never picked.
+    CHECK(mods.choose_slot(slots, sources).mod == nullptr);
+
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"aaa.on": true})"));
+    ModSet::SlotChoice c = mods.choose_slot(slots, sources);
+    REQUIRE(c.mod != nullptr);
+    CHECK(c.decl->impl == "aaa_impl");
+    CHECK(c.other_mods.empty());
+    CHECK(c.error.empty());
+    const std::optional<ExprValue> speed = mods.slot_setting(c, "detail_wall_speed", sources);
+    REQUIRE(speed);
+    CHECK(std::get<std::string>(*speed) == "50%");
+    CHECK_FALSE(mods.slot_setting(c, "no_such_setting", sources));
+    // Another job's slots: nothing.
+    CHECK(mods.choose_slot({ "support.areas" }, sources).mod == nullptr);
+
+    // Both on: the higher priority is used, the other is named.
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"aaa.on": true, "bbb.on": true})"));
+    c = mods.choose_slot(slots, sources);
+    REQUIRE(c.mod != nullptr);
+    CHECK(c.decl->impl == "bbb_impl");
+    CHECK(c.other_mods == std::vector<std::string>{ "aaa" });
+
+    // A region's own value picks for that region only.
+    config.set_key_value("mod_settings", new ConfigOptionString("{}"));
+    const std::string region_values = R"({"aaa.on": true})";
+    sources.region_values = &region_values;
+    c = mods.choose_slot(slots, sources);
+    REQUIRE(c.mod != nullptr);
+    CHECK(c.decl->impl == "aaa_impl");
+    sources.region_values = nullptr;
+    CHECK(mods.choose_slot(slots, sources).mod == nullptr);
+}
+
+TEST_CASE("Two mods turned on for one job at one priority stop the choice", "[ModHost]")
+{
+    const ModSet mods = ModSet::build({ slot_mod("aaa", R"(, "when": "aaa.on")"), slot_mod("bbb", R"(, "when": "bbb.on")") });
+    DynamicPrintConfig config = full_config();
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"aaa.on": true, "bbb.on": true})"));
+    ModSet::ValueSources sources;
+    sources.print = &config;
+    const ModSet::SlotChoice c = mods.choose_slot({ "wall.plan" }, sources);
+    CHECK(c.mod == nullptr);
+    CHECK_THAT(c.error, ContainsSubstring("both turned on"));
+    // One of them on: no error.
+    config.set_key_value("mod_settings", new ConfigOptionString(R"({"bbb.on": true})"));
+    CHECK(mods.choose_slot({ "wall.plan" }, sources).error.empty());
+}
+
+TEST_CASE("A slot declaration reads settings and parameters that name the steps they change", "[ModHost]")
+{
+    // A parameter whose "invalidates" is "none" changed nothing but what rules wrote: read by the core for a slot, the
+    // print would stay stale when it changes.
+    CHECK_THROWS_WITH(ModSet::build({ slot_mod("aaa", R"(, "when": "aaa.quiet")") }), ContainsSubstring("name the steps it changes"));
+    CHECK_THROWS_WITH(ModSet::build({ slot_mod("aaa", R"(, "settings": {"x": "aaa.quiet"})") }), ContainsSubstring("name the steps it changes"));
+    CHECK_THROWS_WITH(ModSet::build({ slot_mod("aaa", R"(, "when": "nobody.on")") }), ContainsSubstring("neither a setting nor a mod parameter"));
+    // Settings of the print config may be read.
+    CHECK_NOTHROW(ModSet::build({ slot_mod("aaa", R"(, "when": "aaa.on and wall_loops > 1")") }));
+    // A set of mods without rules is not empty.
+    CHECK_FALSE(ModSet::build({ slot_mod("aaa", "") }).empty());
+}
+
+TEST_CASE("The official mods' slot settings name steps, so a changed parameter redoes the export", "[ModHost]")
+{
+    // Layer time blending's parameters used to declare "none": the planner reads them while exporting, so a changed
+    // value left the old G-code (its rule wrote only the settings the export read). They now name psGCodeExport.
+    std::vector<std::string> errors;
+    const ModSet official = ModSet::load_dir(boost::filesystem::path(MAGPIE_OFFICIAL_MODS_DIR), errors);
+    REQUIRE(errors.empty());
+    for (const char *key : { "layer_time_blend.max_diff", "layer_time_blend.blend_type", "layer_time_blend.wait_at" }) {
+        CAPTURE(key);
+        const std::set<std::string> steps = official.invalidated_steps("{}", std::string(R"({")") + key + R"(": "x"})");
+        CHECK(steps.count("psGCodeExport") == 1);
+    }
+    CHECK(official.invalidated_steps("{}", R"({"multi_nozzle_walls.small_wall_speed": 30})").count("psGCodeExport") == 1);
 }

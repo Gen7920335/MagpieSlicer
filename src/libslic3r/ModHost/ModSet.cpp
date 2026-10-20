@@ -522,6 +522,23 @@ Mod ModSet::parse_mod(const std::string &json_text)
             decl.slot    = required_string(s, "slot", mod.id);
             decl.version = s["version"].get<uint32_t>();
             decl.impl    = required_string(s, "impl", mod.id);
+            const std::string where_slot = where + " slot " + decl.slot;
+            if (std::string when = optional_string(s, "when"); !when.empty())
+                decl.when = parse_expr(when, where_slot + " when");
+            if (auto p = s.find("priority"); p != s.end()) {
+                if (!p->is_number_integer())
+                    mod_fail(mod.id, "slot " + decl.slot + ": \"priority\" must be a whole number");
+                decl.priority = p->get<int>();
+            }
+            if (auto st = s.find("settings"); st != s.end()) {
+                if (!st->is_object())
+                    mod_fail(mod.id, "slot " + decl.slot + ": \"settings\" must map names to expressions");
+                for (auto &[name, text] : st->items()) {
+                    if (!text.is_string())
+                        mod_fail(mod.id, "slot " + decl.slot + ": setting \"" + name + "\" must be an expression");
+                    decl.settings.emplace(name, parse_expr(text.get<std::string>(), where_slot + " setting " + name));
+                }
+            }
             mod.slots.push_back(std::move(decl));
         }
         if (!mod.slots.empty() && mod.binary.empty())
@@ -556,11 +573,31 @@ Mod ModSet::parse_mod(const std::string &json_text)
     if (auto it = j.find("legacy_keys"); it != j.end()) {
         if (!it->is_object())
             mod_fail(mod.id, "\"legacy_keys\" must map old setting keys to parameter names");
-        for (auto &[old_key, param] : it->items()) {
-            if (!param.is_string() || std::none_of(mod.params.begin(), mod.params.end(),
-                                                   [&param](const ModParam &p) { return p.name == param.get<std::string>(); }))
-                mod_fail(mod.id, "\"legacy_keys\": \"" + old_key + "\" must name a parameter of this mod");
-            mod.legacy_keys[old_key] = param.get<std::string>();
+        auto has_param = [&mod](const std::string &name) {
+            return std::any_of(mod.params.begin(), mod.params.end(), [&name](const ModParam &p) { return p.name == name; });
+        };
+        for (auto &[old_key, entry] : it->items()) {
+            // "old_key": "param", or {"param": "param", "saved_default": "0"}, or {"point": "position"}.
+            ModLegacyKey key;
+            if (entry.is_string()) {
+                key.param = entry.get<std::string>();
+            } else if (entry.is_object()) {
+                if (auto p = entry.find("point"); p != entry.end() && p->is_string()) {
+                    key.param = p->get<std::string>();
+                    key.point = true;
+                } else
+                    key.param = optional_string(entry, "param");
+                if (auto d = entry.find("saved_default"); d != entry.end()) {
+                    if (!d->is_string())
+                        mod_fail(mod.id, "\"legacy_keys\": \"" + old_key + "\" saved_default must be the stored text");
+                    key.saved_default = d->get<std::string>();
+                }
+            }
+            const bool known = key.point ? has_param(key.param + "_x") && has_param(key.param + "_y") : has_param(key.param);
+            if (key.param.empty() || !known)
+                mod_fail(mod.id, "\"legacy_keys\": \"" + old_key + "\" must name a parameter of this mod" +
+                                     (key.point ? std::string(" (a point: <name>_x and <name>_y)") : std::string()));
+            mod.legacy_keys[old_key] = std::move(key);
         }
     }
     if (auto it = j.find("gui"); it != j.end()) {
@@ -639,6 +676,30 @@ ModSet ModSet::build(std::vector<Mod> mods)
             if (rule.when)
                 check_names(*rule.when);
             by_target[rule.target].push_back({m, r});
+        }
+
+    // A slot declaration's condition and settings read settings and parameters. The core reads them for the picked
+    // implementation only, so a parameter they read must name the steps it changes: "none" would leave the print
+    // stale when it changes.
+    for (const Mod &mod : set.m_mods)
+        for (const ModSlotDecl &decl : mod.slots) {
+            const std::string where = "mod '" + mod.id + "' slot " + decl.slot;
+            auto check_names = [&](const Expr &e) {
+                for (const std::string &name : e.names()) {
+                    if (auto p = set.m_params.find(name); p != set.m_params.end()) {
+                        const ModParam &param = set.m_mods[p->second.first].params[p->second.second];
+                        if (param.invalidates.size() == 1 && param.invalidates.front() == "none")
+                            throw ModError(where + ": it reads \"" + name + "\", whose \"invalidates\" is \"none\"; name the steps it changes");
+                        if (param.scope == "filament")
+                            throw ModError(where + ": \"" + name + "\" is a filament parameter, which has one value per filament");
+                    } else if (print_config_def.get(name) == nullptr)
+                        throw ModError(where + ": \"" + name + "\" is neither a setting nor a mod parameter");
+                }
+            };
+            if (decl.when)
+                check_names(*decl.when);
+            for (const auto &[name, e] : decl.settings)
+                check_names(e);
         }
 
     // Within one setting, rules apply in ascending priority; equal priorities have no defined order.
@@ -913,6 +974,69 @@ std::optional<ExprValue> ModSet::value_of(const std::string &key, const ValueSou
     return p->default_value;
 }
 
+ExprLookup ModSet::slot_lookup(const ValueSources &sources) const
+{
+    return [this, &sources](const std::string &name, std::optional<size_t> index) -> std::optional<ExprValue> {
+        if (m_params.count(name))
+            return index ? std::nullopt : value_of(name, sources);
+        const ConfigOptionDef *def = print_config_def.get(name);
+        return def && sources.print ? read_option(sources.print->option(name), def->type, index) : std::nullopt;
+    };
+}
+
+ModSet::SlotChoice ModSet::choose_slot(const std::vector<std::string> &slots, const ValueSources &sources) const
+{
+    SlotChoice choice;
+    const ExprLookup lookup = slot_lookup(sources);
+    // Every declaration whose condition holds, as (priority, mod, declaration).
+    struct Held { int priority; const Mod *mod; const ModSlotDecl *decl; };
+    std::vector<Held> held;
+    for (const Mod &mod : m_mods)
+        for (const ModSlotDecl &decl : mod.slots) {
+            if (!decl.when || std::find(slots.begin(), slots.end(), decl.slot) == slots.end())
+                continue;
+            try {
+                if (expr_truthy(decl.when->evaluate(lookup)))
+                    held.push_back({decl.priority, &mod, &decl});
+            } catch (const ExprError &e) {
+                choice.error = "mod '" + mod.id + "' slot " + decl.slot + " when: " + e.what();
+                return choice;
+            }
+        }
+    if (held.empty())
+        return choice;
+    std::stable_sort(held.begin(), held.end(), [](const Held &a, const Held &b) { return a.priority > b.priority; });
+    if (held.size() > 1 && held[1].priority == held[0].priority && held[1].mod != held[0].mod) {
+        choice.error = "mods '" + held[0].mod->id + "' and '" + held[1].mod->id + "' are both turned on for " + held[0].decl->slot +
+                       " with priority " + std::to_string(held[0].priority) + "; turn one off";
+        return choice;
+    }
+    choice.mod  = held[0].mod;
+    choice.decl = held[0].decl;
+    for (size_t i = 1; i < held.size(); ++i)
+        if (held[i].mod != choice.mod &&
+            std::find(choice.other_mods.begin(), choice.other_mods.end(), held[i].mod->id) == choice.other_mods.end())
+            choice.other_mods.push_back(held[i].mod->id);
+    return choice;
+}
+
+std::optional<ExprValue> ModSet::slot_setting(const SlotChoice &choice, const std::string &name, const ValueSources &sources,
+                                              std::string *error) const
+{
+    if (choice.decl == nullptr)
+        return std::nullopt;
+    auto it = choice.decl->settings.find(name);
+    if (it == choice.decl->settings.end())
+        return std::nullopt;
+    try {
+        return it->second.evaluate(slot_lookup(sources));
+    } catch (const ExprError &e) {
+        if (error)
+            *error = "mod '" + choice.mod->id + "' slot " + choice.decl->slot + " setting " + name + ": " + e.what();
+        return std::nullopt;
+    }
+}
+
 std::set<std::string> ModSet::invalidated_steps(const std::string &old_json, const std::string &new_json) const
 {
     std::set<std::string> steps;
@@ -999,6 +1123,20 @@ void set_active_mods(std::shared_ptr<const ModSet> mods)
 {
     std::lock_guard<std::mutex> lock(g_active_mutex);
     g_active = std::move(mods);
+}
+
+static std::shared_ptr<const std::vector<Mod>> g_known;
+
+std::shared_ptr<const std::vector<Mod>> known_mods()
+{
+    std::lock_guard<std::mutex> lock(g_active_mutex);
+    return g_known;
+}
+
+void set_known_mods(std::shared_ptr<const std::vector<Mod>> mods)
+{
+    std::lock_guard<std::mutex> lock(g_active_mutex);
+    g_known = std::move(mods);
 }
 
 std::optional<ExprValue> param_value(const DynamicPrintConfig &config, const std::string &key)

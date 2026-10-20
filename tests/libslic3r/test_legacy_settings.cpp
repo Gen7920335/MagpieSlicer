@@ -122,28 +122,65 @@ TEST_CASE("Line 1 feature settings become mod parameters and line 1 only keys ar
     CHECK_FALSE(config.has("support_interface_temperature"));
 }
 
-TEST_CASE("A migrated line 1 feature turns off with its mod parameter", "[LegacySettings]")
+TEST_CASE("Line 1's detail wall speed loads as the multi-nozzle walls parameter and leaves no setting", "[LegacySettings]")
 {
     BundledMods mods;
-    // Before: the line 1 key kept its value 1, differed from the system preset, and so counted as a
-    // user change; the mod's rule skipped it and the feature stayed on with the parameter off.
-    // The multi-nozzle walls mod's rule writes crisp_corner_small_nozzle_wall_speed, a key this build defines.
-    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    const std::string off = config.opt_serialize("crisp_corner_small_nozzle_wall_speed");
-    config.apply(load({ { "crisp_corner_small_nozzle_wall_speed", "30" } }));
-    REQUIRE(mod_settings(config).contains("multi_nozzle_walls.small_wall_speed"));
-    CHECK(config.opt_serialize("crisp_corner_small_nozzle_wall_speed") == off);
-    config.set_key_value("different_settings_to_system", new ConfigOptionStrings({ "", "", "" }));
+    // The setting the multi-nozzle walls mod's rule used to write is gone: its wall planner's slot declaration gives
+    // the speed now. A value, a percentage and line 2's saved default.
+    CHECK(mod_settings(load({ { "crisp_corner_small_nozzle_wall_speed", "30" } }))["multi_nozzle_walls.small_wall_speed"] == 30.);
+    CHECK(mod_settings(load({ { "crisp_corner_small_nozzle_wall_speed", "50%" } }))["multi_nozzle_walls.small_wall_speed"] == "50%");
+    const DynamicPrintConfig unset = load({ { "crisp_corner_small_nozzle_wall_speed", "0" } });
+    CHECK_FALSE(unset.has("mod_settings"));
+    CHECK_FALSE(unset.has("crisp_corner_small_nozzle_wall_speed"));
+}
 
-    DynamicPrintConfig on = config;
-    REQUIRE(ModHost::active_mods()->resolve(on).empty());
-    CHECK(on.opt_serialize("crisp_corner_small_nozzle_wall_speed") == "30");
+TEST_CASE("Settings mod rules wrote to pick an implementation or pass values to the export are dropped", "[LegacySettings]")
+{
+    BundledMods mods;
+    // Line 2 files saved them as the rules wrote them; the mods' parameters in mod_settings are what the user set.
+    const DynamicPrintConfig config = load({
+        { "support_generator", "cura" }, { "wall_planner", "multi_nozzle" }, { "layer_time_planner", "blend" },
+        { "layer_time_blend_wait_at", "tower" }, { "layer_time_blend_park_x", "10" }, { "layer_time_blend_heat_rate", "3" },
+    });
+    CHECK_FALSE(config.has("mod_settings"));
+    for (const char *key : { "support_generator", "wall_planner", "layer_time_planner", "layer_time_blend_wait_at",
+                             "layer_time_blend_park_x", "layer_time_blend_heat_rate" })
+        CHECK_FALSE(config.has(key));
+}
 
-    nlohmann::json m = mod_settings(config);
-    m["multi_nozzle_walls.small_wall_speed"] = 0;
-    config.set_key_value("mod_settings", new ConfigOptionString(m.dump()));
-    REQUIRE(ModHost::active_mods()->resolve(config).empty());
-    CHECK(config.opt_serialize("crisp_corner_small_nozzle_wall_speed") == off);
+TEST_CASE("A turned-off mod's line 1 settings still load into its parameters", "[LegacySettings]")
+{
+    // The keys come from the mods' manifests ("legacy_keys"). A mod turned off is not active, but its manifest is
+    // known, so a project saved with the feature keeps its values for when the mod is on again.
+    std::vector<std::string> errors;
+    const ModHost::ModSet official = ModHost::ModSet::load_dirs({ fs::path(MAGPIE_OFFICIAL_MODS_DIR) }, errors);
+    REQUIRE(errors.empty());
+    const std::shared_ptr<const ModHost::ModSet>           previous_active = ModHost::active_mods();
+    const std::shared_ptr<const std::vector<ModHost::Mod>> previous_known  = ModHost::known_mods();
+    ModHost::set_active_mods(nullptr);
+    ModHost::set_known_mods(std::make_shared<const std::vector<ModHost::Mod>>(official.mods()));
+    const DynamicPrintConfig config = load({
+        { "outer_wall_half_layer_height", "1" },
+        { "use_smaller_nozzles_in_crisp_corners", "1" },
+        { "support_interface_brush_start", "10x12" },
+    });
+    const DynamicPrintConfig unknown = [&] {
+        ModHost::set_known_mods(nullptr);
+        return load({ { "outer_wall_half_layer_height", "1" } });
+    }();
+    ModHost::set_known_mods(previous_known);
+    ModHost::set_active_mods(previous_active);
+
+    const nlohmann::json m = mod_settings(config);
+    CHECK(m["half_layer.outer_walls"] == true);
+    CHECK(m["multi_nozzle_walls.enable"] == true);
+    // A printer parameter goes to the printer's values, by the known manifest's scope.
+    const auto *printer = config.option<ConfigOptionString>("printer_mod_settings");
+    REQUIRE(printer != nullptr);
+    CHECK(nlohmann::json::parse(printer->value)["low_temp_interface.brush_start_x"] == 10.);
+    CHECK_FALSE(config.has("outer_wall_half_layer_height"));
+    // No mod knows the key: it is not migrated.
+    CHECK_FALSE(unknown.has("mod_settings"));
 }
 
 TEST_CASE("A line 2 file that stores a mod-owned key at its default adds no mod parameter", "[LegacySettings]")

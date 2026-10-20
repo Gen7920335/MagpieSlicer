@@ -1461,6 +1461,12 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
         static const std::string &wait_site_tag();
         // Counts M109 temperature waits as time (see m_estimate_temperature_waits). Off after reset().
         void set_temperature_wait_estimate(bool on) { m_estimate_temperature_waits = on; }
+        // The nozzle's heating and cooling rates that estimate assumes, degC/s (at least 0.1).
+        void set_temperature_rates(double heat_rate, double cool_rate)
+        {
+            m_heat_rate = float(std::max(0.1, heat_rate));
+            m_cool_rate = float(std::max(0.1, cool_rate));
+        }
         static const std::string &wait_tower_begin_tag();
         static const std::string &wait_tower_end_tag();
         using WaitMarkKind = GCodeWaitMarkKind;

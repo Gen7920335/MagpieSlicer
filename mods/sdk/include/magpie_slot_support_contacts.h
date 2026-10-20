@@ -7,8 +7,9 @@
  * (the contacts) and keeps a support body of its own, which the core then cuts at the print Z of every
  * support layer it builds. Orca's normal-support generator prints the result: interface layers, Z and
  * X/Y gaps, raft and toolpaths, the body trimmed by the object like its own base layers. support_type
- * does not apply (the contacts are given). The impl name of the slot is the value of the
- * support_generator setting that selects it.
+ * does not apply (the contacts are given). The core picks one support implementation per object among the mods'
+ * slot declarations (mod.json "slots": "when", "priority"); host config_str "support_generator" gives the
+ * picked implementation's name for the object.
  *
  * Coordinates of polygons are in integer units (1 = host->scaling_factor_mm mm) and in object
  * coordinates; the mesh and every height is in mm. Slicer settings the generator needs (layer height,

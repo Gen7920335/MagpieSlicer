@@ -10,6 +10,7 @@
 #include "HalfLayerSources.hpp"
 #include "HalfLayerSupportSources.hpp"
 #include "ClipperUtils.hpp"
+#include "libslic3r/ModHost/SlotChoice.hpp"
 #include "libslic3r/ModHost/WallPlanner.hpp"
 #include "LineWidths.hpp"
 #include "ParameterUtils.hpp"
@@ -1151,8 +1152,7 @@ static void append_planner_wall_filaments(const PrintObject &object, const Print
 {
     const Print &print = *object.print();
     const std::unique_ptr<const ModHost::WallPlanner> planner =
-        ModHost::open_wall_planner(region.config().wall_planner.value, print.full_print_config(), print.config(), &object.config(),
-                                   region.config());
+        ModHost::open_wall_planner(print.full_print_config(), print.config(), &object.config(), region.config());
     if (!planner)
         return;
     const unsigned int base = unsigned(std::max(1, region.config().outer_wall_filament_id.value));
@@ -3828,7 +3828,8 @@ bool WipingExtrusions::is_overriddable(const ExtrusionEntityCollection& eec, con
     // MAGPIE: walls a wall planner assigned to a nozzle keep it, and so does the gap fill that follows them;
     // flushing into them would change it.
     // Only a wall planner sets tool hints, so without one the walk over the collection is skipped.
-    if (! region.config().wall_planner.value.empty() && (eec.role() == erGapFill || has_wall_tool_hint(eec)))
+    if ((eec.role() == erGapFill || has_wall_tool_hint(eec)) &&
+        ! ModHost::wall_planner_name(object.print()->full_print_config(), &object.config(), region.config()).empty())
         return false;
 
     if (print_config.filament_soluble.get_at(m_layer_tools->extruder(eec, region)))

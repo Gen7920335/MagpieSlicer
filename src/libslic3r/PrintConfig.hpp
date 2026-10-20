@@ -1300,7 +1300,6 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                enable_support))
     // Automatic supports (generated based on support_threshold_angle).
     ((ConfigOptionEnum<SupportType>,   support_type))
-    ((ConfigOptionString,              support_generator))
     // MAGPIE: this object's values of object-scope mod parameters (JSON, see PrintConfig.cpp).
     ((ConfigOptionString,              object_mod_settings))
     // MAGPIE: the stored per-plate position of an auxiliary tower (GCode/AuxiliaryTower.hpp).
@@ -1549,11 +1548,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatsNullable, inner_wall_speed))
     // Total number of perimeters.
     ((ConfigOptionInt, wall_loops))
-    // MAGPIE: wall.plan slot and multi-nozzle walls (see PrintConfig.cpp).
-    ((ConfigOptionString, wall_planner))
     // MAGPIE: this region's values of region-scope mod parameters (JSON, see PrintConfig.cpp).
     ((ConfigOptionString, region_mod_settings))
-    ((ConfigOptionFloatOrPercent, crisp_corner_small_nozzle_wall_speed))
     ((ConfigOptionBool, alternate_extra_wall))
     ((ConfigOptionFloat, minimum_sparse_infill_area))
     ((ConfigOptionInt, internal_solid_filament_id))
@@ -1961,25 +1957,9 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     PrintConfig,
     (MachineEnvelopeConfig, GCodeConfig),
 
-    // MAGPIE: layer time blending (resources/mods/layer_time_blend.json, slot gcode.time_plan).
-    ((ConfigOptionString,              layer_time_planner))
-    ((ConfigOptionBool,                layer_time_blend_log))
-    ((ConfigOptionFloat,               layer_time_blend_max_diff))
-    ((ConfigOptionFloat,               layer_time_blend_max_ratio))
-    ((ConfigOptionInt,                 layer_time_blend_ease_layers))
-    ((ConfigOptionInt,                 layer_time_blend_start_layer))
-    ((ConfigOptionFloat,               layer_time_blend_wait_cap))
-    ((ConfigOptionFloat,               layer_time_blend_warn_total))
-    ((ConfigOptionFloat,               layer_time_blend_warn_single))
-    ((ConfigOptionString,              layer_time_blend_wait_at))
-    ((ConfigOptionFloat,               layer_time_blend_in_place_max))
-    ((ConfigOptionFloat,               layer_time_blend_tower_size))
+    // MAGPIE: the layer time tower's stored per-plate position (layer time blending, slot gcode.time_plan).
     ((ConfigOptionFloats,              layer_time_blend_tower_x))
     ((ConfigOptionFloats,              layer_time_blend_tower_y))
-    ((ConfigOptionFloat,               layer_time_blend_park_x))
-    ((ConfigOptionFloat,               layer_time_blend_park_y))
-    ((ConfigOptionFloat,               layer_time_blend_heat_rate))
-    ((ConfigOptionFloat,               layer_time_blend_cool_rate))
 
     // Build plate tilt for off-axis gravity support generation (printer-level setting).
     ((ConfigOptionFloat,               build_plate_tilt_x))

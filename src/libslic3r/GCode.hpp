@@ -93,7 +93,7 @@ struct LayerTimeWaitSite
     bool   wait_at_visit = false;
 };
 
-// Where a layer time blending wait happens (layer_time_blend_wait_at).
+// Where a layer time blending wait happens (the layer time planner's wait_at setting).
 enum class LayerTimeWaitAt { InPlace, Tower, Park, PurgeTower };
 
 class OozePrevention {
@@ -790,6 +790,11 @@ protected:
     FullPrintConfig                     m_config;
     // MAGPIE: the wall planner nozzle of the loop or multi-path being extruded (wall.plan slot).
     ExtrusionToolHint                   m_wall_tool_hint { ExtrusionToolHint::Auto };
+    // MAGPIE: the speed of walls a wall planner sends to its detail nozzle, for the region whose config m_config last
+    // took (the planner's slot setting detail_wall_speed: mm/s, or % of the outer wall speed; 0 = the wall speed).
+    ConfigOptionFloatOrPercent          m_detail_wall_speed { 0., false };
+    // Applies a region's config to m_config and takes its detail wall speed.
+    void                                apply_region_config(const Print &print, const PrintRegionConfig &region_config);
     // MAGPIE: the G-code event mods open for this export, and where their G-code goes while one runs: the string
     // being built at the event, the depth of event calls (extrusions a mod asks for raise no events of their own)
     // and whether it made free moves (the wipe path is then dropped).
@@ -936,9 +941,13 @@ protected:
     double                              m_last_layer_accumulated_mass{ 0.0 };
     // MAGPIE: the native mods this export calls (their ids), named in the G-code header.
     std::set<std::string>               m_native_mods_used;
-    // MAGPIE: layer time blending. The planner chosen by layer_time_planner, or null, and the wait
+    // MAGPIE: layer time blending. The planner the active mods pick (gcode.time_plan slot), or null, and the wait
     // sites written so far in G-code order.
     std::shared_ptr<const ModHost::TimePlanner> m_layer_time_planner;
+    // The picked planner's settings for the export (its slot declaration's "settings"), mm: the layer time tower's
+    // side and the park position (a negative coordinate: automatic).
+    double                              m_layer_time_tower_size{ 15. };
+    Vec2d                               m_layer_time_park{ -1., -1. };
     std::vector<LayerTimeWaitSite>      m_layer_time_sites;
     // purge_tower: this layer's tower visit is still to be tagged; the last layer's visit was tagged.
     bool                                m_layer_time_visit_wanted{ false };

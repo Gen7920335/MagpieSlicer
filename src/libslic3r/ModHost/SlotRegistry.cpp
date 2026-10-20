@@ -27,8 +27,8 @@ struct Registry
 
 void register_builtin_modules(Registry &registry)
 {
-    // Orca's own normal and tree generators behind the slot. It produces exactly what an empty
-    // support_generator does, which is how the slot itself is checked against vanilla output.
+    // Orca's own normal and tree generators behind the slot. It produces exactly what no picked
+    // support implementation does, which is how the slot itself is checked against vanilla output.
     registry.support_generators["orca"] = {"orca", "Orca", [](PrintObject &object) { object.generate_orca_support_material(); }};
     // "cura" (CuraEngine's normal support areas) is the native mod mods/cura_support, a support.areas
     // implementation (NativeSupport.hpp).

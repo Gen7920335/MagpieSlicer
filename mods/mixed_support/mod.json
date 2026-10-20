@@ -9,10 +9,12 @@
     // the Normal or Tree channel of the support paint tool overrides the automatic choice there.
     "id": "mixed_support",
     "name": "Mixed support", "name_ko": "혼합 서포트",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "api": { "major": 1, "min_minor": 0 },
     "binary": "mixed_support",
-    "slots": [ { "slot": "support.compose", "version": 1, "impl": "mixed" } ],
+    // Priority 2 puts it above cura_support (0) and resin_support (1): with mixed support on, it is used. Its
+    // normal support can still be Cura's (normal_generator).
+    "slots": [ { "slot": "support.compose", "version": 1, "impl": "mixed", "when": "mixed_support.enable", "priority": 2 } ],
     "thread_safe": true,
     "params": {
         "enable":             { "invalidates": ["posSupportMaterial"], "type": "bool",   "default": false,     "label": "Use mixed support", "label_ko": "혼합 서포트 사용" },
@@ -21,11 +23,6 @@
         "coverage_threshold": { "invalidates": ["posSupportMaterial"], "type": "float",  "default": 100,       "unit": "%", "label": "Normal support coverage threshold", "label_ko": "일반 서포트 커버 퍼센테이지 역치" },
         "selective_merge":    { "invalidates": ["posSupportMaterial"], "type": "bool",   "default": false,     "label": "Selective merge", "label_ko": "셀렉티브 머지" }
     },
-    "rules": [
-        // Priority 2 puts this rule above cura_support (0) and resin_support (1): with mixed support
-        // on, it is used. Its normal support can still be Cura's (normal_generator).
-        { "target": "support_generator", "value": "\"mixed\"", "when": "mixed_support.enable", "priority": 2 }
-    ],
     "gui": {
         // The support paint tool's two channels while mixed support is on: channel 0 (normal) and 1 (tree).
         "paint_when": "mixed_support.enable",
@@ -33,5 +30,11 @@
             { "id": "normal", "color": "#59F273", "label": "Normal", "label_ko": "일반" },
             { "id": "tree",   "color": "#59A6FF", "label": "Tree",   "label_ko": "트리" }
         ]
+    },
+    // Line 1 settings.
+    "legacy_keys": {
+        "mixed_normal_coverage_threshold": "coverage_threshold",
+        "mixed_selective_merge": "selective_merge",
+        "mixed_tree_support_style": "tree_style"
     }
 }

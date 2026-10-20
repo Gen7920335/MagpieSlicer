@@ -177,6 +177,11 @@ std::vector<Candidate> read_candidates(const fs::path &dir, ModOrigin origin, st
                 throw ModError("a mod with native code must be a package folder <id>/mod.json");
             }
             if (origin == ModOrigin::Bundled) {
+                // Shipped with the application, so trusted where it is. A signature that comes with it (the installer
+                // signs the official mods) must still verify, so a changed file in the installation is not loaded.
+                if (package)
+                    if (const SignatureCheck sig = check_package_signature(c.mod.dir); sig.present && !sig.valid)
+                        throw ModError("its signature does not verify: " + sig.error);
                 c.mod.official = c.mod.verified = true;
             } else if (package) {
                 const SignatureCheck sig = check_package_signature(c.mod.dir);
@@ -618,6 +623,10 @@ ModLoadResult load_mods(const ModLoadOptions &options)
         }
         mods.push_back(std::move(mod));
     };
+    for (const std::vector<Candidate> *list : { &bundled, &installed })
+        for (const Candidate &c : *list)
+            if (std::none_of(result.known.begin(), result.known.end(), [&c](const Mod &m) { return m.id == c.mod.id; }))
+                result.known.push_back(c.mod);
     for (Candidate &c : bundled)
         take(c);
     for (Candidate &c : installed)
@@ -717,14 +726,17 @@ void load_active_mods_from_data_dir()
         BOOST_LOG_TRIVIAL(error) << "Mod not loaded: " << e;
     for (const std::string &n : result.notes)
         BOOST_LOG_TRIVIAL(info) << "Mod: " << n;
+    // A reload keeps the native code the start loaded, so that is what the line counts then.
+    const std::shared_ptr<const NativeModSet> native = result.native ? std::shared_ptr<const NativeModSet>(result.native) : startup_native;
     if (!result.mods->mods().empty())
         BOOST_LOG_TRIVIAL(info) << "Loaded " << result.mods->mods().size() << " mod(s)" <<
-            (result.native && !result.native->mods().empty() ? ", " + std::to_string(result.native->mods().size()) + " with native code" : std::string());
+            (native && !native->mods().empty() ? ", " + std::to_string(native->mods().size()) + " with native code" : std::string());
     if (!started) {
         startup_native = result.native;
         set_active_native_mods(startup_native);
         started = true;
     }
+    set_known_mods(std::make_shared<const std::vector<Mod>>(std::move(result.known)));
     set_active_mods(std::move(result.mods));
 }
 

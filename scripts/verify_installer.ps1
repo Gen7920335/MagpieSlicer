@@ -107,6 +107,23 @@ foreach ($required in @($installedExe, $installedDll, $installedResources, $inst
     }
 }
 
+# MAGPIE: the official mods are bundled: a package folder each, with its library and, in a signed package, a SIGNATURE.
+$officialMods = @("cuda_compute", "cura_support", "half_layer", "layer_time_blend", "lesic", "low_temp_interface",
+                  "mixed_support", "multi_nozzle_walls", "resin_support", "snapmaker_u1", "support_extras")
+$bundledModsDir = Join-Path $installedResources "mods"
+$signedMods = 0
+foreach ($id in $officialMods) {
+    foreach ($required in @((Join-Path $bundledModsDir "$id\mod.json"), (Join-Path $bundledModsDir "$id\bin\win-x64\$id.dll"))) {
+        if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+            throw "Bundled official mod is incomplete: $required"
+        }
+    }
+    if (Test-Path -LiteralPath (Join-Path $bundledModsDir "$id\SIGNATURE") -PathType Leaf) {
+        $signedMods++
+    }
+}
+Write-Output "BundledMods=$($officialMods.Count) (signed $signedMods)"
+
 $payloadFiles = @(Get-ChildItem -LiteralPath $installRoot -Recurse -File)
 $payloadBytes = ($payloadFiles | Measure-Object Length -Sum).Sum
 $exeHash = (Get-FileHash -LiteralPath $installedExe -Algorithm SHA256).Hash
@@ -150,6 +167,13 @@ try {
         throw "Installed GUI did not remain responsive for $GuiStabilitySeconds seconds within the $GuiStartupTimeoutSeconds second timeout."
     }
     Write-Output "InstalledGuiStartup=PASS"
+    # The log of the run says how many mods loaded; every bundled one must have, with its native code.
+    $loaded = Get-ChildItem -LiteralPath (Join-Path $guiDataDir "log") -File -ErrorAction SilentlyContinue |
+        Select-String -Pattern "Loaded (\d+) mod\(s\), (\d+) with native code" | Select-Object -Last 1
+    if ($null -eq $loaded -or [int]$loaded.Matches[0].Groups[2].Value -lt $officialMods.Count) {
+        throw "The installed application did not load the $($officialMods.Count) bundled mods: $($loaded.Line)"
+    }
+    Write-Output "InstalledModsLoaded=$($loaded.Matches[0].Groups[2].Value)"
 } finally {
     if (-not $guiProcess.HasExited) {
         $null = $guiProcess.CloseMainWindow()

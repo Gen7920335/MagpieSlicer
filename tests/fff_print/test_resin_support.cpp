@@ -1,3 +1,4 @@
+#include <libslic3r/ModHost/SlotChoice.hpp>
 #include <catch2/catch_all.hpp>
 
 #include "libslic3r/Config.hpp"
@@ -72,7 +73,7 @@ TEST_CASE("Resin support Default and Branching print support under an overhang",
     Print print;
     REQUIRE_NOTHROW(init_and_process_print({column_under_ceiling(18.)}, print, config));
     const PrintObject &object = *print.objects().front();
-    CHECK(object.config().support_generator.value == "resin");
+    CHECK(ModHost::support_generator_name(print.full_print_config(), object.config()) == "resin");
     // The default 5 mm elevation lifts the object.
     CHECK(object.slicing_parameters().object_print_z_min > 4.9);
     const auto layers = object.support_layers();
@@ -149,13 +150,13 @@ TEST_CASE("Resin support lifts only an object whose support it generates", "[Res
 {
     BundledMods mods;
     REQUIRE(mods.errors.empty());
-    // Mixed support's rule outranks resin support's, so the object's support_generator is "mixed": the
+    // Mixed support's slot declaration outranks resin support's, so mixed support is picked for the object: the
     // resin lift must not apply, as Mixed fills no gap under a lifted object.
     DynamicPrintConfig config = resin_config({{"mixed_support.enable", true}, {"resin_support.default_object_elevation", 5.}});
     Print print;
     REQUIRE_NOTHROW(init_and_process_print({column_under_ceiling(8.)}, print, config));
     const PrintObject &object = *print.objects().front();
-    REQUIRE(object.config().support_generator.value == "mixed");
+    REQUIRE(ModHost::support_generator_name(print.full_print_config(), object.config()) == "mixed");
     CHECK_THAT(object.slicing_parameters().object_print_z_min, Catch::Matchers::WithinAbs(0., 1e-9));
 }
 
@@ -168,7 +169,7 @@ TEST_CASE("Resin support with enforcers only keeps the object on the bed", "[Res
     Print print;
     REQUIRE_NOTHROW(init_and_process_print({column_under_ceiling(8.)}, print, config));
     const PrintObject &object = *print.objects().front();
-    REQUIRE(object.config().support_generator.value == "resin");
+    REQUIRE(ModHost::support_generator_name(print.full_print_config(), object.config()) == "resin");
     CHECK_THAT(object.slicing_parameters().object_print_z_min, Catch::Matchers::WithinAbs(0., 1e-9));
     // Its first layer is printed: nothing between the bed and the object is left empty.
     CHECK_THAT(object.layers().front()->bottom_z(), Catch::Matchers::WithinAbs(0., 1e-9));

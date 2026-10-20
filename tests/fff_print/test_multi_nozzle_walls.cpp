@@ -138,7 +138,6 @@ DynamicPrintConfig two_nozzle_config(double first_nozzle, double second_nozzle, 
     config.set_key_value("filament_colour", new ConfigOptionStrings{ "#FF0000", "#FF0000" });
     size_flush_to_nozzles(config);
     if (enabled) {
-        config.set_deserialize_strict({ { "wall_planner", "multi_nozzle" } });
         multi_nozzle_params(config, { { "enable", true }, { "small_wall_count", 1 } });
     }
     return config;
@@ -170,7 +169,7 @@ std::unique_ptr<const ModHost::WallPlanner> open_planner(DynamicPrintConfig conf
     print_config.apply(config, true);
     PrintRegionConfig region;
     region.apply(config, true);
-    return ModHost::open_wall_planner("multi_nozzle", config, print_config, nullptr, region);
+    return ModHost::open_wall_planner(config, print_config, nullptr, region);
 }
 
 } // namespace
@@ -186,8 +185,9 @@ TEST_CASE("Multi-nozzle walls: override ranges parse and select the last matchin
         config.set_key_value("nozzle_diameter", new ConfigOptionFloats(size_t(toolheads), 0.4));
         const auto planner = open_planner(config, { { "override_regions", ranges } });
         std::vector<unsigned int> out;
+        // No range at all picks no planner: every layer keeps the region's own toolhead.
         for (size_t layer_id = 0; layer_id < 8; ++layer_id)
-            out.push_back(planner->layer_wall_toolhead(layer_id));
+            out.push_back(planner ? planner->layer_wall_toolhead(layer_id) : 0u);
         return out;
     };
     const std::vector<unsigned int> none(8, 0);
@@ -289,6 +289,35 @@ TEST_CASE("An object's own multi-nozzle parameters override the print's", "[Mult
         };
         CHECK(detail_walls(0) == 1);
         CHECK(detail_walls(1) == 0);
+    }
+}
+
+TEST_CASE("An object's own multi-nozzle parameter turns detail walls on for that object only", "[MultiNozzleWalls][Mods]")
+{
+    // Before: the planner was picked by a setting the mod's rule wrote from the process values, so an object that
+    // turned detail walls on for itself got none. Now the planner is picked per region by the parameters it reads.
+    OfficialMods mods;
+    const char *wall_generator = GENERATE("classic", "arachne");
+    DYNAMIC_SECTION(wall_generator) {
+        DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, wall_generator, false);
+        multi_nozzle_params(config, { { "small_wall_count", 1 } });
+        Print print;
+        Model model;
+        init_print({ cube(20), cube(20) }, print, model, config);
+        model.objects[1]->config.set_key_value("region_mod_settings",
+                                               new ConfigOptionString(nlohmann::json{ { "multi_nozzle_walls.enable", true } }.dump()));
+        print.apply(model, config);
+        print.process();
+        auto detail_walls = [&print](size_t object_id) {
+            const auto walls = walls_of(*print.objects()[object_id]->layers()[5]->regions().front());
+            return std::count_if(walls.begin(), walls.end(), [](const ExtrusionEntity *e) { return e->tool_hint == ExtrusionToolHint::DetailWall; });
+        };
+        CHECK(detail_walls(0) == 0);
+        CHECK(detail_walls(1) == 1);
+        // The G-code routes the second object's detail walls to the small nozzle and names the mod.
+        const std::string output = Slic3r::Test::gcode(print);
+        CHECK(tools_for_type(output, "Outer wall") == std::set<int>{ 0, 1 });
+        CHECK(output.find("; mods: multi_nozzle_walls ") != std::string::npos);
     }
 }
 
@@ -1590,7 +1619,6 @@ TEST_CASE("H/2 shell bridges take the bridge width of the nozzle that prints the
     size_flush_to_nozzles(config);
     // Bridge widths per nozzle, mm (0: the process width): nozzle 2 and nozzle 3 differ.
     config.set_key_value(per_nozzle_line_width_key("bridge_line_width"), new ConfigOptionFloats{ 0., 0.12, 0.18 });
-    config.set_deserialize_strict({ { "wall_planner", "multi_nozzle" } });
     multi_nozzle_params(config, { { "enable", true }, { "small_wall_count", 1 }, { "detail_toolhead", 3 } });
     half_layer_params(config, true);
     const std::string gcode = slice({ TestMesh::overhang }, config);

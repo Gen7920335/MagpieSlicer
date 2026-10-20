@@ -12,6 +12,11 @@ struct ExtrusionSpeedContext {
     bool first_layer;
     bool object_layer_over_raft;
     bool sloped;
+    // MAGPIE: the speed of walls a wall planner sends to its detail nozzle (ExtrusionToolHint::DetailWall): mm/s, or
+    // with detail_wall_speed_percent a percentage of the outer wall speed; 0 keeps the wall speed. The wall planner
+    // the region uses gives it (its wall.plan setting detail_wall_speed).
+    double detail_wall_speed = 0.;
+    bool   detail_wall_speed_percent = false;
 };
 
 struct ExtrusionBaseSpeed {

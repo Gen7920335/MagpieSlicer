@@ -25,7 +25,7 @@
 
 #define LTI_MOD_ID "low_temp_interface"
 
-MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.0.0")
+MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.0.1")
 
 namespace lti {
 

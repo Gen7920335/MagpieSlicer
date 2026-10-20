@@ -2,12 +2,13 @@
  * object's support out of the core's own generators. C only; include after magpie_geometry.h.
  *
  * The core runs its generators for the composer: Orca's normal support, a support.areas mod (by its
- * support_generator name) or Orca's tree support, each on a mask, and keeps their support layers as a
+ * implementation name) or Orca's tree support, each on a mask, and keeps their support layers as a
  * set the composer names by a handle. The composer decides which generator supports what and finally
  * merges at most two sets into the object's support layers; it never touches a layer itself. Layers
  * of the first set are marked as normal support, of the second as tree support, and a layer both
- * have at the same height as a layer with both channels (Layer.hpp SupportInnerType). The impl name
- * of the slot is the value of the support_generator setting that selects it.
+ * have at the same height as a layer with both channels (Layer.hpp SupportInnerType). Support is one job for
+ * support.areas, support.compose and support.contacts: the core picks one implementation of them per object among
+ * the mods' slot declarations (mod.json "slots": "when", "priority"); none picked keeps Orca's own.
  *
  * Per object layer lists (mp_rings[layer_count]) are in integer units (1 = host->scaling_factor_mm
  * mm) and object coordinates. Lists the host returns are released with free_layers; lists the

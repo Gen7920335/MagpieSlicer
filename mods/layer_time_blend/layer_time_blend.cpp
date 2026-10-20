@@ -1,5 +1,5 @@
 // The layer time blending mod: fills the core slot "gcode.time_plan" (magpie_slot_time_plan.h) with the
-// planner of planner.cpp under the name "blend", the value its rule gives layer_time_planner. Its
+// planner of planner.cpp under the name "blend", picked while blending is on (mod.json). Its
 // settings are the mod's own parameters (mod.json), read through the host for each print.
 #include <magpie_mod.hpp>
 #include <magpie_slot_time_plan.h>
@@ -114,4 +114,4 @@ int32_t magpie::mod_init(const MagpieHostApi &host, MagpieRegistrar &registrar)
 
 void magpie::mod_shutdown() { LayerTimeBlend::set_diagnostic_sink({}); }
 
-MAGPIE_MOD_DEFINE(LTB_MOD_ID, "1.1.0")
+MAGPIE_MOD_DEFINE(LTB_MOD_ID, "1.2.0")

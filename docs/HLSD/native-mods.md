@@ -25,11 +25,11 @@ Manifest fields on top of a JSON mod:
 |---|---|
 | `api` | `{"major": 1, "min_minor": 0}`: the API the library was built for |
 | `binary` | library name under `bin/<platform>/`, without prefix or extension |
-| `slots` | `[{"slot", "version", "impl"}]`: every slot implementation the library registers. Registering one not listed, or not registering one listed, fails the load |
+| `slots` | `[{"slot", "version", "impl"}]`: every slot implementation the library registers. Registering one not listed, or not registering one listed, fails the load. For the slots the core picks one implementation of ([mods.md](mods.md), Implementations behind slots) also `"when"` (an expression over parameters and settings), `"priority"` and `"settings"` (name -> expression) |
 | `depends` | `[{"id", "min"}]`: mods (or `core`, the mod API version) loaded first |
 | `conflicts` | mod ids that cannot load together with this one |
 | `thread_safe` | `true` lets the core call the mod from several threads; otherwise calls into it are serialised |
-| `legacy_keys` | old setting key -> parameter name, for projects from before the feature was a mod |
+| `legacy_keys` | old setting key -> parameter name, for projects and presets of Magpie line 1 or from before the feature was a mod; or `{"param", "saved_default"}` (a value every old file saved, which carries nothing), or `{"point": "<name>"}` (an `"XxY"` position into `<name>_x`/`<name>_y`). Read from every mod found, turned-off ones included (`known_mods()`), so a file keeps its values while the mod is off. Conversions that read several keys or rewrite an Orca setting stay in `ModHost/LegacySettings.cpp` |
 | `gui` | declarative GUI: `paint_channels` (`id`, `color`, `label`), `aux_towers`, `legends`, `calibrations`, `object_params` (order of the object settings rows) |
 
 ## Loading
@@ -42,7 +42,9 @@ the mods so each comes after what it depends on, checks them together, and loads
    (`ModPackage.cpp`, `trusted_keys()`); unsigned or community libraries are not loaded. Its
    `bin/<platform>/` folder is copied to `<data dir>/cache/mods/<id>-<version>-<hash>/` and the copy is
    loaded, after checking it is exactly the signed file, so the installed files stay free to be
-   replaced while the application runs. Bundled libraries load from where they are.
+   replaced while the application runs. Bundled libraries load from where they are. A bundled package
+   needs no signature; one that carries a `SIGNATURE` (the installer signs the official mods with the
+   official key, `MAGPIE_MOD_SIGN_KEY` at install time) must verify, or the mod is not loaded.
 2. `LoadLibraryExW` with `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`: a library's
    dependencies resolve from its own folder and System32 only.
 3. `magpie_mod_query()` answers `"<id> <version> <major> <minor> fp=<mode>"`. The id and version must

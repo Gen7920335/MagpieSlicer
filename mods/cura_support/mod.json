@@ -5,10 +5,11 @@
     // threshold angle) still apply; the parameters below are the CuraEngine settings Orca has no setting for.
     "id": "cura_support",
     "name": "Cura support", "name_ko": "Cura 서포트",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "api": { "major": 1, "min_minor": 0 },
     "binary": "cura_support",
-    "slots": [ { "slot": "support.areas", "version": 1, "impl": "cura" } ],
+    // Picked for an object's support while enable holds; mixed_support (priority 2) and resin_support (1) go first.
+    "slots": [ { "slot": "support.areas", "version": 1, "impl": "cura", "when": "cura_support.enable" } ],
     "thread_safe": true,
     "params": {
         "enable":                       { "invalidates": ["posSupportMaterial"], "type": "bool",  "default": false, "label": "Use Cura support", "label_ko": "Cura 서포트 사용" },
@@ -33,7 +34,9 @@
         "conical_min_width":            { "invalidates": ["posSupportMaterial"], "type": "float", "default": 5.0,   "unit": "mm",  "label": "Conical support minimum width", "label_ko": "원뿔형 서포트 최소 폭" },
         "solid_first_layer":            { "invalidates": ["posSupportMaterial"], "type": "bool",  "default": false, "label": "Solid first support layer", "label_ko": "서포트 첫 레이어 채움" }
     },
-    "rules": [
-        { "target": "support_generator", "value": "\"cura\"", "when": "cura_support.enable" }
-    ]
+    // Line 1 settings.
+    "legacy_keys": {
+        "cura_support_join_distance": "join_distance",
+        "cura_solid_support_raft": "solid_first_layer"
+    }
 }

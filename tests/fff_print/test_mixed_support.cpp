@@ -1,3 +1,4 @@
+#include <libslic3r/ModHost/SlotChoice.hpp>
 #include <catch2/catch_all.hpp>
 
 #include "libslic3r/ClipperUtils.hpp"
@@ -247,7 +248,7 @@ TEST_CASE("Mixed support prints normal and tree support in one object", "[MixedS
     Print print;
     REQUIRE_NOTHROW(init_and_process_print({pillar_under_ceiling()}, print, config));
     const PrintObject &object = *print.objects().front();
-    CHECK(object.config().support_generator.value == "mixed");
+    CHECK(ModHost::support_generator_name(print.full_print_config(), object.config()) == "mixed");
     REQUIRE_FALSE(object.support_layers().empty());
     // Normal support stands on the bed beside the pillar; the tree reaches over the pillar. They
     // meet on shared layers.

@@ -4,7 +4,12 @@ param(
     [string]$ShortStageRoot = "C:\MagpiePkg",
     [string]$BuildDirectory = "",
     [switch]$DevelopmentProfiler,
-    [switch]$PreflightOnly
+    [switch]$PreflightOnly,
+    # The official mod signing key (PEM). The bundled official mods are signed with it while the package is staged.
+    # Defaults to the MAGPIE_MOD_SIGN_KEY environment variable.
+    [string]$ModSignKey = "",
+    # Package the official mods unsigned (a test package): they still load, as bundled mods do.
+    [switch]$UnsignedMods
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,6 +70,19 @@ if (-not $DevelopmentProfiler -and $profilerEnabled) {
     throw "Stable installer packaging rejects MAGPIE_SLICING_PROFILER=ON. Pass -DevelopmentProfiler for the isolated development package."
 }
 
+if ([string]::IsNullOrWhiteSpace($ModSignKey)) {
+    $ModSignKey = $env:MAGPIE_MOD_SIGN_KEY
+}
+if ($UnsignedMods) {
+    $ModSignKey = ""
+} elseif ([string]::IsNullOrWhiteSpace($ModSignKey)) {
+    throw "The bundled official mods need the signing key: pass -ModSignKey <official key PEM> (or -UnsignedMods for a test package)."
+} elseif (-not (Test-Path -LiteralPath $ModSignKey -PathType Leaf)) {
+    throw "Mod signing key not found: $ModSignKey"
+} else {
+    $ModSignKey = [IO.Path]::GetFullPath($ModSignKey)
+}
+
 if ($resolvedStageRoot.Length -gt 80) {
     throw "NSIS staging root is too long ($($resolvedStageRoot.Length) characters). Use a short path such as C:\MagpiePkg."
 }
@@ -97,6 +115,7 @@ Write-Output "Package identity: $appName ($appKey)"
 Write-Output "CUDA slicer: $cudaEnabled"
 Write-Output "Slicing profiler: $($DevelopmentProfiler.IsPresent)"
 Write-Output "Short staging directory: $stageDir"
+Write-Output "Official mods: $(if ($ModSignKey) { "signed with $ModSignKey" } else { "unsigned" })"
 
 if ($PreflightOnly) {
     Write-Output "PREFLIGHT_OK=1"
@@ -109,6 +128,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+# The install step signs the bundled official mods with this key (CMakeLists.txt, install of resources/mods).
+$env:MAGPIE_MOD_SIGN_KEY = $ModSignKey
 & cpack -G NSIS -C Release --config (Join-Path $buildDir "CPackConfig.cmake") -B $stageDir
 if ($LASTEXITCODE -ne 0) {
     $nsisLog = Join-Path $stageDir "_CPack_Packages\win64\NSIS\NSISOutput.log"

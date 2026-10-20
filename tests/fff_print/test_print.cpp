@@ -1886,7 +1886,6 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
     }
     if (scenario == 7 || scenario == 8) {
         config.set("outer_wall_filament_id", 2);
-        config.set("wall_planner", "multi_nozzle");
         multi_nozzle_params(config, {{"enable", true}, {"detail_toolhead", 1}, {"small_wall_count", scenario == 7 ? 3 : 2}, {"interlock", true}});
     }
     if (scenario == 9) {

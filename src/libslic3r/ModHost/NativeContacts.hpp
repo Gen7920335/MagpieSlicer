@@ -3,8 +3,8 @@
 // MAGPIE: the support.contacts slot (mods/sdk/include/magpie_slot_support_contacts.h). A native mod decides
 // where an object's support touches it (contacts per object layer) and keeps a support body of its own;
 // the core runs Orca's normal-support generator on them (SupportMaterialOverrides): interfaces, gaps,
-// raft and toolpaths as Orca's, the body cut at every intermediate support layer's print Z. The
-// support_generator setting picks the implementation by name.
+// raft and toolpaths as Orca's, the body cut at every intermediate support layer's print Z. The active
+// mods pick the implementation per object (ModHost::support_generator_name, SlotChoice.hpp).
 
 #include <string>
 

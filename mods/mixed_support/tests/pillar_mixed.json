@@ -7,6 +7,6 @@
     ],
     "contains": [
         ";TYPE:Support",
-        "; mods: mixed_support 2.0.0"
+        "; mods: mixed_support 2.1.0"
     ]
 }

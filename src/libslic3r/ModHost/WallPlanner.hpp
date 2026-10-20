@@ -79,7 +79,7 @@ public:
     std::vector<WallToolUse> tool_uses(bool &base_inner_walls) const;
 
 private:
-    friend std::unique_ptr<const WallPlanner> open_wall_planner(const std::string &, const DynamicPrintConfig &, const PrintConfig &,
+    friend std::unique_ptr<const WallPlanner> open_wall_planner(const DynamicPrintConfig &, const PrintConfig &,
                                                                 const PrintObjectConfig *, const PrintRegionConfig &);
     WallPlanner() = default;
 
@@ -89,15 +89,16 @@ private:
     void                                *m_state { nullptr };
 };
 
-// The id of the loaded mod that provides the planner `name`, or "" (also for an empty name).
-std::string wall_planner_mod_id(const std::string &name);
+// The id of the loaded mod whose planner the region uses, or "" for none (wall_planner_name, SlotChoice.hpp).
+std::string wall_planner_mod_id(const DynamicPrintConfig &full_config, const PrintObjectConfig *object_config,
+                                const PrintRegionConfig &region_config);
 
-// Opens the planner `name` for a region. full_config is the print's full config (it holds the mod parameters);
-// print_config the print's own, object_config the region's object (or null). Nullptr when name is empty; throws
-// SlicingError when no loaded mod provides the planner or the mod refuses the region.
-std::unique_ptr<const WallPlanner> open_wall_planner(const std::string &name, const DynamicPrintConfig &full_config,
-                                                     const PrintConfig &print_config, const PrintObjectConfig *object_config,
-                                                     const PrintRegionConfig &region_config);
+// Opens the planner the region uses (wall_planner_name: the active mods' wall.plan declaration whose "when" holds for
+// the region). full_config is the print's full config (it holds the mod parameters); print_config the print's own,
+// object_config the region's object (or null). Nullptr when the region uses none; throws SlicingError when the choice
+// fails, no loaded mod provides the planner or the mod refuses the region.
+std::unique_ptr<const WallPlanner> open_wall_planner(const DynamicPrintConfig &full_config, const PrintConfig &print_config,
+                                                     const PrintObjectConfig *object_config, const PrintRegionConfig &region_config);
 
 } // namespace ModHost
 } // namespace Slic3r

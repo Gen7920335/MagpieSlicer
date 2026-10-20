@@ -6,7 +6,7 @@
     // are read per object, so an object can set its own.
     "id": "half_layer",
     "name": "Half-height outer walls and support", "name_ko": "절반 높이 외벽과 서포트",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "api": { "major": 1, "min_minor": 1 },
     "binary": "half_layer",
     "slots": [ { "slot": "layer.bands", "version": 1, "impl": "half_layer" } ],
@@ -14,5 +14,10 @@
     "params": {
         "outer_walls": { "scope": "object", "invalidates": ["posPerimeters", "posSupportMaterial"], "type": "bool", "default": false, "label": "Half-height outer walls", "label_ko": "절반 높이 외벽" },
         "support":     { "scope": "object", "invalidates": ["posSupportMaterial"], "type": "bool", "default": false, "label": "Half-height support", "label_ko": "절반 높이 서포트" }
+    },
+    // Line 1 (and line 2 before H/2 was a native mod) saved these as the rule wrote them; their defaults carry nothing.
+    "legacy_keys": {
+        "outer_wall_half_layer_height": {"param": "outer_walls", "saved_default": "0"},
+        "support_half_layer_height": {"param": "support", "saved_default": "0"}
     }
 }

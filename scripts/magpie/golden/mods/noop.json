@@ -6,9 +6,6 @@
         { "target": "wall_loops", "value": "wall_loops" },
         { "target": "sparse_infill_density", "value": "if(noop.flag, \"80%\", sparse_infill_density)" },
         { "target": "top_shell_layers", "value": "99", "when": "noop.flag" },
-        { "target": "layer_height", "value": "layer_height * noop.unused / 1.5" },
-        // Orca's own support generators behind the support.generator slot.
-        // Priority -1 keeps clear of the bundled support mods, whose rules use 0 and up.
-        { "target": "support_generator", "value": "\"orca\"", "priority": -1 }
+        { "target": "layer_height", "value": "layer_height * noop.unused / 1.5" }
     ]
 }

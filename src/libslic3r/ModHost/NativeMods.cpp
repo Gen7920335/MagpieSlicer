@@ -1,4 +1,5 @@
 #include "NativeMods.hpp"
+#include "SlotChoice.hpp"
 
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/ExPolygon.hpp"
@@ -284,6 +285,18 @@ int host_config_f64(mp_ctx *ctx, const char *key, int32_t index, double *out)
 
 int host_config_str(mp_ctx *ctx, const char *key, int32_t index, char *buf, uint32_t cap)
 {
+    // "support_generator" is no setting any more: the host gives the support implementation the active mods pick for
+    // the context's object ("" for Orca's own), which a mod reads to know whether the object's support is its own.
+    if (ctx != nullptr && key != nullptr && std::strcmp(key, "support_generator") == 0 && ctx->print_config != nullptr) {
+        if (index != -1)
+            return MP_ERR_ARGUMENT;
+        try {
+            return copy_string(ctx->object_config != nullptr ? support_generator_name(*ctx->print_config, *ctx->object_config) : std::string(),
+                               buf, cap);
+        } catch (const std::exception &) {
+            return copy_string(std::string(), buf, cap);
+        }
+    }
     const ConfigOption *opt = context_option(ctx, key);
     if (opt == nullptr)
         return MP_ERR_NOT_FOUND;

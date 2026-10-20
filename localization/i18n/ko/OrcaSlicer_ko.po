@@ -43310,6 +43310,11 @@ msgid "Mods %1% and %2% both set \"%3%\"; the value \"%4%\" of %2% is used. Turn
 msgstr "모드 %1%와(과) %2%가 둘 다 \"%3%\"를 설정합니다. %2%의 값 \"%4%\"를 씁니다. 원하지 않는 모드는 끄세요."
 
 # AI Translated
+#, boost-format
+msgid "Mods %1% and %2% are both turned on for the same job; %2% is used. Turn off the mods you do not want."
+msgstr "모드 %1%와(과) %2%가 같은 일에 둘 다 켜져 있습니다. %2%를 씁니다. 원하지 않는 모드는 끄세요."
+
+# AI Translated
 msgid "The start G-code moves the Snapmaker U1 before homing, so a G28 was added after PRINT_START."
 msgstr "시작 G-code가 원점 복귀 전에 Snapmaker U1을 움직여서 PRINT_START 뒤에 G28을 넣었습니다."
 

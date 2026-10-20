@@ -90,8 +90,7 @@ TEST_CASE("Coupled core candidate stays within both hollow source sections", "[H
     config.set_deserialize_strict({{"layer_height", parent_h_mm}, {"initial_layer_print_height", parent_h_mm},
         {"elefant_foot_compensation", 0.}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"wall_loops", 4}, {"detect_overhang_wall", false}, {"detect_thin_wall", true},
-        {"precise_outer_wall", false}, {"outer_wall_line_width", 0.42}, {"inner_wall_line_width", 0.48},
-        {"wall_planner", "multi_nozzle"}});
+        {"precise_outer_wall", false}, {"outer_wall_line_width", 0.42}, {"inner_wall_line_width", 0.48}});
     multi_nozzle_params(config, { { "enable", detail_nozzle }, { "small_wall_count", 2 }, { "interlock", true } });
     config.set_key_value("wall_generator", new ConfigOptionEnum<PerimeterGeneratorType>(engine));
     if (detail_nozzle) {
@@ -206,8 +205,7 @@ TEST_CASE("Joint gaps preserve a narrow neck attached to full-height core island
     config.set_deserialize_strict({{"layer_height", h_mm}, {"initial_layer_print_height", h_mm},
         {"wall_loops", 4}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
         {"elefant_foot_compensation", 0.}, {"detect_overhang_wall", false}, {"detect_thin_wall", true},
-        {"precise_outer_wall", false}, {"outer_wall_line_width", 0.42}, {"inner_wall_line_width", 0.48},
-        {"wall_planner", "multi_nozzle"}});
+        {"precise_outer_wall", false}, {"outer_wall_line_width", 0.42}, {"inner_wall_line_width", 0.48}});
     multi_nozzle_params(config, { { "enable", detail }, { "small_wall_count", 2 }, { "interlock", true } });
     config.set_key_value("wall_generator", new ConfigOptionEnum<PerimeterGeneratorType>(engine));
     if (detail) {
@@ -370,8 +368,7 @@ TEST_CASE("Coupled region candidates retain material ownership and mixed-nozzle 
     config.set_deserialize_strict({{"layer_height", h_mm}, {"initial_layer_print_height", h_mm},
         {"single_extruder_multi_material", false}, {"elefant_foot_compensation", 0.},
         {"wall_loops", 4}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
-        {"detect_overhang_wall", false}, {"precise_outer_wall", false},
-        {"wall_planner", "multi_nozzle"}});
+        {"detect_overhang_wall", false}, {"precise_outer_wall", false}});
     multi_nozzle_params(config, { { "enable", true }, { "small_wall_count", requested_detail }, { "interlock", true } });
     config.set_key_value("wall_generator", new ConfigOptionEnum<PerimeterGeneratorType>(engine));
     Transform3d shear = Transform3d::Identity();
@@ -514,7 +511,7 @@ TEST_CASE("Half-layer zero-wall candidates preserve original parent fill boundar
     const bool unavailable_detail = GENERATE(false, true);
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", h_mm}, {"initial_layer_print_height", h_mm},
-        {"wall_loops", 0}, {"wall_planner", "multi_nozzle"},
+        {"wall_loops", 0},
         {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false}});
     multi_nozzle_params(config, { { "enable", unavailable_detail } });
     config.set_key_value("wall_generator", new ConfigOptionEnum<PerimeterGeneratorType>(engine));
@@ -828,8 +825,7 @@ TEST_CASE("Live half-height walls meet generated solid infill at narrow neck tra
     auto config = detail ? multifilament_config(2) : DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"layer_height", h_mm}, {"initial_layer_print_height", h_mm},
         {"wall_generator", engine}, {"wall_loops", 4}, {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
-        {"elefant_foot_compensation", 0.}, {"sparse_infill_density", 100.}, {"sparse_infill_pattern", "rectilinear"},
-        {"wall_planner", "multi_nozzle"}});
+        {"elefant_foot_compensation", 0.}, {"sparse_infill_density", 100.}, {"sparse_infill_pattern", "rectilinear"}});
     Slic3r::Test::half_layer_params(config, enabled);
     multi_nozzle_params(config, { { "enable", detail }, { "small_wall_count", 2 }, { "interlock", true } });
     if (detail) {
@@ -934,7 +930,7 @@ TEST_CASE("Tool and seam consumers retain auxiliary physical walls under their l
     config.set_deserialize_strict({{"single_extruder_multi_material", false}, {"wall_generator", engine},
         {"layer_height", h_mm}, {"initial_layer_print_height", h_mm}, {"wall_loops", 2},
         {"only_one_wall_top", false}, {"only_one_wall_first_layer", false},
-        {"detect_overhang_wall", false}, {"wall_planner", "multi_nozzle"}});
+        {"detect_overhang_wall", false}});
     Slic3r::Test::half_layer_params(config, true);
     // This fixture intentionally needs both different-colored materials;
     // Auto must not substitute another color just to obtain a small nozzle.
@@ -983,8 +979,7 @@ TEST_CASE("Sliced half-height paths produce a complete material-resolved executi
         set_toolhead_nozzle_diameter(config, 0, 0.4);
         set_toolhead_nozzle_diameter(config, 1, 0.2);
         config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
-        config.set_deserialize_strict({{"single_extruder_multi_material", false},
-            {"wall_planner", "multi_nozzle"}});
+        config.set_deserialize_strict({{"single_extruder_multi_material", false}});
         multi_nozzle_params(config, { { "enable", true }, { "detail_toolhead", 2 }, { "small_wall_count", detail_count } });
     }
     config.set_deserialize_strict({{"wall_generator", engine}, {"layer_height", h_mm},
@@ -1176,7 +1171,10 @@ TEST_CASE("Native support generators produce half-height paths without changing 
         {"support_on_build_plate_only", true}, {"support_threshold_overlap", 0.}});
     Slic3r::Test::half_layer_params(config, false, true);
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(type));
-    config.set_key_value("support_generator", new ConfigOptionString(support_generator));
+    if (*support_generator)
+        Slic3r::Test::set_mod_params(config, std::string(support_generator) == "resin" ?
+            nlohmann::json{{"resin_support.enable", true}, {"resin_support.default_object_elevation", 0.}} :
+            nlohmann::json{{std::string(support_generator) + "_support.enable", true}});
     if (generator == 2 || generator == 3)
         config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(generator == 2 ? smsTreeStrong : smsTreeOrganic));
     TriangleMesh mesh = make_cube(5., 10., 6.);
@@ -1460,7 +1458,10 @@ TEST_CASE("Half-height support retains the original logical event grid", "[HalfL
         {"support_on_build_plate_only", true}, {"support_threshold_overlap", 0.}, {"raft_layers", raft_layers}});
     Slic3r::Test::half_layer_params(config, false, true);
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(type));
-    config.set_key_value("support_generator", new ConfigOptionString(support_generator));
+    if (*support_generator)
+        Slic3r::Test::set_mod_params(config, std::string(support_generator) == "resin" ?
+            nlohmann::json{{"resin_support.enable", true}, {"resin_support.default_object_elevation", 0.}} :
+            nlohmann::json{{std::string(support_generator) + "_support.enable", true}});
     if (generator == 2 || generator == 3)
         config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(generator == 2 ? smsTreeStrong : smsTreeOrganic));
     TriangleMesh mesh = make_cube(5., 10., 6.);
@@ -2456,7 +2457,10 @@ TEST_CASE("Bunny60 exports half-height support through every native generator", 
         {"support_interface_bottom_layers", 2}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
     Slic3r::Test::half_layer_params(config, outer_half, true);
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(type));
-    config.set_key_value("support_generator", new ConfigOptionString(support_generator));
+    if (*support_generator)
+        Slic3r::Test::set_mod_params(config, std::string(support_generator) == "resin" ?
+            nlohmann::json{{"resin_support.enable", true}, {"resin_support.default_object_elevation", 0.}} :
+            nlohmann::json{{std::string(support_generator) + "_support.enable", true}});
     if (generator == 2 || generator == 3)
         config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(
             generator == 2 ? smsTreeStrong : smsTreeOrganic));
@@ -2493,8 +2497,7 @@ TEST_CASE("Shared speed calculation preserves captured machine commands", "[.Spe
         {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}});
     if (variant > 0) {
         config.set_num_extruders(2);
-        config.set_deserialize_strict({{"single_extruder_multi_material", false},
-            {"wall_planner", "multi_nozzle"}});
+        config.set_deserialize_strict({{"single_extruder_multi_material", false}});
         multi_nozzle_params(config, { { "enable", true }, { "small_wall_count", 2 } });
         set_toolhead_nozzle_diameter(config, 0, 0.4);
         set_toolhead_nozzle_diameter(config, 1, 0.2);

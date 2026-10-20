@@ -1,6 +1,7 @@
 #include "libslic3r/StageTimer.hpp"
 #include "Accel/BatchAccel.hpp"
 #include "ModHost/NativeMods.hpp"
+#include "ModHost/SlotChoice.hpp"
 #include "ModHost/SlotRegistry.hpp"
 #include "ModHost/WallPlanner.hpp"
 #include "ArcFitter.hpp"
@@ -3322,12 +3323,60 @@ namespace DoExport {
 }
 
 // MAGPIE: layer time blending.
+// A number the picked layer time planner's slot declaration gives in "settings", else `fallback`.
+static double layer_time_setting(const ModHost::ActiveSlotChoice &planner, const char *name, double fallback)
+{
+    const std::optional<ModHost::ExprValue> v = planner.setting(name);
+    if (const double *d = v ? std::get_if<double>(&*v) : nullptr)
+        return *d;
+    if (const bool *b = v ? std::get_if<bool>(&*v) : nullptr)
+        return *b ? 1. : 0.;
+    return fallback;
+}
+
+// MAGPIE: the speed of a region's detail walls: the wall planner the region uses gives it (its wall.plan setting
+// detail_wall_speed, mm/s or a percentage of the outer wall speed); 0 without one.
+static ConfigOptionFloatOrPercent detail_wall_speed_of(const Print &print, const PrintObjectConfig *object_config,
+                                                       const PrintRegionConfig &region_config)
+{
+    ConfigOptionFloatOrPercent speed(0., false);
+    const ModHost::ActiveSlotChoice planner =
+        ModHost::choose_active_slot(ModHost::wall_plan_slots(), print.full_print_config(), object_config, &region_config);
+    if (const std::optional<ModHost::ExprValue> v = planner.setting("detail_wall_speed")) {
+        if (const double *d = std::get_if<double>(&*v))
+            speed = ConfigOptionFloatOrPercent(*d, false);
+        else if (const std::string *text = std::get_if<std::string>(&*v))
+            speed.deserialize(*text);
+    }
+    return speed;
+}
+
+static ExtrusionSpeedContext with_detail_wall_speed(ExtrusionSpeedContext context, const ConfigOptionFloatOrPercent &speed)
+{
+    context.detail_wall_speed         = speed.value;
+    context.detail_wall_speed_percent = speed.percent;
+    return context;
+}
+
+void GCode::apply_region_config(const Print &print, const PrintRegionConfig &region_config)
+{
+    m_config.apply(region_config);
+    // MAGPIE: the detail wall speed comes with the region.
+    m_detail_wall_speed = detail_wall_speed_of(print, m_config_object != nullptr ? &m_config_object->config() : nullptr, region_config);
+}
+
 // The estimate counts temperature waits while layer times are blended around a G-code event mod that changes
 // nozzle temperatures within layers (gcode.events, MP_GCODE_CHANGES_TEMPERATURE), where those waits vary between
-// layers. Elsewhere it stays Orca's.
-static bool layer_time_blend_estimates_temperature_waits(const Print &print, const ModHost::GCodeEvents *events)
+// layers, with the nozzle's heating and cooling rates the planner's settings give (heat_rate, cool_rate, degC/s).
+// Elsewhere it stays Orca's.
+static void layer_time_blend_set_estimate(GCodeProcessor &processor, const Print &print, const ModHost::GCodeEvents *events)
 {
-    return !print.config().layer_time_planner.value.empty() && events != nullptr && events->changes_temperature();
+    const ModHost::ActiveSlotChoice planner =
+        ModHost::choose_active_slot(ModHost::time_plan_slots(), print.full_print_config(), nullptr, nullptr);
+    const bool blending = !planner.impl().empty();
+    processor.set_temperature_wait_estimate(blending && events != nullptr && events->changes_temperature());
+    if (blending)
+        processor.set_temperature_rates(layer_time_setting(planner, "heat_rate", 2.), layer_time_setting(planner, "cool_rate", 1.));
 }
 
 namespace LayerTimeBlendExport {
@@ -3512,7 +3561,7 @@ std::optional<Vec2d> GCode::layer_time_park_position(const Print &print, coordf_
     BoundingBoxf bed; // mm, plate coordinates
     for (const Vec2d &p : area)
         bed.merge(p);
-    const Vec2d configured(m_config.layer_time_blend_park_x.value, m_config.layer_time_blend_park_y.value);
+    const Vec2d configured = m_layer_time_park;
     // An automatic park position keeps this far from the printable area's edge, mm.
     constexpr double park_margin = 5.;
     Vec2d position = configured.x() >= 0. && configured.y() >= 0. ? configured :
@@ -3543,7 +3592,7 @@ bool GCode::place_layer_time_tower(const Print &print)
     const double nozzle  = m_config.nozzle_diameter.get_at(this->cur_extruder_index()); // mm
     const double spacing = Flow(Flow::auto_extrusion_width(frPerimeter, float(nozzle)), float(nozzle * 0.5), float(nozzle)).spacing();
     const double brim    = LAYER_TIME_TOWER_BRIM_LINES * spacing;           // mm
-    const double side    = m_config.layer_time_blend_tower_size.value;       // mm
+    const double side    = m_layer_time_tower_size;                         // mm
     const double foot    = side + 2. * brim;                                 // mm
 
     // What the tower must stay clear of, in plate coordinates (mm): every object instance's footprint grown by
@@ -3745,7 +3794,7 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
         DoExport::init_gcode_processor(print.config(), processor, silent, print.get_layered_nozzle_group_result());
         processor.set_print(&print);
         processor.set_xy_offset(offset.x(), offset.y());
-        processor.set_temperature_wait_estimate(layer_time_blend_estimates_temperature_waits(print, m_gcode_events.get()));
+        layer_time_blend_set_estimate(processor, print, m_gcode_events.get());
         processor.initialize(path);
     };
     const std::function<void()> throw_if_canceled = [&print]() { print.throw_if_canceled(); };
@@ -4071,7 +4120,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     m_gcode_event_error = nullptr;
     m_gcode_events = std::make_unique<ModHost::GCodeEvents>(print, m_config, GCodeEventHost::writer_table(), this,
                                                            ModHost::calibration_name(print), [this]() { GCodeEventHost::rethrow_pending(*this); });
-    m_processor.set_temperature_wait_estimate(layer_time_blend_estimates_temperature_waits(print, m_gcode_events.get()));
+    layer_time_blend_set_estimate(m_processor, print, m_gcode_events.get());
     const bool is_bbl_printers = print.is_BBL_printer();
     const bool skip_config_block = print.config().gcode_skip_config_block;
     const WipeTowerType wipe_tower_type = print.wipe_tower_type();
@@ -4226,8 +4275,13 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     // an axis remap (belt printers), where the in-place lift would not be a plain Z move.
     m_layer_time_sites.clear();
     m_layer_time_planner = nullptr;
+    m_detail_wall_speed = ConfigOptionFloatOrPercent(0., false);
     m_native_mods_used.clear();
-    if (const std::string &planner = print.config().layer_time_planner.value; !planner.empty()) {
+    const ModHost::ActiveSlotChoice time_planner =
+        ModHost::choose_active_slot(ModHost::time_plan_slots(), print.full_print_config(), nullptr, nullptr);
+    if (!time_planner.choice.error.empty())
+        throw Slic3r::SlicingError(time_planner.choice.error);
+    if (const std::string planner = time_planner.impl(); !planner.empty()) {
         m_layer_time_planner = ModHost::find_time_planner(planner);
         if (m_layer_time_planner == nullptr)
             // TRN %1% is the name of a layer time planner, which a mod provides.
@@ -4237,8 +4291,13 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         else
             m_native_mods_used.insert(m_layer_time_planner->mod_id);
     }
-    // Where the waits happen. A tower is not printed in a by-object print, where the head would hit it.
-    const std::string &wait_at = print.config().layer_time_blend_wait_at.value;
+    // Where the waits happen (the planner's settings; without a planner nothing waits). A tower is not printed in a
+    // by-object print, where the head would hit it.
+    std::string wait_at = "in_place";
+    if (const std::optional<ModHost::ExprValue> v = time_planner.setting("wait_at"); v && std::holds_alternative<std::string>(*v))
+        wait_at = std::get<std::string>(*v);
+    m_layer_time_tower_size = layer_time_setting(time_planner, "tower_size", 15.);
+    m_layer_time_park       = Vec2d(layer_time_setting(time_planner, "park_x", -1.), layer_time_setting(time_planner, "park_y", -1.));
     m_layer_time_wait_at = wait_at == "tower" ? LayerTimeWaitAt::Tower : wait_at == "park" ? LayerTimeWaitAt::Park :
                            wait_at == "purge_tower" ? LayerTimeWaitAt::PurgeTower : LayerTimeWaitAt::InPlace;
     if (m_layer_time_wait_at == LayerTimeWaitAt::Tower && print.config().print_sequence.value == PrintSequence::ByObject)
@@ -4934,7 +4993,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             m_native_mods_used.insert(object->layer_bands().mod_id);
         // The wall planners the object's regions name (wall.plan slot), each opened for them.
         for (const PrintRegion &region : object->all_regions())
-            if (const std::string id = ModHost::wall_planner_mod_id(region.config().wall_planner.value); !id.empty())
+            if (const std::string id = ModHost::wall_planner_mod_id(print.full_print_config(), &object->config(), region.config()); !id.empty())
                 m_native_mods_used.insert(id);
     }
     if (const std::string accelerator = Accel::session_mod(); !accelerator.empty())
@@ -6496,8 +6555,10 @@ void retarget_half_layer_task_material(HalfLayerExecutionTask &task,
         task.logical_layer->id() == 0 && std::abs(task.logical_layer->bottom_z()) < EPSILON;
     const bool over_raft = !task.support && task.logical_layer->id() > 0 &&
         task.object->slicing_parameters().raft_layers() == task.logical_layer->id();
-    const ExtrusionSpeedContext context{physical_tool, destination_filament,
-        int(task.logical_layer->id()), first_layer, over_raft, false};
+    const ExtrusionSpeedContext context = with_detail_wall_speed({physical_tool, destination_filament,
+        int(task.logical_layer->id()), first_layer, over_raft, false},
+        task.region != nullptr ? detail_wall_speed_of(*task.object->print(), &task.object->config(), task.region->region().config())
+                               : ConfigOptionFloatOrPercent(0., false));
     task.tool = {unsigned(physical_tool), destination_filament};
     const auto metrics = half_layer_entity_metrics(*task.entity, config, context);
     task.extrusion_seconds = metrics.seconds;
@@ -6529,8 +6590,8 @@ void append_half_layer_model_tasks(const PrintObject &object, size_t parent_inde
             // MAGPIE: walls a wall planner (wall.plan slot) routes to other nozzles, as GCode::process_layer routes them.
             const unsigned base_filament = unsigned(std::max(1, region_config.outer_wall_filament_id.value));
             const std::unique_ptr<const ModHost::WallPlanner> planner =
-                ModHost::open_wall_planner(region_config.wall_planner.value, object.print()->full_print_config(), print_config, &object.config(),
-                                           region_config);
+                ModHost::open_wall_planner(object.print()->full_print_config(), print_config, &object.config(), region_config);
+            const ConfigOptionFloatOrPercent detail_wall_speed = detail_wall_speed_of(*object.print(), &object.config(), region_config);
             auto collect_root = [&](const ExtrusionEntityCollection &root, bool perimeter) {
                 auto collect = [&](auto &&self, const ExtrusionEntity &entity) -> void {
                     if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
@@ -6561,7 +6622,8 @@ void append_half_layer_model_tasks(const PrintObject &object, size_t parent_inde
                     const size_t physical_tool = get_extruder_index(config, filament);
                     if (physical_tool >= config.nozzle_diameter.size())
                         throw std::invalid_argument("Half-layer task has an invalid physical nozzle mapping");
-                    const ExtrusionSpeedContext context{physical_tool, filament, int(parent.id()), first_layer, over_raft, false};
+                    const ExtrusionSpeedContext context =
+                        with_detail_wall_speed({physical_tool, filament, int(parent.id()), first_layer, over_raft, false}, detail_wall_speed);
                     HalfLayerExecutionTask task;
                     task.entity = &entity;
                     task.overrides_key = &root;
@@ -8306,8 +8368,7 @@ LayerResult GCode::process_layer(
                 // MAGPIE: the region's wall planner (wall.plan slot), which routes walls and the gap fill between detail
                 // walls to its nozzles below.
                 const std::unique_ptr<const ModHost::WallPlanner> wall_planner =
-                    ModHost::open_wall_planner(region.config().wall_planner.value, print.full_print_config(), print.config(),
-                                               &layer.object()->config(), region.config());
+                    ModHost::open_wall_planner(print.full_print_config(), print.config(), &layer.object()->config(), region.config());
 
                 // Now we must process perimeters and infills and create islands of extrusions in by_region std::map.
                 // It is also necessary to save which extrusions are part of MM wiping and which are not.
@@ -8788,7 +8849,7 @@ LayerResult GCode::process_layer(
             m_config_object = task.object;
             this->set_physical_layer(*task.physical_layer, *task.logical_layer, task.motion_reference_height);
             if (task.region != nullptr)
-                m_config.apply(task.region->region().config());
+                this->apply_region_config(print, task.region->region().config());
             m_object_layer_over_raft = !task.support && task.logical_layer->id() > 0 &&
                 task.object->slicing_parameters().raft_layers() == task.logical_layer->id();
             if (m_config.reduce_crossing_wall)
@@ -9872,30 +9933,11 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "mod_settings"sv,
         "object_mod_settings"sv,
         "region_mod_settings"sv,
-        "wall_planner"sv,
-        "crisp_corner_small_nozzle_wall_speed"sv,
         "support_interface_temperature_drop_tower_x"sv,
         "support_interface_temperature_drop_tower_y"sv,
-        "layer_time_planner"sv,
-        "layer_time_blend_log"sv,
-        "layer_time_blend_max_diff"sv,
-        "layer_time_blend_max_ratio"sv,
-        "layer_time_blend_ease_layers"sv,
-        "layer_time_blend_start_layer"sv,
-        "layer_time_blend_wait_cap"sv,
-        "layer_time_blend_warn_total"sv,
-        "layer_time_blend_warn_single"sv,
-        "layer_time_blend_wait_at"sv,
-        "layer_time_blend_in_place_max"sv,
-        "layer_time_blend_tower_size"sv,
         "layer_time_blend_tower_x"sv,
         "layer_time_blend_tower_y"sv,
-        "layer_time_blend_park_x"sv,
-        "layer_time_blend_park_y"sv,
-        "layer_time_blend_heat_rate"sv,
-        "layer_time_blend_cool_rate"sv,
         "printer_mod_settings"sv,
-        "support_generator"sv,
         // The fast-purge / prime-volume-mode keys are new static-member registrations. Excluding them from
         // the config block keeps registration byte-identical for the shipping fleet (default
         // prime_volume_mode==Default leaves the slicing body unchanged; only the config-dump would otherwise
@@ -10483,7 +10525,7 @@ std::string GCode::extrude_perimeters(const Print &print, const std::vector<Obje
     std::string gcode;
     for (const ObjectByExtruder::Island::Region &region : by_region)
         if (! region.perimeters.empty()) {
-            m_config.apply(print.get_print_region(&region - &by_region.front()).config());
+            this->apply_region_config(print, print.get_print_region(&region - &by_region.front()).config());
             // BBS: for first layer, we always print wall firstly to get better bed adhesive force
             // This behaviour is same with cura
             const bool should_print = is_first_layer ? !is_infill_first
@@ -10539,7 +10581,7 @@ std::string GCode::extrude_infill(const Print &print, const std::vector<ObjectBy
                 if ((ee->role() == erIroning) == ironing)
                     extrusions.emplace_back(ee);
             if (! extrusions.empty()) {
-                m_config.apply(print.get_print_region(&region - &by_region.front()).config());
+                this->apply_region_config(print, print.get_print_region(&region - &by_region.front()).config());
                 reversed.clear();
                 chain_and_reorder_extrusion_entities(extrusions, m_last_pos.to_point(), reversed);
                 // The reversed copies are in chain order.
@@ -10869,8 +10911,9 @@ ExtrusionBaseSpeed extrusion_base_speed(const FullPrintConfig &m_config, const E
 
     if (tool_hint == ExtrusionToolHint::DetailWall &&
         (path.role() == erPerimeter || path.role() == erExternalPerimeter) &&
-        m_config.crisp_corner_small_nozzle_wall_speed.value > 0.)
-        speed = m_config.crisp_corner_small_nozzle_wall_speed.get_abs_value(m_config.outer_wall_speed.get_at(context.physical_tool));
+        context.detail_wall_speed > 0.)
+        speed = ConfigOptionFloatOrPercent(context.detail_wall_speed, context.detail_wall_speed_percent)
+                    .get_abs_value(m_config.outer_wall_speed.get_at(context.physical_tool));
 
     const auto _layer = context.logical_layer_id;
     if (context.first_layer || context.object_layer_over_raft) {
@@ -11431,8 +11474,8 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
         // MAGPIE: walls of a wall planner's detail nozzle at their own speed (mm/s, or % of the outer wall speed).
         if ((path.role() == erPerimeter || path.role() == erExternalPerimeter) &&
             (m_wall_tool_hint == ExtrusionToolHint::DetailWall || path.tool_hint == ExtrusionToolHint::DetailWall) &&
-            m_config.crisp_corner_small_nozzle_wall_speed.value > 0.) {
-            speed = m_config.crisp_corner_small_nozzle_wall_speed.get_abs_value(NOZZLE_CONFIG(outer_wall_speed));
+            m_detail_wall_speed.value > 0.) {
+            speed = m_detail_wall_speed.get_abs_value(NOZZLE_CONFIG(outer_wall_speed));
             if (sloped)
                 speed = std::min(speed, m_config.scarf_joint_speed.get_abs_value(speed));
         }

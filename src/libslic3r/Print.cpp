@@ -39,6 +39,7 @@
 #include "MultiNozzleUtils.hpp"
 #include "ModHost/GCodeEvents.hpp"
 #include "ModHost/ObjectZOffset.hpp"
+#include "ModHost/SlotChoice.hpp"
 #include "ModHost/SupportStyle.hpp"
 #include "ModHost/WallPlanner.hpp"
 #include <chrono>
@@ -192,24 +193,8 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "belt_printer_infinite_y",
         //BBS
         "additional_cooling_fan_speed",
-        "layer_time_planner",
-        "layer_time_blend_log",
-        "layer_time_blend_max_diff",
-        "layer_time_blend_max_ratio",
-        "layer_time_blend_ease_layers",
-        "layer_time_blend_start_layer",
-        "layer_time_blend_wait_cap",
-        "layer_time_blend_warn_total",
-        "layer_time_blend_warn_single",
-        "layer_time_blend_wait_at",
-        "layer_time_blend_in_place_max",
-        "layer_time_blend_tower_size",
         "layer_time_blend_tower_x",
         "layer_time_blend_tower_y",
-        "layer_time_blend_park_x",
-        "layer_time_blend_park_y",
-        "layer_time_blend_heat_rate",
-        "layer_time_blend_cool_rate",
         "reduce_crossing_wall",
         "max_travel_detour_distance",
         "printable_area",
@@ -2036,14 +2021,12 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
                 // A wall planner (wall.plan slot) may print walls with other filaments: the planner says which.
                 std::vector<ModHost::WallToolUse> planner_uses;
                 bool                              planner_inner_walls = false;
-                if (! rc.wall_planner.value.empty()) {
-                    try {
-                        planner_uses = ModHost::open_wall_planner(rc.wall_planner.value, print.full_print_config(), pc, &config, rc)
-                                           ->tool_uses(planner_inner_walls);
-                    } catch (const SlicingError &e) {
-                        error = {e.what(), &object, "wall_planner"};
-                        return error;
-                    }
+                try {
+                    if (const auto planner = ModHost::open_wall_planner(print.full_print_config(), pc, &config, rc))
+                        planner_uses = planner->tool_uses(planner_inner_walls);
+                } catch (const SlicingError &e) {
+                    error = {e.what(), &object, ""};
+                    return error;
                 }
                 check(outer, rc, "outer_wall_line_width", outer_mm, first);
                 // The planner may have the large nozzle print the inner walls even when the wall count is small.
@@ -2150,6 +2133,41 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         // TRN %1%: one or more mod ids, %2%: the mod id whose value is used, %3%: a setting key, %4%: its value.
         warn(Slic3r::format(_u8L("Mods %1% and %2% both set \"%3%\"; the value \"%4%\" of %2% is used. Turn off the mods you do not want."),
                             c.other_mods, c.used_mod, c.setting, c.used_value), c.setting);
+
+    // MAGPIE: the jobs the active mods pick one implementation of (support per object, walls per region, the layer time
+    // plan per print; SlotChoice.hpp). A choice that cannot be made stops the slice; several mods turned on for one job
+    // are reported, naming the one used, as when their rules set one setting differently.
+    {
+        std::set<std::string> reported;
+        auto check_choice = [&](const ModHost::ActiveSlotChoice &c, const ObjectBase *object) -> bool {
+            if (!c.choice.error.empty())
+                return false;
+            if (c.choice.mod == nullptr || c.choice.other_mods.empty())
+                return true;
+            std::string others;
+            for (const std::string &m : c.choice.other_mods)
+                others += (others.empty() ? "" : ", ") + m;
+            if (reported.insert(others + "/" + c.mod_id()).second)
+                // TRN %1%: one or more mod ids, %2%: the mod id that is used.
+                warn(Slic3r::format(_u8L("Mods %1% and %2% are both turned on for the same job; %2% is used. Turn off the mods you do not want."),
+                                    others, c.mod_id()), "", object);
+            return true;
+        };
+        const ModHost::ActiveSlotChoice time_choice = ModHost::choose_active_slot(ModHost::time_plan_slots(), m_full_print_config, nullptr, nullptr);
+        if (!check_choice(time_choice, nullptr))
+            return { time_choice.choice.error };
+        for (const PrintObject *object : m_objects) {
+            const ModHost::ActiveSlotChoice support = ModHost::choose_active_slot(ModHost::support_slots(), m_full_print_config, &object->config(), nullptr);
+            if (!check_choice(support, object))
+                return { support.choice.error, object };
+            for (const PrintRegion &region : object->all_regions()) {
+                const ModHost::ActiveSlotChoice walls =
+                    ModHost::choose_active_slot(ModHost::wall_plan_slots(), m_full_print_config, &object->config(), &region.config());
+                if (!check_choice(walls, object))
+                    return { walls.choice.error, object };
+            }
+        }
+    }
 
     // MAGPIE: an object two mods lift off the bed (object.z_offset), or whose lift failed: the slicing heights
     // took no lift, so the slice must not run.

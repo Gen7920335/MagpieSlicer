@@ -14,7 +14,7 @@
 
 #define HALF_LAYER_MOD_ID "half_layer"
 
-MAGPIE_MOD_DEFINE(HALF_LAYER_MOD_ID, "2.0.0")
+MAGPIE_MOD_DEFINE(HALF_LAYER_MOD_ID, "2.0.1")
 
 namespace half_layer {
 

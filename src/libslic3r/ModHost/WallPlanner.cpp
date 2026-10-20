@@ -1,6 +1,7 @@
 #include "WallPlanner.hpp"
 
 #include "NativeMods.hpp"
+#include "SlotChoice.hpp"
 
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Exception.hpp"
@@ -209,8 +210,10 @@ std::vector<WallToolUse> WallPlanner::tool_uses(bool &base_inner_walls) const
     return uses;
 }
 
-std::string wall_planner_mod_id(const std::string &name)
+std::string wall_planner_mod_id(const DynamicPrintConfig &full_config, const PrintObjectConfig *object_config,
+                                const PrintRegionConfig &region_config)
 {
+    const std::string name = wall_planner_name(full_config, object_config, region_config);
     if (name.empty())
         return {};
     std::shared_ptr<const NativeModSet> native = active_native_mods();
@@ -218,10 +221,10 @@ std::string wall_planner_mod_id(const std::string &name)
     return entry != nullptr ? entry->mod->id() : std::string();
 }
 
-std::unique_ptr<const WallPlanner> open_wall_planner(const std::string &name, const DynamicPrintConfig &full_config,
-                                                     const PrintConfig &print_config, const PrintObjectConfig *object_config,
-                                                     const PrintRegionConfig &region_config)
+std::unique_ptr<const WallPlanner> open_wall_planner(const DynamicPrintConfig &full_config, const PrintConfig &print_config,
+                                                     const PrintObjectConfig *object_config, const PrintRegionConfig &region_config)
 {
+    const std::string name = wall_planner_name(full_config, object_config, region_config);
     if (name.empty())
         return nullptr;
     std::shared_ptr<const NativeModSet> native = active_native_mods();

@@ -3014,9 +3014,9 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
 {
     m_parser.apply_config(config);
 
-    // MAGPIE: rates for the temperature wait estimate (set_temperature_wait_estimate switches it on).
-    m_heat_rate = float(std::max(0.1, config.layer_time_blend_heat_rate.value));
-    m_cool_rate = float(std::max(0.1, config.layer_time_blend_cool_rate.value));
+    // MAGPIE: rates for the temperature wait estimate (set_temperature_wait_estimate switches it on), degC/s, until
+    // set_temperature_rates gives the layer time planner's.
+    set_temperature_rates(2., 1.);
 
     m_flavor = config.gcode_flavor;
     m_printer_model = config.printer_model.value;
@@ -6600,7 +6600,7 @@ void GCodeProcessor::process_M109(const GCodeReader::GCodeLine& line)
             id = size_t(val);
         // Orca: a wait inside the print (a tool change, a temperature change between layers) takes time; Orca
         // counted it as none. Waits before the first layer (start G-code heat-up) and BBL's virtual VM109 stay
-        // at none, as in Orca, and leave the nozzle at the target. Rates: layer_time_blend_heat_rate/_cool_rate.
+        // at none, as in Orca, and leave the nozzle at the target. Rates: set_temperature_rates.
         const bool estimate = !m_virtual_temperature_wait && (m_estimate_temperature_waits || m_layer_id > 0);
         if (estimate)
             simulate_st_synchronize(0.f);

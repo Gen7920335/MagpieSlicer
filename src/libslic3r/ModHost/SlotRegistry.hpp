@@ -22,11 +22,12 @@ struct WallPlan;
 namespace ModHost {
 
 // support.generator: replaces Orca's support generation for an object. It fills the object's
-// support layers the way PrintObject::generate_orca_support_material() does, and is chosen per
-// object by the support_generator setting. An empty setting keeps Orca's own generator.
+// support layers the way PrintObject::generate_orca_support_material() does, and is looked up by the
+// name of the support implementation the active mods pick for the object (support_generator_name).
+// No pick keeps Orca's own generator.
 struct SupportGenerator
 {
-    std::string                        name;  // the support_generator value that selects it
+    std::string                        name;  // the implementation name that selects it
     std::string                        label; // shown in the settings
     std::function<void(PrintObject &)> generate;
 };
@@ -40,8 +41,8 @@ void register_support_generator(SupportGenerator generator);
 
 // gcode.time_plan: decides how long to wait at each wait site of a print's G-code. A wait site sits
 // at the start of a full layer, before its first extrusion; the core marks the sites while exporting,
-// estimates their times, asks the planner and fills the waits in. Chosen by the layer_time_planner
-// setting; an empty setting marks no sites. Input and output are numbers only, so a planner never
+// estimates their times, asks the planner and fills the waits in. The active mods pick it
+// (time_planner_name, SlotChoice.hpp); without a pick no site is marked. Input and output are numbers only, so a planner never
 // touches G-code or geometry. Planners are native mods filling the C slot of
 // mods/sdk/include/magpie_slot_time_plan.h; these structures are the core's view of its data.
 struct WaitSite
@@ -87,7 +88,7 @@ struct WaitPlan
 
 struct TimePlanner
 {
-    std::string name;                 // the layer_time_planner value that selects it
+    std::string name;                 // the implementation name
     std::string mod_id, mod_version;  // the native mod that fills the slot
     // The plan for the sites of one print. `config` is the print's full configuration, which holds the mod's
     // parameters; `cancelled` says the user stopped the slice; `print_time_s` is the print's estimated time

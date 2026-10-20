@@ -7385,44 +7385,6 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("This enables support generation.");
     def->set_default_value(new ConfigOptionBool(false));
 
-    // MAGPIE: a support generator module that replaces Orca's own for this object; empty keeps
-    // Orca's normal/tree generators. Modules register under ModHost::register_support_generator.
-    def = this->add("support_generator", coString);
-    def->label = L("Support generator module");
-    def->category = L("Support");
-    def->tooltip = L("Name of a support generator module that replaces the built-in generator. "
-                     "Leave empty to use the support type above.");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionString(""));
-
-
-    // MAGPIE: wall.plan slot (the planner a native mod provides, see ModHost/WallPlanner.hpp) and the speed of the
-    // walls a planner prints with its detail nozzle (line 1's key). The multi_nozzle_walls mod's rules write both;
-    // its other parameters (line 1's other crisp_corner_* keys, LegacySettings) are read by the mod itself.
-    def = this->add("wall_planner", coString);
-    def->label = L("Wall planner module");
-    def->category = L("Quality");
-    def->tooltip = L("Name of a wall planner module that splits walls between two nozzles. Empty keeps Orca's walls.");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionString(""));
-
-    def = this->add("crisp_corner_small_nozzle_wall_speed", coFloatOrPercent);
-    def->label = L("Small nozzle wall speed");
-    def->category = L("Speed");
-    def->tooltip = L("Speed of the walls printed with the smaller nozzle, in mm/s or as a percentage of the wall speed. 0 keeps the wall speed.");
-    def->sidetext = L("mm/s or %");
-    def->ratio_over = "outer_wall_speed";
-    def->min = 0;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloatOrPercent(0., false));
-
-
-
-
-
-
-
-
     // MAGPIE: per plate position of an auxiliary tower (GCode/AuxiliaryTower.hpp), mm; negative asks for the rear left
     // of the bed. The names are those the low temperature interface's tower was saved with.
     def = this->add("support_interface_temperature_drop_tower_x", coFloats);
@@ -7433,103 +7395,8 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloats{ -1.0 });
 
-
-
-
-    // MAGPIE: layer time blending, driven by resources/mods/layer_time_blend.json. Hidden; the defaults
-    // mark no wait sites and leave the G-code as it is.
-    def = this->add("layer_time_planner", coString);
-    def->label = L("Layer time planner");
-    def->tooltip = L("Module that adds waits between layers so neighbouring layer times stay close. Empty adds none.");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionString(""));
-
-    def = this->add("layer_time_blend_log", coBool);
-    def->label = L("Blend layer times by ratio");
-    def->tooltip = L("Limit the ratio of neighbouring layer times instead of their difference.");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionBool(false));
-
-    def = this->add("layer_time_blend_max_diff", coFloat);
-    def->label = L("Maximum layer time difference");
-    def->tooltip = L("Largest difference between the times of neighbouring layers.");
-    def->sidetext = L("s");
-    def->min = 0;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(5.));
-
-    def = this->add("layer_time_blend_max_ratio", coFloat);
-    def->label = L("Maximum layer time change");
-    def->tooltip = L("Largest increase from the shorter to the longer of two neighbouring layer times.");
-    def->sidetext = "%";
-    def->min = 0;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(20.));
-
-    def = this->add("layer_time_blend_ease_layers", coInt);
-    def->label = L("Transition easing layers");
-    def->tooltip = L("Number of layers over which a change in layer time starts and stops gradually. 0 changes it at once.");
-    def->min = 0;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionInt(0));
-
-    def = this->add("layer_time_blend_start_layer", coInt);
-    def->label = L("First blended layer");
-    def->tooltip = L("Layers below this one get no wait and do not limit its time.");
-    def->min = 1;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionInt(2));
-
-    def = this->add("layer_time_blend_wait_cap", coFloat);
-    def->label = L("Maximum wait per layer");
-    def->tooltip = L("Longest wait added to one layer. 0 sets no limit.");
-    def->sidetext = L("s");
-    def->min = 0;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(0.));
-
-    def = this->add("layer_time_blend_warn_total", coFloat);
-    def->label = L("Warn when waits exceed");
-    def->tooltip = L("Warn when the added waits are more than this share of the print time. 0 never warns.");
-    def->sidetext = "%";
-    def->min = 0;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(15.));
-
-    def = this->add("layer_time_blend_warn_single", coFloat);
-    def->label = L("Warn when one wait exceeds");
-    def->tooltip = L("Warn when a single added wait is longer than this. 0 never warns.");
-    def->sidetext = L("s");
-    def->min = 0;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(60.));
-
-    def = this->add("layer_time_blend_wait_at", coString);
-    def->label = L("Wait position");
-    def->tooltip = L("Where the nozzle waits: in_place (lifted over the part), tower (on a small tower printed "
-                     "every layer), park (at the park position) or purge_tower (over the prime tower or the "
-                     "temperature drop tower while they are printed).");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionString("in_place"));
-
-    def = this->add("layer_time_blend_in_place_max", coFloat);
-    def->label = L("Longest wait in place");
-    def->tooltip = L("When parking, waits shorter than this, or shorter than the trip to the park position, wait in place.");
-    def->sidetext = L("s");
-    def->min = 0;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(2.));
-
-    def = this->add("layer_time_blend_tower_size", coFloat);
-    def->label = L("Layer time tower size");
-    def->tooltip = L("Side of the hollow square tower the nozzle waits over.");
-    def->sidetext = L("mm");
-    def->min = 5;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(15.));
-
-    // Per plate tower position (the tower's lower left corner, brim included), mm; negative places it next
-    // to the objects.
+    // MAGPIE: per plate position of the layer time tower (the lower left corner of its footprint, brim included), mm;
+    // negative places it next to the objects. Stored like the prime tower's, so a drag in the preview keeps it.
     def = this->add("layer_time_blend_tower_x", coFloats);
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloats{ -1.0 });
@@ -7537,42 +7404,6 @@ void PrintConfigDef::init_fff_params()
     def = this->add("layer_time_blend_tower_y", coFloats);
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionFloats{ -1.0 });
-
-    def = this->add("layer_time_blend_park_x", coFloat);
-    def->label = L("Park position X");
-    def->tooltip = L("X of the position the nozzle waits at when it parks. Negative: the rear left corner of the bed.");
-    def->sidetext = L("mm");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(-1.));
-
-    def = this->add("layer_time_blend_park_y", coFloat);
-    def->label = L("Park position Y");
-    def->tooltip = L("Y of the position the nozzle waits at when it parks. Negative: the rear left corner of the bed.");
-    def->sidetext = L("mm");
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(-1.));
-
-    // Rates the time estimate uses for a nozzle temperature wait (M109) while layer time blending plans
-    // around the low temperature support interface, degC/s. Slow on purpose: an estimate that is too short
-    // makes the layers around an interface look shorter than they print.
-    def = this->add("layer_time_blend_heat_rate", coFloat);
-    def->label = L("Nozzle heating rate");
-    def->tooltip = L("How fast the nozzle heats, for estimating temperature waits when layer times are blended.");
-    def->sidetext = L("°C/s");
-    def->min = 0.1;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(2.));
-
-    def = this->add("layer_time_blend_cool_rate", coFloat);
-    def->label = L("Nozzle cooling rate");
-    def->tooltip = L("How fast the nozzle cools, for estimating temperature waits when layer times are blended.");
-    def->sidetext = L("°C/s");
-    def->min = 0.1;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(1.));
-
-
-
 
     def = this->add("support_type", coEnum);
     def->label = L("Type");

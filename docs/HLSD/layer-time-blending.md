@@ -4,9 +4,10 @@ Layer time blending adds waits after short layers so that the times of neighbour
 close, which keeps the cooling each layer gets even. It is the bundled native mod
 `mods/layer_time_blend` ([native-mods.md](native-mods.md)): its library fills the `gcode.time_plan`
 slot (`mods/sdk/include/magpie_slot_time_plan.h`) under the name `blend` and reads the blending
-parameters itself; its rules write only what the core's export reads, the hidden
-`layer_time_planner` (which marks the sites) and the `layer_time_blend_*` settings for where the
-nozzle waits, the tower, the park position and the temperature estimate. The core marks the sites,
+parameters itself. Its slot declaration picks it while blending is on and gives, as settings, what the
+core's export reads: where the nozzle waits, the tower size, the park position and the heating and
+cooling rates of the temperature estimate ([mods.md](mods.md), Implementations behind slots). The
+tower's stored per-plate position stays in `layer_time_blend_tower_x`/`_y`. The core marks the sites,
 measures them, hands the numbers to the slot and writes the waits; it has no planner of its own,
 and a planner name no loaded mod provides stops the slice. With the mod off nothing is written and
 the G-code is Orca's.
