@@ -14,6 +14,13 @@
 
 ## History
 
+### 2026-10-20 F: Classic narrow-loop walls go to the detail nozzle (ab3ef4720d)
+
+- Classic's narrow-loop outer walls (BBS: an island narrower than ext width + spacing, small area) print at smaller_ext_perimeter_flow, which the wall planner sets to the detail nozzle's flow. They got a tool hint only from an active wall plan; island_needs_detail() returns false for a concave island without sharp corners (a hole, gentle turns), so the loop went to the large nozzle at the detail width. `PerimeterGenerator::narrow_loops_use_detail_flow` marks the planner's flow, and such loops are tagged DetailWall.
+- Not involved: interlace and only_one_wall_top (the slab count was 42 with each off). Not covered: an override region (crisp_corner_large_nozzle_override_regions) routes every wall to the override toolhead, so a narrow loop there still prints at the detail width on that nozzle (UNKNOWN whether it happens; not measured).
+- Counterfactual: Hilda 1 mm slab, Classic, H/2, interlace, gap fill filtered out (filter_out_gap_fill 1000, see the gap fill entry): 0.4 mm tool 0.17 mm outer wall moves 42 -> 0, 0.15 mm tool 47313 -> 47355. Test "A narrow island's outer wall at the detail width is printed by the detail nozzle" (4 mm tube, 0.6 mm wall) fails with the hint off (840 / 1680 narrow moves on the 0.4 mm tool, H/2 off / on) and passes with it.
+- Results: ctest all pass (5 Python host tests skipped as before). Golden vs pn/e: every corpus identical (the type-1 tower cases differ as in the base). The first off run differed in 5 cases because another session rewrote the shared datadir's user presets mid-run (idler_gyroid and idler_lightning came out with one hash); rerun with a private datadir (`magpie-next-audit/datadir_g`), identical. Use a private datadir for golden while other sessions run.
+
 ### 2026-10-20 E: single-wall-top layers keep the detail/large boundary overlap (1aff6f51a5)
 
 - Arachne's single-wall-top path prints the wall plan's detail walls in one pass and the large walls in a second pass inside it. The second pass's region (`inner_region`) now grows by the plan's boundary overlap (`wall_plan.boundary_overlap()`, or the H/2 profile's at depth `single_pass_walls`) when the single pass holds the plan's detail walls, and it is taken back by `wall_0_inset` only when the single pass holds one wall (wall_0_inset moves bead 0 only, and the inner contour follows the innermost bead). Without a wall plan the single pass is always one wall: Orca output unchanged.
