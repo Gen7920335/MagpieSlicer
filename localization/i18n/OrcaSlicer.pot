@@ -31387,3 +31387,7 @@ msgstr ""
 #, boost-format
 msgid "%1% on nozzle %2% (%3% mm), in mm. Leave empty to use the line width setting."
 msgstr ""
+
+#, boost-format
+msgid "%1% is printed %2% mm wide by the %3% mm nozzle of tool %4%: it was laid out for another tool's nozzle."
+msgstr ""

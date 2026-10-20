@@ -14,6 +14,15 @@
 
 ## History
 
+### 2026-10-20 Skirt and brim on the nozzle of the tool printing them (after 5cffa3a260)
+
+- Mixed-nozzle printers only; one-size printers keep Orca's code path. Skirt and brim are printed by whichever tool visits them, so their widths are resolved on that tool's nozzle through the Skirt and Brim routes (per-nozzle fields included), replacing 3272a672c6's "as set" widths on one filament's nozzle.
+- Brim: `brim_tool()` (Print.cpp) is the tool of the object's first visit on its first layer: the first tool of the first layer's tool order (the print's, or the object's own in a by-object print) that prints that layer of the object. Brim.cpp sizes each object's brim on its tool's nozzle (`BrimFlows`); a combined brim takes the earliest of its objects' tools. Print::brim_flow() is the first object's.
+- Skirt: the loops are laid out for the first layer's first tool (Print::skirt_flow()); GCode::generate_skirt prints each layer's skirt in the width of the tool printing it (path width, height, flow).
+- Tests: the width harness checks Skirt and Brim exactly per tool; new "Each object's brim is printed in the width of the nozzle of the tool that prints it" (two objects on different nozzles). Counterfactual: with the new brim and skirt paths switched off, the harness reports the skirt 0.188 mm on the 0.4 mm nozzle and the 0.15 mm object's brim 0.5 mm; with them on, both pass.
+- Results: ctest 2623/2623. Golden off and the half-layer, low-temp, multi-nozzle corpora identical to 5cffa3a260; mixed corpus: only mixed_all_small_tree changes (skirt on the 0.15 mm nozzle 0.5 -> 0.1875 mm, the bed mesh area follows the smaller skirt); exact_widths.py with Skirt/Brim rows 1 -> 0 mismatches. The output check still only warns for brim and skirt (message now says the brim or skirt was laid out for another tool's nozzle).
+- Not exact: a skirt printed over several layers by different tools keeps the first tool's loop spacing; the H/2 execution plan's first-layer visit order is assumed to follow the same tool order (harness passes with H/2 off; ASSUMED for H/2).
+
 ### 2026-10-20 Per-nozzle line width fields (Gen: "ㅇㅇ 그렇게가자", plan per-nozzle-line-width-risks_KO.md)
 
 - 11 process settings `<width key>_per_nozzle` (mm per physical nozzle, 0 = the setting). Precedence for one setting on one nozzle: an object/part/modifier/layer-range override of the width > the per-nozzle field > the setting (absolute widths scaled from the reference nozzle as before). Ignored on a printer with one nozzle size. `prepare_line_widths()` (PrintConfig.cpp) sizes the fields to the nozzle count, clears them on one-size printers and where an override sets the width; Print::apply, object_config_from_model_object and region_config_from_model_volume call it. Written out as set (full_print_config_as_set).

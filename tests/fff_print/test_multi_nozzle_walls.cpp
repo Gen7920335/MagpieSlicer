@@ -819,6 +819,9 @@ std::vector<std::string> width_mismatches(const Print &print, const std::string 
         std::vector<std::pair<const char *, FlowRole>> keys;
         std::pair<double, double>                      band;          // x nominal width
         double                                         min_length_mm; // shorter groups are not judged
+        // When set, the one nominal width is the first of these settings above 0 on the tool's nozzle (skirt, brim:
+        // printed by whichever tool visits them, each in its own nozzle's width), else the automatic width.
+        std::vector<const char *>                      chain {};
     };
     const std::pair<double, double> exact { 1., 1. };
     const std::pair<double, double> wall_band { 0.9, 1.3 };
@@ -836,6 +839,8 @@ std::vector<std::string> width_mismatches(const Print &print, const std::string 
         { "Bottom surface", { { { "internal_solid_infill_line_width", frSolidInfill }, { "top_surface_line_width", frTopSolidInfill } }, fill_band, 50. } },
         { "Support", { { { "support_line_width", frSupportMaterial } }, exact, 5. } },
         { "Support interface", { { { "support_line_width", frSupportMaterial } }, exact, 5. } },
+        { "Skirt", { {}, exact, 5., { "initial_layer_line_width", "line_width" } } },
+        { "Brim", { {}, exact, 5., { "initial_layer_line_width", "inner_wall_line_width", "line_width" } } },
     };
     const DynamicPrintConfig  config  = print.full_print_config_as_set();
     const std::vector<double> nozzles = config.option<ConfigOptionFloats>("nozzle_diameter")->values; // mm
@@ -904,7 +909,15 @@ std::vector<std::string> width_mismatches(const Print &print, const std::string 
         std::vector<double> nominal;
         for (const auto &[key, flow_role] : expected.keys)
             nominal.push_back(resolve(key, flow_role, nozzle));
-        if (layer_id == 0 && setting_on("initial_layer_line_width", nozzle).value > 0.)
+        if (!expected.chain.empty()) {
+            ConfigOptionFloatOrPercent width(0., false);
+            for (const char *key : expected.chain)
+                if (width = setting_on(key, nozzle); width.value > 0.)
+                    break;
+            if (width.value <= 0.)
+                width = ConfigOptionFloatOrPercent(0., false);
+            nominal.push_back(double(Flow::new_from_config_width(frPerimeter, width, float(nozzle_mm), 0.1f).width()));
+        } else if (layer_id == 0 && setting_on("initial_layer_line_width", nozzle).value > 0.)
             nominal.push_back(resolve("initial_layer_line_width", frPerimeter, nozzle));
         const bool ok = std::any_of(nominal.begin(), nominal.end(), [&](double n) {
             return mode_mm >= expected.band.first * n - tolerance_mm && mode_mm <= expected.band.second * n + tolerance_mm;
@@ -952,6 +965,8 @@ TEST_CASE("Every role on a mixed-nozzle printer prints the width resolved on its
             { "enable_support", true }, { "support_type", "normal(auto)" }, { "support_on_build_plate_only", true },
             { "support_filament", small }, { "support_interface_filament", small },
             { "top_shell_layers", 3 }, { "bottom_shell_layers", 3 },
+            // Skirt and brim, printed by whichever tool visits them, in that tool's nozzle's width.
+            { "brim_type", "outer_only" }, { "brim_width", 3 }, { "skirt_loops", 2 }, { "skirt_distance", 3 }, // mm
         });
         auto on_small = [small_first](const char *small_mm, const char *large_mm) {
             return small_first ? std::string(small_mm) + "," + large_mm : std::string(large_mm) + "," + small_mm;
@@ -1004,6 +1019,39 @@ TEST_CASE("Detail and large walls under a single top wall print their own nozzle
         Model model;
         init_print({ mesh }, print, model, config);
         const std::string gcode = Slic3r::Test::gcode(print);
+        const std::vector<std::string> mismatches = width_mismatches(print, gcode);
+        INFO(join_lines(mismatches));
+        CHECK(mismatches.empty());
+    }
+}
+
+TEST_CASE("Each object's brim is printed in the width of the nozzle of the tool that prints it", "[MultiNozzleWalls][Widths]")
+{
+    // One object printed by the 0.4 mm nozzle, one by the 0.15 mm nozzle, each with its brim. Orca sized every brim on
+    // the nozzle of the print's first region. Stock U1 absolute widths of a 0.4 mm process: a brim is 0.5 mm on the
+    // 0.4 mm nozzle and 125 % (0.1875 mm) on the 0.15 mm one.
+    const bool small_first = GENERATE(true, false); // nozzle order
+    DYNAMIC_SECTION((small_first ? "0.15/0.4" : "0.4/0.15")) {
+        const int small = small_first ? 1 : 2, large = small_first ? 2 : 1; // filaments, 1-based
+        DynamicPrintConfig config = two_nozzle_config(small_first ? 0.15 : 0.4, small_first ? 0.4 : 0.15, large, "classic", false);
+        config.set_deserialize_strict({
+            { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+            { "printer_variant", "0.4" },
+            { "line_width", "0.42" }, { "outer_wall_line_width", "0.42" }, { "inner_wall_line_width", "0.45" },
+            { "sparse_infill_line_width", "0.45" }, { "internal_solid_infill_line_width", "0.42" },
+            { "top_surface_line_width", "0.42" }, { "initial_layer_line_width", "0.5" }, // mm
+            { "brim_type", "outer_only" }, { "brim_width", 3 }, { "combine_brims", false }, // mm
+        });
+        std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides(2);
+        for (const auto &[object, filament] : { std::make_pair(0, large), std::make_pair(1, small) })
+            for (const char *key : { "outer_wall_filament_id", "inner_wall_filament_id", "sparse_infill_filament_id",
+                                     "internal_solid_filament_id", "top_surface_filament_id", "bottom_surface_filament_id" })
+                overrides[object].push_back({ key, filament });
+        Print print;
+        Model model;
+        init_print({ make_cube(10., 10., 2.), make_cube(10., 10., 2.) }, print, model, config, &overrides);
+        const std::string gcode = Slic3r::Test::gcode(print);
+        REQUIRE(tools_for_type(gcode, "Brim") == std::set<int>{ 0, 1 });
         const std::vector<std::string> mismatches = width_mismatches(print, gcode);
         INFO(join_lines(mismatches));
         CHECK(mismatches.empty());

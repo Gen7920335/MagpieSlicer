@@ -3316,25 +3316,52 @@ double Print::skirt_first_layer_height() const
     return m_config.initial_layer_print_height.value;
 }
 
-// MAGPIE: brim and skirt geometry is made before the tool printing it is known, and Orca sizes it on one
-// filament's nozzle. Their widths stay as the user set them (an absolute width is not scaled to that nozzle by
-// scale_absolute_line_widths_to_nozzles), which is vanilla Orca's output; GCode::check_extrusion_width warns
-// when that width does not suit the nozzle printing it.
-static ConfigOptionFloatOrPercent brim_skirt_width_as_set(const DynamicPrintConfig &as_set, const DynamicPrintConfig &full,
-                                                          const char *key, const ConfigOptionFloatOrPercent &width)
+// MAGPIE: skirt and brim are printed by whichever tool visits them, so on a printer whose nozzles differ in size
+// their widths are resolved on that tool's nozzle (Skirt and Brim routes of LineWidths.hpp, per-nozzle fields
+// included): the brim of an object on its brim_tool(), the skirt's loops on the first layer's first tool, each layer's
+// skirt on its own tool (GCode::generate_skirt). On a printer with one nozzle size every nozzle gives Orca's flows.
+Flow skirt_flow_on_nozzle(const Print &print, size_t nozzle)
 {
-    const auto *original  = as_set.option<ConfigOptionFloatOrPercent>(key);
-    const auto *converted = full.option<ConfigOptionFloatOrPercent>(key);
-    return original != nullptr && converted != nullptr && *converted == width ? *original : width;
+    const WidthConfigs configs { &print.config(), print.objects().empty() ? nullptr : &print.objects().front()->config(), nullptr };
+    return feature_flow(WidthFeature::Skirt, configs, nozzle, float(print.skirt_first_layer_height()), false);
+}
+
+Flow brim_flow_on_nozzle(const Print &print, const PrintObject &object, size_t nozzle)
+{
+    const WidthConfigs configs { &print.config(), &object.config(),
+                                 object.num_printing_regions() > 0 ? &object.printing_region(0).config() : nullptr };
+    return feature_flow(WidthFeature::Brim, configs, nozzle, float(print.skirt_first_layer_height()), false);
+}
+
+unsigned int brim_tool(const Print &print, const PrintObject &object)
+{
+    // The tools printing the object's first layer, from its own tool ordering. A by-object print orders them that
+    // way too; a print by layer visits objects in its first layer's tool order.
+    const bool   by_object = print.config().print_sequence == PrintSequence::ByObject || print.tool_ordering().layer_tools().empty();
+    ToolOrdering ordering(object, (unsigned int) -1);
+    if (by_object)
+        ordering.sort_and_build_data(object, (unsigned int) -1);
+    const std::vector<unsigned int> object_tools = ordering.layer_tools().empty() ? std::vector<unsigned int>() : ordering.layer_tools().front().extruders;
+    const std::vector<unsigned int> &order       = by_object ? object_tools : print.tool_ordering().layer_tools().front().extruders;
+    for (const unsigned int tool : order)
+        if (std::find(object_tools.begin(), object_tools.end(), tool) != object_tools.end())
+            return tool;
+    // Nothing printed on the first layer known: Orca's brim extruder, the outer wall filament.
+    return object_tools.empty() ? unsigned(std::max(0, (object.num_printing_regions() > 0 ? object.printing_region(0).config().outer_wall_filament_id.value : 1) - 1)) :
+                                  object_tools.front();
 }
 
 Flow Print::brim_flow() const
 {
-    ConfigOptionFloatOrPercent width = brim_skirt_width_as_set(m_line_widths_as_set, m_full_print_config, "initial_layer_line_width", m_config.initial_layer_line_width);
+    // MAGPIE: on a printer whose nozzles differ in size, the first object's brim on the nozzle printing it.
+    if (m_line_width_context.reference_mm > 0. && !m_objects.empty())
+        return brim_flow_on_nozzle(*this, *m_objects.front(),
+                                   printing_nozzle_index(m_config, int(brim_tool(*this, *m_objects.front())) + 1, this->is_BBL_printer()));
+    ConfigOptionFloatOrPercent width = m_config.initial_layer_line_width;
     if (width.value <= 0)
-        width = brim_skirt_width_as_set(m_line_widths_as_set, m_full_print_config, "inner_wall_line_width", m_print_regions.front()->config().inner_wall_line_width);
+        width = m_print_regions.front()->config().inner_wall_line_width;
     if (width.value <= 0)
-        width = brim_skirt_width_as_set(m_line_widths_as_set, m_full_print_config, "line_width", m_objects.front()->config().line_width);
+        width = m_objects.front()->config().line_width;
 
     /* We currently use a random region's perimeter extruder.
        While this works for most cases, we should probably consider all of the perimeter
@@ -3351,11 +3378,18 @@ Flow Print::brim_flow() const
 
 Flow Print::skirt_flow() const
 {
-
+    // MAGPIE: on a printer whose nozzles differ in size the skirt's loops are laid out for the nozzle of the first
+    // layer's first tool, which prints them there (before the tool ordering exists: the support filament's, Orca's).
+    if (m_line_width_context.reference_mm > 0.) {
+        const int filament = !m_tool_ordering.layer_tools().empty() && !m_tool_ordering.layer_tools().front().extruders.empty() ?
+                                 int(m_tool_ordering.layer_tools().front().extruders.front()) + 1 :
+                                 (m_objects.empty() ? 0 : m_objects.front()->config().support_filament.value);
+        return skirt_flow_on_nozzle(*this, printing_nozzle_index(m_config, filament, this->is_BBL_printer()));
+    }
     // Orca: fall back to m_config if no objects are present
-    ConfigOptionFloatOrPercent width = brim_skirt_width_as_set(m_line_widths_as_set, m_full_print_config, "initial_layer_line_width", m_config.initial_layer_line_width);
+    ConfigOptionFloatOrPercent width = m_config.initial_layer_line_width;
     if (width.value <= 0)
-        width = m_objects.empty() ? width : brim_skirt_width_as_set(m_line_widths_as_set, m_full_print_config, "line_width", m_objects.front()->config().line_width);
+        width = m_objects.empty() ? width : m_objects.front()->config().line_width;
 
     /* We currently use a random object's support material extruder.
        While this works for most cases, we should probably consider all of the support material
@@ -4619,8 +4653,27 @@ void Print::_make_skirt()
                 const float brim_cleanup_delta = std::max(scaled_resolution, float(SCALED_EPSILON));
                 combined_area = offset2_ex(combined_area, brim_cleanup_delta, -brim_cleanup_delta, jtRound, scaled_resolution);
 
+                // MAGPIE: the combined brim is printed on the first visit of any of its objects: with the earliest of their
+                // brim tools in the first layer's tool order, on a printer whose nozzles differ in size.
+                Flow group_flow = brim_flow();
+                if (m_line_width_context.reference_mm > 0.) {
+                    const std::vector<unsigned int> order = m_tool_ordering.layer_tools().empty() ? std::vector<unsigned int>() :
+                                                                                                  m_tool_ordering.layer_tools().front().extruders;
+                    size_t best = size_t(-1);
+                    for (const ObjectInstanceID &instance : instances) {
+                        const PrintObject *object = this->get_object(instance.object_id);
+                        if (object == nullptr)
+                            continue;
+                        const unsigned int tool = brim_tool(*this, *object);
+                        const size_t       rank = size_t(std::find(order.begin(), order.end(), tool) - order.begin());
+                        if (best == size_t(-1) || rank < best) {
+                            best       = rank;
+                            group_flow = brim_flow_on_nozzle(*this, *object, printing_nozzle_index(m_config, int(tool) + 1, this->is_BBL_printer()));
+                        }
+                    }
+                }
                 Polygons islands_area;
-                brims.push_back({ makeBrimInfillFromPlateCoordinates(combined_area, *this, islands_area), instances });
+                brims.push_back({ makeBrimInfillFromPlateCoordinates(combined_area, *this, islands_area, group_flow), instances });
             }
 
             return brims;

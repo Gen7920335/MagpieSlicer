@@ -43142,3 +43142,8 @@ msgstr "노즐 %1% (%2% mm)"
 #, boost-format
 msgid "%1% on nozzle %2% (%3% mm), in mm. Leave empty to use the line width setting."
 msgstr "노즐 %2%(%3% mm)의 %1% 선 너비(mm)입니다. 비워 두면 선 너비 설정을 씁니다."
+
+# AI Translated
+#, boost-format
+msgid "%1% is printed %2% mm wide by the %3% mm nozzle of tool %4%: it was laid out for another tool's nozzle."
+msgstr "%1%이(가) 툴 %4%의 %3% mm 노즐로 %2% mm 너비로 출력됩니다. 다른 툴의 노즐에 맞춰 배치된 것입니다."

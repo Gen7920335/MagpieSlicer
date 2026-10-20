@@ -102,12 +102,14 @@ double bridge_line_width_mm(const PrintConfig &print, const PrintRegionConfig &r
 // with the printer's nozzle_diameter and printer_variant. For the per-nozzle table of the settings tab.
 double per_nozzle_line_width_fallback_mm(const DynamicPrintConfig &config, const char *width_key, size_t nozzle);
 
-// The skirt and brim flows on `nozzle` (0-based), the tool printing them (Print.cpp): the Skirt and Brim routes,
-// read on the print's first object and its first region, at the skirt's first layer height.
+// Skirt and brim are printed by whichever tool visits them (Print.cpp). The skirt flow on `nozzle` (0-based): the
+// Skirt route read on the print's first object. The brim flow of `object` on `nozzle`: the Brim route read on the
+// object and its first region. Both at the skirt's first layer height.
 Flow skirt_flow_on_nozzle(const Print &print, size_t nozzle);
-Flow brim_flow_on_nozzle(const Print &print, size_t nozzle);
-// The nozzle (0-based) printing the brim of `object`: the first tool of the object's first layer, in the print's
-// first layer tool order (Print.cpp).
-size_t brim_nozzle(const Print &print, const PrintObject &object);
+Flow brim_flow_on_nozzle(const Print &print, const PrintObject &object, size_t nozzle);
+// The tool (0-based filament) that prints the brim of `object`: the G-code prints it on the first visit of the
+// object on its first layer, so the first tool of the first layer's tool order (the print's, or the object's own in
+// a by-object print) that prints anything of that layer of the object. Needs the tool ordering of Print::process().
+unsigned int brim_tool(const Print &print, const PrintObject &object);
 
 } // namespace Slic3r

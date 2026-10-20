@@ -6941,7 +6941,11 @@ std::string GCode::generate_skirt(const Print &print,
         set_origin(unscaled(offset));
 
         m_avoid_crossing_perimeters.use_external_mp();
-        Flow layer_skirt_flow = print.skirt_flow().with_height(float(skirt_done.back() - (skirt_done.size() == 1 ? 0. : skirt_done[skirt_done.size() - 2])));
+        // MAGPIE: on a printer whose nozzles differ in size, this layer's skirt in the width of the tool printing it.
+        const bool mixed_nozzles = print.line_width_reference_mm() > 0.;
+        const Flow skirt_flow    = mixed_nozzles ?
+            skirt_flow_on_nozzle(print, printing_nozzle_index(print.config(), int(extruder_id) + 1, print.is_BBL_printer())) : print.skirt_flow();
+        Flow layer_skirt_flow = skirt_flow.with_height(float(skirt_done.back() - (skirt_done.size() == 1 ? 0. : skirt_done[skirt_done.size() - 2])));
         double mm3_per_mm = layer_skirt_flow.mm3_per_mm();
         // Decide where to start looping:
         // - If it’s the first layer or if we do NOT want a single-wall skirt/draft shield,
@@ -6959,6 +6963,8 @@ std::string GCode::generate_skirt(const Print &print,
             for (ExtrusionPath &path : loop.paths) {
                 path.height = layer_skirt_flow.height();
                 path.mm3_per_mm = mm3_per_mm;
+                if (mixed_nozzles)
+                    path.width = layer_skirt_flow.width();
             }
 
             //FIXME using the support_speed of the 1st object printed.
@@ -11425,7 +11431,8 @@ void GCode::check_extrusion_width(const ExtrusionPath &path)
 {
     // MAGPIE: output invariant. Every extrusion is compared with the nozzle of the tool printing it, so a line
     // width resolved on another nozzle (a 0.42 mm wall from a 0.15 mm nozzle) stops the slice instead of
-    // reaching the printer. Brim and skirt only warn: Orca sizes them on one filament's nozzle for every tool.
+    // reaching the printer. Brim and skirt only warn: their geometry is laid out before G-code export for the tool
+    // expected to print them (brim_tool(), the first layer's first tool), so a mismatch means that expectation failed.
     if (m_writer.filament() == nullptr)
         return;
     const double nozzle_mm = EXTRUDER_CONFIG(nozzle_diameter);
@@ -11437,7 +11444,7 @@ void GCode::check_extrusion_width(const ExtrusionPath &path)
         if (!m_extrusion_width_warned && m_print != nullptr) {
             m_extrusion_width_warned = true;
             m_print->active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL,
-                (boost::format(_(L("%1% is printed %2% mm wide by the %3% mm nozzle of tool %4%: brim and skirt widths follow one filament's nozzle on a printer with nozzles of different sizes."))) %
+                (boost::format(_(L("%1% is printed %2% mm wide by the %3% mm nozzle of tool %4%: it was laid out for another tool's nozzle."))) %
                  _(role) % path.width % nozzle_mm % (tool + 1)).str());
         }
         return;
