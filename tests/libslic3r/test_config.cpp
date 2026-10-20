@@ -1743,6 +1743,9 @@ TEST_CASE("Every read of a nozzle-relative line width key is in the reviewed tab
         { "src/libslic3r/GCode/ToolOrdering.cpp", 4 },
         { "src/libslic3r/Layer.cpp", 2 },
         { "src/libslic3r/LineWidths.cpp", 19 },
+        // The support.contacts input: the slot field support_line_width, the support flow's width resolved by
+        // support_material_flow(), not the setting.
+        { "src/libslic3r/ModHost/NativeContacts.cpp", 1 },
         // The support.areas input: the support flow's width, resolved by support_material_flow().
         { "src/libslic3r/ModHost/NativeSupport.cpp", 1 },
         { "src/libslic3r/MultiMaterialSegmentation.cpp", 2 },
