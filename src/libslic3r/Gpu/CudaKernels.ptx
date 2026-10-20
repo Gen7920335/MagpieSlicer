@@ -1,0 +1,406 @@
+// MAGPIE: CUDA test mod kernels, written as PTX so neither the build nor the user needs the CUDA
+// toolkit: the NVIDIA driver compiles this text for the installed GPU when the module is loaded.
+//
+// Every kernel reproduces one CPU function bit for bit; CudaCompute.cpp names the function next to
+// each dispatcher. Floating point uses explicit .rn rounding on every mul/add/sub/div, which keeps
+// the JIT from fusing them into FMA, and no .ftz, so subnormals are kept as on the CPU.
+//
+// All kernels take the same parameters:
+//   in, out   device pointers to the packed input and output records
+//   count     number of records (one thread each)
+//   aux       count of the shared array the records search (layers, edges, rings)
+//   off1/off2 byte offsets from `in` to the shared arrays
+
+.version 7.0
+.target sm_52
+.address_size 64
+
+// TriangleMeshSlicer.cpp slice_facet_at_zs(): layer range and lowest vertex of a facet.
+// in: count x {f32 z0, z1, z2}; off1: aux x f32 slice z (sorted)
+// out: count x {u32 first, last, lowest_vertex}
+//   lo = fminf(z0, fminf(z1, z2)), hi = fmaxf(...)
+//   first = lower_bound(zs, lo), last = upper_bound(zs + first, zs + n, hi)
+//   lowest = z1 == lo ? 1 : (z2 == lo ? 2 : 0)
+.visible .entry magpie_mesh_layer_ranges(
+    .param .u64 p_in, .param .u64 p_out, .param .u32 p_count, .param .u32 p_aux,
+    .param .u64 p_off1, .param .u64 p_off2)
+{
+    .reg .pred  %p<6>;
+    .reg .b32   %r<16>;
+    .reg .f32   %f<8>;
+    .reg .b64   %rd<12>;
+
+    ld.param.u64        %rd1, [p_in];
+    ld.param.u64        %rd2, [p_out];
+    ld.param.u32        %r1, [p_count];
+    ld.param.u32        %r2, [p_aux];
+    ld.param.u64        %rd3, [p_off1];
+    cvta.to.global.u64  %rd1, %rd1;
+    cvta.to.global.u64  %rd2, %rd2;
+    mov.u32             %r3, %ctaid.x;
+    mov.u32             %r4, %ntid.x;
+    mov.u32             %r5, %tid.x;
+    mad.lo.u32          %r6, %r3, %r4, %r5;
+    setp.ge.u32         %p1, %r6, %r1;
+    @%p1 bra            MESH_DONE;
+
+    mul.wide.u32        %rd4, %r6, 12;
+    add.s64             %rd5, %rd1, %rd4;
+    ld.global.f32       %f1, [%rd5];
+    ld.global.f32       %f2, [%rd5+4];
+    ld.global.f32       %f3, [%rd5+8];
+    min.f32             %f4, %f2, %f3;
+    min.f32             %f4, %f1, %f4;
+    max.f32             %f5, %f2, %f3;
+    max.f32             %f5, %f1, %f5;
+    setp.eq.f32         %p2, %f3, %f4;
+    selp.u32            %r7, 2, 0, %p2;
+    setp.eq.f32         %p2, %f2, %f4;
+    selp.u32            %r7, 1, %r7, %p2;
+    add.s64             %rd6, %rd1, %rd3;
+
+    // first = lower_bound(zs, lo): first index whose z is not below lo.
+    mov.u32             %r8, 0;
+    mov.u32             %r9, %r2;
+MESH_LB:
+    setp.ge.u32         %p3, %r8, %r9;
+    @%p3 bra            MESH_LB_DONE;
+    sub.u32             %r10, %r9, %r8;
+    shr.u32             %r10, %r10, 1;
+    add.u32             %r10, %r8, %r10;
+    mul.wide.u32        %rd7, %r10, 4;
+    add.s64             %rd8, %rd6, %rd7;
+    ld.global.f32       %f6, [%rd8];
+    setp.lt.f32         %p4, %f6, %f4;
+    @%p4 add.u32        %r8, %r10, 1;
+    @!%p4 mov.u32       %r9, %r10;
+    bra                 MESH_LB;
+MESH_LB_DONE:
+
+    // last = upper_bound(zs + first, zs + n, hi): first index from `first` whose z is above hi.
+    mov.u32             %r11, %r8;
+    mov.u32             %r9, %r2;
+MESH_UB:
+    setp.ge.u32         %p3, %r11, %r9;
+    @%p3 bra            MESH_UB_DONE;
+    sub.u32             %r10, %r9, %r11;
+    shr.u32             %r10, %r10, 1;
+    add.u32             %r10, %r11, %r10;
+    mul.wide.u32        %rd7, %r10, 4;
+    add.s64             %rd8, %rd6, %rd7;
+    ld.global.f32       %f6, [%rd8];
+    setp.lt.f32         %p4, %f5, %f6;
+    @%p4 mov.u32        %r9, %r10;
+    @!%p4 add.u32       %r11, %r10, 1;
+    bra                 MESH_UB;
+MESH_UB_DONE:
+
+    mul.wide.u32        %rd9, %r6, 12;
+    add.s64             %rd10, %rd2, %rd9;
+    st.global.u32       [%rd10], %r8;
+    st.global.u32       [%rd10+4], %r11;
+    st.global.u32       [%rd10+8], %r7;
+MESH_DONE:
+    ret;
+}
+
+// FillRectilinear.cpp rectilinear_vertical_intersection(): where segment p1-p2 crosses the vertical
+// line x, as pos_p / pos_q, for a segment whose ends are both off the line (p1.x != x != p2.x).
+// in: count x {s64 p1x, p1y, p2x, p2y, x}; out: count x {s64 pos_p, u64 pos_q}
+//   t = p2x > p1x ? x - p1x : p1x - x;  q = uint32(p2x > p1x ? p2x - p1x : p1x - p2x)
+//   pos_p = t * (p2y - p1y) + p1y * q   (int64, wrapping like the CPU)
+.visible .entry magpie_vertical_intersections(
+    .param .u64 p_in, .param .u64 p_out, .param .u32 p_count, .param .u32 p_aux,
+    .param .u64 p_off1, .param .u64 p_off2)
+{
+    .reg .pred  %p<3>;
+    .reg .b32   %r<8>;
+    .reg .b64   %rd<24>;
+
+    ld.param.u64        %rd1, [p_in];
+    ld.param.u64        %rd2, [p_out];
+    ld.param.u32        %r1, [p_count];
+    cvta.to.global.u64  %rd1, %rd1;
+    cvta.to.global.u64  %rd2, %rd2;
+    mov.u32             %r3, %ctaid.x;
+    mov.u32             %r4, %ntid.x;
+    mov.u32             %r5, %tid.x;
+    mad.lo.u32          %r6, %r3, %r4, %r5;
+    setp.ge.u32         %p1, %r6, %r1;
+    @%p1 bra            VI_DONE;
+
+    mul.wide.u32        %rd3, %r6, 40;
+    add.s64             %rd4, %rd1, %rd3;
+    ld.global.s64       %rd5, [%rd4];
+    ld.global.s64       %rd6, [%rd4+8];
+    ld.global.s64       %rd7, [%rd4+16];
+    ld.global.s64       %rd8, [%rd4+24];
+    ld.global.s64       %rd9, [%rd4+32];
+    setp.gt.s64         %p2, %rd7, %rd5;
+    sub.s64             %rd10, %rd9, %rd5;
+    sub.s64             %rd11, %rd5, %rd9;
+    selp.b64            %rd12, %rd10, %rd11, %p2;
+    sub.s64             %rd13, %rd7, %rd5;
+    sub.s64             %rd14, %rd5, %rd7;
+    selp.b64            %rd15, %rd13, %rd14, %p2;
+    and.b64             %rd15, %rd15, 4294967295;
+    sub.s64             %rd16, %rd8, %rd6;
+    mul.lo.s64          %rd17, %rd12, %rd16;
+    mad.lo.s64          %rd17, %rd6, %rd15, %rd17;
+
+    mul.wide.u32        %rd18, %r6, 16;
+    add.s64             %rd19, %rd2, %rd18;
+    st.global.s64       [%rd19], %rd17;
+    st.global.u64       [%rd19+8], %rd15;
+VI_DONE:
+    ret;
+}
+
+// Line.hpp line_alg::distance_to_squared(), minimum over a list of edges (Lightning DistanceField).
+// in: count x {s64 x, y}; off1: aux x {s64 ax, ay, bx, by}; out: count x f64
+//   d2 = DBL_MAX; for each edge: d2 = min(d2, distance_to_squared(edge, point))
+.visible .entry magpie_point_segment_distances(
+    .param .u64 p_in, .param .u64 p_out, .param .u32 p_count, .param .u32 p_aux,
+    .param .u64 p_off1, .param .u64 p_off2)
+{
+    .reg .pred  %p<6>;
+    .reg .b32   %r<12>;
+    .reg .b64   %rd<24>;
+    .reg .f64   %fd<32>;
+
+    ld.param.u64        %rd1, [p_in];
+    ld.param.u64        %rd2, [p_out];
+    ld.param.u32        %r1, [p_count];
+    ld.param.u32        %r2, [p_aux];
+    ld.param.u64        %rd3, [p_off1];
+    cvta.to.global.u64  %rd1, %rd1;
+    cvta.to.global.u64  %rd2, %rd2;
+    mov.u32             %r3, %ctaid.x;
+    mov.u32             %r4, %ntid.x;
+    mov.u32             %r5, %tid.x;
+    mad.lo.u32          %r6, %r3, %r4, %r5;
+    setp.ge.u32         %p1, %r6, %r1;
+    @%p1 bra            DIST_DONE;
+
+    mul.wide.u32        %rd4, %r6, 16;
+    add.s64             %rd5, %rd1, %rd4;
+    ld.global.s64       %rd6, [%rd5];
+    ld.global.s64       %rd7, [%rd5+8];
+    add.s64             %rd8, %rd1, %rd3;
+    mov.f64             %fd1, 0d7FEFFFFFFFFFFFFF;
+    mov.u32             %r7, 0;
+DIST_LOOP:
+    setp.ge.u32         %p2, %r7, %r2;
+    @%p2 bra            DIST_STORE;
+    mul.wide.u32        %rd9, %r7, 32;
+    add.s64             %rd10, %rd8, %rd9;
+    ld.global.s64       %rd11, [%rd10];
+    ld.global.s64       %rd12, [%rd10+8];
+    ld.global.s64       %rd13, [%rd10+16];
+    ld.global.s64       %rd14, [%rd10+24];
+    // v = b - a, va = point - a
+    sub.s64             %rd15, %rd13, %rd11;
+    sub.s64             %rd16, %rd14, %rd12;
+    sub.s64             %rd17, %rd6, %rd11;
+    sub.s64             %rd18, %rd7, %rd12;
+    cvt.rn.f64.s64      %fd2, %rd15;
+    cvt.rn.f64.s64      %fd3, %rd16;
+    cvt.rn.f64.s64      %fd4, %rd17;
+    cvt.rn.f64.s64      %fd5, %rd18;
+    // l2 = v.squaredNorm()
+    mul.rn.f64          %fd6, %fd2, %fd2;
+    mul.rn.f64          %fd7, %fd3, %fd3;
+    add.rn.f64          %fd8, %fd6, %fd7;
+    // va.squaredNorm()
+    mul.rn.f64          %fd9, %fd4, %fd4;
+    mul.rn.f64          %fd10, %fd5, %fd5;
+    add.rn.f64          %fd11, %fd9, %fd10;
+    setp.eq.f64         %p3, %fd8, 0d0000000000000000;
+    @%p3 bra            DIST_TAKE_A;
+    // t = va.dot(v) / l2
+    mul.rn.f64          %fd12, %fd4, %fd2;
+    mul.rn.f64          %fd13, %fd5, %fd3;
+    add.rn.f64          %fd14, %fd12, %fd13;
+    div.rn.f64          %fd15, %fd14, %fd8;
+    setp.le.f64         %p4, %fd15, 0d0000000000000000;
+    @%p4 bra            DIST_TAKE_A;
+    setp.ge.f64         %p5, %fd15, 0d3FF0000000000000;
+    @%p5 bra            DIST_TAKE_B;
+    // (t * v - va).squaredNorm()
+    mul.rn.f64          %fd16, %fd15, %fd2;
+    sub.rn.f64          %fd17, %fd16, %fd4;
+    mul.rn.f64          %fd18, %fd15, %fd3;
+    sub.rn.f64          %fd19, %fd18, %fd5;
+    mul.rn.f64          %fd20, %fd17, %fd17;
+    mul.rn.f64          %fd21, %fd19, %fd19;
+    add.rn.f64          %fd22, %fd20, %fd21;
+    bra                 DIST_MIN;
+DIST_TAKE_B:
+    // (point - b).squaredNorm()
+    sub.s64             %rd19, %rd6, %rd13;
+    sub.s64             %rd20, %rd7, %rd14;
+    cvt.rn.f64.s64      %fd23, %rd19;
+    cvt.rn.f64.s64      %fd24, %rd20;
+    mul.rn.f64          %fd25, %fd23, %fd23;
+    mul.rn.f64          %fd26, %fd24, %fd24;
+    add.rn.f64          %fd22, %fd25, %fd26;
+    bra                 DIST_MIN;
+DIST_TAKE_A:
+    mov.f64             %fd22, %fd11;
+DIST_MIN:
+    // std::min(d2, candidate) keeps d2 unless the candidate is smaller.
+    setp.lt.f64         %p4, %fd22, %fd1;
+    selp.f64            %fd1, %fd22, %fd1, %p4;
+    add.u32             %r7, %r7, 1;
+    bra                 DIST_LOOP;
+DIST_STORE:
+    mul.wide.u32        %rd21, %r6, 8;
+    add.s64             %rd22, %rd2, %rd21;
+    st.global.f64       [%rd22], %fd1;
+DIST_DONE:
+    ret;
+}
+
+// ExPolygon::contains(point) (border counts as inside), true when any of the ExPolygons holds the
+// point (TreeSupport.cpp is_inside_ex). Each ring is tested with Polygon.cpp point_in_polygon().
+// in: count x {s64 x, y}
+// off1: aux x ring {u32 first_vertex, u32 vertex_count, u32 is_contour, u32 unused}; a contour
+//       starts an ExPolygon, the holes follow it
+// off2: vertices {s64 x, y}
+// out: count x u32 (0 or 1)
+.visible .entry magpie_points_in_expolygons(
+    .param .u64 p_in, .param .u64 p_out, .param .u32 p_count, .param .u32 p_aux,
+    .param .u64 p_off1, .param .u64 p_off2)
+{
+    .reg .pred  %p<16>;
+    .reg .b32   %r<24>;
+    .reg .b64   %rd<40>;
+
+    ld.param.u64        %rd1, [p_in];
+    ld.param.u64        %rd2, [p_out];
+    ld.param.u32        %r1, [p_count];
+    ld.param.u32        %r2, [p_aux];
+    ld.param.u64        %rd3, [p_off1];
+    ld.param.u64        %rd4, [p_off2];
+    cvta.to.global.u64  %rd1, %rd1;
+    cvta.to.global.u64  %rd2, %rd2;
+    mov.u32             %r3, %ctaid.x;
+    mov.u32             %r4, %ntid.x;
+    mov.u32             %r5, %tid.x;
+    mad.lo.u32          %r6, %r3, %r4, %r5;
+    setp.ge.u32         %p1, %r6, %r1;
+    @%p1 bra            PIP_DONE;
+
+    mul.wide.u32        %rd5, %r6, 16;
+    add.s64             %rd6, %rd1, %rd5;
+    ld.global.s64       %rd7, [%rd6];            // pt.x
+    ld.global.s64       %rd8, [%rd6+8];          // pt.y
+    add.s64             %rd9, %rd1, %rd3;        // ring table
+    add.s64             %rd10, %rd1, %rd4;       // vertices
+    mov.u32             %r7, 0;                  // current ExPolygon still holds the point
+    mov.u32             %r8, 0;                  // ring index
+PIP_RING:
+    setp.ge.u32         %p2, %r8, %r2;
+    @%p2 bra            PIP_STORE;
+    mul.wide.u32        %rd11, %r8, 16;
+    add.s64             %rd12, %rd9, %rd11;
+    ld.global.u32       %r9, [%rd12];            // first vertex
+    ld.global.u32       %r10, [%rd12+4];         // vertex count
+    ld.global.u32       %r11, [%rd12+8];         // is contour
+    add.u32             %r8, %r8, 1;
+    setp.ne.u32         %p3, %r11, 0;
+    @!%p3 bra           PIP_HOLE;
+    // A new ExPolygon: the previous one held the point, so the answer is known.
+    setp.ne.u32         %p4, %r7, 0;
+    @%p4 bra            PIP_STORE;
+    bra                 PIP_TEST;
+PIP_HOLE:
+    // Holes of an ExPolygon whose contour already missed the point change nothing.
+    setp.eq.u32         %p4, %r7, 0;
+    @%p4 bra            PIP_RING;
+PIP_TEST:
+    // point_in_polygon(): %r12 = 0 outside, 1 inside, 2 on the border (-1 on the CPU).
+    mov.u32             %r12, 0;
+    setp.lt.u32         %p5, %r10, 3;
+    @%p5 bra            PIP_RESULT;
+    mul.wide.u32        %rd13, %r9, 16;
+    add.s64             %rd14, %rd10, %rd13;     // &path[0]
+    ld.global.s64       %rd15, [%rd14];          // ip.x
+    ld.global.s64       %rd16, [%rd14+8];        // ip.y
+    mov.u32             %r13, 1;                 // i
+PIP_EDGE:
+    setp.gt.u32         %p5, %r13, %r10;
+    @%p5 bra            PIP_RESULT;
+    setp.eq.u32         %p6, %r13, %r10;
+    selp.u32            %r14, 0, %r13, %p6;
+    mul.wide.u32        %rd17, %r14, 16;
+    add.s64             %rd18, %rd14, %rd17;
+    ld.global.s64       %rd19, [%rd18];          // ipNext.x
+    ld.global.s64       %rd20, [%rd18+8];        // ipNext.y
+    // ipNext.y == pt.y && (ipNext.x == pt.x || (ip.y == pt.y && ((ipNext.x > pt.x) == (ip.x < pt.x)))) -> border
+    setp.eq.s64         %p7, %rd20, %rd8;
+    @!%p7 bra           PIP_CROSS;
+    setp.eq.s64         %p8, %rd19, %rd7;
+    @%p8 bra            PIP_BORDER;
+    setp.eq.s64         %p8, %rd16, %rd8;
+    @!%p8 bra           PIP_CROSS;
+    setp.gt.s64         %p9, %rd19, %rd7;
+    setp.lt.s64         %p10, %rd15, %rd7;
+    xor.pred            %p11, %p9, %p10;
+    @!%p11 bra          PIP_BORDER;
+PIP_CROSS:
+    // (ip.y < pt.y) != (ipNext.y < pt.y)
+    setp.lt.s64         %p9, %rd16, %rd8;
+    setp.lt.s64         %p10, %rd20, %rd8;
+    xor.pred            %p11, %p9, %p10;
+    @!%p11 bra          PIP_NEXT;
+    setp.gt.s64         %p12, %rd19, %rd7;       // ipNext.x > pt.x
+    setp.ge.s64         %p13, %rd15, %rd7;       // ip.x >= pt.x
+    @!%p13 bra          PIP_LEFT;
+    @!%p12 bra          PIP_DET;
+    xor.b32             %r12, %r12, 1;
+    bra                 PIP_NEXT;
+PIP_LEFT:
+    @!%p12 bra          PIP_NEXT;
+PIP_DET:
+    // d = (ip.x - pt.x) * (ipNext.y - pt.y) - (ipNext.x - pt.x) * (ip.y - pt.y)
+    sub.s64             %rd21, %rd15, %rd7;
+    sub.s64             %rd22, %rd20, %rd8;
+    sub.s64             %rd23, %rd19, %rd7;
+    sub.s64             %rd24, %rd16, %rd8;
+    mul.lo.s64          %rd25, %rd21, %rd22;
+    mul.lo.s64          %rd26, %rd23, %rd24;
+    sub.s64             %rd27, %rd25, %rd26;
+    setp.eq.s64         %p14, %rd27, 0;
+    @%p14 bra           PIP_BORDER;
+    // (d > 0) == (ipNext.y > ip.y) -> flip
+    setp.gt.s64         %p9, %rd27, 0;
+    setp.gt.s64         %p10, %rd20, %rd16;
+    xor.pred            %p11, %p9, %p10;
+    @%p11 bra           PIP_NEXT;
+    xor.b32             %r12, %r12, 1;
+PIP_NEXT:
+    mov.b64             %rd15, %rd19;
+    mov.b64             %rd16, %rd20;
+    add.u32             %r13, %r13, 1;
+    bra                 PIP_EDGE;
+PIP_BORDER:
+    mov.u32             %r12, 2;
+PIP_RESULT:
+    // Contour: border or inside keeps the point. Hole: only strictly inside removes it.
+    setp.ne.u32         %p15, %r11, 0;
+    @!%p15 bra          PIP_RESULT_HOLE;
+    setp.ne.u32         %p5, %r12, 0;
+    selp.u32            %r7, 1, 0, %p5;
+    bra                 PIP_RING;
+PIP_RESULT_HOLE:
+    setp.eq.u32         %p5, %r12, 1;
+    @%p5 mov.u32        %r7, 0;
+    bra                 PIP_RING;
+PIP_STORE:
+    mul.wide.u32        %rd28, %r6, 4;
+    add.s64             %rd29, %rd2, %rd28;
+    st.global.u32       [%rd29], %r7;
+PIP_DONE:
+    ret;
+}

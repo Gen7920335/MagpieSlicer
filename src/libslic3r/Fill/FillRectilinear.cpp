@@ -1,4 +1,5 @@
 #include "libslic3r/StageTimer.hpp"
+#include "libslic3r/Gpu/CudaCompute.hpp"
 #include <numeric>
 #include <math.h>
 #include <initializer_list>
@@ -775,6 +776,27 @@ enum DirectionMask
     DIR_BACKWARD = 2
 };
 
+// Where segment p1-p2 crosses the vertical line this_x, when neither end is on the line, as the rational
+// pos_p / pos_q. MAGPIE: also the CPU reference of the CUDA test mod's magpie_vertical_intersections kernel.
+static inline Gpu::CudaRational vertical_crossing(const Point &p1, const Point &p2, coord_t this_x)
+{
+    SegmentIntersection is;
+    // First calculate the intersection parameter 't' as a rational number with non negative denominator.
+    if (p2.x() > p1.x()) {
+        is.pos_p = this_x - p1.x();
+        is.pos_q = p2.x() - p1.x();
+    } else {
+        is.pos_p = p1.x() - this_x;
+        is.pos_q = p1.x() - p2.x();
+    }
+    assert(is.pos_q > 1);
+    assert(is.pos_p > 0 && is.pos_p < is.pos_q);
+    // Make an intersection point from the 't'.
+    is.pos_p *= int64_t(p2.y() - p1.y());
+    is.pos_p += p1.y() * int64_t(is.pos_q);
+    return { is.pos_p, is.pos_q };
+}
+
 static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(const ExPolygonWithOffset &poly_with_offset, size_t n_vlines, coord_t x0, coord_t line_spacing)
 {
     MAGPIE_STAGE_TIMER("fn.rectilinear_vertical_intersections");
@@ -784,6 +806,11 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(con
         segs[i].idx = i;
         segs[i].pos = x0 + i * line_spacing;
     }
+    // MAGPIE: CUDA test mod. While CUDA is on, the crossings computed by vertical_crossing() are
+    // collected here, left as 0/1 placeholders, and filled in one batch after the contour loop.
+    const bool                             collect_crossings = Gpu::cuda_mode() != Gpu::CudaMode::Off;
+    std::vector<Gpu::CudaVerticalCrossing> crossings;
+    std::vector<std::pair<size_t, size_t>> crossing_slots; // (vertical line, index in its intersections)
     // For each contour
     for (size_t iContour = 0; iContour < poly_with_offset.n_contours; ++ iContour) {
         const Points &contour = poly_with_offset.contour(iContour).points;
@@ -842,26 +869,37 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(con
                     }
                     is.pos_p = p2.y();
                     is.pos_q = 1;
+                } else if (collect_crossings) {
+                    crossings.push_back({ p1, p2, this_x });
+                    crossing_slots.emplace_back(size_t(i), segs[i].intersections.size());
+                    segs[i].intersections.push_back(is);
+                    continue;
                 } else {
-                    // First calculate the intersection parameter 't' as a rational number with non negative denominator.
-                    if (p2.x() > p1.x()) {
-                        is.pos_p = this_x - p1.x();
-                        is.pos_q = p2.x() - p1.x();
-                    } else {
-                        is.pos_p = p1.x() - this_x;
-                        is.pos_q = p1.x() - p2.x();
-                    }
-                    assert(is.pos_q > 1);
-                    assert(is.pos_p > 0 && is.pos_p < is.pos_q);
-                    // Make an intersection point from the 't'.
-                    is.pos_p *= int64_t(p2.y() - p1.y());
-                    is.pos_p += p1.y() * int64_t(is.pos_q);
+                    const Gpu::CudaRational crossing = vertical_crossing(p1, p2, this_x);
+                    is.pos_p = crossing.p;
+                    is.pos_q = crossing.q;
                 }
                 // +-1 to take rounding into account.
                 assert(is.pos() + 1 >= std::min(p1.y(), p2.y()));
                 assert(is.pos() <= std::max(p1.y(), p2.y()) + 1);
                 segs[i].intersections.push_back(is);
             }
+        }
+    }
+    if (! crossings.empty()) {
+        auto cpu = [&crossings](size_t k) { return vertical_crossing(crossings[k].p1, crossings[k].p2, crossings[k].x); };
+        std::vector<Gpu::CudaRational> values;
+        if (! Gpu::cuda_vertical_intersections(crossings, cpu, values)) {
+            values.resize(crossings.size());
+            for (size_t k = 0; k < crossings.size(); ++ k)
+                values[k] = cpu(k);
+        }
+        for (size_t k = 0; k < crossings.size(); ++ k) {
+            SegmentIntersection &is = segs[crossing_slots[k].first].intersections[crossing_slots[k].second];
+            is.pos_p = values[k].p;
+            is.pos_q = values[k].q;
+            assert(is.pos() + 1 >= std::min(crossings[k].p1.y(), crossings[k].p2.y()));
+            assert(is.pos() <= std::max(crossings[k].p1.y(), crossings[k].p2.y()) + 1);
         }
     }
 

@@ -1995,6 +1995,8 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionFloat,               layer_time_blend_park_y))
     ((ConfigOptionFloat,               layer_time_blend_heat_rate))
     ((ConfigOptionFloat,               layer_time_blend_cool_rate))
+    // MAGPIE: CUDA test mod (resources/mods/cuda_compute.json): off, on or max.
+    ((ConfigOptionString,              cuda_compute))
 
     // Build plate tilt for off-axis gravity support generation (printer-level setting).
     ((ConfigOptionFloat,               build_plate_tilt_x))

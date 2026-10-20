@@ -43105,3 +43105,11 @@ msgstr "노즐 냉각 속도"
 # AI Translated
 msgid "How fast the nozzle cools, for estimating temperature waits when layer times are blended."
 msgstr "레이어 시간을 블렌딩할 때 온도 대기를 추정하는 데 쓰는 노즐 냉각 속도입니다."
+
+# AI Translated
+msgid "CUDA compute"
+msgstr "CUDA 연산"
+
+# AI Translated
+msgid "Runs some slicing calculations on an NVIDIA GPU: off, on (every GPU result is checked against the CPU) or max (GPU results are used unchecked)."
+msgstr "일부 슬라이싱 계산을 NVIDIA GPU에서 실행합니다: 끔, 켬(모든 GPU 결과를 CPU로 검증) 또는 최대(GPU 결과를 검증 없이 사용)."

@@ -9845,6 +9845,8 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "layer_time_blend_park_y"sv,
         "layer_time_blend_heat_rate"sv,
         "layer_time_blend_cool_rate"sv,
+        // CUDA test mod: how the slice was computed, not what it is; the G-code stays identical.
+        "cuda_compute"sv,
         "printer_mod_settings"sv,
         "support_generator"sv,
         // The fast-purge / prime-volume-mode keys are new static-member registrations. Excluding them from
