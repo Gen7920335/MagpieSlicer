@@ -1097,3 +1097,91 @@ TEST_CASE("Each tool prints the prime tower in its own nozzle's width", "[MultiN
         CHECK(mismatches.empty());
     }
 }
+
+TEST_CASE("Detail and large walls overlap on single-wall-top layers as on other layers", "[MultiNozzleWalls][Arachne]")
+{
+    // A 20 mm box carrying a 10 mm box flush with its left side: the last layer below the step has a U-shaped top
+    // surface, so Arachne's single-wall-top
+    // path prints the detail walls in one pass and the large walls in a second. On other layers one pass places
+    // the first large wall the plan's boundary overlap (crisp_corner_nozzle_wall_overlap) into the last detail wall.
+    // The gap between their centerlines on the box's straight left side must be the same on both kinds of layer.
+    const double step_mm = GENERATE(6.0, 6.12); // the step layer is odd (one detail wall) or even (two)
+    const bool   h2      = GENERATE(false, true);
+    DYNAMIC_SECTION("step " << step_mm << " mm, H/2 " << h2) {
+        DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "arachne", true);
+        config.set_deserialize_strict({
+            { "wall_loops", 2 }, { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+            { "top_shell_layers", 3 }, { "only_one_wall_top", true },
+            { "crisp_corner_small_nozzle_wall_count", 2 }, { "crisp_corner_interlace_small_nozzle_walls", true },
+            { "crisp_corner_nozzle_wall_overlap", "30%" },
+            { "outer_wall_half_layer_height", h2 },
+        });
+        TriangleMesh mesh = make_cube(20., 20., step_mm);
+        TriangleMesh top  = make_cube(10., 10., 3.);
+        top.translate(0.f, 5.f, float(step_mm));
+        mesh.merge(top);
+        Print print;
+        Model model;
+        init_print({ mesh }, print, model, config);
+        print.process();
+        const PrintObject &object = *print.objects().front();
+        const Layer *step_layer = nullptr;
+        for (const Layer *layer : object.layers())
+            if (layer->print_z < step_mm + EPSILON)
+                step_layer = layer;
+        REQUIRE(step_layer != nullptr);
+        REQUIRE(step_layer->id() >= 4);
+        // Same interlace parity, two layers lower: no top surface there.
+        const Layer *plain_layer = object.layers()[step_layer->id() - 2];
+
+        // Centerline x (mm) of the last detail wall and the first large wall on the left side of the 20 mm box, at
+        // y = 10 mm: under the upper box, so not top surface on the step layer either.
+        auto gap = [&](const Layer &layer) {
+            const BoundingBox box = get_extents(layer.lslices);
+            const double      x0  = unscale<double>(box.min.x()), y0 = unscale<double>(box.min.y());
+            double detail_x = -1e9, large_x = 1e9;
+            // H/2 keeps the half-height outer walls on the two phase layers of the parent layer.
+            std::vector<const ExtrusionEntity *> walls = walls_of(*layer.regions().front());
+            if (const HalfLayerSourceLayers *sources = object.half_layer_sources())
+                for (const auto &phase : sources->phases)
+                    if (layer.id() < phase.size())
+                        for (const ExtrusionEntity *wall : walls_of(*phase[layer.id()]->regions().front()))
+                            walls.push_back(wall);
+            for (const ExtrusionEntity *wall : walls) {
+                std::vector<const ExtrusionPath *> paths;
+                if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(wall))
+                    for (const ExtrusionPath &path : loop->paths) paths.push_back(&path);
+                else if (const auto *multi = dynamic_cast<const ExtrusionMultiPath *>(wall))
+                    for (const ExtrusionPath &path : multi->paths) paths.push_back(&path);
+                else if (const auto *path = dynamic_cast<const ExtrusionPath *>(wall))
+                    paths.push_back(path);
+                for (const ExtrusionPath *path : paths)
+                    for (size_t i = 1; i < path->polyline.points.size(); ++i) {
+                        // Where the segment crosses y = 10 mm, the middle of that side.
+                        const double ax = unscale<double>(path->polyline.points[i - 1].x()) - x0, ay = unscale<double>(path->polyline.points[i - 1].y()) - y0;
+                        const double bx = unscale<double>(path->polyline.points[i].x()) - x0, by = unscale<double>(path->polyline.points[i].y()) - y0;
+                        if ((ay - 10.) * (by - 10.) > 0. || ay == by)
+                            continue;
+                        const double x = ax + (bx - ax) * (10. - ay) / (by - ay);
+                        if (x > 2.)
+                            continue;
+                        if (wall->tool_hint == ExtrusionToolHint::DetailWall)
+                            detail_x = std::max(detail_x, x);
+                        else if (wall->tool_hint == ExtrusionToolHint::LargeWall)
+                            large_x = std::min(large_x, x);
+                    }
+            }
+            REQUIRE(detail_x > -1e9);
+            REQUIRE(large_x < 1e9);
+            return large_x - detail_x;
+        };
+        const double step_gap  = gap(*step_layer);
+        const double plain_gap = gap(*plain_layer);
+        CAPTURE(step_layer->id(), step_gap, plain_gap);
+        // mm; a 30 % overlap of a 0.17 mm detail spacing is about 0.05 mm. Measured with H/2 off: without the inner
+        // pass's overlap the odd step layer was 0.2965 against 0.2536; with the overlap but the inner region pulled
+        // back by wall_0_inset on two single pass walls, the even one was 0.2536 against 0.2407. Both now agree
+        // within 1e-6 mm.
+        CHECK(std::abs(step_gap - plain_gap) < 0.005);
+    }
+}

@@ -3001,9 +3001,21 @@ void PerimeterGenerator::process_arachne()
                 // instead - the fallback when there is no top fill - walls the top/non-top interface and rings
                 // top-surface islands with inner walls that don't exist when the feature is disabled.
                 const bool     clip_walls_over_top = top_fill_replaces_inner_walls(*this->config);
-                const Polygons inner_region        = to_polygons(offset_ex(clip_walls_over_top ? infill_contour
-                                                                                               : diff_ex(infill_contour, top_expolygons),
-                                                                          wall_0_inset));
+                // MAGPIE: when the single pass holds the plan's detail walls, the first inner wall is a large wall and
+                // overlaps the last detail wall by the plan's boundary overlap, the way the full pass places it (the
+                // innermost fixed shell's overlap, or the H/2 profile's at that depth), scaled mm.
+                const coord_t detail_boundary_overlap =
+                    !wall_plan.active || single_pass_walls != this->detail_wall_count ? 0 :
+                    half_layer_outer_walls ? half_layer_wall_boundary_overlap(*this, wall_plan, single_pass_walls, this->detail_wall_count) :
+                                             wall_plan.boundary_overlap();
+                const ExPolygons inner_base = detail_boundary_overlap > 0 ? offset_ex(infill_contour, float(detail_boundary_overlap)) : infill_contour;
+                // ORCA: the single pass's inner contour follows its innermost bead, and wall_0_inset moves bead 0 only
+                // (OuterWallInsetBeadingStrategy), so the contour is taken back by wall_0_inset when bead 0 is the
+                // innermost bead. MAGPIE: with more single pass walls the innermost bead stays where the full pass puts it.
+                const coord_t inner_region_inset = single_pass_walls == 1 ? wall_0_inset : 0;
+                const Polygons inner_region        = to_polygons(offset_ex(clip_walls_over_top ? inner_base
+                                                                                               : diff_ex(inner_base, top_expolygons),
+                                                                          inner_region_inset));
                 // MAGPIE: the inner walls start at depth single_pass_walls. The single pass's fixed outer wall profile
                 // (detail nozzle spacing at depth 0) is not theirs: their first bead would take the detail width while
                 // its depth, and so its tool, is a large wall. Only the H/2 depths they hold carry a profile.
