@@ -931,9 +931,11 @@ protected:
     // Bedslinger mass model: cumulative printed mass at the previous layer, used to derive
     // the current layer mass for the per-layer Y acceleration limit (curr_y_acceleration_limit).
     double                              m_last_layer_accumulated_mass{ 0.0 };
-    // MAGPIE: layer time blending. The planner chosen by layer_time_planner, or nullptr, and the wait
+    // MAGPIE: the native mods this export calls (their ids), named in the G-code header.
+    std::set<std::string>               m_native_mods_used;
+    // MAGPIE: layer time blending. The planner chosen by layer_time_planner, or null, and the wait
     // sites written so far in G-code order.
-    const ModHost::TimePlanner         *m_layer_time_planner{ nullptr };
+    std::shared_ptr<const ModHost::TimePlanner> m_layer_time_planner;
     std::vector<LayerTimeWaitSite>      m_layer_time_sites;
     LayerTimeWaitAt                     m_layer_time_wait_at{ LayerTimeWaitAt::InPlace };
     // The layer time tower: placed at the first site; its footprint's lower left corner (brim included),

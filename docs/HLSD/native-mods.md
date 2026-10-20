@@ -75,8 +75,27 @@ millimetres, read at each call: the application switches it for very large beds.
 
 ## Native mods in the G-code
 
-When native mods are loaded, the G-code header names them (`; mods: id version, ...`) so a print can
-be reproduced. With none loaded nothing is written.
+When a print uses a native mod (the export calls one of its slots), the G-code header names it
+(`; mods: id version, ...`) so the print can be reproduced. A mod that is loaded but not used, such
+as a bundled one whose feature is off, is not named, so output without native code stays
+byte-identical to Orca's.
+
+## Slots
+
+| Slot | Header | Chosen by | Mods |
+|---|---|---|---|
+| `gcode.time_plan` v1 | `magpie_slot_time_plan.h` | `layer_time_planner` | `layer_time_blend` (`blend`) |
+
+The core checks what a slot returns before using it (counts, indices, finite numbers) and stops the
+slice with the mod's name when a call fails; it never falls back to its own behaviour.
+
+## Bundled native mods
+
+An official mod's source lives in `mods/<id>/` with its `mod.json`, and builds as its own target
+with the SDK template only. The build writes its package folder to `resources/mods/<id>/`
+(generated, not tracked): the manifest, `bin/<platform>/` and the `--mod-test` cases from
+`mods/<id>/tests/`. Its own unit tests (`mods/<id>/unit/`) compile the mod's sources with Catch2
+and nothing of the core; the core's side of its slot is tested through the built library.
 
 ## Tools
 

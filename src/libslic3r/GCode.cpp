@@ -3741,7 +3741,7 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
                 if (mark.kind == MarkKind::Site && k < n)
                     sites[k++].layer_id = mark.layer_id >= 2 ? mark.layer_id - 2 : 0;
         }
-        plan = m_layer_time_planner->plan(sites, print.config(), print_time_s);
+        plan = m_layer_time_planner->plan(sites, print.full_print_config(), [&print]() { return print.canceled(); }, print_time_s);
         // Leaving tower blocks out shifts the E axis when it is absolute, so then the tower stays whole.
         if (!m_config.use_relative_e_distances.value)
             plan.tower_end = n;
@@ -3839,6 +3839,8 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
         BOOST_LOG_TRIVIAL(warning) << message;
         print.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL, message);
     }
+    for (const std::string &message : plan.mod_warnings)
+        print.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL, m_layer_time_planner->mod_id + ": " + message);
 
     // The final estimate, statistics and post-processing run over the G-code as written.
     setup(m_processor, path_tmp);
@@ -4136,12 +4138,16 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     // an axis remap (belt printers), where the in-place lift would not be a plain Z move.
     m_layer_time_sites.clear();
     m_layer_time_planner = nullptr;
+    m_native_mods_used.clear();
     if (const std::string &planner = print.config().layer_time_planner.value; !planner.empty()) {
         m_layer_time_planner = ModHost::find_time_planner(planner);
         if (m_layer_time_planner == nullptr)
-            BOOST_LOG_TRIVIAL(error) << "Unknown layer time planner \"" << planner << "\"; no waits added";
-        else if (print.config().spiral_mode.value || m_writer.has_axis_remap())
+            // TRN %1% is the name of a layer time planner, which a mod provides.
+            throw Slic3r::SlicingError(Slic3r::format(_u8L("No loaded mod provides the layer time planner \"%1%\"."), planner));
+        if (print.config().spiral_mode.value || m_writer.has_axis_remap())
             m_layer_time_planner = nullptr;
+        else
+            m_native_mods_used.insert(m_layer_time_planner->mod_id);
     }
     // Where the waits happen. A tower is not printed in a by-object print, where the head would hit it.
     const std::string &wait_at = print.config().layer_time_blend_wait_at.value;
@@ -4827,9 +4833,9 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     std::string thumbnails_value = print.config().option<ConfigOptionString>("thumbnails")->value;
     // search string for the BTT_TFT label
     bool has_BTT_thumbnail = (thumbnails_value.find("BTT_TFT") != std::string::npos);
-    // MAGPIE: the native mods this G-code was made with, so it can be reproduced. Nothing when none is
-    // loaded, which keeps the mod-free output byte-identical.
-    const std::string native_mods = ModHost::native_mod_summary();
+    // MAGPIE: the native mods this G-code was made with, so it can be reproduced. Nothing when it uses
+    // none, which keeps the output of a print without them byte-identical.
+    const std::string native_mods = ModHost::native_mod_summary(m_native_mods_used);
     if (has_BTT_thumbnail && !native_mods.empty())
         file.write_format("; mods: %s\n", native_mods.c_str());
 

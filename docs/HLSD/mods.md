@@ -86,11 +86,12 @@ an empty value keeps Orca's own behaviour.
 |---|---|---|---|
 | `support.generator` | `support_generator` | `orca`, `cura`, `resin`, `mixed` | fills an object's support layers |
 | `wall.plan` | `wall_planner` | `multi_nozzle` | splits a region's walls between two nozzles |
-| `gcode.time_plan` | `layer_time_planner` | `blend` | the wait sites of a print (estimated interval since the previous site, park trip, tower block times, chain breaks, guessed intervals) in, per-site waits, park choice, tower cut and warnings out |
+| `gcode.time_plan` | `layer_time_planner` | `blend` (native mod `layer_time_blend`) | the wait sites of a print (estimated interval since the previous site, park trip, tower block times, chain breaks, guessed intervals) in, per-site waits, park choice, tower cut and warnings out |
 
-`gcode.time_plan` exchanges numbers only, never G-code or geometry; the core marks the sites,
-estimates their times, fills in the waits and re-estimates the result. Its design is in
-[layer-time-blending.md](layer-time-blending.md).
+`gcode.time_plan` is a C slot filled by native mods only ([native-mods.md](native-mods.md)); the
+core has no module of its own there. It exchanges numbers only, never G-code or geometry; the core
+marks the sites, estimates their times, fills in the waits and re-estimates the result. Its design
+is in [layer-time-blending.md](layer-time-blending.md).
 
 ## Mod index
 

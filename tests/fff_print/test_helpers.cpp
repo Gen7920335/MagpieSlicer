@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "libslic3r/ModHost/ModPackage.hpp"
 #include "test_utils.hpp"
 
 namespace Slic3r { namespace Test {
@@ -509,13 +510,28 @@ std::vector<std::string> role_sequence(const std::string &gcode, const std::vect
     return seq;
 }
 
-BundledMods::BundledMods() : previous(ModHost::active_mods())
+BundledMods::BundledMods() : previous(ModHost::active_mods()), previous_native(ModHost::active_native_mods())
 {
-    ModHost::set_active_mods(std::make_shared<const ModHost::ModSet>(
-        ModHost::ModSet::load_dir(boost::filesystem::path(PROFILES_DIR) / ".." / "mods", errors)));
+    namespace fs = boost::filesystem;
+    const fs::path temp = fs::temp_directory_path() / fs::unique_path("magpie-bundled-%%%%-%%%%");
+    temp_dir            = temp.string();
+    ModHost::ModLoadOptions options;
+    options.bundled_dir   = (fs::path(PROFILES_DIR) / ".." / "mods").string();
+    options.installed_dir = (temp / "mods").string();
+    options.cache_dir     = (temp / "cache").string();
+    ModHost::ModLoadResult result = ModHost::load_mods(options);
+    errors                        = result.errors;
+    ModHost::set_active_mods(result.mods);
+    ModHost::set_active_native_mods(result.native);
 }
 
-BundledMods::~BundledMods() { ModHost::set_active_mods(previous); }
+BundledMods::~BundledMods()
+{
+    ModHost::set_active_mods(previous);
+    ModHost::set_active_native_mods(previous_native);
+    boost::system::error_code ec;
+    boost::filesystem::remove_all(temp_dir, ec);
+}
 
 } } // namespace Slic3r::Test
 

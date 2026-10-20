@@ -3,6 +3,11 @@
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/sdk/MagpieMod.cmake)
 
+# The official mods, bundled with the application. Each target adds itself to MAGPIE_OFFICIAL_MOD_TARGETS,
+# which the application and the tests that load it depend on.
+set(MAGPIE_OFFICIAL_MOD_TARGETS "" CACHE INTERNAL "Targets of the bundled native mods")
+add_subdirectory(layer_time_blend)
+
 if (BUILD_TESTS)
     # Test mods for tests/libslic3r/test_native_mods.cpp, as package folders <id>/mod.json + bin/<platform>/.
     set(MAGPIE_TEST_MODS_DIR "${CMAKE_BINARY_DIR}/test_mods" CACHE INTERNAL "Package folders of the test mods")

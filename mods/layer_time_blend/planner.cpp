@@ -1,17 +1,25 @@
-#include "LayerTimeBlend.hpp"
-
-#include "libslic3r/PrintConfig.hpp"
-
-#include <boost/log/trivial.hpp>
+#include "planner.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <string>
+#include <utility>
 
-namespace Slic3r {
-namespace ModHost {
 namespace LayerTimeBlend {
 
 namespace {
+
+std::function<void(const std::string &)> &diagnostic_sink()
+{
+    static std::function<void(const std::string &)> sink;
+    return sink;
+}
+
+void diagnostic(const std::string &text)
+{
+    if (diagnostic_sink())
+        diagnostic_sink()(text);
+}
 
 // Shortest layer time the log type works with, s. A layer time is never this short in practice; it
 // keeps log() finite for an empty interval.
@@ -90,7 +98,8 @@ std::vector<double> blend_chain(std::vector<double> v, double limit, int ease_la
             return v;
     }
     // PERMANENT DIAGNOSTIC: the alternation did not settle, which the closedness argument rules out.
-    BOOST_LOG_TRIVIAL(error) << "Layer time blending: easing did not converge in " << max_rounds << " rounds over " << v.size() << " layers";
+    diagnostic("Layer time blending: easing did not converge in " + std::to_string(max_rounds) + " rounds over " +
+               std::to_string(v.size()) + " layers");
     lipschitz_envelope(v, limit);
     return v;
 }
@@ -257,29 +266,6 @@ WaitPlan plan(const std::vector<WaitSite> &sites, const Settings &settings, doub
     return out;
 }
 
-Settings settings_from(const PrintConfig &config)
-{
-    Settings s;
-    s.log            = config.layer_time_blend_log.value;
-    s.max_diff_s     = config.layer_time_blend_max_diff.value;
-    s.max_ratio_pct  = config.layer_time_blend_max_ratio.value;
-    s.ease_layers    = config.layer_time_blend_ease_layers.value;
-    s.start_layer    = config.layer_time_blend_start_layer.value;
-    s.wait_cap_s     = config.layer_time_blend_wait_cap.value;
-    s.warn_total_pct = config.layer_time_blend_warn_total.value;
-    s.warn_single_s  = config.layer_time_blend_warn_single.value;
-    s.park           = config.layer_time_blend_wait_at.value == "park" || config.layer_time_blend_wait_at.value == "purge_tower";
-    s.park_min_s     = config.layer_time_blend_in_place_max.value;
-    return s;
-}
-
-TimePlanner make_planner()
-{
-    return {"blend", "Layer time blending", [](const std::vector<WaitSite> &sites, const PrintConfig &config, double print_time_s) {
-                return plan(sites, settings_from(config), print_time_s);
-            }};
-}
+void set_diagnostic_sink(std::function<void(const std::string &)> sink) { diagnostic_sink() = std::move(sink); }
 
 } // namespace LayerTimeBlend
-} // namespace ModHost
-} // namespace Slic3r

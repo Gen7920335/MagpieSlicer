@@ -1262,8 +1262,11 @@ endif ()
 
 add_subdirectory(src)
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT OrcaSlicer_app_gui)
-# MAGPIE: native mods (SDK template only, no core sources).
+# MAGPIE: native mods (SDK template only, no core sources). The bundled ones are built with the application.
 add_subdirectory(mods)
+if (MAGPIE_OFFICIAL_MOD_TARGETS)
+    add_dependencies(OrcaSlicer ${MAGPIE_OFFICIAL_MOD_TARGETS})
+endif ()
 
 add_dependencies(gettext_make_pot hintsToPot)
 

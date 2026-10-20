@@ -4,6 +4,7 @@
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
+#include "libslic3r/ModHost/NativeMods.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/Print.hpp"
@@ -141,12 +142,14 @@ int role_passes(const std::string &gcode, const std::string &role);
 // The `roles` in the order their extrusion blocks first appear, consecutive repeats collapsed.
 std::vector<std::string> role_sequence(const std::string &gcode, const std::vector<std::string> &roles);
 
-// Makes the bundled mods (resources/mods) the active mods while it lives, and restores the
-// previous set afterwards. errors lists the mods that failed to load.
+// Makes the bundled mods (resources/mods), with their native code, the active mods while it lives,
+// and restores the previous set afterwards. errors lists the mods that failed to load.
 struct BundledMods
 {
-    std::shared_ptr<const ModHost::ModSet> previous;
-    std::vector<std::string>               errors;
+    std::shared_ptr<const ModHost::ModSet>       previous;
+    std::shared_ptr<const ModHost::NativeModSet> previous_native;
+    std::vector<std::string>                     errors;
+    std::string                                  temp_dir; // the empty installed-mods folder and the cache
     BundledMods();
     ~BundledMods();
 };
