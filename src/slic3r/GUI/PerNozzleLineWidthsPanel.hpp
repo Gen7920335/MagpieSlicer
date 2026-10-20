@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-class wxTextCtrl;
+class TextInput;
 class wxWindow;
 
 namespace Slic3r {
@@ -36,7 +36,7 @@ private:
     {
         std::string key; // the per-nozzle setting
         size_t      nozzle;
-        wxTextCtrl *control;
+        ::TextInput *control;
     };
 
     void rebuild(const std::vector<double> &nozzles_mm);

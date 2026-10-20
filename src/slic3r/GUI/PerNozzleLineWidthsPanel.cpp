@@ -4,6 +4,7 @@
 #include "I18N.hpp"
 #include "libslic3r/LineWidths.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "Widgets/TextInput.hpp"
 
 #include <wx/sizer.h>
 #include <wx/stattext.h>
@@ -47,6 +48,8 @@ bool one_nozzle_size(const std::vector<double> &nozzles_mm)
 
 PerNozzleLineWidthsPanel::PerNozzleLineWidthsPanel(wxWindow *parent) : wxPanel(parent), m_config(std::make_unique<DynamicPrintConfig>())
 {
+    // The settings page's palette colour, dark mode included.
+    SetBackgroundColour(parent->GetBackgroundColour());
     SetSizer(new wxBoxSizer(wxVERTICAL));
 }
 
@@ -75,14 +78,14 @@ void PerNozzleLineWidthsPanel::rebuild(const std::vector<double> &nozzles_mm)
         grid->Add(new wxStaticText(this, wxID_ANY, def != nullptr ? _(def->label) : wxString::FromUTF8(width_key)), 0, wxALIGN_CENTER_VERTICAL);
         const std::string key = per_nozzle_line_width_key(width_key);
         for (size_t nozzle = 0; nozzle < nozzles_mm.size(); ++nozzle) {
-            auto *control = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(70), -1), wxTE_PROCESS_ENTER);
+            auto *control = new ::TextInput(this, wxEmptyString, wxEmptyString, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(70), -1), wxTE_PROCESS_ENTER);
             control->SetToolTip(format_wxstr(_L("%1% on nozzle %2% (%3% mm), in mm. Leave empty to use the line width setting."),
                                              def != nullptr ? _(def->label) : wxString::FromUTF8(width_key), nozzle + 1,
                                              format_mm(nozzles_mm[nozzle])));
             m_cells.push_back({ key, nozzle, control });
             const size_t idx = m_cells.size() - 1;
-            control->Bind(wxEVT_TEXT_ENTER, [this, idx](wxCommandEvent &) { commit(m_cells[idx]); });
-            control->Bind(wxEVT_KILL_FOCUS, [this, idx](wxFocusEvent &e) { commit(m_cells[idx]); e.Skip(); });
+            control->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, [this, idx](wxCommandEvent &e) { commit(m_cells[idx]); e.Skip(); });
+            control->GetTextCtrl()->Bind(wxEVT_KILL_FOCUS, [this, idx](wxFocusEvent &e) { commit(m_cells[idx]); e.Skip(); });
             grid->Add(control, 0, wxALIGN_CENTER_VERTICAL);
         }
     }
@@ -113,10 +116,10 @@ void PerNozzleLineWidthsPanel::load(const DynamicPrintConfig &process, const Dyn
     m_loading = true;
     for (const Cell &cell : m_cells) {
         const double value = stored_values(cell.key)[cell.nozzle];
-        cell.control->ChangeValue(value > 0. ? format_mm(value) : wxString());
+        cell.control->GetTextCtrl()->ChangeValue(value > 0. ? format_mm(value) : wxString());
         // The width the empty cell gives, greyed.
         const std::string width_key = cell.key.substr(0, cell.key.size() - std::string("_per_nozzle").size());
-        cell.control->SetHint(format_mm(per_nozzle_line_width_fallback_mm(*m_config, width_key.c_str(), cell.nozzle)));
+        cell.control->GetTextCtrl()->SetHint(format_mm(per_nozzle_line_width_fallback_mm(*m_config, width_key.c_str(), cell.nozzle)));
     }
     m_loading = false;
     if (IsShown() != shown) {
@@ -131,11 +134,11 @@ void PerNozzleLineWidthsPanel::commit(const Cell &cell)
     if (m_loading)
         return;
     std::vector<double> values = stored_values(cell.key);
-    const wxString      text   = cell.control->GetValue().Strip(wxString::both);
+    const wxString      text   = cell.control->GetTextCtrl()->GetValue().Strip(wxString::both);
     double              mm     = 0.;
     // Empty is 0 (the setting); a number that is not a width shows the stored value again.
     if (!text.empty() && (!text.ToCDouble(&mm) || !std::isfinite(mm) || mm < 0.)) {
-        cell.control->ChangeValue(values[cell.nozzle] > 0. ? format_mm(values[cell.nozzle]) : wxString());
+        cell.control->GetTextCtrl()->ChangeValue(values[cell.nozzle] > 0. ? format_mm(values[cell.nozzle]) : wxString());
         return;
     }
     if (mm == values[cell.nozzle])
