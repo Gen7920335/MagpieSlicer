@@ -1026,6 +1026,13 @@ private:
         circle.front().translate(p.first);
         {
             Point hash_pos = p.first / ((config.min_radius + 1) / 10);
+            // Orca: inside the parallel tip placement, keep the tip for insert_ordered_tips(). Overhangs of several
+            // layers place tips into the same layer; inserting them as the threads came made the first thread win a
+            // shared slot (hash_pos), so the tree differed from run to run.
+            if (tl_pending_tips != nullptr) {
+                tl_pending_tips->push_back({ std::move(p), insert_layer, dont_move_until, roof, roof_recovery_dtt, skip_ovalisation });
+                return;
+            }
             std::lock_guard<std::mutex> critical_section_movebounds(m_mutex_movebounds);
             if (!m_already_inserted[insert_layer].count(hash_pos)) {
                 // normalize the point a bit to also catch points which are so close that inserting it would achieve nothing
@@ -1055,6 +1062,29 @@ private:
         }
     }
 
+public:
+    // A tip placed by one overhang layer of the parallel tip placement, inserted later in overhang order.
+    struct PendingTip
+    {
+        std::pair<Point, LineStatus> p;
+        LayerIndex                   insert_layer;
+        size_t                       dont_move_until;
+        bool                         roof;
+        size_t                       roof_recovery_dtt;
+        bool                         skip_ovalisation;
+    };
+    // While set (per thread), add_point_as_influence_area() appends here instead of inserting.
+    static inline thread_local std::vector<PendingTip> *tl_pending_tips = nullptr;
+
+    // Insert the collected tips one overhang layer after the other, as a serial run would.
+    void insert_ordered_tips(std::vector<std::vector<PendingTip>> &&pending)
+    {
+        for (std::vector<PendingTip> &tips : pending)
+            for (PendingTip &tip : tips)
+                add_point_as_influence_area(std::move(tip.p), tip.insert_layer, tip.dont_move_until, tip.roof, tip.roof_recovery_dtt, tip.skip_ovalisation);
+    }
+
+private:
     // Outputs
     std::vector<SupportElements>                       &move_bounds;
 
@@ -1374,12 +1404,15 @@ static void generate_initial_areas(
     }
 
     RichInterfacePlacer rich_interface_placer{ interface_placer, volumes, force_tip_to_roof, num_support_layers, move_bounds };
+    std::vector<std::vector<RichInterfacePlacer::PendingTip>> pending_tips(raw_overhangs.size());
 
     tbb::parallel_for(tbb::blocked_range<size_t>(0, raw_overhangs.size()),
         [&volumes, &config, &raw_overhangs, &mesh_group_settings,
          min_xy_dist, roof_enabled, num_support_roof_layers, extra_outset, circle_length_to_half_linewidth_change, connect_length,
-         &rich_interface_placer, &throw_on_cancel](const tbb::blocked_range<size_t> &range) {
+         &rich_interface_placer, &pending_tips, &throw_on_cancel](const tbb::blocked_range<size_t> &range) {
         for (size_t raw_overhang_idx = range.begin(); raw_overhang_idx < range.end(); ++ raw_overhang_idx) {
+            RichInterfacePlacer::tl_pending_tips = &pending_tips[raw_overhang_idx];
+            struct ClearPending { ~ClearPending() { RichInterfacePlacer::tl_pending_tips = nullptr; } } clear_pending;
             size_t           layer_idx    = raw_overhangs[raw_overhang_idx].first;
             const Polygons  &overhang_raw = *raw_overhangs[raw_overhang_idx].second;
 
@@ -1505,6 +1538,7 @@ static void generate_initial_areas(
             }
         }
     });
+    rich_interface_placer.insert_ordered_tips(std::move(pending_tips));
 
     finalize_raft_contact(print_object, raft_contact_layer_idx, interface_placer.top_contacts_mutable(), move_bounds);
 }
