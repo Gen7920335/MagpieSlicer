@@ -4914,9 +4914,14 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     // MAGPIE: the native mods this G-code was made with, so it can be reproduced: the export's own slots, the
     // objects' support and the accelerator of the slicing session. Nothing when it uses none, which keeps
     // the output of a print without them byte-identical.
-    for (const PrintObject *object : print.objects())
+    for (const PrintObject *object : print.objects()) {
         for (const std::string &id : object->native_mods_used())
             m_native_mods_used.insert(id);
+        // The wall planners the object's regions name (wall.plan slot), each opened for them.
+        for (const PrintRegion &region : object->all_regions())
+            if (const std::string id = ModHost::wall_planner_mod_id(region.config().wall_planner.value); !id.empty())
+                m_native_mods_used.insert(id);
+    }
     if (const std::string accelerator = Accel::session_mod(); !accelerator.empty())
         m_native_mods_used.insert(accelerator);
     const std::string native_mods = ModHost::native_mod_summary(m_native_mods_used);

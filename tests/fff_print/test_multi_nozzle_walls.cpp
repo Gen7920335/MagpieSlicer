@@ -210,6 +210,8 @@ TEST_CASE("Multi-nozzle walls off leaves wall routing to the wall filament", "[M
     DYNAMIC_SECTION(wall_generator) {
         const std::string output = slice({ cube(20) }, two_nozzle_config(0.4, 0.15, 1, wall_generator, false));
         CHECK(tools_for_role(output, "perimeter") == std::set<int>{ 0 });
+        // Loaded but not used, the mod is not named.
+        CHECK(output.find("; mods:") == std::string::npos);
     }
 }
 
@@ -223,6 +225,8 @@ TEST_CASE("Classic and Arachne route detail walls to a smaller nozzle", "[MultiN
         const std::string output = slice({ cube(20) }, two_nozzle_config(0.4, detail_nozzle, 1, wall_generator, true));
         CHECK(tools_for_role(output, "perimeter") == std::set<int>{ 0, 1 });
         CHECK(tools_for_role(output, "infill") == std::set<int>{ 0 });
+        // The G-code names the mod whose planner made its walls.
+        CHECK(output.find("; mods: multi_nozzle_walls ") != std::string::npos);
     }
 }
 

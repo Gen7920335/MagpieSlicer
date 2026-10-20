@@ -89,6 +89,9 @@ private:
     void                                *m_state { nullptr };
 };
 
+// The id of the loaded mod that provides the planner `name`, or "" (also for an empty name).
+std::string wall_planner_mod_id(const std::string &name);
+
 // Opens the planner `name` for a region. full_config is the print's full config (it holds the mod parameters);
 // print_config the print's own, object_config the region's object (or null). Nullptr when name is empty; throws
 // SlicingError when no loaded mod provides the planner or the mod refuses the region.
