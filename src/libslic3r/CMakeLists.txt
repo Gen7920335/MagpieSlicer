@@ -113,8 +113,6 @@ set(lisbslic3r_sources
     Config.cpp
     Config.hpp
     GCodeCompatibility.hpp
-    ModHost/Builtin/CuraSupport.cpp
-    ModHost/Builtin/CuraSupport.hpp
     ModHost/Builtin/MixedSupport.cpp
     ModHost/Builtin/MixedSupport.hpp
     ModHost/Builtin/MultiNozzleWalls.cpp
@@ -125,8 +123,8 @@ set(lisbslic3r_sources
     ModHost/Expr.hpp
     StageTimer.cpp
     StageTimer.hpp
-    Gpu/CudaCompute.cpp
-    Gpu/CudaCompute.hpp
+    Accel/BatchAccel.cpp
+    Accel/BatchAccel.hpp
     ModHost/ModIndex.cpp
     ModHost/ModIndex.hpp
     ModHost/LegacySettings.cpp
@@ -138,8 +136,11 @@ set(lisbslic3r_sources
     ModHost/ModTest.cpp
     ModHost/ModTest.hpp
     ModHost/NativeCall.cpp
+    ModHost/NativeGeometry.cpp
     ModHost/NativeMods.cpp
     ModHost/NativeMods.hpp
+    ModHost/NativeSupport.cpp
+    ModHost/NativeSupport.hpp
     ModHost/ParamGraph.cpp
     ModHost/SlotRegistry.cpp
     ModHost/SlotRegistry.hpp
@@ -690,20 +691,6 @@ add_library(libslic3r STATIC ${lisbslic3r_sources}
     "${CMAKE_CURRENT_BINARY_DIR}/libslic3r_version.h"
     ${OpenVDBUtils_SOURCES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${lisbslic3r_sources})
-
-# MAGPIE: CUDA test mod. The kernels are PTX text compiled by the NVIDIA driver at run time, so the
-# build needs no CUDA toolkit; the text is embedded into Gpu/CudaCompute.cpp.
-set(magpie_cuda_ptx "${CMAKE_CURRENT_SOURCE_DIR}/Gpu/CudaKernels.ptx")
-set(magpie_cuda_ptx_header "${CMAKE_CURRENT_BINARY_DIR}/Gpu/CudaKernelsPtx.hpp")
-add_custom_command(OUTPUT "${magpie_cuda_ptx_header}"
-    COMMAND "${CMAKE_COMMAND}" -DINPUT=${magpie_cuda_ptx} -DOUTPUT=${magpie_cuda_ptx_header}
-            -DNAME=magpie_cuda_kernels_ptx -P "${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake"
-    DEPENDS "${magpie_cuda_ptx}" "${CMAKE_SOURCE_DIR}/cmake/EmbedText.cmake"
-    VERBATIM)
-add_custom_target(magpie_cuda_ptx DEPENDS "${magpie_cuda_ptx_header}")
-add_dependencies(libslic3r magpie_cuda_ptx)
-set_property(SOURCE Gpu/CudaCompute.cpp APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_BINARY_DIR}/Gpu")
-set_property(SOURCE Gpu/CudaCompute.cpp APPEND PROPERTY OBJECT_DEPENDS "${magpie_cuda_ptx_header}")
 
 if (SLIC3R_STATIC)
     set(CGAL_Boost_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)

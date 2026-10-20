@@ -1,37 +1,40 @@
 // CuraEngine's normal ("area") support, ported from CuraEngine src/support.cpp at commit 47b0388
 // (2026-10-15, AGPL-3.0, like OrcaSlicer). The support, roof and bottom areas follow CuraEngine's
-// AreaSupport::generateSupportAreasForMesh, generateSupportRoof and generateSupportBottom; the
-// areas are then printed with Orca's support toolpaths. Cura works in micrometres; every Cura
-// constant below is converted to Orca's scaled units at its declaration.
+// AreaSupport::generateSupportAreasForMesh, generateSupportRoof and generateSupportBottom; the core
+// prints them with Orca's support toolpaths (slot support.areas, magpie_support.h). Cura works in
+// micrometres; every Cura constant below is converted to integer units at its declaration.
+//
+// Every polygon operation runs in the core (geometry.hpp), and the arithmetic around them is written
+// exactly as it was inside the core, so the areas are the same bit for bit.
 
-#include "CuraSupport.hpp"
+#include "geometry.hpp"
 
-#include "libslic3r/AABBTreeLines.hpp"
-#include "libslic3r/BoundingBox.hpp"
-#include "libslic3r/ClipperUtils.hpp"
-#include "libslic3r/ExPolygon.hpp"
-#include "libslic3r/Flow.hpp"
-#include "libslic3r/Layer.hpp"
-#include "libslic3r/ModHost/ModSet.hpp"
-#include "libslic3r/Print.hpp"
-#include "libslic3r/Support/SupportCommon.hpp"
-#include "libslic3r/Support/SupportLayer.hpp"
-#include "libslic3r/Support/SupportParameters.hpp"
-
-#include <tbb/blocked_range.h>
-#include <tbb/parallel_for.h>
+#include <magpie_support.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstdlib>
+#include <type_traits>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <utility>
+#include <vector>
 
-namespace Slic3r {
-namespace ModHost {
-namespace CuraSupport {
+#define CURA_MOD_ID "cura_support"
+#define CURA_MOD_VERSION "1.0.0"
+
+MAGPIE_MOD_DEFINE(CURA_MOD_ID, CURA_MOD_VERSION)
+
+namespace cura {
 
 namespace {
 
-// Cura micrometres in Orca's scaled units (SCALING_FACTOR is mm per scaled unit; 1 um = 1e-3 mm).
-inline coord_t um(double micrometres) { return coord_t(std::llround(micrometres * 1e-3 / SCALING_FACTOR)); }
+struct Cancelled {};
+
+// Cura micrometres in integer units (1 um = 1e-3 mm).
+inline coord_t um(double micrometres) { return coord_t(std::llround(micrometres * 1e-3 / scaling_factor())); }
 
 // Cura's Shape::offset defaults: mitre joins with a mitre limit of 1.2.
 Polygons cura_offset(const Polygons &polygons, coord_t distance, JoinType join = jtMiter)
@@ -52,8 +55,8 @@ Polygons remove_small_areas(const Polygons &polygons, double min_area_mm2)
 {
     if (min_area_mm2 <= 0. || polygons.empty())
         return polygons;
-    // Scaled area of one square millimetre.
-    const double min_area = min_area_mm2 / (SCALING_FACTOR * SCALING_FACTOR);
+    // Integer-unit area of min_area_mm2 square millimetres.
+    const double min_area = min_area_mm2 / (scaling_factor() * scaling_factor());
     ExPolygons islands = union_ex(polygons);
     islands.erase(std::remove_if(islands.begin(), islands.end(), [min_area](const ExPolygon &e) { return std::abs(e.contour.area()) < min_area; }),
                   islands.end());
@@ -63,18 +66,133 @@ Polygons remove_small_areas(const Polygons &polygons, double min_area_mm2)
 double bounded_tan(double angle_rad)
 {
     // Cura's boundedTan: tan clamped away from +-90 degrees.
-    constexpr double limit = M_PI / 2. - 0.0001;
+    constexpr double limit = PI / 2. - 0.0001;
     return std::tan(std::clamp(angle_rad, -limit, limit));
 }
 
-template<class Fn> void parallel_layers(size_t begin, size_t end, const PrintObject &object, Fn &&fn)
+// Runs fn(i) for i in [begin, end) on the core's thread pool. Exceptions stay on this side of the
+// boundary: the first is rethrown here once the loop is over.
+template<class Fn> void parallel_layers(mp_ctx *ctx, size_t begin, size_t end, Fn &&fn)
 {
-    tbb::parallel_for(tbb::blocked_range<size_t>(begin, end), [&](const tbb::blocked_range<size_t> &range) {
-        for (size_t i = range.begin(); i < range.end(); ++i) {
-            if (object.print()->canceled()) throw CanceledException();
-            fn(i);
+    if (end <= begin)
+        return;
+    struct Job
+    {
+        std::remove_reference_t<Fn> *fn;
+        size_t            begin;
+        mp_ctx           *ctx;
+        std::atomic<bool> failed{false};
+        bool              cancelled = false;
+        std::mutex        mutex;
+        std::string       error;
+    } job;
+    job.fn    = &fn;
+    job.begin = begin;
+    job.ctx   = ctx;
+    magpie::host()->parallel_for(ctx, uint32_t(end - begin), [](void *user, uint32_t i) {
+        Job &j = *static_cast<Job *>(user);
+        if (j.failed.load())
+            return;
+        try {
+            if (magpie::host()->cancelled(j.ctx))
+                throw Cancelled{};
+            (*j.fn)(j.begin + i);
+        } catch (const Cancelled &) {
+            std::lock_guard<std::mutex> lock(j.mutex);
+            j.cancelled = true;
+            j.failed    = true;
+        } catch (const std::exception &e) {
+            std::lock_guard<std::mutex> lock(j.mutex);
+            if (j.error.empty())
+                j.error = e.what();
+            j.failed = true;
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(j.mutex);
+            if (j.error.empty())
+                j.error = "unknown exception";
+            j.failed = true;
         }
-    });
+    }, &job);
+    if (job.cancelled)
+        throw Cancelled{};
+    if (job.failed)
+        throw std::runtime_error(job.error);
+}
+
+// Settings of CuraEngine's normal support that Orca has no setting for: this mod's parameters, in
+// Cura's own terms. The defaults are the manifest's.
+struct ModSettings
+{
+    double join_distance_mm         = 2.0;  // support_join_distance
+    double min_feature_width_mm     = 0.;   // min_even_wall_line_width; 0 = 0.85 x support line width
+    bool   z_overrides_xy           = true; // support_xy_overrides_z == z_overrides_xy
+    double xy_distance_overhang_mm  = 0.2;  // support_xy_distance_overhang
+    double stair_step_height_mm     = 0.3;  // support_bottom_stair_step_height
+    double stair_step_width_mm      = 5.0;  // support_bottom_stair_step_width
+    double stair_step_min_slope_deg = 10.;  // support_bottom_stair_step_min_slope
+    double minimum_support_area_mm2 = 0.;   // minimum_support_area
+    double minimum_roof_area_mm2    = 1.;   // minimum_roof_area
+    double minimum_bottom_area_mm2  = 1.;   // minimum_bottom_area
+    double roof_offset_mm           = 0.;   // support_roof_offset
+    double bottom_offset_mm         = 0.;   // support_bottom_offset
+    bool   use_towers               = false; // support_use_towers
+    double tower_diameter_mm        = 3.0;  // support_tower_diameter
+    double tower_max_supported_mm   = 3.0;  // support_tower_maximum_supported_diameter
+    double tower_roof_angle_deg     = 65.;  // support_tower_roof_angle
+    bool   conical_enabled          = false; // support_conical_enabled
+    double conical_angle_deg        = 30.;  // support_conical_angle
+    double conical_min_width_mm     = 5.0;  // support_conical_min_width
+    bool   solid_first_layer        = false; // Magpie line 1's cura_solid_support_raft
+};
+
+ModSettings read_settings(mp_ctx *ctx)
+{
+    ModSettings s;
+    auto num = [ctx](const char *name, double &dst) {
+        if (auto v = magpie::param_f64(ctx, name))
+            dst = *v;
+    };
+    auto flag = [ctx](const char *name, bool &dst) {
+        if (auto v = magpie::param_f64(ctx, name))
+            dst = *v != 0.;
+    };
+    num("join_distance", s.join_distance_mm);
+    num("min_feature_width", s.min_feature_width_mm);
+    flag("z_overrides_xy", s.z_overrides_xy);
+    num("xy_distance_overhang", s.xy_distance_overhang_mm);
+    num("stair_step_height", s.stair_step_height_mm);
+    num("stair_step_width", s.stair_step_width_mm);
+    num("stair_step_min_slope", s.stair_step_min_slope_deg);
+    num("minimum_support_area", s.minimum_support_area_mm2);
+    num("minimum_roof_area", s.minimum_roof_area_mm2);
+    num("minimum_bottom_area", s.minimum_bottom_area_mm2);
+    num("roof_offset", s.roof_offset_mm);
+    num("bottom_offset", s.bottom_offset_mm);
+    flag("use_towers", s.use_towers);
+    num("tower_diameter", s.tower_diameter_mm);
+    num("tower_max_supported_diameter", s.tower_max_supported_mm);
+    num("tower_roof_angle", s.tower_roof_angle_deg);
+    flag("conical_enabled", s.conical_enabled);
+    num("conical_angle", s.conical_angle_deg);
+    num("conical_min_width", s.conical_min_width_mm);
+    flag("solid_first_layer", s.solid_first_layer);
+    return s;
+}
+
+double config_f64(mp_ctx *ctx, const char *key)
+{
+    double v = 0.;
+    if (magpie::host()->config_f64(ctx, key, -1, &v) != MP_OK)
+        throw std::runtime_error(std::string("setting ") + key + " could not be read");
+    return v;
+}
+
+std::string config_str(mp_ctx *ctx, const char *key)
+{
+    char buf[256] = {};
+    if (magpie::host()->config_str(ctx, key, -1, buf, uint32_t(sizeof(buf))) != MP_OK)
+        throw std::runtime_error(std::string("setting ") + key + " could not be read");
+    return buf;
 }
 
 struct Inputs
@@ -94,58 +212,62 @@ struct Inputs
     coord_t roof_line_width;
     coord_t bottom_line_width;
     Polygon machine_border;        // printable area, for conical support
+    double  layer_height_mm;
 
-    std::vector<Polygons> outlines;  // storage.getLayerOutlines per layer
-    std::vector<Polygons> enforcers; // force_overhang
-    std::vector<Polygons> blockers;  // anti_overhang
+    std::vector<ExPolygons> slices;    // the object's islands per layer
+    std::vector<Polygons>   outlines;  // storage.getLayerOutlines per layer
+    std::vector<Polygons>   enforcers; // force_overhang
+    std::vector<Polygons>   blockers;  // anti_overhang
+    std::vector<Polygons>   mask;      // empty, or per layer the only places support may go
 };
 
-Inputs gather_inputs(const PrintObject &object, const ModSettings &settings)
+Inputs gather_inputs(mp_ctx *ctx, const mp_support_input_v1 &c)
 {
-    const PrintObjectConfig &config = object.config();
     Inputs in;
-    in.layer_thickness   = scale_(config.layer_height.value);
-    in.z_distance_top    = scale_(config.support_top_z_distance.value);
-    in.z_distance_bottom = scale_(config.support_bottom_z_distance.value);
-    in.xy_distance       = scale_(config.support_object_xy_distance.value);
-    in.extension_offset  = scale_(config.support_expansion.value);
+    in.layer_thickness   = scale_(config_f64(ctx, "layer_height"));
+    in.z_distance_top    = scale_(config_f64(ctx, "support_top_z_distance"));
+    in.z_distance_bottom = scale_(config_f64(ctx, "support_bottom_z_distance"));
+    in.xy_distance       = scale_(config_f64(ctx, "support_object_xy_distance"));
+    in.extension_offset  = scale_(config_f64(ctx, "support_expansion"));
     // Orca's threshold is measured from the horizontal and 0 means automatic; Cura's support_angle
     // is measured from the vertical. Cura's own default (50 degrees) stands in for automatic.
-    const int threshold  = config.support_threshold_angle.value;
-    in.support_angle_rad = Geometry::deg2rad(threshold > 0 ? 90. - double(std::min(threshold, 89)) : 50.);
-    in.automatic         = is_auto(config.support_type.value);
-    in.platform_only     = config.support_on_build_plate_only.value;
+    const int threshold  = int(config_f64(ctx, "support_threshold_angle"));
+    in.support_angle_rad = deg2rad(threshold > 0 ? 90. - double(std::min(threshold, 89)) : 50.);
+    // is_auto(): normal(auto) and tree(auto).
+    const std::string type = config_str(ctx, "support_type");
+    in.automatic         = type.size() >= 6 && type.compare(type.size() - 6, 6, "(auto)") == 0;
+    in.platform_only     = config_f64(ctx, "support_on_build_plate_only") != 0.;
 
-    const Flow support_flow   = support_material_flow(&object);
-    const Flow interface_flow = support_material_interface_flow(&object);
-    in.support_line_width = coord_t(support_flow.scaled_width());
-    in.roof_line_width    = coord_t(interface_flow.scaled_width());
+    in.support_line_width = coord_t(c.support_line_width);
+    in.roof_line_width    = coord_t(c.interface_line_width);
     in.bottom_line_width  = in.roof_line_width;
 
-    const double layer_height = config.layer_height.value;
-    in.roof_layer_count   = size_t(std::max(0, config.support_interface_top_layers.value));
-    const int bottom      = config.support_interface_bottom_layers.value;
-    in.bottom_layer_count = size_t(std::max(0, bottom < 0 ? config.support_interface_top_layers.value : bottom));
-    (void) layer_height;
+    in.layer_height_mm    = config_f64(ctx, "layer_height");
+    const int top_layers  = int(config_f64(ctx, "support_interface_top_layers"));
+    in.roof_layer_count   = size_t(std::max(0, top_layers));
+    const int bottom      = int(config_f64(ctx, "support_interface_bottom_layers"));
+    in.bottom_layer_count = size_t(std::max(0, bottom < 0 ? top_layers : bottom));
 
-    const auto &area = object.print()->config().printable_area.values;
-    for (const Vec2d &p : area)
-        in.machine_border.points.emplace_back(scale_(p.x()), scale_(p.y()));
-    // The printable area is in bed coordinates; the object's layers are in object coordinates.
-    in.machine_border.translate(-object.center_offset());
+    in.machine_border.points.assign(reinterpret_cast<const Point *>(c.printable_area.pts),
+                                    reinterpret_cast<const Point *>(c.printable_area.pts) + c.printable_area.n);
 
-    const size_t layer_count = object.layer_count();
+    const size_t layer_count = c.layer_count;
+    in.slices.resize(layer_count);
     in.outlines.resize(layer_count);
-    for (size_t i = 0; i < layer_count; ++i)
-        in.outlines[i] = to_polygons(object.get_layer(int(i))->lslices);
-
-    in.enforcers = object.slice_support_enforcers();
-    in.blockers  = object.slice_support_blockers();
-    object.project_and_append_custom_facets(false, EnforcerBlockerType::ENFORCER, in.enforcers);
-    object.project_and_append_custom_facets(false, EnforcerBlockerType::BLOCKER, in.blockers);
     in.enforcers.resize(layer_count);
     in.blockers.resize(layer_count);
-    (void) settings;
+    for (size_t i = 0; i < layer_count; ++i) {
+        for (uint32_t k = 0; k < c.slices[i].n; ++k)
+            in.slices[i].push_back(to_expolygon(c.slices[i].items[k]));
+        in.outlines[i]  = to_polygons(in.slices[i]);
+        in.enforcers[i] = to_polygons(c.enforcers[i]);
+        in.blockers[i]  = to_polygons(c.blockers[i]);
+    }
+    if (c.mask != nullptr) {
+        in.mask.resize(layer_count);
+        for (size_t i = 0; i < layer_count; ++i)
+            in.mask[i] = to_polygons(c.mask[i]);
+    }
     return in;
 }
 
@@ -188,33 +310,24 @@ Polygons varying_xy_disallowed_area(const Inputs &in, size_t layer_idx, const Mo
     if (layer_idx + 1 < in.outlines.size())
         deltas.push_back({double(in.z_distance_top), double(in.layer_thickness), closed(layer_idx + 1)});
 
-    std::vector<std::pair<size_t, double>> acc;
+    std::vector<Point> vertices;
     for (const Polygon &poly : layer_current)
-        acc.resize(acc.size() + poly.size(), {0, 0.});
+        vertices.insert(vertices.end(), poly.points.begin(), poly.points.end());
+    std::vector<std::pair<size_t, double>> acc(vertices.size(), {0, 0.});
     for (const Delta &d : deltas) {
         const double natural = d.support_distance * bounded_tan(in.support_angle_rad);
-        // Every vertex against every edge of the neighbouring layer was quadratic per layer. The tree finds
-        // the nearest edge; the exact minimum is then taken over the edges within that distance (plus 1
-        // scaled unit), so the result is the brute-force minimum bit for bit.
-        const Lines                             lines = to_lines(d.layer);
-        const AABBTreeLines::LinesDistancer<Line> distancer(lines);
-        size_t       i       = 0;
-        for (const Polygon &poly : layer_current)
-            for (const Point &p : poly.points) {
-                double min_dist2 = std::numeric_limits<double>::max();
-                if (! lines.empty()) {
-                    const double nearest = std::get<0>(distancer.distance_from_lines_extra<false>(p));
-                    for (size_t k : distancer.all_lines_in_radius(p, nearest + 1.))
-                        min_dist2 = std::min(min_dist2, lines[k].distance_to_squared(p));
-                }
-                const double slope     = std::sqrt(min_dist2) / d.delta_z;
-                const double wall      = std::atan(std::abs(slope));
-                const double ratio     = std::clamp(wall / in.support_angle_rad, 0., 1.);
-                const double varying   = double(in.xy_distance) + (natural - double(in.xy_distance)) * ratio;
-                acc[i].first += 1;
-                acc[i].second += varying;
-                ++i;
-            }
+        // The nearest edge of the neighbouring layer for every vertex, the brute-force minimum bit for
+        // bit (the core's distance service).
+        const std::vector<double> min_dist2s = min_dist2(vertices, d.layer);
+        for (size_t i = 0; i < vertices.size(); ++i) {
+            const double min_dist2 = min_dist2s[i];
+            const double slope     = std::sqrt(min_dist2) / d.delta_z;
+            const double wall      = std::atan(std::abs(slope));
+            const double ratio     = std::clamp(wall / in.support_angle_rad, 0., 1.);
+            const double varying   = double(in.xy_distance) + (natural - double(in.xy_distance)) * ratio;
+            acc[i].first += 1;
+            acc[i].second += varying;
+        }
     }
 
     // Shape::offsetMulti: each edge moves out by the distances at its two ends.
@@ -231,13 +344,19 @@ Polygons varying_xy_disallowed_area(const Inputs &in, size_t layer_idx, const Mo
         for (size_t j = 0; j < n; ++j) {
             const Point  p    = poly.points[j];
             const double dist = dist_at(j);
-            const Vec2d  dir  = (prev_p - p).cast<double>();
+            // Vec2d dir = (prev_p - p).cast<double>()
+            const double dir_x = double(prev_p.x() - p.x());
+            const double dir_y = double(prev_p.y() - p.y());
             // Edges shorter than 10 um are skipped, as Cura does.
-            if (dir.squaredNorm() > double(um(10.)) * double(um(10.))) {
-                const Vec2d unit = dir.normalized();
-                const Vec2d ccw(-unit.y(), unit.x());
-                out.points.emplace_back((prev_p.cast<double>() + ccw * prev_dist).cast<coord_t>());
-                out.points.emplace_back((p.cast<double>() + ccw * dist).cast<coord_t>());
+            if (dir_x * dir_x + dir_y * dir_y > double(um(10.)) * double(um(10.))) {
+                // Eigen's normalized(): each coordinate divided by the norm.
+                const double norm   = std::sqrt(dir_x * dir_x + dir_y * dir_y);
+                const double unit_x = dir_x / norm;
+                const double unit_y = dir_y / norm;
+                const double ccw_x  = -unit_y;
+                const double ccw_y  = unit_x;
+                out.points.emplace_back(coord_t(double(prev_p.x()) + ccw_x * prev_dist), coord_t(double(prev_p.y()) + ccw_y * prev_dist));
+                out.points.emplace_back(coord_t(double(p.x()) + ccw_x * dist), coord_t(double(p.y()) + ccw_y * dist));
             }
             prev_p    = p;
             prev_dist = dist;
@@ -246,7 +365,7 @@ Polygons varying_xy_disallowed_area(const Inputs &in, size_t layer_idx, const Mo
         i += n;
     }
     // Clipper's positive fill unions the self-overlapping offset rings, as SimplifyPolygons does in Cura.
-    moved = union_(moved, pftPositive);
+    moved = union_positive(moved);
     const coord_t smooth = in.xy_distance / 2;
     return cura_offset(cura_offset(moved, smooth), -smooth);
 }
@@ -255,7 +374,7 @@ Polygons varying_xy_disallowed_area(const Inputs &in, size_t layer_idx, const Mo
 Polygons join(const Inputs &in, const ModSettings &s, const Polygons &layer_up, const Polygons &layer_this, coord_t half_min_feature)
 {
     Polygons joined;
-    const double conical_angle = Geometry::deg2rad(s.conical_angle_deg);
+    const double conical_angle = deg2rad(s.conical_angle_deg);
     if (s.conical_enabled && conical_angle != 0.) {
         const coord_t conical_offset = conical_angle > 0 ? -coord_t(bounded_tan(conical_angle) * double(in.layer_thickness))
                                                          : coord_t(bounded_tan(-conical_angle) * double(in.layer_thickness));
@@ -305,7 +424,7 @@ void move_up_from_model(const Inputs &in, Polygons &stair_removal, const Polygon
 void handle_wall_struts(const ModSettings &s, Polygons &layer_this)
 {
     const double max_supported = scale_(s.tower_max_supported_mm);
-    const coord_t half_tower   = scale_(s.tower_diameter_mm) / 2;
+    const coord_t half_tower   = coord_t(scale_(s.tower_diameter_mm) / 2);
     Polygons struts;
     for (const Polygon &poly : layer_this) {
         if (poly.size() >= 6)
@@ -313,7 +432,10 @@ void handle_wall_struts(const ModSettings &s, Polygons &layer_this)
         double best_length2 = -1.;
         size_t best         = 0;
         for (size_t i = 0; i < poly.size(); ++i) {
-            const double l2 = (poly.points[i] - poly.points[(i + 1) % poly.size()]).cast<double>().squaredNorm();
+            // (a - b).cast<double>().squaredNorm()
+            const Point  d  = poly.points[i] - poly.points[(i + 1) % poly.size()];
+            const double dx = double(d.x()), dy = double(d.y());
+            const double l2 = dx * dx + dy * dy;
             if (l2 > best_length2) {
                 best_length2 = l2;
                 best         = i;
@@ -354,7 +476,7 @@ void handle_towers(const Inputs &in, const ModSettings &s, const Polygons &xy_di
             if (!poly.empty())
                 tower_roofs.push_back(poly);
     }
-    const double  roof_angle    = Geometry::deg2rad(s.tower_roof_angle_deg);
+    const double  roof_angle    = deg2rad(s.tower_roof_angle_deg);
     const coord_t tower_diam    = scale_(s.tower_diameter_mm);
     const double  tower_area    = double(tower_diam) * double(tower_diam);
     const coord_t expansion     = roof_angle == 0. ? tower_diam / 2 : coord_t(double(in.layer_thickness) / bounded_tan(roof_angle));
@@ -399,57 +521,17 @@ Polygons interface_layer(Polygons &support_areas, const Polygons &colliding, coo
     return interface;
 }
 
-} // namespace
-
-ModSettings read_settings(const PrintObject &object)
-{
-    const DynamicPrintConfig &config = object.print()->full_print_config();
-    ModSettings s;
-    auto num = [&config](const char *name, double &dst) {
-        if (auto v = param_value(config, std::string("cura_support.") + name); v && std::holds_alternative<double>(*v))
-            dst = std::get<double>(*v);
-    };
-    auto flag = [&config](const char *name, bool &dst) {
-        if (auto v = param_value(config, std::string("cura_support.") + name); v && std::holds_alternative<bool>(*v))
-            dst = std::get<bool>(*v);
-    };
-    num("join_distance", s.join_distance_mm);
-    num("min_feature_width", s.min_feature_width_mm);
-    flag("z_overrides_xy", s.z_overrides_xy);
-    num("xy_distance_overhang", s.xy_distance_overhang_mm);
-    num("stair_step_height", s.stair_step_height_mm);
-    num("stair_step_width", s.stair_step_width_mm);
-    num("stair_step_min_slope", s.stair_step_min_slope_deg);
-    num("minimum_support_area", s.minimum_support_area_mm2);
-    num("minimum_roof_area", s.minimum_roof_area_mm2);
-    num("minimum_bottom_area", s.minimum_bottom_area_mm2);
-    num("roof_offset", s.roof_offset_mm);
-    num("bottom_offset", s.bottom_offset_mm);
-    flag("use_towers", s.use_towers);
-    num("tower_diameter", s.tower_diameter_mm);
-    num("tower_max_supported_diameter", s.tower_max_supported_mm);
-    num("tower_roof_angle", s.tower_roof_angle_deg);
-    flag("conical_enabled", s.conical_enabled);
-    num("conical_angle", s.conical_angle_deg);
-    num("conical_min_width", s.conical_min_width_mm);
-    flag("solid_first_layer", s.solid_first_layer);
-    return s;
-}
-
-namespace {
-
-// Basic and full overhang per layer (AreaSupport::generateOverhangAreasForMesh), clipped to mask.
-void detect_overhangs(const PrintObject &object, const Inputs &in, const std::vector<Polygons> *mask, std::vector<Polygons> &overhang,
-                      std::vector<Polygons> &full_overhang)
+// Basic and full overhang per layer (AreaSupport::generateOverhangAreasForMesh), clipped to the mask.
+void detect_overhangs(mp_ctx *ctx, const Inputs &in, std::vector<Polygons> &overhang, std::vector<Polygons> &full_overhang)
 {
     const size_t layer_count     = in.outlines.size();
-    const double layer_height_mm = object.config().layer_height.value;
+    const double layer_height_mm = in.layer_height_mm;
     overhang.assign(layer_count, Polygons{});
     full_overhang.assign(layer_count, Polygons{});
-    parallel_layers(1, layer_count, object, [&](size_t i) {
+    parallel_layers(ctx, 1, layer_count, [&](size_t i) {
         auto [basic, full] = basic_and_full_overhang(in, i, layer_height_mm);
-        if (mask != nullptr) {
-            const Polygons &allowed = i < mask->size() ? (*mask)[i] : Polygons{};
+        if (!in.mask.empty()) {
+            const Polygons &allowed = in.mask[i];
             basic = intersection(basic, allowed);
             full  = intersection(full, allowed);
         }
@@ -458,22 +540,25 @@ void detect_overhangs(const PrintObject &object, const Inputs &in, const std::ve
     });
 }
 
-} // namespace
-
-std::vector<Polygons> overhang_demand(const PrintObject &object, const ModSettings &s)
+struct Areas
 {
-    const Inputs          in = gather_inputs(object, s);
+    std::vector<Polygons> support; // body, with roofs and bottoms taken out
+    std::vector<Polygons> roofs;
+    std::vector<Polygons> bottoms;
+};
+
+std::vector<Polygons> overhang_demand(mp_ctx *ctx, const Inputs &in)
+{
     std::vector<Polygons> overhang, full_overhang;
     if (in.outlines.size() >= 2)
-        detect_overhangs(object, in, nullptr, overhang, full_overhang);
+        detect_overhangs(ctx, in, overhang, full_overhang);
     else
         full_overhang.assign(in.outlines.size(), Polygons{});
     return full_overhang;
 }
 
-Areas compute_areas(const PrintObject &object, const ModSettings &s, const std::vector<Polygons> *mask)
+Areas compute_areas(mp_ctx *ctx, const Inputs &in, const ModSettings &s)
 {
-    const Inputs in          = gather_inputs(object, s);
     const size_t layer_count = in.outlines.size();
     Areas        out;
     out.support.assign(layer_count, Polygons{});
@@ -488,7 +573,7 @@ Areas compute_areas(const PrintObject &object, const ModSettings &s, const std::
 
     // Overhangs (AreaSupport::generateOverhangAreasForMesh).
     std::vector<Polygons> overhang, full_overhang;
-    detect_overhangs(object, in, mask, overhang, full_overhang);
+    detect_overhangs(ctx, in, overhang, full_overhang);
     if (std::all_of(full_overhang.begin(), full_overhang.end(), [](const Polygons &p) { return p.empty(); }))
         return out;
 
@@ -499,14 +584,14 @@ Areas compute_areas(const PrintObject &object, const ModSettings &s, const std::
     if (use_towers) {
         const double max_area = double(max_tower_supported) * double(max_tower_supported);
         for (size_t i = 1; i < layer_count; ++i)
-            for (const ExPolygon &part : object.get_layer(int(i))->lslices) {
+            for (const ExPolygon &part : in.slices[i]) {
                 if (part.contour.area() >= max_area)
                     continue;
                 if (!intersection(in.outlines[i - 1], to_polygons(part)).empty())
                     continue;
                 Polygons point = diff(to_polygons(part), in.blockers[i]);
-                if (mask != nullptr)
-                    point = intersection(point, i < mask->size() ? (*mask)[i] : Polygons{});
+                if (!in.mask.empty())
+                    point = intersection(point, in.mask[i]);
                 if (!point.empty())
                     overhang_points[i].push_back(std::move(point));
             }
@@ -514,11 +599,11 @@ Areas compute_areas(const PrintObject &object, const ModSettings &s, const std::
 
     // X/Y disallowed and sloped areas (generateSupportAreasForMesh, first parallel loop).
     const coord_t half_min_feature = (s.min_feature_width_mm > 0. ? scale_(s.min_feature_width_mm) : coord_t(0.85 * double(in.support_line_width))) + um(10.);
-    const double  sloped_angle     = Geometry::deg2rad(s.stair_step_min_slope_deg);
+    const double  sloped_angle     = deg2rad(s.stair_step_min_slope_deg);
     const coord_t sloped_width     = um(10.) + coord_t(double(in.layer_thickness) / bounded_tan(sloped_angle)) / 2;
     std::vector<Polygons> xy_disallowed(layer_count), sloped(layer_count);
     xy_disallowed[0] = cura_offset(in.outlines[0], in.xy_distance);
-    parallel_layers(1, layer_count, object, [&](size_t i) {
+    parallel_layers(ctx, 1, layer_count, [&](size_t i) {
         sloped[i] = cura_offset(cura_offset(intersection(tube(in.outlines[i - 1], sloped_width, um(10.)), tube(in.outlines[i], um(10.), sloped_width)), -um(10.)),
                                 um(10.) + sloped_width);
         if (s.z_overrides_xy)
@@ -541,7 +626,7 @@ Areas compute_areas(const PrintObject &object, const ModSettings &s, const std::
     std::vector<Polygons> tower_roofs;
     Polygons              stair_removal;
     for (size_t idx = layer_count - 1 - layer_z_distance_top + 1; idx-- > 0;) {
-        if (object.print()->canceled()) throw CanceledException();
+        if (magpie::host()->cancelled(ctx)) throw Cancelled{};
         Polygons layer_this = full_overhang[idx + layer_z_distance_top];
         if (in.extension_offset > 0) {
             // Grow the support and the model outline in turns, so the expansion does not fold around the model.
@@ -579,7 +664,7 @@ Areas compute_areas(const PrintObject &object, const ModSettings &s, const std::
     }
 
     // X/Y distance, printability, minimum area.
-    parallel_layers(0, layer_count, object, [&](size_t i) {
+    parallel_layers(ctx, 0, layer_count, [&](size_t i) {
         Polygons &layer = support[i];
         if (!layer.empty() && !xy_disallowed[i].empty())
             layer = diff(layer, xy_disallowed[i]);
@@ -589,7 +674,7 @@ Areas compute_areas(const PrintObject &object, const ModSettings &s, const std::
 
     if (in.platform_only) {
         Polygons touching = support[0];
-        const double conical_angle = Geometry::deg2rad(s.conical_angle_deg);
+        const double conical_angle = deg2rad(s.conical_angle_deg);
         const bool   conical       = s.conical_enabled && conical_angle != 0.;
         const coord_t conical_offset = conical_angle > 0 ? -coord_t(bounded_tan(conical_angle) * double(in.layer_thickness))
                                                          : coord_t(bounded_tan(-conical_angle) * double(in.layer_thickness));
@@ -604,7 +689,7 @@ Areas compute_areas(const PrintObject &object, const ModSettings &s, const std::
     // Enforce the top Z distance.
     if (layer_z_distance_top > 1) {
         const size_t max_check = std::max<long long>(0, (long long) layer_count - (long long) (layer_z_distance_top - 1));
-        parallel_layers(0, max_check, object, [&](size_t i) { support[i] = diff(support[i], in.outlines[i + layer_z_distance_top - 1]); });
+        parallel_layers(ctx, 0, max_check, [&](size_t i) { support[i] = diff(support[i], in.outlines[i + layer_z_distance_top - 1]); });
     }
 
     // Remove floating support.
@@ -650,83 +735,117 @@ Areas compute_areas(const PrintObject &object, const ModSettings &s, const std::
     return out;
 }
 
-void generate(PrintObject &object, const std::vector<Polygons> *mask)
+// ---------------------------------------------------------------------------------------------------
+// support.areas v1
+
+// What one call hands back: the areas in the C layout, owned here until release.
+struct Output
 {
-    if (object.layer_count() == 0)
-        return;
-    if (object.print()->config().belt_printer.value)
-        throw Slic3r::SlicingError("Cura support does not support belt printers yet.");
+    std::vector<Polygons>             layers[3]; // body, roof, bottom
+    std::vector<std::vector<mp_ring>> rings[3];
+    std::vector<mp_rings>             lists[3];
+};
 
-    const ModSettings s     = read_settings(object);
-    Areas             areas = compute_areas(object, s, mask);
-
-    SupportParameters            support_params(object);
-    // Cura prints the first support layer with the same lines as the rest (support_initial_layer_line_distance
-    // defaults to the support line distance) and without widening it, unless asked for a solid first layer.
-    if (s.solid_first_layer)
-        support_params.first_layer_density = 1.f;
-    else
-        support_params.aligned_first_layer = true;
-    SupportGeneratorLayerStorage storage;
-    SupportGeneratorLayersPtr    base_layers, interface_layers, empty;
-    auto make_layer = [&](size_t idx, SupporLayerType type, Polygons &&polygons) {
-        const Layer          &object_layer = *object.get_layer(int(idx));
-        SupportGeneratorLayer &layer       = storage.allocate(type);
-        layer.print_z  = object_layer.print_z;
-        layer.bottom_z = object_layer.bottom_z();
-        layer.height   = object_layer.height;
-        layer.polygons = std::move(polygons);
-        return &layer;
-    };
-    for (size_t i = 0; i < areas.support.size(); ++i) {
-        if (!areas.support[i].empty())
-            base_layers.push_back(make_layer(i, SupporLayerType::Base, std::move(areas.support[i])));
-        if (!areas.roofs[i].empty())
-            interface_layers.push_back(make_layer(i, SupporLayerType::TopInterface, std::move(areas.roofs[i])));
-        if (!areas.bottoms[i].empty())
-            interface_layers.push_back(make_layer(i, SupporLayerType::BottomInterface, std::move(areas.bottoms[i])));
-    }
-    std::sort(interface_layers.begin(), interface_layers.end(), [](const SupportGeneratorLayer *a, const SupportGeneratorLayer *b) { return *a < *b; });
-
-    // As in line 1 and the classic generator, the raft contact layer carries the first object layer
-    // (expanded by raft_expansion) and the feet of the columns; generate_raft_base builds the raft
-    // base and interface below it. Without it the raft comes out empty and the object, lifted by
-    // the raft height, prints in the air.
-    SupportGeneratorLayersPtr     top_contacts;
-    const SlicingParameters      &slicing_params = object.slicing_parameters();
-    if (slicing_params.has_raft()) {
-        const Layer &first_layer  = *object.layers().front();
-        Polygons     raft_contact = to_polygons(first_layer.lslices);
-        if (object.config().raft_expansion.value > 0)
-            raft_contact = expand(raft_contact, scaled<float>(object.config().raft_expansion.value));
-        if (!base_layers.empty() && is_approx(base_layers.front()->print_z, first_layer.print_z))
-            raft_contact = union_(raft_contact, base_layers.front()->polygons);
-        if (!raft_contact.empty()) {
-            SupportGeneratorLayer &contact = storage.allocate(SupporLayerType::TopContact);
-            contact.print_z                = slicing_params.raft_contact_top_z;
-            contact.bottom_z               = slicing_params.raft_interface_top_z;
-            contact.height                 = slicing_params.contact_raft_layer_height;
-            contact.idx_object_layer_above = 0;
-            contact.contact_polygons       = std::make_unique<Polygons>(raft_contact);
-            contact.overhang_polygons      = std::make_unique<Polygons>(raft_contact);
-            contact.polygons               = std::move(raft_contact);
-            top_contacts.push_back(&contact);
+void fill_output(std::unique_ptr<Output> data, mp_support_output_v1 *out)
+{
+    for (int k = 0; k < 3; ++k) {
+        const size_t n = data->layers[k].size();
+        data->rings[k].resize(n);
+        data->lists[k].resize(n);
+        for (size_t i = 0; i < n; ++i) {
+            for (const Polygon &p : data->layers[k][i])
+                data->rings[k][i].push_back({reinterpret_cast<const mp_point *>(p.points.data()), uint32_t(p.points.size())});
+            data->lists[k][i] = {data->rings[k][i].data(), uint32_t(data->rings[k][i].size())};
         }
     }
-    if (base_layers.empty() && interface_layers.empty() && top_contacts.empty())
-        return;
-
-    SupportGeneratorLayersPtr raft_layers = generate_raft_base(object, support_params, slicing_params, top_contacts, interface_layers, empty,
-                                                               base_layers, storage);
-    if (object.print()->canceled()) throw CanceledException();
-    // H/2 support refines these layers into half-height bands, so each role gets its own list.
-    SupportGeneratorLayersPtr bottom_contacts, base_interface_layers;
-    generate_support_layers(object, raft_layers, bottom_contacts, top_contacts, base_layers, interface_layers, base_interface_layers, &storage);
-    if (object.print()->canceled()) throw CanceledException();
-    generate_support_toolpaths(object.support_layers(), object.config(), support_params, object.slicing_parameters(), raft_layers, bottom_contacts,
-                               top_contacts, base_layers, interface_layers, base_interface_layers);
+    out->layer_count = uint32_t(data->layers[0].size());
+    out->body        = data->lists[0].data();
+    out->roof        = data->lists[1].empty() ? nullptr : data->lists[1].data();
+    out->bottom      = data->lists[2].empty() ? nullptr : data->lists[2].data();
+    out->mod_data    = data.release();
 }
 
-} // namespace CuraSupport
-} // namespace ModHost
-} // namespace Slic3r
+template<class Fn> mp_status run(Fn &&fn)
+{
+    static thread_local std::string message;
+    try {
+        fn();
+        return {MP_OK, nullptr};
+    } catch (const Cancelled &) {
+        return {MP_ERR_CANCELLED, "cancelled"};
+    } catch (const std::exception &e) {
+        message = e.what();
+    } catch (...) {
+        message = "unknown exception";
+    }
+    return {MP_ERR_FAILED, message.c_str()};
+}
+
+mp_status compute(void *, mp_ctx *ctx, const mp_support_input_v1 *in, mp_support_output_v1 *out)
+{
+    return run([&] {
+        if (in == nullptr || out == nullptr || in->size < sizeof(mp_support_input_v1))
+            throw std::runtime_error("bad arguments");
+        if (in->layer_count == 0) {
+            out->layer_count = 0;
+            return;
+        }
+        if (config_f64(ctx, "belt_printer") != 0.)
+            throw std::runtime_error("Cura support does not support belt printers yet.");
+        const ModSettings s      = read_settings(ctx);
+        const Inputs      inputs = gather_inputs(ctx, *in);
+        Areas             areas  = compute_areas(ctx, inputs, s);
+        auto data       = std::make_unique<Output>();
+        data->layers[0] = std::move(areas.support);
+        data->layers[1] = std::move(areas.roofs);
+        data->layers[2] = std::move(areas.bottoms);
+        // Cura prints the first support layer with the same lines as the rest (support_initial_layer_line_distance
+        // defaults to the support line distance) and without widening it, unless asked for a solid first layer.
+        out->first_layer_dense = s.solid_first_layer ? 1 : 0;
+        fill_output(std::move(data), out);
+    });
+}
+
+mp_status demand(void *, mp_ctx *ctx, const mp_support_input_v1 *in, mp_support_output_v1 *out)
+{
+    return run([&] {
+        if (in == nullptr || out == nullptr || in->size < sizeof(mp_support_input_v1))
+            throw std::runtime_error("bad arguments");
+        const Inputs inputs = gather_inputs(ctx, *in);
+        auto data       = std::make_unique<Output>();
+        data->layers[0] = overhang_demand(ctx, inputs);
+        fill_output(std::move(data), out);
+    });
+}
+
+void release(void *, mp_support_output_v1 *out)
+{
+    if (out == nullptr)
+        return;
+    delete static_cast<Output *>(out->mod_data);
+    out->mod_data    = nullptr;
+    out->layer_count = 0;
+    out->body = out->roof = out->bottom = nullptr;
+}
+
+const mp_support_areas_v1 table = {sizeof(mp_support_areas_v1), compute, demand, release};
+
+} // namespace
+} // namespace cura
+
+int32_t magpie::mod_init(const MagpieHostApi &host, MagpieRegistrar &registrar)
+{
+    uint32_t size = 0;
+    cura::geometry() = static_cast<const mp_geometry_v1 *>(registrar.import_service(&registrar, MP_GEOMETRY_SERVICE, MP_GEOMETRY_VERSION, &size, nullptr));
+    if (cura::geometry() == nullptr || size < sizeof(mp_geometry_v1)) {
+        host.log(MP_LOG_ERROR, CURA_MOD_ID, "the application offers no core.geometry v1 service");
+        return MP_ERR_NOT_FOUND;
+    }
+    if (int rc = registrar.register_slot(&registrar, MP_SUPPORT_AREAS_SLOT, MP_SUPPORT_AREAS_VERSION, "cura", &cura::table, sizeof(cura::table), nullptr);
+        rc != MP_OK)
+        return rc;
+    // The same table for other mods (Mixed support once it is a mod).
+    return registrar.export_service(&registrar, "cura.support_areas", 1, &cura::table, sizeof(cura::table), nullptr);
+}
+
+void magpie::mod_shutdown() { cura::geometry() = nullptr; }

@@ -1,4 +1,5 @@
 #include "libslic3r/StageTimer.hpp"
+#include "Accel/BatchAccel.hpp"
 #include "ModHost/NativeMods.hpp"
 #include "ModHost/SlotRegistry.hpp"
 #include "ArcFitter.hpp"
@@ -4909,8 +4910,14 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     std::string thumbnails_value = print.config().option<ConfigOptionString>("thumbnails")->value;
     // search string for the BTT_TFT label
     bool has_BTT_thumbnail = (thumbnails_value.find("BTT_TFT") != std::string::npos);
-    // MAGPIE: the native mods this G-code was made with, so it can be reproduced. Nothing when it uses
-    // none, which keeps the output of a print without them byte-identical.
+    // MAGPIE: the native mods this G-code was made with, so it can be reproduced: the export's own slots, the
+    // objects' support and the accelerator of the slicing session. Nothing when it uses none, which keeps
+    // the output of a print without them byte-identical.
+    for (const PrintObject *object : print.objects())
+        for (const std::string &id : object->native_mods_used())
+            m_native_mods_used.insert(id);
+    if (const std::string accelerator = Accel::session_mod(); !accelerator.empty())
+        m_native_mods_used.insert(accelerator);
     const std::string native_mods = ModHost::native_mod_summary(m_native_mods_used);
     if (has_BTT_thumbnail && !native_mods.empty())
         file.write_format("; mods: %s\n", native_mods.c_str());
@@ -9985,8 +9992,6 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "layer_time_blend_park_y"sv,
         "layer_time_blend_heat_rate"sv,
         "layer_time_blend_cool_rate"sv,
-        // CUDA test mod: how the slice was computed, not what it is; the G-code stays identical.
-        "cuda_compute"sv,
         "printer_mod_settings"sv,
         "support_generator"sv,
         // The fast-purge / prime-volume-mode keys are new static-member registrations. Excluding them from

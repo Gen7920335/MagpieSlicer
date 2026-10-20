@@ -88,6 +88,15 @@ function(orcaslicer_discover_tests TARGET)
     catch_discover_tests(${TARGET} ADD_TAGS_AS_LABELS)
 endfunction()
 
+# MAGPIE: a test target that slices with features now in official native mods (Cura support, CUDA)
+# loads their package folders from the build tree (mods/CMakeLists.txt); they are built first.
+function(magpie_use_official_mods TARGET)
+    if (MAGPIE_OFFICIAL_MOD_TARGETS)
+        add_dependencies(${TARGET} ${MAGPIE_OFFICIAL_MOD_TARGETS})
+    endif ()
+    target_compile_definitions(${TARGET} PRIVATE MAGPIE_OFFICIAL_MODS_DIR=R"\(${MAGPIE_OFFICIAL_MODS_DIR}\)")
+endfunction()
+
 add_subdirectory(libnest2d)
 add_subdirectory(libslic3r)
 add_subdirectory(slic3rutils)

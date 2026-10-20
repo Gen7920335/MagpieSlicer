@@ -1743,8 +1743,9 @@ TEST_CASE("Every read of a nozzle-relative line width key is in the reviewed tab
         { "src/libslic3r/GCode/ToolOrdering.cpp", 4 },
         { "src/libslic3r/Layer.cpp", 2 },
         { "src/libslic3r/LineWidths.cpp", 19 },
-        { "src/libslic3r/ModHost/Builtin/CuraSupport.cpp", 4 },
         { "src/libslic3r/ModHost/Builtin/MultiNozzleWalls.cpp", 1 },
+        // The support.areas input: the support flow's width, resolved by support_material_flow().
+        { "src/libslic3r/ModHost/NativeSupport.cpp", 1 },
         { "src/libslic3r/MultiMaterialSegmentation.cpp", 2 },
         { "src/libslic3r/PerimeterGenerator.cpp", 2 },
         { "src/libslic3r/PlaceholderParser.cpp", 4 },

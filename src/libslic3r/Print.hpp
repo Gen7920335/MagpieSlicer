@@ -45,6 +45,7 @@
 #include <map>
 #include <math.h>
 #include <optional>
+#include <mutex>
 #include <set>
 #include <string>
 #include <tuple>
@@ -498,6 +499,12 @@ public:
     // MAGPIE: lets a support module warn on the step it runs in.
     void            add_module_warning(PrintStateBase::WarningLevel level, const std::string &message)
         { this->active_step_add_warning(level, message); }
+    // MAGPIE: the native mods (ids) whose slots made this object's support, for the G-code header. Reset when
+    // the support is generated again.
+    void            note_native_mod(const std::string &id) const
+        { std::lock_guard<std::mutex> lock(m_native_mods_mutex); m_native_mods_used.insert(id); }
+    std::set<std::string> native_mods_used() const
+        { std::lock_guard<std::mutex> lock(m_native_mods_mutex); return m_native_mods_used; }
     SupportLayer*   get_support_layer(int idx) { return idx<m_support_layers.size()? m_support_layers[idx]:nullptr; }
     const SupportLayer* get_support_layer_at_printz(coordf_t print_z, coordf_t epsilon) const;
     SupportLayer*   get_support_layer_at_printz(coordf_t print_z, coordf_t epsilon);
@@ -728,6 +735,8 @@ private:
     std::unique_ptr<HalfLayerSourceLayers>   m_half_layer_sources;
     std::unique_ptr<HalfLayerSupportSources> m_half_layer_support_sources;
     SupportLayerPtrs                        m_support_layers;
+    mutable std::mutex                      m_native_mods_mutex;
+    mutable std::set<std::string>           m_native_mods_used;
     // Belt brim, generated in posSupportMaterial by BeltBrim.cpp.  Object-local
     // slicing frame, one entry per object layer plus a prologue of brim-only
     // bands that print below the object's first layer.

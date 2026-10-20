@@ -2,7 +2,10 @@
 #include "ModSet.hpp"
 #include "NativeMods.hpp"
 
+#include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/string/join.hpp>
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string/split.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/nowide/fstream.hpp>
 #include <nlohmann/json.hpp>
@@ -192,9 +195,17 @@ std::vector<ModTestCase> read_mod_test_cases(const std::string &package_dir)
             if (!j.is_object())
                 throw ModError(where + ": a test case must be a JSON object");
             for (std::string arg : string_list(j, "args", where)) {
-                // Arguments naming a file of the tests folder are made absolute.
-                if (!arg.empty() && arg[0] != '-' && fs::exists(tests / arg))
-                    arg = (tests / arg).string();
+                // Arguments naming files of the tests folder, alone or as a ';' list ("--load-settings
+                // machine.json;process.json"), are made absolute.
+                if (!arg.empty() && arg[0] != '-') {
+                    std::vector<std::string> parts;
+                    boost::split(parts, arg, boost::is_any_of(";"));
+                    if (std::all_of(parts.begin(), parts.end(), [&tests](const std::string &p) { return !p.empty() && fs::exists(tests / p); })) {
+                        for (std::string &p : parts)
+                            p = (tests / p).string();
+                        arg = boost::join(parts, ";");
+                    }
+                }
                 c.args.push_back(arg);
             }
             if (c.args.empty())

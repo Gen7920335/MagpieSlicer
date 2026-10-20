@@ -2,7 +2,7 @@
 //CuraEngine is released under the terms of the AGPLv3 or higher.
 
 #include "libslic3r/StageTimer.hpp"
-#include "libslic3r/Gpu/CudaCompute.hpp"
+#include "libslic3r/Accel/BatchAccel.hpp"
 #include "DistanceField.hpp" //Class we're implementing.
 #include "../FillRectilinear.hpp"
 #include "../../ClipperUtils.hpp"
@@ -82,9 +82,9 @@ DistanceField::DistanceField(const coord_t& radius, const Polygons& current_outl
             }
             return d2;
         };
-        // MAGPIE: CUDA test mod. All sampled points in one GPU batch against the same boundary edges.
+        // MAGPIE: batch accelerator. All sampled points in one batch against the same boundary edges.
         std::vector<double> gpu_d2;
-        if (Gpu::cuda_should_dispatch(sampled_points.size())) {
+        if (Accel::should_dispatch(Accel::Op::MinDistances, sampled_points.size())) {
             Lines edges;
             for (size_t icontour = 0; icontour <= expoly.holes.size(); ++icontour) {
                 const Polygon &contour = icontour == 0 ? expoly.contour : expoly.holes[icontour - 1];
@@ -96,7 +96,7 @@ DistanceField::DistanceField(const coord_t& radius, const Polygons& current_outl
                     }
                 }
             }
-            if (! Gpu::cuda_min_distances_squared(sampled_points, edges,
+            if (! Accel::min_distances_squared(sampled_points, edges,
                     [&](size_t i) { return boundary_distance_squared(sampled_points[i]); }, gpu_d2))
                 gpu_d2.clear();
         }

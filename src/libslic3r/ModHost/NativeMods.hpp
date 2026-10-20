@@ -161,5 +161,7 @@ namespace Slic3r {
 namespace ModHost {
 // The host table handed to every mod.
 const MagpieHostApi &native_host_api();
+// A service the core itself offers to mods ("core.geometry", NativeGeometry.cpp), or nullptr.
+const void *core_service(const std::string &name, uint32_t min_version, uint32_t *table_size);
 } // namespace ModHost
 } // namespace Slic3r

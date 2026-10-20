@@ -534,6 +534,10 @@ struct NativeLoader
         if (self == nullptr || name == nullptr || table == nullptr || table_size < sizeof(uint32_t))
             return MP_ERR_ARGUMENT;
         State &st = state_of(self);
+        if (core_service(name, 0, nullptr) != nullptr) {
+            st.error = std::string("service ") + name + " is the core's own";
+            return MP_ERR_ARGUMENT;
+        }
         for (const NativeEntry &e : st.set->m_services)
             if (e.name == name) {
                 st.error = std::string("service ") + name + " is already offered by mod '" + e.mod->id() + "'";
@@ -547,6 +551,12 @@ struct NativeLoader
     {
         if (self == nullptr || name == nullptr)
             return nullptr;
+        // The core's own services first: no mod can stand in for them.
+        if (const void *table = core_service(name, min_version, table_size)) {
+            if (user)
+                *user = nullptr;
+            return table;
+        }
         const NativeEntry *e = state_of(self).set->find_service(name, min_version);
         if (e == nullptr)
             return nullptr;

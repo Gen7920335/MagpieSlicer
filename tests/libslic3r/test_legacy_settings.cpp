@@ -26,8 +26,12 @@ struct BundledMods
     BundledMods()
     {
         std::vector<std::string> errors;
-        const fs::path dir = fs::path(TEST_DATA_DIR).parent_path().parent_path() / "resources" / "mods";
-        ModHost::set_active_mods(std::make_shared<const ModHost::ModSet>(ModHost::ModSet::load_dir(dir, errors)));
+        // The bundled JSON mods and the official native mods' manifests (Cura support is one).
+        std::vector<fs::path> dirs{fs::path(TEST_DATA_DIR).parent_path().parent_path() / "resources" / "mods"};
+#ifdef MAGPIE_OFFICIAL_MODS_DIR
+        dirs.emplace_back(MAGPIE_OFFICIAL_MODS_DIR);
+#endif
+        ModHost::set_active_mods(std::make_shared<const ModHost::ModSet>(ModHost::ModSet::load_dirs(dirs, errors)));
         REQUIRE(errors.empty());
     }
     ~BundledMods() { ModHost::set_active_mods(previous); }

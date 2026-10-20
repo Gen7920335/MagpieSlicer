@@ -1,5 +1,5 @@
 #include "libslic3r/StageTimer.hpp"
-#include "libslic3r/Gpu/CudaCompute.hpp"
+#include "libslic3r/Accel/BatchAccel.hpp"
 #include <numeric>
 #include <math.h>
 #include <initializer_list>
@@ -777,8 +777,8 @@ enum DirectionMask
 };
 
 // Where segment p1-p2 crosses the vertical line this_x, when neither end is on the line, as the rational
-// pos_p / pos_q. MAGPIE: also the CPU reference of the CUDA test mod's magpie_vertical_intersections kernel.
-static inline Gpu::CudaRational vertical_crossing(const Point &p1, const Point &p2, coord_t this_x)
+// pos_p / pos_q. MAGPIE: also the CPU reference of the batch accelerator's vertical crossings (Accel/BatchAccel.hpp).
+static inline Accel::Rational vertical_crossing(const Point &p1, const Point &p2, coord_t this_x)
 {
     SegmentIntersection is;
     // First calculate the intersection parameter 't' as a rational number with non negative denominator.
@@ -806,10 +806,10 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(con
         segs[i].idx = i;
         segs[i].pos = x0 + i * line_spacing;
     }
-    // MAGPIE: CUDA test mod. While CUDA is on, the crossings computed by vertical_crossing() are
+    // MAGPIE: batch accelerator. While one runs, the crossings computed by vertical_crossing() are
     // collected here, left as 0/1 placeholders, and filled in one batch after the contour loop.
-    const bool                             collect_crossings = Gpu::cuda_mode() != Gpu::CudaMode::Off;
-    std::vector<Gpu::CudaVerticalCrossing> crossings;
+    const bool                             collect_crossings = Accel::active();
+    std::vector<Accel::VerticalCrossing>   crossings;
     std::vector<std::pair<size_t, size_t>> crossing_slots; // (vertical line, index in its intersections)
     // For each contour
     for (size_t iContour = 0; iContour < poly_with_offset.n_contours; ++ iContour) {
@@ -875,7 +875,7 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(con
                     segs[i].intersections.push_back(is);
                     continue;
                 } else {
-                    const Gpu::CudaRational crossing = vertical_crossing(p1, p2, this_x);
+                    const Accel::Rational crossing = vertical_crossing(p1, p2, this_x);
                     is.pos_p = crossing.p;
                     is.pos_q = crossing.q;
                 }
@@ -888,8 +888,8 @@ static std::vector<SegmentedIntersectionLine> slice_region_by_vertical_lines(con
     }
     if (! crossings.empty()) {
         auto cpu = [&crossings](size_t k) { return vertical_crossing(crossings[k].p1, crossings[k].p2, crossings[k].x); };
-        std::vector<Gpu::CudaRational> values;
-        if (! Gpu::cuda_vertical_intersections(crossings, cpu, values)) {
+        std::vector<Accel::Rational> values;
+        if (! Accel::vertical_intersections(crossings, cpu, values)) {
             values.resize(crossings.size());
             for (size_t k = 0; k < crossings.size(); ++ k)
                 values[k] = cpu(k);

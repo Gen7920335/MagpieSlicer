@@ -49,10 +49,6 @@ target_link_libraries(${_TEST_NAME}_tests test_common libslic3r Catch2::Catch2Wi
 set_property(TARGET ${_TEST_NAME}_tests PROPERTY FOLDER "tests")
 
 orcaslicer_copy_test_dlls()
-
-# MAGPIE: the bundled native mods (mods/CMakeLists.txt) are built before the tests that slice with them.
-if (MAGPIE_OFFICIAL_MOD_TARGETS)
-    add_dependencies(${_TEST_NAME}_tests ${MAGPIE_OFFICIAL_MOD_TARGETS})
-endif ()
+magpie_use_official_mods(${_TEST_NAME}_tests)
 
 orcaslicer_discover_tests(${_TEST_NAME}_tests)

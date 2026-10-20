@@ -1,6 +1,27 @@
-#include "CudaCompute.hpp"
+// MAGPIE: the CUDA compute mod (slot "accel.batch", mods/sdk/include/magpie_accel.h).
+//
+// Runs four per-item calculations of the slicer on an NVIDIA GPU so CUDA on and off can be compared:
+// facet layer ranges, rectilinear infill crossings, Lightning boundary distances and tree support contact
+// points inside the overhang. Each kernel reproduces its CPU function in the core bit for bit
+// (CudaKernels.ptx), so the G-code is the same with CUDA on, off or unavailable; in "on" mode the core
+// checks that and throws away any batch that differs.
+//
+// The kernels are PTX text that the NVIDIA driver compiles when they are first used. Neither the build
+// nor the user needs the CUDA toolkit; without an NVIDIA driver every batch is declined and the core
+// computes it on the CPU.
+//
+// Parameter "mode": off never loads the driver; on = the core checks every result against the CPU;
+// max = results used unchecked (the core allows that for an official build of this mod only).
+//
+// Environment overrides, for CLI runs: MAGPIE_CUDA_SLICER_ENABLE=0/1/on/max sets the mode,
+// MAGPIE_CUDA_SLICER_FORCE_DISPATCH=1 sends batches of any size to the GPU (tests), and
+// MAGPIE_CUDA_REPORT=1 prints the per-operation counts to stderr at the end of each slice.
+
+#include <magpie_mod.hpp>
+#include <magpie_accel.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -10,11 +31,9 @@
 #include <limits>
 #include <mutex>
 #include <sstream>
+#include <string>
 #include <type_traits>
-
-#include <boost/log/trivial.hpp>
-
-#include "libslic3r/StageTimer.hpp"
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -28,12 +47,17 @@
 #include <dlfcn.h>
 #endif
 
-// PTX text of Gpu/CudaKernels.ptx, generated at build time (cmake/EmbedText.cmake).
+// PTX text of CudaKernels.ptx, generated at build time (mods/sdk/EmbedText.cmake).
 #include "CudaKernelsPtx.hpp"
 
-namespace Slic3r::Gpu {
+#define CUDA_MOD_ID "cuda_compute"
+#define CUDA_MOD_VERSION "1.0.0"
+
+MAGPIE_MOD_DEFINE(CUDA_MOD_ID, CUDA_MOD_VERSION)
 
 namespace {
+
+void mod_log(int32_t level, const std::string &text) { magpie::log(level, CUDA_MOD_ID, text); }
 
 // The few CUDA driver API types and entry points used here, declared by hand so the build needs no
 // CUDA headers. The driver ABI is stable; the _v2 names are the 64-bit entry points of cuda.h.
@@ -92,13 +116,13 @@ constexpr unsigned int threads_per_block = 256;
 struct OpStats
 {
     std::atomic<uint64_t> gpu_batches{ 0 }, gpu_items{ 0 }, gpu_us{ 0 };
-    std::atomic<uint64_t> too_large{ 0 }, busy{ 0 }, failed{ 0 }, rejected{ 0 };
-    void reset() { gpu_batches = gpu_items = gpu_us = too_large = busy = failed = rejected = 0; }
+    std::atomic<uint64_t> too_large{ 0 }, busy{ 0 }, failed{ 0 };
+    void reset() { gpu_batches = gpu_items = gpu_us = too_large = busy = failed = 0; }
 };
 
-std::atomic<int>  g_mode{ int(CudaMode::Off) };
-std::atomic<bool> g_force_dispatch{ false };
-OpStats           g_stats[opCount];
+std::atomic<int32_t> g_mode{ MP_ACCEL_OFF };
+std::atomic<bool>    g_force_dispatch{ false };
+OpStats              g_stats[opCount];
 
 class Runtime
 {
@@ -113,9 +137,9 @@ public:
             m_tried = true;
             m_ok    = this->load();
             if (m_ok)
-                BOOST_LOG_TRIVIAL(info) << "CUDA compute: " << m_device_name << " ready";
+                mod_log(MP_LOG_INFO, "CUDA compute: " + m_device_name + " ready");
             else
-                BOOST_LOG_TRIVIAL(warning) << "CUDA compute unavailable: " << m_reason;
+                mod_log(MP_LOG_WARNING, "CUDA compute unavailable: " + m_reason);
         }
         if (!m_ok && reason)
             *reason = m_reason;
@@ -298,12 +322,15 @@ template<class T> T get(const std::vector<uint8_t> &buffer, size_t at)
     return value;
 }
 
-// Packs nothing itself: runs a packed batch through the GPU and, in On mode, compares every decoded
-// item with the caller's CPU calculation. `decode(output, i)` reads item i of the downloaded output.
-template<class T, class Decode>
+// Smallest batch, in work items, worth a GPU round trip. A guess (line 1 used the same), not measured.
+constexpr uint64_t minimum_batch_items = 4096;
+
+mp_status declined() { return { MP_ERR_FAILED, "declined" }; }
+
+// Runs a packed batch through the GPU. False means the core computes the batch on the CPU: too large,
+// the GPU busy with another batch, no GPU or a driver error.
 bool dispatch(Op op, size_t count, const std::vector<uint8_t> &input, size_t input_stride, uint32_t aux, uint64_t off1,
-              uint64_t off2, size_t output_stride, uint64_t steps_per_item, Decode decode,
-              const std::function<T(size_t)> &cpu, std::vector<T> &out)
+              uint64_t off2, size_t output_stride, uint64_t steps_per_item, std::vector<uint8_t> &output)
 {
     OpStats &stats = g_stats[op];
     if (input.size() + count * output_stride > max_batch_bytes || count > std::numeric_limits<uint32_t>::max()) {
@@ -321,229 +348,196 @@ bool dispatch(Op op, size_t count, const std::vector<uint8_t> &input, size_t inp
         ++stats.failed;
         return false;
     }
-    MAGPIE_STAGE_TIMER("cuda.dispatch");
-    const auto           started          = std::chrono::steady_clock::now();
-    const size_t         items_per_launch = size_t(std::max<uint64_t>(1, std::min(max_items_per_launch,
-                                                                                max_steps_per_launch / std::max<uint64_t>(1, steps_per_item))));
-    std::vector<uint8_t> output;
-    std::string          error;
+    const auto   started          = std::chrono::steady_clock::now();
+    const size_t items_per_launch = size_t(std::max<uint64_t>(1, std::min(max_items_per_launch,
+                                                                          max_steps_per_launch / std::max<uint64_t>(1, steps_per_item))));
+    std::string error;
     if (!rt.run(op, input, input_stride, count, aux, off1, off2, output_stride, items_per_launch, output, error)) {
-        // PERMANENT DIAGNOSTIC: names the driver call that failed; the slice itself silently uses the CPU.
-        BOOST_LOG_TRIVIAL(warning) << "CUDA " << op_names[op] << ": " << error << "; CPU used";
+        // PERMANENT DIAGNOSTIC: names the driver call that failed; the core then computes the batch on the CPU.
+        mod_log(MP_LOG_WARNING, std::string("CUDA ") + op_names[op] + ": " + error + "; CPU used");
         ++stats.failed;
         return false;
     }
     lock.unlock();
     stats.gpu_us += uint64_t(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count());
-    out.resize(count);
-    for (size_t i = 0; i < count; ++i)
-        out[i] = decode(output, i);
-    if (cuda_mode() == CudaMode::On) {
-        for (size_t i = 0; i < count; ++i)
-            if (!(out[i] == cpu(i))) {
-                // PERMANENT DIAGNOSTIC: a kernel that drifted from its CPU function shows up here first.
-                BOOST_LOG_TRIVIAL(error) << "CUDA " << op_names[op] << ": item " << i << " of " << count
-                                         << " differs from the CPU; batch discarded";
-                ++stats.rejected;
-                out.clear();
-                return false;
-            }
-    }
     ++stats.gpu_batches;
     stats.gpu_items += count;
     return true;
 }
 
-// Coordinates go to the GPU as int64 like coord_t, and the kernels do the CPU's int64 arithmetic,
-// wrapping included, so there is nothing to range-check.
-static_assert(sizeof(coord_t) == sizeof(int64_t), "the kernels read coordinates as int64");
+const char *mode_name(int32_t mode) { return mode == MP_ACCEL_TRUSTED ? "max" : mode == MP_ACCEL_VERIFY ? "on" : "off"; }
 
-} // namespace
-
-CudaMode cuda_mode_from_string(const std::string &value)
+std::string report()
 {
-    if (value == "on")
-        return CudaMode::On;
-    if (value == "max")
-        return CudaMode::MaxGpu;
-    return CudaMode::Off;
-}
-
-const char *cuda_mode_name(CudaMode mode)
-{
-    switch (mode) {
-    case CudaMode::On: return "on";
-    case CudaMode::MaxGpu: return "max";
-    default: return "off";
+    std::ostringstream out;
+    out << "CUDA compute (" << mode_name(g_mode.load()) << "):\n";
+    for (int op = 0; op < opCount; ++op) {
+        const OpStats &s = g_stats[op];
+        out << "  " << op_names[op] << ": GPU " << s.gpu_batches << " batches, " << s.gpu_items << " items, " << (s.gpu_us / 1000.)
+            << " ms; CPU: busy " << s.busy << ", too large " << s.too_large << ", failed " << s.failed << "\n";
     }
+    return out.str();
 }
 
-CudaMode cuda_mode() { return CudaMode(g_mode.load(std::memory_order_relaxed)); }
+// ---------------------------------------------------------------------------------------------------
+// accel.batch v1
 
-CudaSession::CudaSession(const std::string &configured_mode)
+mp_status begin(void *, mp_ctx *ctx, int32_t *mode)
 {
-    CudaMode mode = cuda_mode_from_string(configured_mode);
-    if (const char *env = std::getenv("MAGPIE_CUDA_SLICER_ENABLE"); env != nullptr && *env != 0)
-        mode = std::string(env) == "1" ? CudaMode::On : cuda_mode_from_string(env);
-    const char *force = std::getenv("MAGPIE_CUDA_SLICER_FORCE_DISPATCH");
-    g_force_dispatch.store(force != nullptr && std::string(force) == "1");
-    for (OpStats &stats : g_stats)
-        stats.reset();
-    g_mode.store(int(mode));
-    if (mode != CudaMode::Off)
-        BOOST_LOG_TRIVIAL(info) << "CUDA compute: " << cuda_mode_name(mode);
+    return magpie::guarded([&] {
+        std::string value = magpie::param_str(ctx, "mode").value_or("off");
+        if (const char *env = std::getenv("MAGPIE_CUDA_SLICER_ENABLE"); env != nullptr && *env != 0)
+            value = std::string(env) == "1" ? "on" : std::string(env);
+        const char *force = std::getenv("MAGPIE_CUDA_SLICER_FORCE_DISPATCH");
+        g_force_dispatch.store(force != nullptr && std::string(force) == "1");
+        for (OpStats &stats : g_stats)
+            stats.reset();
+        *mode = value == "on" ? MP_ACCEL_VERIFY : value == "max" ? MP_ACCEL_TRUSTED : MP_ACCEL_OFF;
+        g_mode.store(*mode);
+        if (*mode != MP_ACCEL_OFF)
+            mod_log(MP_LOG_INFO, std::string("CUDA compute: ") + mode_name(*mode));
+    });
 }
 
-CudaSession::~CudaSession()
+void end(void *)
 {
-    if (cuda_mode() == CudaMode::Off)
+    if (g_mode.load() == MP_ACCEL_OFF)
         return;
-    const std::string report = cuda_report();
-    g_mode.store(int(CudaMode::Off));
-    BOOST_LOG_TRIVIAL(info) << report;
+    const std::string text = report();
+    g_mode.store(MP_ACCEL_OFF);
+    mod_log(MP_LOG_INFO, text);
     if (const char *env = std::getenv("MAGPIE_CUDA_REPORT"); env != nullptr && std::string(env) == "1")
-        std::fprintf(stderr, "%s", report.c_str());
+        std::fprintf(stderr, "%s", text.c_str());
 }
 
-bool cuda_should_dispatch(size_t items)
+int32_t accepts(void *, uint32_t, uint64_t items)
 {
-    return cuda_mode() != CudaMode::Off && items > 0 &&
-           (items >= cuda_minimum_batch_items || g_force_dispatch.load(std::memory_order_relaxed));
+    return items > 0 && (items >= minimum_batch_items || g_force_dispatch.load(std::memory_order_relaxed)) ? 1 : 0;
 }
 
-bool cuda_available(std::string *reason)
+int32_t available(void *, char *reason, uint32_t cap)
 {
     Runtime                    &rt = runtime();
     std::lock_guard<std::mutex> lock(rt.mutex);
-    return rt.ready(reason);
-}
-
-std::string cuda_report()
-{
-    std::ostringstream report;
-    report << "CUDA compute (" << cuda_mode_name(cuda_mode()) << "):\n";
-    for (int op = 0; op < opCount; ++op) {
-        const OpStats &s = g_stats[op];
-        report << "  " << op_names[op] << ": GPU " << s.gpu_batches << " batches, " << s.gpu_items << " items, "
-               << (s.gpu_us / 1000.) << " ms; CPU: busy " << s.busy << ", too large " << s.too_large << ", failed "
-               << s.failed << ", rejected " << s.rejected << "\n";
+    std::string                 why;
+    const bool                  ok = rt.ready(&why);
+    if (!ok && reason != nullptr && cap > 0) {
+        const size_t n = std::min<size_t>(why.size(), cap - 1);
+        std::memcpy(reason, why.data(), n);
+        reason[n] = '\0';
     }
-    return report.str();
+    return ok ? 1 : 0;
 }
 
-bool cuda_mesh_layer_ranges(const std::vector<std::array<float, 3>> &facet_z, const std::vector<float> &zs,
-                            const std::function<CudaLayerRange(size_t)> &cpu, std::vector<CudaLayerRange> &out)
+mp_status facet_layer_ranges(void *, const float *facet_z, uint64_t n, const float *zs, uint64_t n_zs, uint32_t *out)
 {
-    if (!cuda_should_dispatch(facet_z.size()) || zs.empty() || zs.size() > std::numeric_limits<uint32_t>::max())
-        return false;
-    std::vector<uint8_t> input;
-    input.reserve(facet_z.size() * 12 + zs.size() * 4);
-    for (const std::array<float, 3> &z : facet_z)
-        for (float v : z)
-            put(input, v);
-    const uint64_t zs_offset = input.size();
-    for (float z : zs)
-        put(input, z);
+    if (n == 0 || n_zs == 0 || n_zs > std::numeric_limits<uint32_t>::max())
+        return declined();
+    std::vector<uint8_t> input(size_t(n) * 12 + size_t(n_zs) * 4);
+    std::memcpy(input.data(), facet_z, size_t(n) * 12);
+    const uint64_t zs_offset = uint64_t(n) * 12;
+    std::memcpy(input.data() + zs_offset, zs, size_t(n_zs) * 4);
     // Two binary searches over the layers per facet.
-    const uint64_t steps = 2 * uint64_t(std::ceil(std::log2(double(zs.size()) + 1.))) + 2;
-    return dispatch<CudaLayerRange>(
-        opMeshLayerRanges, facet_z.size(), input, 12, uint32_t(zs.size()), zs_offset, 0, 12, steps,
-        [](const std::vector<uint8_t> &o, size_t i) {
-            return CudaLayerRange{ get<uint32_t>(o, i * 12), get<uint32_t>(o, i * 12 + 4), get<uint32_t>(o, i * 12 + 8) };
-        },
-        cpu, out);
+    const uint64_t       steps = 2 * uint64_t(std::ceil(std::log2(double(n_zs) + 1.))) + 2;
+    std::vector<uint8_t> output;
+    if (!dispatch(opMeshLayerRanges, size_t(n), input, 12, uint32_t(n_zs), zs_offset, 0, 12, steps, output))
+        return declined();
+    std::memcpy(out, output.data(), size_t(n) * 12);
+    return { MP_OK, nullptr };
 }
 
-bool cuda_vertical_intersections(const std::vector<CudaVerticalCrossing> &crossings,
-                                 const std::function<CudaRational(size_t)> &cpu, std::vector<CudaRational> &out)
+mp_status vertical_crossings(void *, const int64_t *p1p2x, uint64_t n, int64_t *out_p, uint32_t *out_q)
 {
-    if (!cuda_should_dispatch(crossings.size()))
-        return false;
-    std::vector<uint8_t> input;
-    input.reserve(crossings.size() * 40);
-    for (const CudaVerticalCrossing &c : crossings) {
-        put(input, int64_t(c.p1.x()));
-        put(input, int64_t(c.p1.y()));
-        put(input, int64_t(c.p2.x()));
-        put(input, int64_t(c.p2.y()));
-        put(input, int64_t(c.x));
+    if (n == 0)
+        return declined();
+    std::vector<uint8_t> input(size_t(n) * 40);
+    std::memcpy(input.data(), p1p2x, size_t(n) * 40);
+    std::vector<uint8_t> output;
+    if (!dispatch(opVerticalIntersections, size_t(n), input, 40, 0, 0, 0, 16, 1, output))
+        return declined();
+    for (size_t i = 0; i < size_t(n); ++i) {
+        out_p[i] = get<int64_t>(output, i * 16);
+        out_q[i] = uint32_t(get<uint64_t>(output, i * 16 + 8));
     }
-    return dispatch<CudaRational>(
-        opVerticalIntersections, crossings.size(), input, 40, 0, 0, 0, 16, 1,
-        [](const std::vector<uint8_t> &o, size_t i) {
-            return CudaRational{ get<int64_t>(o, i * 16), uint32_t(get<uint64_t>(o, i * 16 + 8)) };
-        },
-        cpu, out);
+    return { MP_OK, nullptr };
 }
 
-bool cuda_min_distances_squared(const Points &points, const Lines &edges, const std::function<double(size_t)> &cpu,
-                                std::vector<double> &out)
+mp_status min_dist2(void *, const mp_point *points, uint64_t n, const mp_point *edges, uint64_t m, double *out)
 {
-    if (!cuda_should_dispatch(points.size()) || edges.size() > std::numeric_limits<uint32_t>::max())
-        return false;
+    if (n == 0 || m > std::numeric_limits<uint32_t>::max())
+        return declined();
     std::vector<uint8_t> input;
-    input.reserve(points.size() * 16 + edges.size() * 32);
-    for (const Point &p : points) {
-        put(input, int64_t(p.x()));
-        put(input, int64_t(p.y()));
+    input.reserve(size_t(n) * 16 + size_t(m) * 32);
+    for (uint64_t i = 0; i < n; ++i) {
+        put(input, points[i].x);
+        put(input, points[i].y);
     }
     const uint64_t edges_offset = input.size();
-    for (const Line &e : edges) {
-        put(input, int64_t(e.a.x()));
-        put(input, int64_t(e.a.y()));
-        put(input, int64_t(e.b.x()));
-        put(input, int64_t(e.b.y()));
+    for (uint64_t i = 0; i < 2 * m; ++i) {
+        put(input, edges[i].x);
+        put(input, edges[i].y);
     }
-    return dispatch<double>(
-        opMinDistances, points.size(), input, 16, uint32_t(edges.size()), edges_offset, 0, 8, edges.size() + 1,
-        [](const std::vector<uint8_t> &o, size_t i) { return get<double>(o, i * 8); }, cpu, out);
+    std::vector<uint8_t> output;
+    if (!dispatch(opMinDistances, size_t(n), input, 16, uint32_t(m), edges_offset, 0, 8, m + 1, output))
+        return declined();
+    std::memcpy(out, output.data(), size_t(n) * 8);
+    return { MP_OK, nullptr };
 }
 
-bool cuda_points_in_expolygons(const Points &points, const ExPolygons &expolygons, const std::function<bool(size_t)> &cpu,
-                               std::vector<uint8_t> &out)
+mp_status points_in_expolys(void *, const mp_point *points, uint64_t n, const mp_expolys *polys, uint8_t *out)
 {
-    if (!cuda_should_dispatch(points.size()))
-        return false;
+    if (n == 0 || polys == nullptr)
+        return declined();
     // Ring table: {first vertex, vertex count, is contour, unused}; a contour starts each ExPolygon.
     std::vector<uint8_t> rings, vertices;
     uint64_t             vertex_count = 0, ring_count = 0;
-    auto add_ring = [&](const Polygon &ring, bool contour) {
-        put(rings, uint32_t(vertex_count));
-        put(rings, uint32_t(ring.points.size()));
-        put(rings, uint32_t(contour ? 1 : 0));
-        put(rings, uint32_t(0));
-        for (const Point &p : ring.points) {
-            put(vertices, int64_t(p.x()));
-            put(vertices, int64_t(p.y()));
+    for (uint32_t e = 0; e < polys->n; ++e)
+        for (uint32_t r = 0; r < polys->items[e].n; ++r) {
+            const mp_ring &ring = polys->items[e].rings[r];
+            put(rings, uint32_t(vertex_count));
+            put(rings, uint32_t(ring.n));
+            put(rings, uint32_t(r == 0 ? 1 : 0));
+            put(rings, uint32_t(0));
+            for (uint32_t k = 0; k < ring.n; ++k) {
+                put(vertices, ring.pts[k].x);
+                put(vertices, ring.pts[k].y);
+            }
+            vertex_count += ring.n;
+            ++ring_count;
         }
-        vertex_count += ring.points.size();
-        ++ring_count;
-    };
-    for (const ExPolygon &expolygon : expolygons) {
-        add_ring(expolygon.contour, true);
-        for (const Polygon &hole : expolygon.holes)
-            add_ring(hole, false);
-    }
     if (vertex_count > std::numeric_limits<uint32_t>::max() || ring_count > std::numeric_limits<uint32_t>::max())
-        return false;
+        return declined();
     std::vector<uint8_t> input;
-    input.reserve(points.size() * 16 + rings.size() + vertices.size());
-    for (const Point &p : points) {
-        put(input, int64_t(p.x()));
-        put(input, int64_t(p.y()));
+    input.reserve(size_t(n) * 16 + rings.size() + vertices.size());
+    for (uint64_t i = 0; i < n; ++i) {
+        put(input, points[i].x);
+        put(input, points[i].y);
     }
     const uint64_t rings_offset = input.size();
     input.insert(input.end(), rings.begin(), rings.end());
     const uint64_t vertices_offset = input.size();
     input.insert(input.end(), vertices.begin(), vertices.end());
-    std::vector<uint8_t> inside;
-    const bool ok = dispatch<uint8_t>(
-        opPointsInExPolygons, points.size(), input, 16, uint32_t(ring_count), rings_offset, vertices_offset, 4,
-        vertex_count + ring_count + 1, [](const std::vector<uint8_t> &o, size_t i) { return uint8_t(get<uint32_t>(o, i * 4) != 0); },
-        std::function<uint8_t(size_t)>([&cpu](size_t i) { return uint8_t(cpu(i) ? 1 : 0); }), inside);
-    if (ok)
-        out = std::move(inside);
-    return ok;
+    std::vector<uint8_t> output;
+    if (!dispatch(opPointsInExPolygons, size_t(n), input, 16, uint32_t(ring_count), rings_offset, vertices_offset, 4,
+                  vertex_count + ring_count + 1, output))
+        return declined();
+    for (size_t i = 0; i < size_t(n); ++i)
+        out[i] = uint8_t(get<uint32_t>(output, i * 4) != 0);
+    return { MP_OK, nullptr };
 }
 
-} // namespace Slic3r::Gpu
+const mp_accel_batch_v1 table = { sizeof(mp_accel_batch_v1), begin, end, accepts, available,
+                                  facet_layer_ranges, vertical_crossings, min_dist2, points_in_expolys };
+
+// Coordinates go to the GPU as int64 like the core's, and the kernels do the CPU's int64 arithmetic,
+// wrapping included, so there is nothing to range-check.
+static_assert(sizeof(mp_point) == 2 * sizeof(int64_t), "the kernels read coordinates as int64");
+
+} // namespace
+
+int32_t magpie::mod_init(const MagpieHostApi &, MagpieRegistrar &registrar)
+{
+    return registrar.register_slot(&registrar, MP_ACCEL_SLOT, MP_ACCEL_SLOT_VERSION, "cuda", &table, sizeof(table), nullptr);
+}
+
+void magpie::mod_shutdown() {}

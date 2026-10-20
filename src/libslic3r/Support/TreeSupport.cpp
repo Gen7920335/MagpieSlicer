@@ -1,5 +1,5 @@
 #include "libslic3r/StageTimer.hpp"
-#include "libslic3r/Gpu/CudaCompute.hpp"
+#include "libslic3r/Accel/BatchAccel.hpp"
 #include <boost/date_time/posix_time/ptime.hpp>
 #include <boost/date_time/posix_time/posix_time_types.hpp>
 #include <cassert>
@@ -3967,15 +3967,15 @@ void TreeSupport::generate_contact_points()
                     overhang_bounds.inflated(-radius_scaled);
                     ExPolygons overhang_inner = offset_ex(overhang, -radius_scaled);
                     MAGPIE_STAGE_TIMER("fn.tree_contact_inside");
-                    // MAGPIE: CUDA test mod. The inside test of every candidate in one GPU batch; the
+                    // MAGPIE: batch accelerator. The inside test of every candidate in one batch; the
                     // points are then inserted in the same order as below.
-                    if (Gpu::cuda_mode() != Gpu::CudaMode::Off) {
+                    if (Accel::active()) {
                         Points candidates;
                         for (const Point &candidate : grid_points)
                             if (overhang_bounds.contains(candidate))
                                 candidates.push_back(candidate);
                         std::vector<uint8_t> inside;
-                        if (Gpu::cuda_points_in_expolygons(candidates, overhang_inner,
+                        if (Accel::points_in_expolygons(candidates, overhang_inner,
                                 [&](size_t i) { return is_inside_ex(overhang_inner, candidates[i]); }, inside)) {
                             for (size_t i = 0; i < candidates.size(); ++i)
                                 if (inside[i])

@@ -131,7 +131,8 @@ typedef struct MagpieRegistrar {
                          const char *impl_name, const void *table, uint32_t table_size, void *user);
     /* Offers a service to other mods ("cura.support_areas"), and asks for one another mod offers. A
      * mod that imports a service lists its owner under "depends" so that owner initialises first.
-     * import_service returns the table, or null when no loaded mod offers it at min_version or newer. */
+     * import_service returns the table, or null when no loaded mod offers it at min_version or newer.
+     * Services named "core.*" are the core's own (magpie_geometry.h) and need no "depends". */
     int (*export_service)(struct MagpieRegistrar *self, const char *name, uint32_t version,
                           const void *table, uint32_t table_size, void *user);
     const void *(*import_service)(struct MagpieRegistrar *self, const char *name, uint32_t min_version,

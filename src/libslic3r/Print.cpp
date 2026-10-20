@@ -5,7 +5,7 @@
 #endif
 
 #include "libslic3r/StageTimer.hpp"
-#include "libslic3r/Gpu/CudaCompute.hpp"
+#include "libslic3r/Accel/BatchAccel.hpp"
 
 #include "PrintBase.hpp"
 #include <utility>
@@ -428,10 +428,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             // Belt printer transform options change the mesh geometry before slicing.
             || opt_key == "belt_printer"
             || opt_key == "belt_slice_rotation"
-            || opt_key == "belt_slice_rotation_angle"
-            // MAGPIE: CUDA test mod. The output does not change, but switching it must rerun the
-            // slicing so the next slice actually runs (and can be timed) in the new mode.
-            || opt_key == "cuda_compute") {
+            || opt_key == "belt_slice_rotation_angle") {
             osteps.emplace_back(posSlice);
         } else if (
                opt_key == "belt_support_floor_offset") {
@@ -3571,8 +3568,9 @@ std::map<ObjectID, unsigned int> getObjectExtruderMap(const Print& print) {
 void Print::process(long long *time_cost_with_cache, bool use_cache)
 {
     MAGPIE_STAGE_TIMER("print.process");
-    // MAGPIE: CUDA test mod, for the slicing steps below; Off unless the mod (or the environment) turns it on.
-    Gpu::CudaSession cuda_session(m_config.cuda_compute.value);
+    // MAGPIE: batch accelerator for the slicing steps below (Accel/BatchAccel.hpp); none runs unless a
+    // native mod provides one and its settings turn it on.
+    Accel::Session accel_session(this->full_print_config());
     long long start_time = 0, end_time = 0;
     if (time_cost_with_cache)
         *time_cost_with_cache = 0;

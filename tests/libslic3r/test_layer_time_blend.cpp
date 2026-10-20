@@ -27,7 +27,7 @@ namespace fs = boost::filesystem;
 
 namespace {
 
-// The bundled mods with native code, active for the test's lifetime.
+// The official mods with native code, active for the test's lifetime.
 struct BundledNativeMods
 {
     std::shared_ptr<const ModSet>       previous        = active_mods();
@@ -37,7 +37,8 @@ struct BundledNativeMods
     BundledNativeMods()
     {
         ModLoadOptions options;
-        options.bundled_dir   = (fs::path(PROFILES_DIR) / ".." / "mods").string();
+        // The official mods built in this tree (mods/CMakeLists.txt), and the bundled JSON mods.
+        options.bundled_dir   = MAGPIE_OFFICIAL_MODS_DIR;
         options.installed_dir = (temp / "mods").string();
         options.cache_dir     = (temp / "cache").string();
         result                = load_mods(options);
