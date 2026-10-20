@@ -480,16 +480,17 @@ TEST_CASE("Single wall on top surfaces gives no large nozzle wall a detail nozzl
     }
 }
 
-TEST_CASE("Gap fill between walls prints with the detail nozzle", "[MultiNozzleWalls]")
+TEST_CASE("Gap fill between large walls stays on the base nozzle with detail walls", "[MultiNozzleWalls]")
 {
-    // Classic walls on a 0.6 mm base nozzle leave gap fill in a 3 mm wide bar (convex, so its corners get
-    // detail walls); with detail walls on the 0.4 mm nozzle the gap fill follows them, and without them it
-    // stays on the base nozzle.
+    // Classic walls on a 0.6 mm base nozzle leave gap fill in the middle of a 3 mm wide bar (convex, so its corners
+    // get one detail wall on the 0.4 mm nozzle). That gap lies between the large walls and is sized for them, so it
+    // stays on the base nozzle with or without the detail wall (line 1 sent it to the detail nozzle; gap fill between
+    // two detail walls still goes there, see the wedge test below).
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.6, 2, "classic", true);
     config.set_deserialize_strict({ { "wall_loops", 3 }, { "gap_fill_target", "everywhere" } });
     const std::set<int> gap_tools = tools_for_type(slice({ make_cube(20., 3., 10.) }, config), "Gap infill");
     REQUIRE_FALSE(gap_tools.empty());
-    CHECK(gap_tools == std::set<int>{ 0 });
+    CHECK(gap_tools == std::set<int>{ 1 });
 
     config.set_deserialize_strict({ { "use_smaller_nozzles_in_crisp_corners", false } });
     CHECK(tools_for_type(slice({ make_cube(20., 3., 10.) }, config), "Gap infill") == std::set<int>{ 1 });
@@ -1252,5 +1253,65 @@ TEST_CASE("A narrow island's outer wall at the detail width is printed by the de
         CHECK(narrow_moves[0] > 0);
         // ...and none of it by the 0.4 mm nozzle (a 0.17 mm line from a 0.4 mm nozzle).
         CHECK(narrow_moves[1] == 0);
+    }
+}
+
+TEST_CASE("Gap fill between large walls is printed by the large nozzle", "[MultiNozzleWalls][Classic]")
+{
+    // Classic sizes gap fill for the large walls (up to two large wall spacings wide). Gap fill between the large
+    // walls of a wedge used to go to the detail nozzle with the rest of the region's gap fill, a 0.6 mm line from a
+    // 0.15 mm nozzle, which the line width check stops. Only gap fill between two detail walls goes to it now.
+    const bool h2 = GENERATE(false, true);
+    DYNAMIC_SECTION("H/2 " << h2) {
+        // Nozzle 1 0.15 mm (detail), nozzle 2 0.4 mm (the walls' filament).
+        DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "classic", true);
+        config.set_deserialize_strict({
+            { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+            { "wall_loops", 3 }, { "crisp_corner_small_nozzle_wall_count", 2 }, { "gap_fill_target", "everywhere" },
+            { "outer_wall_half_layer_height", h2 },
+        });
+        // A wedge 20 mm long, 3 mm wide at its base, 1.2 mm tall: its walls converge and leave gaps of every width.
+        indexed_triangle_set wedge;
+        const float          z_top = 1.2f; // mm
+        for (const float z : { 0.f, z_top }) {
+            wedge.vertices.emplace_back(0.f, 0.f, z);
+            wedge.vertices.emplace_back(20.f, 1.5f, z);
+            wedge.vertices.emplace_back(0.f, 3.f, z);
+        }
+        wedge.indices = { { 0, 2, 1 }, { 3, 4, 5 },             // bottom, top
+                          { 0, 1, 4 }, { 0, 4, 3 }, { 1, 2, 5 }, // sides
+                          { 1, 5, 4 }, { 2, 0, 3 }, { 2, 3, 5 } };
+        TriangleMesh mesh(std::move(wedge));
+        REQUIRE(mesh.volume() > 0.);
+        Print print;
+        Model model;
+        init_print({ mesh }, print, model, config);
+        // The line width check throws on a gap fill too wide for the nozzle printing it.
+        std::string gcode;
+        REQUIRE_NOTHROW(gcode = Slic3r::Test::gcode(print));
+
+        const std::vector<double> nozzles = { 0.15, 0.4 }; // mm, by tool
+        int                       tool    = -1;
+        bool                      gap     = false;
+        double                    width   = 0.; // mm, the last ;WIDTH (G-code repeats it only when it changes)
+        std::map<int, double>     widest;       // tool -> widest gap fill, mm
+        std::istringstream        lines(gcode);
+        for (std::string line; std::getline(lines, line);) {
+            if (line.size() >= 2 && line[0] == 'T' && std::isdigit((unsigned char) line[1]))
+                tool = std::stoi(line.substr(1));
+            else if (line.rfind(";TYPE:", 0) == 0)
+                gap = line == ";TYPE:Gap infill";
+            else if (line.rfind(";WIDTH:", 0) == 0)
+                width = std::stod(line.substr(7));
+            else if (gap && tool >= 0 && line.rfind("G1 ", 0) == 0 && line.find(" E") != std::string::npos && line.find('X') != std::string::npos)
+                widest[tool] = std::max(widest[tool], width);
+        }
+        INFO("widest gap fill on the 0.15 mm tool: " << widest[0] << " mm, on the 0.4 mm tool: " << widest[1] << " mm");
+        // The wedge has gap fill, wider than a 0.15 mm nozzle prints, and the 0.4 mm nozzle prints it.
+        CHECK(widest[1] > 3. * nozzles[0]);
+        // Gap fill between the two detail walls (where they converge) is printed by the 0.15 mm nozzle, at most
+        // 3 x its diameter (mm).
+        CHECK(widest[0] > 0.);
+        CHECK(widest[0] <= 3. * nozzles[0]);
     }
 }

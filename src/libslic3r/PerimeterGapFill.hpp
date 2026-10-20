@@ -15,6 +15,10 @@ struct PerimeterGapDemand {
     double max_spacing_scaled;       // Fixed-point distance, 1 unit = 1e-6 mm.
     double simplify_distance_scaled; // Fixed-point distance, 1 unit = 1e-6 mm.
     double minimum_length_scaled;    // Fixed-point distance, 1 unit = 1e-6 mm.
+    // MAGPIE: when set, the gap fill is tagged for the wall planner's nozzles: a gap lying in detail_regions (between
+    // two detail walls) goes to the detail nozzle, every other gap to the large walls' route.
+    bool       route_by_wall_nozzle = false;
+    ExPolygons detail_regions;
 };
 
 // Same conversion for the ordinary generator and a jointly assigned demand.

@@ -65,6 +65,15 @@ ExtrusionEntityCollection make_perimeter_gap_fill(PerimeterGapDemand demand)
         [&demand](const ThickPolyline &p) { return p.length() < demand.minimum_length_scaled; }), polylines.end());
     ExtrusionEntityCollection result;
     variable_width(polylines, erGapFill, demand.flow, result.entities);
+    if (demand.route_by_wall_nozzle)
+        for (ExtrusionEntity *entity : result.entities) {
+            // Each gap fill line runs inside one gap region; its middle vertex says which.
+            const Polyline line   = entity->as_polyline();
+            const bool     detail = !line.points.empty() &&
+                std::any_of(demand.detail_regions.begin(), demand.detail_regions.end(),
+                            [&line](const ExPolygon &region) { return region.contains(line.points[line.points.size() / 2]); });
+            entity->tool_hint     = detail ? ExtrusionToolHint::DetailWall : ExtrusionToolHint::LargeWall;
+        }
     return result;
 }
 
@@ -1743,6 +1752,8 @@ void PerimeterGenerator::process_classic()
 
         ExPolygons last        = union_ex(surface.expolygon.simplify_p(surface_simplify_resolution));
         ExPolygons gaps;
+        // MAGPIE: the gaps between two of the wall plan's detail walls, printed by the detail nozzle.
+        ExPolygons detail_gaps;
         ExPolygons top_fills;
         ExPolygons fill_clip;
         // ORCA: only_one_wall_top, all empty unless this island has a top surface on this layer. See the
@@ -1872,9 +1883,13 @@ void PerimeterGenerator::process_classic()
                             0.5 * wall_flow_at_depth(size_t(i - 1)).scaled_spacing() : 0.5 * distance;
                         const double next_edge_distance_scaled = half_layer_outer_walls ?
                             0.5 * wall_flow_at_depth(size_t(i)).scaled_spacing() : 0.5 * distance;
-                        append(gaps, diff_ex(
+                        ExPolygons depth_gaps = diff_ex(
                             offset(last, -float(previous_edge_distance_scaled)),
-                            offset(offsets, float(next_edge_distance_scaled + 10)))); // Existing 10 scaled units = 0.00001 mm safety offset.
+                            offset(offsets, float(next_edge_distance_scaled + 10))); // Existing 10 scaled units = 0.00001 mm safety offset.
+                        // Between walls i - 1 and i: both detail walls when i < the detail wall count.
+                        if (this->detail_wall_routing && i < this->detail_wall_count)
+                            append(detail_gaps, depth_gaps);
+                        append(gaps, std::move(depth_gaps));
                     }
                 }
                 if (offsets.empty() && offsets_with_smaller_width.empty()) {
@@ -2220,6 +2235,8 @@ void PerimeterGenerator::process_classic()
                 this->solid_infill_flow.with_height(float(0.5 * layer_height)) : this->solid_infill_flow;
             PerimeterGapDemand demand{std::move(gaps_ex), gap_flow, min, max,
                 surface_simplify_resolution, double(scale_(config->filter_out_gap_fill.value))};
+            demand.route_by_wall_nozzle = this->detail_wall_routing;
+            demand.detail_regions       = union_ex(detail_gaps);
             if (gap_demands != nullptr)
                 gap_demands->push_back(demand);
             auto gap_fill = make_perimeter_gap_fill(std::move(demand));
