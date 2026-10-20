@@ -691,6 +691,9 @@ TreeSupport::TreeSupport(PrintObject& object, const SlicingParameters &slicing_p
         support_type = stTreeAuto;
     if (m_overrides.style != smsDefault)
         m_support_params.support_style = m_overrides.style;
+    // MAGPIE: tree support's own walls, the sheath of its first layer included, follow the tree wall count; the
+    // normal-support wall count is not tree support's (-1 for both keeps Orca's walls).
+    m_support_params.normal_wall_loops = m_support_params.tree_wall_loops;
 
     SupportMaterialPattern support_pattern  = m_object_config->support_base_pattern;
     if (m_support_params.support_style == smsTreeHybrid && support_pattern == smpDefault)

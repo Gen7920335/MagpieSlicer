@@ -3586,11 +3586,11 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
             continue;
 
         SupportParameters            support_params(print_object);
-        // MAGPIE: organic trees run by another support module (Mixed) are drawn with the object's own
-        // support toolpaths, whose walls are the normal-support walls. Give them the tree wall count
-        // instead, as Magpie line 1 did (its Mixed copied tree_support_wall_count into support_wall_count).
-        if (tree_support != nullptr && tree_support->overrides().style != smsDefault && support_params.tree_wall_loops >= 0)
-            support_params.normal_wall_loops = support_params.tree_wall_loops;
+        // MAGPIE: organic trees are drawn with the object's own support toolpaths, whose walls are the
+        // normal-support walls. Give them the tree wall count instead, as Magpie line 1 did for Mixed (its
+        // Mixed copied tree_support_wall_count into support_wall_count); the normal-support wall count is
+        // not tree support's (-1 for both keeps Orca's walls).
+        support_params.normal_wall_loops = support_params.tree_wall_loops;
         support_params.with_sheath = true;
 // Don't override the support density of tree supports, as the support density is used for raft.
 // The trees will have the density zeroed in tree_supports_generate_paths()

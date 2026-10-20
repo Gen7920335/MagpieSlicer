@@ -709,6 +709,28 @@ TEST_CASE("Support wall loops add walls to normal and tree support", "[SupportMa
     }
 }
 
+TEST_CASE("The normal support wall count leaves tree support alone", "[SupportMaterial][SupportExtras]")
+{
+    // Before: support_extras' normal wall count reached every tree style through the sheath of the tree's first
+    // layer (slim, strong, hybrid) and the organic trees' toolpaths, e.g. organic 14187 -> 14153 mm of support on
+    // overhang.obj with 3 normal walls (golden probe, M4).
+    Slic3r::Test::BundledMods mods;
+    for (const char *style : { "organic", "tree_slim", "tree_strong", "tree_hybrid" }) {
+        CAPTURE(style);
+        auto support_gcode = [&](const nlohmann::json &params) {
+            return slice({ TestMesh::overhang }, {
+                { "enable_support", 1 }, { "layer_height", 0.2 }, { "support_type", "tree(auto)" }, { "support_style", style },
+                { "mod_settings", params.dump() } });
+        };
+        const std::string plain = support_gcode(nlohmann::json::object());
+        CHECK(support_role_length(support_gcode({ { "support_extras.normal_wall_loops", 3 } }), false) ==
+              Catch::Approx(support_role_length(plain, false)));
+        // The tree wall count still applies.
+        CHECK(support_role_length(support_gcode({ { "support_extras.tree_wall_loops", 3 } }), false) >
+              1.05 * support_role_length(plain, false));
+    }
+}
+
 // MAGPIE: line 1 (Beta 7). Whether support base and interface may merge compares the object's filament
 // with the support filaments in one index domain.
 TEST_CASE("Support merge eligibility compares material IDs in the same domain", "[SupportMaterial][SupportMapping]")
