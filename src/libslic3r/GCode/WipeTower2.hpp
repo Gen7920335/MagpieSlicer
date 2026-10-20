@@ -294,6 +294,25 @@ private:
 
 	float m_perimeter_width = 0.4f * Width_To_Nozzle_Ratio; // Width of an extrusion line, also a perimeter spacing for 100% infill.
 	float m_extrusion_flow = 0.038f; //0.029f;// Extrusion flow is derived from m_perimeter_width, layer height and filament diameter.
+    // MAGPIE: each tool prints the tower in its own nozzle's width (Width_To_Nozzle_Ratio x its nozzle). m_perimeter_width
+    // and m_extrusion_flow hold the width and flow of the tool printing at the moment (use_tool_width()); the frame
+    // of the tower (the insets of the purge boxes and its depth margins) takes the widest tool's, so the boxes of every
+    // tool fit it. With one nozzle size all three are the same width as before.
+    float m_frame_width = 0.f;
+    float tool_perimeter_width(size_t tool) const
+    {
+        return tool < m_filpar.size() ? m_filpar[tool].nozzle_diameter * Width_To_Nozzle_Ratio : m_perimeter_width;
+    }
+    float tool_extrusion_flow(size_t tool, float layer_height) const
+    {
+        const float width = tool_perimeter_width(tool);
+        return layer_height * (width - layer_height * (1.f - float(M_PI) / 4.f)) / filament_area();
+    }
+    void use_tool_width(size_t tool)
+    {
+        m_perimeter_width = tool_perimeter_width(tool);
+        m_extrusion_flow  = extrusion_flow(m_layer_height);
+    }
 
 	// Extruder specific parameters.
     std::vector<FilamentParameters> m_filpar;

@@ -14,6 +14,12 @@
 
 ## History
 
+### 2026-10-20 Prime tower in each tool's own nozzle width (WipeTower2, after 7bc40b44e5)
+
+- WipeTower2 printed the whole tower in 1.25 x the last set_extruder() tool's nozzle ("all extruders are now assumed to have the same diameter"): 0.5 mm from a 0.15 mm nozzle, or 0.188 mm from a 0.4 mm one, depending on the nozzle order. Now m_perimeter_width/m_extrusion_flow hold the width of the tool printing at the moment (`use_tool_width()`): a toolchange's box rows and wipe are the new tool's, the ram the old tool's (`tool_perimeter_width()`, also for the first wipe line it prints), finish_layer the finishing tool's, priming each tool's. The frame (box insets, tower depth margins) is the widest tool's (`m_frame_width`). set_toolchange/save_on_last_wipe plan with the same widths. One-size printers: every width is the same and the arithmetic is kept bit for bit (golden identical).
+- Type-1 (BBL) WipeTower is unchanged: still one width (ASSUMED wrong on mixed printers; not measured in the 0.4/0.6 corpus because exact_widths' tower band 0.95-2.05 x does not separate 0.75 from 0.5).
+- Results: ctest 2624/2624 (new "Each tool prints the prime tower in its own nozzle's width"); golden off and the half-layer, low-temp, multi-nozzle corpora identical to 7bc40b44e5; corpus_wipe_tower (0.4/0.4/0.6/0.6) type-2 cases: the 0.4 mm tools' tower lines 0.75 -> 0.5 mm, same volume (length x 1.5), tower about 1 mm larger in x and y; mixed corpus tower lines 0.4 mm tool 0.5, 0.15 mm tool 0.1875 in both nozzle orders; exact_widths.py tower rows 12 -> 0 mismatches per case.
+
 ### 2026-10-20 Skirt and brim on the nozzle of the tool printing them (after 5cffa3a260)
 
 - Mixed-nozzle printers only; one-size printers keep Orca's code path. Skirt and brim are printed by whichever tool visits them, so their widths are resolved on that tool's nozzle through the Skirt and Brim routes (per-nozzle fields included), replacing 3272a672c6's "as set" widths on one filament's nozzle.

@@ -822,6 +822,8 @@ std::vector<std::string> width_mismatches(const Print &print, const std::string 
         // When set, the one nominal width is the first of these settings above 0 on the tool's nozzle (skirt, brim:
         // printed by whichever tool visits them, each in its own nozzle's width), else the automatic width.
         std::vector<const char *>                      chain {};
+        // When above 0, the nominal width is this multiple of the tool's nozzle instead (the prime tower).
+        double                                         nozzle_ratio { 0. };
     };
     const std::pair<double, double> exact { 1., 1. };
     const std::pair<double, double> wall_band { 0.9, 1.3 };
@@ -841,6 +843,9 @@ std::vector<std::string> width_mismatches(const Print &print, const std::string 
         { "Support interface", { { { "support_line_width", frSupportMaterial } }, exact, 5. } },
         { "Skirt", { {}, exact, 5., { "initial_layer_line_width", "line_width" } } },
         { "Brim", { {}, exact, 5., { "initial_layer_line_width", "inner_wall_line_width", "line_width" } } },
+        // Each tool wipes and walls the tower in 1.25 x its nozzle (WipeTower2's Width_To_Nozzle_Ratio); rams with
+        // multi-tool ramming are 2 x that, and can be the most common width of a sparse tower layer.
+        { "Prime tower", { {}, { 0.95, 2.05 }, 5., {}, 1.25 } },
     };
     const DynamicPrintConfig  config  = print.full_print_config_as_set();
     const std::vector<double> nozzles = config.option<ConfigOptionFloats>("nozzle_diameter")->values; // mm
@@ -909,7 +914,9 @@ std::vector<std::string> width_mismatches(const Print &print, const std::string 
         std::vector<double> nominal;
         for (const auto &[key, flow_role] : expected.keys)
             nominal.push_back(resolve(key, flow_role, nozzle));
-        if (!expected.chain.empty()) {
+        if (expected.nozzle_ratio > 0.)
+            nominal.push_back(expected.nozzle_ratio * nozzle_mm);
+        else if (!expected.chain.empty()) {
             ConfigOptionFloatOrPercent width(0., false);
             for (const char *key : expected.chain)
                 if (width = setting_on(key, nozzle); width.value > 0.)
@@ -1052,6 +1059,39 @@ TEST_CASE("Each object's brim is printed in the width of the nozzle of the tool 
         init_print({ make_cube(10., 10., 2.), make_cube(10., 10., 2.) }, print, model, config, &overrides);
         const std::string gcode = Slic3r::Test::gcode(print);
         REQUIRE(tools_for_type(gcode, "Brim") == std::set<int>{ 0, 1 });
+        const std::vector<std::string> mismatches = width_mismatches(print, gcode);
+        INFO(join_lines(mismatches));
+        CHECK(mismatches.empty());
+    }
+}
+
+TEST_CASE("Each tool prints the prime tower in its own nozzle's width", "[MultiNozzleWalls][Widths][WipeTower]")
+{
+    // Outer walls on one nozzle, everything else on the other: a tool change and a purge on the tower every layer.
+    // WipeTower2 printed the whole tower in 1.25 x the last tool's nozzle (0.5 mm from the 0.15 mm nozzle too).
+    const bool small_first = GENERATE(true, false); // nozzle order
+    DYNAMIC_SECTION((small_first ? "0.15/0.4" : "0.4/0.15")) {
+        const int small = small_first ? 1 : 2, large = small_first ? 2 : 1; // filaments, 1-based
+        DynamicPrintConfig config = two_nozzle_config(small_first ? 0.15 : 0.4, small_first ? 0.4 : 0.15, large, "classic", false);
+        config.set_deserialize_strict({
+            { "outer_wall_filament_id", small },
+            { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+            { "printer_variant", "0.4" },
+            { "line_width", "0.42" }, { "outer_wall_line_width", "0.42" }, { "inner_wall_line_width", "0.45" },
+            { "sparse_infill_line_width", "0.45" }, { "internal_solid_infill_line_width", "0.42" },
+            { "top_surface_line_width", "0.42" }, { "initial_layer_line_width", "0.5" }, // mm
+            { "enable_prime_tower", true }, { "wipe_tower_type", "type2" },
+            { "wipe_tower_x", "50" }, { "wipe_tower_y", "50" }, // mm, inside the test bed
+        });
+        // Two colours, or filament grouping takes the two filaments for one and never changes the tool.
+        config.set_key_value("filament_colour", new ConfigOptionStrings{ "#FF0000", "#00FF00" });
+        Print print;
+        Model model;
+        init_print({ make_cube(10., 10., 3.) }, print, model, config);
+        // A first apply counts one filament and clears the tower (test_wipe_tower.cpp); the second sees both.
+        print.apply(model, config);
+        const std::string gcode = Slic3r::Test::gcode(print);
+        REQUIRE(tools_for_type(gcode, "Prime tower") == std::set<int>{ 0, 1 });
         const std::vector<std::string> mismatches = width_mismatches(print, gcode);
         INFO(join_lines(mismatches));
         CHECK(mismatches.empty());
