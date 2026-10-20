@@ -72,14 +72,16 @@ when a wait is next to them.
 - `park`: lift, travel to the park position (printer `layer_time_blend_park_x/_y`, rear left by
   default), wait, back to the same XY, down. Waits shorter than `in_place_max` or the trip wait in
   place.
-- `purge_tower`: on a layer that visits the temperature drop tower or the prime tower, the site is
-  where the nozzle has arrived over the tower, retracted, before its first line there: after the
-  travel to it, or in a tool change made in place, before the tower generator's deretraction. The
-  wait is a bare G4 and the tower's lines re-prime the nozzle; there is no extra trip. The site is
-  then mid-layer, so the interval it measures runs from one visit to the next, and where the visit
-  moves within the layer (a tool order that alternates) those intervals vary more than the layer
-  times do. Layers above the towers park at the park position. A layer expected to visit a tower
-  that did not still gets its site, in place at the layer's end (logged).
+- `purge_tower`: the sites stay at the layer starts, so what is blended is the model's layer times.
+  A wait adds to its interval wherever it falls inside the layer before the site, so when that layer
+  visits the temperature drop tower or the prime tower the wait is written at the visit
+  (`;MAGPIE_WAIT_VISIT`): where the nozzle has arrived over the tower, retracted, before its first
+  line there (after the travel to it, or in a tool change made in place, before the tower
+  generator's deretraction). It is a bare G4, the ooze falls on the tower and its lines re-prime the
+  nozzle; there is no extra trip. When the layer before did not visit a tower (above the towers) the
+  site parks at the park position. Timing the intervals from visit to visit instead would even the
+  time at the tower, which does not matter, and makes waits wherever the visit moves within the layer
+  (an alternating tool order); Gen chose the model's layer times (2026-10-20).
 
 Waiting away from the part means the part fan does not blow on it: equal layer times do not mean
 equal cooling, only closer to it.

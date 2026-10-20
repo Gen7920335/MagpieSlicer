@@ -3357,6 +3357,9 @@ static void stream_file(const std::string &path, GCodeProcessor &processor, cons
 // How a site waits: not at all, a bare G4, lifted off the part around the G4, or parked.
 enum class WaitForm { None, Dwell, Lifted, Parked };
 
+// purge_tower: where the nozzle arrived over a tower; the next site's wait is written before it.
+constexpr const char *visit_tag = ";MAGPIE_WAIT_VISIT";
+
 // Shortest wait that lifts the nozzle, s. A shorter one rests the nozzle no longer than Orca's own layer
 // change does, and the lift moves alone would take a good part of it (0.2 s or more).
 constexpr double lifted_wait_min_s = 1.;
@@ -3436,7 +3439,13 @@ static void write_waits(const std::string &src, const std::string &dst, const st
             skipped_e_was_reset = false;
             continue;
         }
-        if (line == tag && k < sites.size()) {
+        if (line == visit_tag) {
+            // The visit before site k, which waits here.
+            if (k < sites.size() && sites[k].wait_at_visit && form[k] != WaitForm::None && dwell_ms[k] > 0)
+                out << "G4 P" << dwell_ms[k] << "\n";
+        } else if (line == tag && k < sites.size() && sites[k].wait_at_visit) {
+            ++k;
+        } else if (line == tag && k < sites.size()) {
             const LayerTimeWaitSite &site = sites[k];
             const WaitForm           f    = form[k];
             if (f == WaitForm::Lifted || f == WaitForm::Parked)
@@ -3485,16 +3494,13 @@ bool GCode::layer_time_tower_visited(const Print &print, coordf_t print_z) const
 
 std::string GCode::layer_time_tower_arrival()
 {
-    if (!m_layer_time_pending_site)
+    if (!m_layer_time_visit_wanted)
         return {};
-    LayerTimeWaitSite site = *m_layer_time_pending_site;
-    m_layer_time_pending_site.reset();
-    // Over the tower, retracted, before the nozzle extrudes there: the wait is a bare G4 and the ooze falls on
-    // the tower, whose lines re-prime the nozzle.
-    site.at_tower = true;
-    site.z        = m_writer.get_position().z();
-    m_layer_time_sites.push_back(site);
-    return ";" + GCodeProcessor::wait_site_tag() + "\n";
+    m_layer_time_visit_wanted = false;
+    m_layer_time_visit_tagged = true;
+    // Over the tower, retracted, before the nozzle extrudes there: the next site's wait is a bare G4 here, the
+    // ooze falls on the tower and its lines re-prime the nozzle.
+    return std::string(LayerTimeBlendExport::visit_tag) + "\n";
 }
 
 std::optional<Vec2d> GCode::layer_time_park_position(const Print &print, coordf_t print_z)
@@ -3665,11 +3671,19 @@ std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
     std::string gcode;
     if (m_layer_time_wait_at == LayerTimeWaitAt::Tower && !m_layer_time_tower_placed && !this->place_layer_time_tower(print))
         m_layer_time_wait_at = LayerTimeWaitAt::Park;
-    // purge_tower: a layer that visits a tower waits there, at the visit (layer_time_tower_arrival); the
-    // others park.
-    if (m_layer_time_wait_at == LayerTimeWaitAt::PurgeTower && this->layer_time_tower_visited(print, print_z)) {
-        m_layer_time_pending_site = site;
-        return gcode;
+    // purge_tower. The sites stay at the layer starts, so the intervals are the model's layer times (Gen,
+    // 2026-10-20: the model's layer times are what is blended, not the time between tower visits). A wait
+    // anywhere in the layer before the site adds to the same interval, so when that layer visited a tower the
+    // wait is written at its visit tag, over the tower; otherwise the site parks.
+    if (m_layer_time_wait_at == LayerTimeWaitAt::PurgeTower) {
+        const bool at_visit       = m_layer_time_visit_tagged;
+        m_layer_time_visit_tagged = false;
+        m_layer_time_visit_wanted = this->layer_time_tower_visited(print, print_z);
+        if (at_visit) {
+            site.wait_at_visit = true;
+            m_layer_time_sites.push_back(site);
+            return gcode + ";" + GCodeProcessor::wait_site_tag() + "\n";
+        }
     }
     const Vec2f writer_offset = m_writer.get_xy_offset();
     auto emitted = [&writer_offset](const Vec2d &p) { return Vec2d(p.x() - writer_offset.x(), p.y() - writer_offset.y()); };
@@ -3809,7 +3823,8 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
                 continue;
             if (plan.use_park[k])
                 form[k] = WaitForm::Parked;
-            else if (m_layer_time_sites[k].at_tower || plan.added_s[k] < LayerTimeBlendExport::lifted_wait_min_s)
+            else if (m_layer_time_sites[k].at_tower || m_layer_time_sites[k].wait_at_visit ||
+                     plan.added_s[k] < LayerTimeBlendExport::lifted_wait_min_s)
                 form[k] = WaitForm::Dwell;
             else
                 form[k] = WaitForm::Lifted;
@@ -4215,7 +4230,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     if (m_layer_time_wait_at == LayerTimeWaitAt::Tower && print.config().print_sequence.value == PrintSequence::ByObject)
         m_layer_time_wait_at = LayerTimeWaitAt::Park;
     m_layer_time_tower_placed    = false;
-    m_layer_time_pending_site.reset();
+    m_layer_time_visit_wanted = false;
+    m_layer_time_visit_tagged = false;
     m_layer_time_tower_side      = 0.;
     m_layer_time_tower_last_z    = 0.;
     m_layer_time_tower_brim_done = false;
@@ -9724,19 +9740,13 @@ LayerResult GCode::process_layer(
         if (this->build_temperature_drop_tower_path(temperature_drop_tower_path))
             gcode += this->extrude_temperature_drop_tower(temperature_drop_tower_path, false);
     }
-    // MAGPIE: layer time blending (purge_tower): a layer expected to visit a tower that did not still gets its
-    // site, waiting in place at the layer's end.
-    if (m_layer_time_pending_site) {
-        // PERMANENT DIAGNOSTIC: the visit did not happen, so the wait is not over the tower.
-        BOOST_LOG_TRIVIAL(warning) << "Layer time blending: no tower visit on the layer at " << m_layer_time_pending_site->print_z
-                                   << " mm; its wait is in place at the layer's end";
-        LayerTimeWaitSite site = *m_layer_time_pending_site;
-        m_layer_time_pending_site.reset();
-        const double lift_mm = site.lift_z - site.z; // as the layer start chose it
-        site.z      = m_writer.get_position().z();
-        site.lift_z = std::max(site.z, std::min(site.z + lift_mm, print.config().printable_height.value));
-        m_layer_time_sites.push_back(site);
-        gcode += ";" + GCodeProcessor::wait_site_tag() + "\n";
+    // MAGPIE: layer time blending (purge_tower): a layer expected to visit a tower that did not; the next site
+    // parks instead.
+    if (m_layer_time_visit_wanted) {
+        // PERMANENT DIAGNOSTIC: the visit did not happen, so the next wait is not over the tower.
+        BOOST_LOG_TRIVIAL(warning) << "Layer time blending: no tower visit on the layer at " << print_z
+                                   << " mm; the next layer's wait parks";
+        m_layer_time_visit_wanted = false;
     }
 
 #if 0
@@ -11347,7 +11357,7 @@ std::string GCode::extrude_temperature_drop_tower(const ExtrusionPath &path, boo
     constexpr double tower_speed = 30.0, slow_tail_speed = 10.0, slow_tail_length_mm = 10.0;
     std::string gcode;
     // MAGPIE: layer time blending (purge_tower): wait over the tower before its first line of this layer.
-    if (m_layer_time_pending_site && ! path.polyline.empty()) {
+    if (m_layer_time_visit_wanted && ! path.polyline.empty()) {
         const ExtrusionPath *first = &path;
         std::vector<ExtrusionPath> brim_paths;
         if (! cooling_transition && ! m_temperature_drop_tower_brim_printed && this->build_temperature_drop_tower_brim_paths(brim_paths) &&

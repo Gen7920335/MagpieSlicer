@@ -86,6 +86,9 @@ struct LayerTimeWaitSite
     double x = 0., y = 0., park_x = 0., park_y = 0., travel_speed = 0.;
     double park_trip_s = 0.; // estimated time of the trip to the park position and back, s
     bool   at_tower = false; // inside a layer time tower block: the nozzle waits over the tower, not lifted
+    // purge_tower: the wait is written at the tower visit of the layer before the site (its visit tag), where the
+    // nozzle is over the tower; it adds to the same interval as a wait at the site would.
+    bool   wait_at_visit = false;
 };
 
 // Where a layer time blending wait happens (layer_time_blend_wait_at).
@@ -591,8 +594,8 @@ protected:
     std::optional<Vec2d> layer_time_park_position(const Print &print, coordf_t print_z);
     // Whether this layer visits the temperature drop tower or the prime tower (purge_tower waits there).
     bool            layer_time_tower_visited(const Print &print, coordf_t print_z) const;
-    // The pending site of a purge_tower layer, written where the nozzle has arrived over the tower; empty
-    // when none is pending.
+    // purge_tower: the visit tag of this layer, where the nozzle has arrived over the tower; empty when the
+    // layer has none to write.
     std::string     layer_time_tower_arrival();
     void            apply_layer_time_plan(Print &print, const std::string &path_tmp);
     // Bedslinger model: derive the Y-axis acceleration limit from the machine force/bed-mass config
@@ -942,8 +945,9 @@ protected:
     // sites written so far in G-code order.
     std::shared_ptr<const ModHost::TimePlanner> m_layer_time_planner;
     std::vector<LayerTimeWaitSite>      m_layer_time_sites;
-    // purge_tower: this layer's site, waiting for the nozzle to reach the tower it visits.
-    std::optional<LayerTimeWaitSite>    m_layer_time_pending_site;
+    // purge_tower: this layer's tower visit is still to be tagged; the last layer's visit was tagged.
+    bool                                m_layer_time_visit_wanted{ false };
+    bool                                m_layer_time_visit_tagged{ false };
     LayerTimeWaitAt                     m_layer_time_wait_at{ LayerTimeWaitAt::InPlace };
     // The layer time tower: placed at the first site; its footprint's lower left corner (brim included),
     // its side and its brim width, mm (plate coordinates), the Z of its last layer and whether its brim is out.

@@ -412,10 +412,11 @@ TEST_CASE("With absolute E the tower is cut above the last wait as with relative
     check_blended(measured_intervals(absolute), max_diff_s);
 }
 
-TEST_CASE("Purge tower waits happen during the temperature drop tower's own visit", "[LayerTimeBlend]")
+TEST_CASE("Purge tower waits happen at the temperature drop tower's visit and blend the model's layer times", "[LayerTimeBlend]")
 {
     // The slab's underside needs support; the low temperature interface prints a drop tower on every layer up to
-    // the last interface. Below it the waits are over the tower when the nozzle gets there; above it they park.
+    // the last interface. The sites stay at the layer starts, so the blended intervals are the model's layer
+    // times; a wait for a layer whose layer before visited the tower is written at that visit, over the tower.
     const double       max_diff_s = 2.;
     DynamicPrintConfig config     = wait_at_config("purge_tower", max_diff_s, {}, {{"park_x", "10"}, {"park_y", "190"}});
     config.set_deserialize_strict({{"enable_support", "1"}, {"support_interface_top_layers", "2"}});
@@ -425,12 +426,13 @@ TEST_CASE("Purge tower waits happen during the temperature drop tower's own visi
     const std::string              out   = slice_mesh(pillar_with_slab(), config);
     const std::vector<std::string> lines = lines_of(out);
     REQUIRE(out.find("; temperature drop tower layer") != std::string::npos);
-    size_t sites = 0, tower_sites = 0, tower_waits = 0;
+    const std::string visit_tag = ";MAGPIE_WAIT_VISIT";
+    size_t visits = 0, tower_waits = 0;
     for (size_t i = 0; i < lines.size(); ++i) {
-        if (lines[i] != site_tag)
+        if (lines[i] != visit_tag)
             continue;
-        ++sites;
-        // Over the drop tower: its marker comes before the next extrusion.
+        ++visits;
+        // At the drop tower: its marker comes before the next extrusion.
         bool at_tower = false;
         for (size_t j = i + 1; j < lines.size(); ++j) {
             if (lines[j].rfind("; temperature drop tower", 0) == 0 || lines[j].rfind("; low-temperature support interface temperature drop tower", 0) == 0) {
@@ -440,9 +442,7 @@ TEST_CASE("Purge tower waits happen during the temperature drop tower's own visi
             if (axis_value(lines[j], 'E') && (axis_value(lines[j], 'X') || axis_value(lines[j], 'Y')))
                 break;
         }
-        if (!at_tower)
-            continue;
-        ++tower_sites;
+        CHECK(at_tower);
         if (lines[i - 1].rfind("G4 P", 0) == 0) {
             // A bare wait where the nozzle already is: no lift and no trip before it.
             CHECK(lines[i - 2].rfind("G1 Z", 0) != 0);
@@ -451,9 +451,10 @@ TEST_CASE("Purge tower waits happen during the temperature drop tower's own visi
             ++tower_waits;
         }
     }
-    CHECK(sites == 53);
-    CHECK(tower_sites > 0);
+    CHECK(count_lines_starting(out, site_tag) == 53);
+    CHECK(visits > 0);
     CHECK(tower_waits > 0);
+    // The intervals between the layer-start sites, the model's layer times, are the ones blended.
     check_blended(measured_intervals(out), max_diff_s);
 }
 
