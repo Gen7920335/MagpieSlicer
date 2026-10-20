@@ -23,9 +23,6 @@ class PrintObject;
 class SupportLayer;
 
 std::vector<double> half_height_support_z_grid(const PrintObject &object);
-// MAGPIE: whether interface layer `interface_number` (1 = the contact layer) of `interface_total` uses the
-// interface sublayer pattern: numbers start_layer..end_layer, clamped to 2..interface_total (Magpie line 1).
-bool support_interface_sublayer_selected(bool enabled, int start_layer, int end_layer, int interface_number, int interface_total);
 // Smallest and largest physical support band, mm, for H/2 refinement.
 std::pair<double, double> half_height_support_band_limits_mm(const PrintObject &object);
 // Band ends follow the model H/2 grid. A support layer boundary off that grid (independent

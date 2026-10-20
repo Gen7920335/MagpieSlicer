@@ -28,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include <nlohmann/json.hpp>
 #include "test_helpers.hpp" // get access to init_print, etc
 
 // Not self-contained: its inline constructor uses PrintObject, PrintRegion, SlicingParameters and
@@ -631,13 +632,15 @@ static double support_role_length(const std::string &gcode, bool interface)
 
 TEST_CASE("A triangle interface pattern lays the top interface in three directions", "[SupportMaterial]")
 {
+    // The support extras mod's interface pattern (support.style slot).
+    Slic3r::Test::BundledMods mods;
     // Directions holding at least 15 % of the top interface layer's length, in 10 degree bins.
     const auto directions = [](const std::string &override_pattern) {
         const std::string gcode = slice({ support_capital() }, {
             { "enable_support", 1 }, { "layer_height", 0.2 }, { "support_type", "normal(auto)" },
             { "support_interface_top_layers", 2 }, { "support_interface_bottom_layers", 0 },
             { "support_interface_pattern", "rectilinear" },
-            { "support_interface_pattern_override", override_pattern } });
+            { "mod_settings", nlohmann::json{ { "support_extras.interface_pattern", override_pattern } }.dump() } });
         double highest = 0;
         GCodeReader parser;
         parser.parse_buffer(gcode, [&highest](GCodeReader &self, const GCodeReader::GCodeLine &line) {
@@ -670,12 +673,13 @@ TEST_CASE("A triangle interface pattern lays the top interface in three directio
 
 TEST_CASE("The interface sublayer prints its layers at its own angle", "[SupportMaterial]")
 {
+    Slic3r::Test::BundledMods mods;
     const std::string gcode = slice({ support_capital() }, {
         { "enable_support", 1 }, { "layer_height", 0.2 }, { "support_type", "normal(auto)" },
         { "support_interface_top_layers", 3 }, { "support_interface_bottom_layers", 0 },
         { "support_interface_pattern", "rectilinear" },
-        { "support_interface_sublayer_start", 2 }, { "support_interface_sublayer_end", 3 },
-        { "support_interface_sublayer_pattern", "rectilinear" }, { "support_interface_sublayer_angle", 45 } });
+        { "mod_settings", nlohmann::json{ { "support_extras.sublayer_start", 2 }, { "support_extras.sublayer_end", 3 },
+                                          { "support_extras.sublayer_pattern", "rectilinear" }, { "support_extras.sublayer_angle", 45 } }.dump() } });
     const std::map<double, double> angles = interface_fill_angle_by_layer(gcode);
     REQUIRE(angles.size() >= 3);
     // The contact layer (the highest) keeps the interface angle; the two below it turn to 45 degrees.
@@ -688,6 +692,7 @@ TEST_CASE("The interface sublayer prints its layers at its own angle", "[Support
 
 TEST_CASE("Support wall loops add walls to normal and tree support", "[SupportMaterial]")
 {
+    Slic3r::Test::BundledMods mods;
     for (const char *type : { "normal(auto)", "tree(auto)" }) {
         CAPTURE(type);
         const bool tree = std::string(type) == "tree(auto)";
@@ -695,7 +700,7 @@ TEST_CASE("Support wall loops add walls to normal and tree support", "[SupportMa
             return support_role_length(slice({ support_capital() }, {
                 { "enable_support", 1 }, { "layer_height", 0.2 }, { "support_type", type }, { "support_style", tree ? "tree_slim" : "default" },
                 { "tree_support_wall_count", 1 },
-                { tree ? "tree_support_wall_loops" : "support_wall_loops", loops } }), false);
+                { "mod_settings", nlohmann::json{ { tree ? "support_extras.tree_wall_loops" : "support_extras.normal_wall_loops", loops } }.dump() } }), false);
         };
         const double one   = base_length(1);
         const double three = base_length(3);

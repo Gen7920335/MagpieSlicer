@@ -2,7 +2,6 @@
 
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/Print.hpp"
-#include "Builtin/MixedSupport.hpp"
 #include "Builtin/ResinSupport.hpp"
 #include "NativeMods.hpp"
 
@@ -37,8 +36,8 @@ void register_builtin_modules(Registry &registry)
     // PrusaSlicer's SLA support points and trees, printed through Orca's normal-support pipeline. Its
     // settings are the parameters of the bundled resin_support mod (resources/mods/resin_support.json).
     registry.support_generators["resin"] = {"resin", "Resin", [](PrintObject &object) { ResinSupport::generate(object); }};
-    // Normal and tree support in one object (resources/mods/mixed_support.json).
-    registry.support_generators["mixed"] = {"mixed", "Mixed", [](PrintObject &object) { MixedSupport::generate(object); }};
+    // "mixed" (normal and tree support in one object) is the native mod mods/mixed_support, a support.compose
+    // implementation (NativeCompose.hpp).
     // "multi_nozzle" (multi-nozzle walls) is the native mod mods/multi_nozzle_walls, a wall.plan
     // implementation (WallPlanner.hpp).
 }

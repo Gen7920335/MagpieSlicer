@@ -3,7 +3,8 @@
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Format/DRC.hpp"
 #include "libslic3r/Layer.hpp"
-#include "libslic3r/ModHost/Builtin/MixedSupport.hpp"
+#include "libslic3r/ModHost/NativeMods.hpp"
+#include "libslic3r/ModHost/NativeSupport.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Support/SupportMaterial.hpp"
@@ -18,11 +19,81 @@
 
 #include "test_helpers.hpp"
 
+#include "../../mods/mixed_support/mixed_support_plan.h"
+
 using namespace Slic3r;
 using namespace Slic3r::Test;
-namespace Mixed = Slic3r::ModHost::MixedSupport;
 
 namespace {
+
+// The Mixed support mod's plan (mods/mixed_support, service mixed_support.plan), through the built library.
+namespace Mixed {
+enum class Channel { Normal, Tree, Split };
+struct Plan
+{
+    std::vector<Polygons> normal_mask, tree_mask, normal_paint_fallback;
+    std::vector<Channel>  decisions;
+    bool has_normal() const { return std::any_of(normal_mask.begin(), normal_mask.end(), [](const Polygons &p) { return !p.empty(); }); }
+    bool has_tree() const { return std::any_of(tree_mask.begin(), tree_mask.end(), [](const Polygons &p) { return !p.empty(); }); }
+};
+
+// One borrowed mp_rings per layer.
+struct LayersView
+{
+    std::vector<std::vector<mp_ring>> rings;
+    std::vector<mp_rings>             lists;
+    LayersView(const std::vector<Polygons> &layers, size_t n)
+    {
+        rings.resize(n);
+        for (size_t i = 0; i < n; ++i) {
+            if (i < layers.size())
+                for (const Polygon &p : layers[i])
+                    rings[i].push_back({reinterpret_cast<const mp_point *>(p.points.data()), uint32_t(p.points.size())});
+            lists.push_back({rings[i].data(), uint32_t(rings[i].size())});
+        }
+    }
+};
+
+std::vector<Polygons> layers_of(const mp_rings *lists, uint32_t n)
+{
+    std::vector<Polygons> out(n);
+    for (uint32_t i = 0; i < n; ++i)
+        for (uint32_t r = 0; r < lists[i].n; ++r) {
+            Polygon p;
+            for (uint32_t k = 0; k < lists[i].rings[r].n; ++k)
+                p.points.emplace_back(lists[i].rings[r].pts[k].x, lists[i].rings[r].pts[k].y);
+            out[i].push_back(std::move(p));
+        }
+    return out;
+}
+
+Plan plan(const std::vector<Polygons> &demand, const std::vector<Polygons> &shadow, double threshold, bool selective,
+          const std::vector<Polygons> *painted_normal = nullptr, const std::vector<Polygons> *painted_tree = nullptr)
+{
+    const ModHost::NativeEntry *service = official_mods().native ?
+        official_mods().native->find_service(MIXED_SUPPORT_PLAN_SERVICE, MIXED_SUPPORT_PLAN_VERSION) : nullptr;
+    REQUIRE(service != nullptr);
+    const auto  *table = static_cast<const mixed_support_plan_v1 *>(service->table);
+    const size_t n     = std::max(demand.size(), shadow.size());
+    // The views point into the layers: no temporaries.
+    static const std::vector<Polygons> none;
+    LayersView d(demand, n), s(shadow, n), pn(painted_normal ? *painted_normal : none, n), pt(painted_tree ? *painted_tree : none, n);
+    mixed_plan_input_v1 in{sizeof(in), uint32_t(n), d.lists.data(), s.lists.data(), threshold, selective ? 1 : 0,
+                           painted_normal ? pn.lists.data() : nullptr, painted_tree ? pt.lists.data() : nullptr};
+    mixed_plan_output_v1 out{sizeof(out)};
+    const mp_status st = table->plan(&in, &out);
+    REQUIRE(st.code == MP_OK);
+    Plan p;
+    p.normal_mask           = layers_of(out.normal_mask, out.layer_count);
+    p.tree_mask             = layers_of(out.tree_mask, out.layer_count);
+    p.normal_paint_fallback = layers_of(out.normal_paint_fallback, out.layer_count);
+    for (uint32_t i = 0; i < out.decision_count; ++i)
+        p.decisions.push_back(out.decisions[i] == MIXED_CHANNEL_NORMAL ? Channel::Normal :
+                              out.decisions[i] == MIXED_CHANNEL_TREE   ? Channel::Tree : Channel::Split);
+    table->release(&out);
+    return p;
+}
+} // namespace Mixed
 
 Polygons rectangle(double min_x, double min_y, double max_x, double max_y) // mm
 {
@@ -180,9 +251,9 @@ TEST_CASE("Mixed support prints normal and tree support in one object", "[MixedS
     REQUIRE_FALSE(object.support_layers().empty());
     // Normal support stands on the bed beside the pillar; the tree reaches over the pillar. They
     // meet on shared layers.
-    CHECK((any_layer(object, stInnerNormal) || any_layer(object, stInnerMixed)));
-    CHECK((any_layer(object, stInnerTree) || any_layer(object, stInnerMixed)));
-    CHECK(any_layer(object, stInnerMixed));
+    CHECK((any_layer(object, stInnerNormal) || any_layer(object, stInnerMultiChannel)));
+    CHECK((any_layer(object, stInnerTree) || any_layer(object, stInnerMultiChannel)));
+    CHECK(any_layer(object, stInnerMultiChannel));
     CHECK_FALSE(gcode(print).empty());
 }
 
@@ -247,8 +318,8 @@ TEST_CASE("Mixed support works with common nozzle diameters", "[MixedSupport]")
     REQUIRE_NOTHROW(init_and_process_print({fixture}, print, config));
     const PrintObject &object = *print.objects().front();
     REQUIRE_FALSE(object.support_layers().empty());
-    CHECK((any_layer(object, stInnerNormal) || any_layer(object, stInnerMixed)));
-    CHECK((any_layer(object, stInnerTree) || any_layer(object, stInnerMixed)));
+    CHECK((any_layer(object, stInnerNormal) || any_layer(object, stInnerMultiChannel)));
+    CHECK((any_layer(object, stInnerTree) || any_layer(object, stInnerMultiChannel)));
 }
 
 // Hidden: slices the full Stanford Bunny twice (about a minute). Run with "[MixedBunny]".
@@ -274,8 +345,9 @@ TEST_CASE("Mixed support splits the Stanford Bunny's demand without gaps or over
     Print print;
     REQUIRE_NOTHROW(init_and_process_print({bunny}, print, config));
     const PrintObject          &object = *print.objects().front();
-    const Mixed::ModSettings    s      = Mixed::read_settings(object);
-    const std::vector<Polygons> demand = Mixed::detect_demand(object, s);
+    const ModHost::NativeEntry *cura   = ModHost::NativeSupport::find("cura");
+    REQUIRE(cura != nullptr);
+    const std::vector<Polygons> demand = ModHost::NativeSupport::overhang_demand(object, *cura);
     const std::vector<Polygons> shadow = buildplate_covered_by_object(object);
     const Mixed::Plan           p      = Mixed::plan(demand, shadow, 50., selective);
     CHECK(p.has_normal());
@@ -300,6 +372,6 @@ TEST_CASE("Mixed support splits the Stanford Bunny's demand without gaps or over
     CHECK(unassigned * to_mm2 <= dust_mm2);
     CHECK(overlap * to_mm2 <= dust_mm2);
     CHECK(reachable_not_normal * to_mm2 <= dust_mm2);
-    CHECK((any_layer(object, stInnerNormal) || any_layer(object, stInnerMixed)));
-    CHECK((any_layer(object, stInnerTree) || any_layer(object, stInnerMixed)));
+    CHECK((any_layer(object, stInnerNormal) || any_layer(object, stInnerMultiChannel)));
+    CHECK((any_layer(object, stInnerTree) || any_layer(object, stInnerMultiChannel)));
 }

@@ -1,0 +1,170 @@
+solid p
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 0
+   vertex 8 10 0
+   vertex 8 0 0
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 0
+   vertex 0 10 0
+   vertex 8 10 0
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 10
+   vertex 8 0 10
+   vertex 8 10 10
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 10
+   vertex 8 10 10
+   vertex 0 10 10
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 0
+   vertex 8 0 0
+   vertex 8 0 10
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 0
+   vertex 8 0 10
+   vertex 0 0 10
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 8 0 0
+   vertex 8 10 0
+   vertex 8 10 10
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 8 0 0
+   vertex 8 10 10
+   vertex 8 0 10
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 8 10 0
+   vertex 0 10 0
+   vertex 0 10 10
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 8 10 0
+   vertex 0 10 10
+   vertex 8 10 10
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 10 0
+   vertex 0 0 0
+   vertex 0 0 10
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 10 0
+   vertex 0 0 10
+   vertex 0 10 10
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 20
+   vertex 20 10 20
+   vertex 20 0 20
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 20
+   vertex 0 10 20
+   vertex 20 10 20
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 22
+   vertex 20 0 22
+   vertex 20 10 22
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 22
+   vertex 20 10 22
+   vertex 0 10 22
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 20
+   vertex 20 0 20
+   vertex 20 0 22
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 20
+   vertex 20 0 22
+   vertex 0 0 22
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 20 0 20
+   vertex 20 10 20
+   vertex 20 10 22
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 20 0 20
+   vertex 20 10 22
+   vertex 20 0 22
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 20 10 20
+   vertex 0 10 20
+   vertex 0 10 22
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 20 10 20
+   vertex 0 10 22
+   vertex 20 10 22
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 10 20
+   vertex 0 0 20
+   vertex 0 0 22
+  endloop
+ endfacet
+ facet normal 0 0 0
+  outer loop
+   vertex 0 10 20
+   vertex 0 0 22
+   vertex 0 10 22
+  endloop
+ endfacet
+endsolid p

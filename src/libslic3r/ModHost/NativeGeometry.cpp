@@ -112,24 +112,44 @@ int32_t geo_simplify(const mp_rings *in, double tolerance, mp_rings *out)
     return guarded_geometry([&] { from_polygons(polygons_simplify(to_polygons(in), tolerance), out); });
 }
 
+// The host's ExPolygons copy, released with host->free_expolys.
+void from_expolygons(const ExPolygons &islands, mp_expolys *out)
+{
+    auto *items = static_cast<mp_expoly *>(std::calloc(std::max<size_t>(islands.size(), 1), sizeof(mp_expoly)));
+    for (size_t i = 0; i < islands.size(); ++i) {
+        mp_rings rings{};
+        Polygons one;
+        one.reserve(1 + islands[i].holes.size());
+        one.push_back(islands[i].contour);
+        one.insert(one.end(), islands[i].holes.begin(), islands[i].holes.end());
+        from_polygons(one, &rings);
+        items[i] = {rings.rings, rings.n};
+    }
+    *out = {items, uint32_t(islands.size())};
+}
+
 int32_t geo_union_ex(const mp_rings *in, mp_expolys *out)
 {
     if (in == nullptr || out == nullptr)
         return MP_ERR_ARGUMENT;
+    return guarded_geometry([&] { from_expolygons(union_ex(to_polygons(in)), out); });
+}
+
+int32_t geo_boolean_ex(int32_t op, const mp_rings *a, const mp_rings *b, mp_expolys *out)
+{
+    if (a == nullptr || b == nullptr || out == nullptr)
+        return MP_ERR_ARGUMENT;
+    // Orca has no union_ex of two Polygons operands; union_ex of one list is the entry above.
+    if (op != MP_OP_INTERSECTION && op != MP_OP_DIFFERENCE)
+        return MP_ERR_ARGUMENT;
     return guarded_geometry([&] {
-        const ExPolygons islands = union_ex(to_polygons(in));
-        // The host's ExPolygons copy, released with host->free_expolys.
-        auto    *items = static_cast<mp_expoly *>(std::calloc(std::max<size_t>(islands.size(), 1), sizeof(mp_expoly)));
-        for (size_t i = 0; i < islands.size(); ++i) {
-            mp_rings rings{};
-            Polygons one;
-            one.reserve(1 + islands[i].holes.size());
-            one.push_back(islands[i].contour);
-            one.insert(one.end(), islands[i].holes.begin(), islands[i].holes.end());
-            from_polygons(one, &rings);
-            items[i] = {rings.rings, rings.n};
+        const Polygons pa = to_polygons(a), pb = to_polygons(b);
+        switch (op) {
+        // intersection_ex(const Polygons &, const Polygons &, ApplySafetyOffset::No)
+        case MP_OP_INTERSECTION: from_expolygons(intersection_ex(pa, pb), out); break;
+        // diff_ex(const Polygons &, const Polygons &, ApplySafetyOffset::No)
+        case MP_OP_DIFFERENCE: from_expolygons(diff_ex(pa, pb), out); break;
         }
-        *out = {items, uint32_t(islands.size())};
     });
 }
 
@@ -172,7 +192,7 @@ int32_t geo_min_dist2(const mp_point *points, uint64_t n, const mp_rings *rings,
 }
 
 const mp_geometry_v1 g_geometry = {sizeof(mp_geometry_v1), geo_offset, geo_boolean, geo_simplify, geo_union_ex,
-                                   geo_area, geo_min_dist2, geo_free_rings};
+                                   geo_area, geo_min_dist2, geo_free_rings, geo_boolean_ex};
 
 } // namespace
 

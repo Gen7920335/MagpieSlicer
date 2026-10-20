@@ -113,8 +113,6 @@ set(lisbslic3r_sources
     Config.cpp
     Config.hpp
     GCodeCompatibility.hpp
-    ModHost/Builtin/MixedSupport.cpp
-    ModHost/Builtin/MixedSupport.hpp
     ModHost/Builtin/ResinSupport.cpp
     ModHost/Builtin/ResinSupport.hpp
     ModHost/Expr.cpp
@@ -137,11 +135,15 @@ set(lisbslic3r_sources
     ModHost/NativeGeometry.cpp
     ModHost/NativeMods.cpp
     ModHost/NativeMods.hpp
+    ModHost/NativeCompose.cpp
+    ModHost/NativeCompose.hpp
     ModHost/NativeSupport.cpp
     ModHost/NativeSupport.hpp
     ModHost/ParamGraph.cpp
     ModHost/SlotRegistry.cpp
     ModHost/SlotRegistry.hpp
+    ModHost/SupportStyle.cpp
+    ModHost/SupportStyle.hpp
     ModHost/WallPlanner.cpp
     ModHost/WallPlanner.hpp
     ModHost/ParamGraph.hpp

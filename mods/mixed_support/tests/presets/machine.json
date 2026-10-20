@@ -1,0 +1,2 @@
+{ "type": "machine", "name": "mod test printer", "from": "User", "instantiation": "true", "version": "2.4.0.0",
+  "layer_change_gcode": "G92 E0" }

@@ -7848,7 +7848,7 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
         "mod_settings", "printer_mod_settings", "filament_mod_settings", "different_settings_to_system",
         "single_nozzle_low_temperature_interface", "support_interface_temperature_drop_tower",
         "support_interface_temperature", "support_interface_nozzle_wiping_on_temperature_change",
-        "support_interface_sublayer_start", "support_interface_sublayer_temperature", "support_interface_top_layers",
+        "support_interface_sublayer_temperature", "support_interface_top_layers",
         "nozzle_temperature", "nozzle_temperature_initial_layer",
         "extruder_colour", "filament_colour", "filament_type", "filament_is_support", "material_colour", "printable_height", "extruder_printable_height", "printer_model", "printer_technology",
         // These values are necessary to construct SlicingParameters by the Canvas3D variable layer height editor.

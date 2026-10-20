@@ -1,0 +1,13 @@
+{
+    "description": "The overhang model with normal support, a triangle interface, interface sublayers 2-3 at 45 degrees and two walls around the support, styled by this mod.",
+    "args": [
+        "--load-settings",
+        "presets/machine.json;presets/process.json",
+        "overhang.obj"
+    ],
+    "contains": [
+        ";TYPE:Support",
+        ";TYPE:Support interface",
+        "; mods: support_extras 2.0.0"
+    ]
+}

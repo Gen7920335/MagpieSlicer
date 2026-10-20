@@ -776,10 +776,11 @@ DynamicPrintConfig sublayer_temperature_config(bool low_temperature_interface, i
         { "support_type", "normal(auto)" },
         { "support_interface_top_layers", 4 },
         { "support_interface_temperature", 200 },
-        { "support_interface_sublayer_start", 2 },
-        { "support_interface_sublayer_end", 3 },
-        { "support_interface_sublayer_temperature", sublayer_temperature_c },
     });
+    // The sublayers are the support extras mod's (support.style slot); its rule writes their temperature into
+    // support_interface_sublayer_temperature while they are on.
+    set_mod_params(config, { { "support_extras.sublayer_start", 2 }, { "support_extras.sublayer_end", 3 },
+                             { "support_extras.sublayer_temperature", sublayer_temperature_c } });
     return config;
 }
 
@@ -787,6 +788,9 @@ DynamicPrintConfig sublayer_temperature_config(bool low_temperature_interface, i
 
 TEST_CASE("Interface sublayers print at their own temperature and the model at the filament temperature", "[LowTemperatureInterface][Sublayer]")
 {
+    // The official native mods' manifests only: the bundled low_temp_interface rules would reset the
+    // interface settings this test sets directly.
+    OfficialMods mods;
     const bool low_temperature_interface = GENERATE(false, true);
     CAPTURE(low_temperature_interface);
     const DynamicPrintConfig config = sublayer_temperature_config(low_temperature_interface, 185);
@@ -804,6 +808,9 @@ TEST_CASE("Interface sublayers print at their own temperature and the model at t
 
 TEST_CASE("Interface sublayers apply to Cura and to slim and hybrid tree support", "[LowTemperatureInterface][Sublayer][SupportExtras]")
 {
+    // The official native mods' manifests only: the bundled low_temp_interface rules would reset the
+    // interface settings this test sets directly.
+    OfficialMods mods;
     // Before: Cura emits no contact layers, so no interface was ever numbered and none became a sublayer;
     // the slim and hybrid tree toolpaths did not know the sublayer at all. Line 1 applied it to every generator.
     const auto [support_type, support_style, generator] = GENERATE(table<const char *, const char *, const char *>({

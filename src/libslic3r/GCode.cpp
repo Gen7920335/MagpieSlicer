@@ -9953,14 +9953,7 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "object_elevation"sv,
         "wall_planner"sv,
         "crisp_corner_small_nozzle_wall_speed"sv,
-        "support_interface_pattern_override"sv,
-        "support_interface_sublayer_start"sv,
-        "support_interface_sublayer_end"sv,
-        "support_interface_sublayer_pattern"sv,
-        "support_interface_sublayer_angle"sv,
         "support_interface_sublayer_temperature"sv,
-        "support_wall_loops"sv,
-        "tree_support_wall_loops"sv,
         "single_nozzle_low_temperature_interface"sv,
         "outer_wall_half_layer_height"sv,
         "support_half_layer_height"sv,
@@ -10558,9 +10551,9 @@ std::string GCode::extrude_path(const ExtrusionPath& path, const std::string& de
     if (m_wipe.enable && FILAMENT_CONFIG(wipe)) {
         m_wipe.reset_path();
         m_wipe.path = path.polyline.to_polyline();
-        // MAGPIE: a mixed support layer prints tree branches whatever support_type says.
+        // MAGPIE: a multi-channel support layer prints tree branches whatever support_type says.
         const auto *active_support_layer = dynamic_cast<const SupportLayer *>(m_layer);
-        if ((is_tree(this->config().support_type) || (active_support_layer != nullptr && active_support_layer->support_type == stInnerMixed)) &&
+        if ((is_tree(this->config().support_type) || (active_support_layer != nullptr && active_support_layer->support_type == stInnerMultiChannel)) &&
             is_support(path.role())) {
             if ((m_wipe.path.first_point() - m_wipe.path.last_point()).cast<double>().norm() > scale_(0.2)) {
                 double min_dist = scale_(0.2);

@@ -178,6 +178,29 @@ TEST_CASE("A file without line 1 settings loads without mod_settings changes", "
     CHECK(config.opt_serialize("support_interface_pattern") == "grid");
 }
 
+TEST_CASE("Settings the support extras rules wrote are dropped without migrating", "[LegacySettings][SupportExtras]")
+{
+    // Before support_extras became a native mod its rules wrote these settings; mod_settings carries what the user
+    // set. SeeMeCNC's Orca profiles carry support_wall_loops, a key Orca does not define: it must not set the
+    // mod's normal wall count.
+    BundledMods mods;
+    const DynamicPrintConfig config = load({
+        { "support_wall_loops", "0" },
+        { "tree_support_wall_loops", "3" },
+        { "support_interface_pattern_override", "grid" },
+        { "support_interface_sublayer_start", "2" },
+        { "support_interface_sublayer_end", "3" },
+        { "support_interface_sublayer_pattern", "concentric" },
+    });
+    CHECK_FALSE(config.has("mod_settings"));
+    for (const char *key : { "support_wall_loops", "tree_support_wall_loops", "support_interface_pattern_override",
+                             "support_interface_sublayer_start", "support_interface_sublayer_end", "support_interface_sublayer_pattern" })
+        CHECK_FALSE(config.has(key));
+    // Line 1's sublayer angle (the same key name) still migrates; its default carries nothing.
+    CHECK(mod_settings(load({ { "support_interface_sublayer_angle", "45" } }))["support_extras.sublayer_angle"] == 45.);
+    CHECK_FALSE(load({ { "support_interface_sublayer_angle", "0" } }).has("mod_settings"));
+}
+
 TEST_CASE("Line 1 toolhead line widths become per-nozzle line widths in mm", "[LegacySettings][LineWidths]")
 {
     BundledMods mods;

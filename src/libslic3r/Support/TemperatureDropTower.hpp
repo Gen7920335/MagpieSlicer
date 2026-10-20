@@ -89,8 +89,9 @@ inline int lowest_low_temperature_interface_target(const ConfigBase &config)
     };
     int       target   = std::max(0, int_value("support_interface_temperature"));
     const int sublayer = int_value("support_interface_sublayer_temperature");
-    // Sublayers exist only from the second interface layer down (the contact layer never is one).
-    const bool sublayers = int_value("support_interface_sublayer_start") > 0 && int_value("support_interface_top_layers") >= 2;
+    // The support_extras mod's rule sets the sublayer temperature only while its sublayers are on. Sublayers exist
+    // only from the second interface layer down (the contact layer never is one).
+    const bool sublayers = int_value("support_interface_top_layers") >= 2;
     if (sublayers && sublayer > 0 && (target == 0 || sublayer < target))
         target = sublayer;
     return target;

@@ -2429,11 +2429,12 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         }
     }
 
-    // MAGPIE: the interface sublayer temperature (support_extras mod), checked like the interface temperature above.
+    // MAGPIE: the interface sublayer temperature (support_extras mod, whose rule sets it only while its sublayers are
+    // on), checked like the interface temperature above.
     for (const PrintObject *object : m_objects) {
         const PrintObjectConfig &oc = object->config();
         const int temperature_c = oc.support_interface_sublayer_temperature.value; // degC, 0 = filament temperature
-        if (!object->has_support_material() || oc.support_interface_sublayer_start.value <= 0 || temperature_c <= 0)
+        if (!object->has_support_material() || temperature_c <= 0)
             continue;
         // Marlin EXTRUDE_MINTEMP and Klipper min_extrude_temp both default to 170 degC.
         constexpr int firmware_min_extrude_temperature_c = 170;

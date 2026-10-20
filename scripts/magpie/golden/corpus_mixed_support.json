@@ -1,0 +1,166 @@
+{
+    "description": "Mixed support corpus: the Mixed support mod (mods/mixed_support) on the u1 and x1c printers, normal support by Orca or Cura with each tree style, selective merge, a raft, interfaces and painted channels. Used as the gate when Mixed support moved from the core into its native mod: the built-in and the mod build must give identical normalized G-code (the '; mods:' header line aside).",
+    "printers": {
+        "u1": {
+            "machine": "presets/u1_04_machine.json",
+            "process": "presets/u1_04_process.json",
+            "filaments": [
+                "presets/u1_pla.json"
+            ],
+            "bed_type": "High Temp Plate"
+        },
+        "x1c": {
+            "machine": "presets/x1c_04_machine.json",
+            "process": "presets/x1c_04_process.json",
+            "filaments": [
+                "presets/x1c_pla.json"
+            ],
+            "bed_type": "Textured PEI Plate"
+        }
+    },
+    "cases": [
+        {
+            "name": "pillar_mixed_orca_organic",
+            "printer": "u1",
+            "model": "external:pillar.stl",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_on_build_plate_only": "0",
+                "mod_settings": "{\"mixed_support.enable\":true,\"mixed_support.coverage_threshold\":80}"
+            }
+        },
+        {
+            "name": "pillar_mixed_orca_slim_selective",
+            "printer": "u1",
+            "model": "external:pillar.stl",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_on_build_plate_only": "0",
+                "mod_settings": "{\"mixed_support.enable\":true,\"mixed_support.tree_style\":\"tree_slim\",\"mixed_support.selective_merge\":true}"
+            }
+        },
+        {
+            "name": "pillar_mixed_orca_strong",
+            "printer": "u1",
+            "model": "external:pillar.stl",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_on_build_plate_only": "0",
+                "mod_settings": "{\"mixed_support.enable\":true,\"mixed_support.tree_style\":\"tree_strong\",\"mixed_support.coverage_threshold\":80}"
+            }
+        },
+        {
+            "name": "pillar_mixed_orca_hybrid_selective",
+            "printer": "u1",
+            "model": "external:pillar.stl",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_on_build_plate_only": "0",
+                "mod_settings": "{\"mixed_support.enable\":true,\"mixed_support.tree_style\":\"tree_hybrid\",\"mixed_support.selective_merge\":true}"
+            }
+        },
+        {
+            "name": "pillar_mixed_cura_organic_selective",
+            "printer": "u1",
+            "model": "external:pillar.stl",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_on_build_plate_only": "0",
+                "mod_settings": "{\"mixed_support.enable\":true,\"mixed_support.normal_generator\":\"cura\",\"mixed_support.selective_merge\":true}"
+            }
+        },
+        {
+            "name": "pillar_mixed_cura_slim",
+            "printer": "u1",
+            "model": "external:pillar.stl",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_on_build_plate_only": "0",
+                "mod_settings": "{\"mixed_support.enable\":true,\"mixed_support.normal_generator\":\"cura\",\"mixed_support.tree_style\":\"tree_slim\",\"mixed_support.coverage_threshold\":80}"
+            }
+        },
+        {
+            "name": "overhang_mixed_orca",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"mixed_support.enable\":true}"
+            }
+        },
+        {
+            "name": "frog_legs_mixed_orca_raft",
+            "printer": "u1",
+            "model": "tests/data/frog_legs.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "raft_layers": "2",
+                "mod_settings": "{\"mixed_support.enable\":true,\"mixed_support.coverage_threshold\":50}"
+            }
+        },
+        {
+            "name": "tee_mixed_orca_interfaces",
+            "printer": "u1",
+            "model": "external:tee.stl",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_interface_top_layers": "3",
+                "support_interface_bottom_layers": "2",
+                "support_on_build_plate_only": "0",
+                "mod_settings": "{\"mixed_support.enable\":true,\"mixed_support.selective_merge\":true}"
+            }
+        },
+        {
+            "name": "tree3mf_mixed_painted_tree",
+            "printer": "u1",
+            "model": "external:tree.3mf",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"mixed_support.enable\":true}"
+            },
+            "optional": true
+        },
+        {
+            "name": "normal3mf_mixed_painted_normal",
+            "printer": "u1",
+            "model": "external:normal.3mf",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"mixed_support.enable\":true}"
+            },
+            "optional": true
+        },
+        {
+            "name": "auto3mf_mixed_painted",
+            "printer": "u1",
+            "model": "external:auto.3mf",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"mixed_support.enable\":true,\"mixed_support.tree_style\":\"tree_hybrid\"}"
+            },
+            "optional": true
+        },
+        {
+            "name": "overhang_mixed_x1c",
+            "printer": "x1c",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"mixed_support.enable\":true,\"mixed_support.selective_merge\":true}"
+            }
+        }
+    ]
+}

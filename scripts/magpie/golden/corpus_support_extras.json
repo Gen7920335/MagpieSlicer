@@ -1,0 +1,191 @@
+{
+    "description": "Support extras corpus: the support extras mod (mods/support_extras) with every support generator: interface pattern, interface sublayers (pattern, angle, temperature, also with the low temperature interface), normal and tree wall counts. Used as the gate when support extras moved from the core's settings into its native mod: the built-in and the mod build must give identical normalized G-code (the '; mods:' header line aside).",
+    "printers": {
+        "u1": {
+            "machine": "presets/u1_04_machine.json",
+            "process": "presets/u1_04_process.json",
+            "filaments": [
+                "presets/u1_pla.json"
+            ],
+            "bed_type": "High Temp Plate"
+        },
+        "x1c": {
+            "machine": "presets/x1c_04_machine.json",
+            "process": "presets/x1c_04_process.json",
+            "filaments": [
+                "presets/x1c_pla.json"
+            ],
+            "bed_type": "Textured PEI Plate"
+        }
+    },
+    "cases": [
+        {
+            "name": "overhang_triangles",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_interface_top_layers": "2",
+                "mod_settings": "{\"support_extras.interface_pattern\":\"triangles\"}"
+            }
+        },
+        {
+            "name": "overhang_concentric_bottom",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_interface_top_layers": "2",
+                "support_interface_bottom_layers": "2",
+                "support_on_build_plate_only": "0",
+                "mod_settings": "{\"support_extras.interface_pattern\":\"concentric\"}"
+            }
+        },
+        {
+            "name": "overhang_sublayer_normal",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_interface_top_layers": "4",
+                "mod_settings": "{\"support_extras.sublayer_start\":2,\"support_extras.sublayer_end\":3,\"support_extras.sublayer_pattern\":\"grid\",\"support_extras.sublayer_angle\":45}"
+            }
+        },
+        {
+            "name": "overhang_sublayer_slim",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "tree(auto)",
+                "support_style": "tree_slim",
+                "support_interface_top_layers": "4",
+                "mod_settings": "{\"support_extras.sublayer_start\":2,\"support_extras.sublayer_end\":3,\"support_extras.sublayer_angle\":30}"
+            }
+        },
+        {
+            "name": "overhang_sublayer_hybrid_triangles",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "tree(auto)",
+                "support_style": "tree_hybrid",
+                "support_interface_top_layers": "4",
+                "mod_settings": "{\"support_extras.sublayer_start\":2,\"support_extras.sublayer_end\":4,\"support_extras.sublayer_pattern\":\"triangles\"}"
+            }
+        },
+        {
+            "name": "overhang_sublayer_organic",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "tree(auto)",
+                "support_style": "organic",
+                "support_interface_top_layers": "4",
+                "mod_settings": "{\"support_extras.sublayer_start\":2,\"support_extras.sublayer_end\":3,\"support_extras.sublayer_angle\":45}"
+            }
+        },
+        {
+            "name": "overhang_sublayer_cura",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_interface_top_layers": "4",
+                "mod_settings": "{\"support_extras.sublayer_start\":2,\"support_extras.sublayer_end\":3,\"support_extras.sublayer_angle\":45,\"cura_support.enable\":true}"
+            }
+        },
+        {
+            "name": "overhang_sublayer_temperature",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_interface_top_layers": "4",
+                "mod_settings": "{\"support_extras.sublayer_start\":2,\"support_extras.sublayer_end\":3,\"support_extras.sublayer_temperature\":195}"
+            }
+        },
+        {
+            "name": "overhang_sublayer_low_temp_interface",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_interface_top_layers": "4",
+                "mod_settings": "{\"support_extras.sublayer_start\":2,\"support_extras.sublayer_end\":3,\"support_extras.sublayer_temperature\":185,\"low_temp_interface.enable\":true,\"low_temp_interface.temperature\":200}"
+            }
+        },
+        {
+            "name": "frog_normal_walls_2",
+            "printer": "u1",
+            "model": "tests/data/frog_legs.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"support_extras.normal_wall_loops\":2}"
+            }
+        },
+        {
+            "name": "frog_normal_walls_0",
+            "printer": "u1",
+            "model": "tests/data/frog_legs.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"support_extras.normal_wall_loops\":0}"
+            }
+        },
+        {
+            "name": "frog_tree_walls_3_slim",
+            "printer": "u1",
+            "model": "tests/data/frog_legs.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "tree(auto)",
+                "support_style": "tree_slim",
+                "mod_settings": "{\"support_extras.tree_wall_loops\":3}"
+            }
+        },
+        {
+            "name": "frog_tree_walls_2_organic",
+            "printer": "u1",
+            "model": "tests/data/frog_legs.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "tree(auto)",
+                "support_style": "organic",
+                "mod_settings": "{\"support_extras.tree_wall_loops\":2}"
+            }
+        },
+        {
+            "name": "pillar_mixed_organic_tree_walls_2",
+            "printer": "u1",
+            "model": "external:pillar.stl",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_on_build_plate_only": "0",
+                "mod_settings": "{\"support_extras.tree_wall_loops\":2,\"mixed_support.enable\":true,\"mixed_support.selective_merge\":true}"
+            }
+        },
+        {
+            "name": "tee_sublayer_triangles_x1c",
+            "printer": "x1c",
+            "model": "external:tee.stl",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_interface_top_layers": "3",
+                "mod_settings": "{\"support_extras.interface_pattern\":\"triangles\",\"support_extras.sublayer_start\":2,\"support_extras.sublayer_end\":2,\"support_extras.sublayer_pattern\":\"rectilinear\"}"
+            }
+        }
+    ]
+}

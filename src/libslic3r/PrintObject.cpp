@@ -40,6 +40,7 @@
 #include "Fill/FillTpmsAdaptive.hpp"
 #include "format.hpp"
 #include "ModHost/ModSet.hpp"
+#include "ModHost/NativeCompose.hpp"
 #include "ModHost/NativeSupport.hpp"
 #include "ModHost/SlotRegistry.hpp"
 #include "AABBTreeIndirect.hpp"
@@ -1707,13 +1708,6 @@ bool PrintObject::invalidate_state_by_config_options(
         } else if (
         	   opt_key == "support_type"
             || opt_key == "support_generator"
-            || opt_key == "support_interface_pattern_override"
-            || opt_key == "support_interface_sublayer_start"
-            || opt_key == "support_interface_sublayer_end"
-            || opt_key == "support_interface_sublayer_pattern"
-            || opt_key == "support_interface_sublayer_angle"
-            || opt_key == "support_wall_loops"
-            || opt_key == "tree_support_wall_loops"
             // MAGPIE: switching the sublayer temperature on or off regroups the support fills; another
             // value only changes the G-code (handled below with the other temperatures).
             || (opt_key == "support_interface_sublayer_temperature" &&
@@ -5083,17 +5077,22 @@ void PrintObject::_generate_support_material()
     }
     // MAGPIE: support.generator slot. An empty support_generator runs Orca's generators unchanged,
     // and so does a raft without support: the modules build support, Orca builds the bare raft. A name
-    // no built-in module has is looked up among the native mods' support.areas implementations.
+    // no built-in module has is looked up among the native mods' support.areas implementations, then
+    // their support.compose implementations.
     if (const std::string &name = m_config.support_generator.value; !name.empty() && this->has_support()) {
         if (const ModHost::SupportGenerator *generator = ModHost::find_support_generator(name)) {
             generator->generate(*this);
             return;
         }
-        const ModHost::NativeEntry *native = ModHost::NativeSupport::find(name);
-        if (native == nullptr)
-            throw Slic3r::SlicingError(Slic3r::format(_u8L("Support generator \"%1%\" is not installed."), name));
-        ModHost::NativeSupport::generate(*this, *native);
-        return;
+        if (const ModHost::NativeEntry *native = ModHost::NativeSupport::find(name)) {
+            ModHost::NativeSupport::generate(*this, *native);
+            return;
+        }
+        if (const ModHost::NativeEntry *composer = ModHost::NativeCompose::find(name)) {
+            ModHost::NativeCompose::generate(*this, *composer);
+            return;
+        }
+        throw Slic3r::SlicingError(Slic3r::format(_u8L("Support generator \"%1%\" is not installed."), name));
     }
     generate_orca_support_material();
 }

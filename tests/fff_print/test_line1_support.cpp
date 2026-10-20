@@ -432,7 +432,7 @@ TEST_CASE("Mixed selective merge generates both support channels",
                 return has_tree_channel(layer->support_type);
             }));
             CHECK(std::any_of(support_layers.begin(), support_layers.end(), [](const SupportLayer *layer) {
-                return layer->support_type == stInnerMixed;
+                return layer->support_type == stInnerMultiChannel;
             }));
 
             const std::string output = gcode(print);
@@ -842,8 +842,21 @@ TEST_CASE("Mixed Bunny60 different Z channels do not intersect",
 
 TEST_CASE("Support interface sublayer range is contact-first and clamped", "[SupportExtras][Line1]")
 {
+    // The support extras mod's sublayer choice, through the support.style slot as the toolpaths ask for it: a
+    // stack of `total` top interface layers, sublayers start..end (start 0 = off).
+    BundledMods mods;
     const auto selected = [](bool enabled, int start, int end, int number, int total) {
-        return support_interface_sublayer_selected(enabled, start, end, number, total);
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("enable_support", new ConfigOptionBool(true));
+        config.set_key_value("support_interface_top_layers", new ConfigOptionInt(total));
+        // Line 1 passed the switch apart from the start; here a start of 0 or less is the switch off, so an
+        // enabled range that starts below the second layer starts at 1.
+        set_mod_params(config, {{"support_extras.sublayer_start", enabled ? std::max(1, start) : 0}, {"support_extras.sublayer_end", end}});
+        Print print;
+        Model model;
+        init_print({TestMesh::overhang}, print, model, config);
+        const SupportParameters params(*print.objects().front());
+        return params.sublayer(number, total).has_value();
     };
 
     CHECK_FALSE(selected(false, 2, 4, 2, 5));

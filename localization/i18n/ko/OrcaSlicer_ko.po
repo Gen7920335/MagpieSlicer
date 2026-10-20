@@ -556,6 +556,25 @@ msgstr "일반 서포트 칠하기"
 msgid "Paint tree support"
 msgstr "트리 서포트 칠하기"
 
+# AI Translated
+msgid "Left-click paints the selected support channel. Right-click blocks support. Shift+left-click returns the area to automatic assignment."
+msgstr "왼쪽 클릭은 선택한 서포트 채널을 칠하고, 오른쪽 클릭은 서포트를 차단합니다. Shift+왼쪽 클릭은 해당 영역을 자동 배정으로 되돌립니다."
+
+# AI Translated
+#. TRN %1% is a support paint channel, such as "Normal" or "Tree".
+#, boost-format
+msgid "Paint %1% support"
+msgstr "%1% 서포트 칠하기"
+
+# AI Translated
+msgid "The support channels contain an extrusion that cannot be merged."
+msgstr "서포트 채널에 병합할 수 없는 압출이 있습니다."
+
+# AI Translated
+#, boost-format
+msgid "The mods %1% and %2% both change how the support of object \"%3%\" is printed. Turn one of them off."
+msgstr "모드 %1%과(와) %2%이(가) 모두 오브젝트 \"%3%\"의 서포트 출력 방식을 바꿉니다. 하나를 끄세요."
+
 msgid "Support generated"
 msgstr "서포트 생성됨"
 

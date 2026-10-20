@@ -46,6 +46,11 @@ typedef struct mp_geometry_v1 {
      * DBL_MAX when there is no edge. */
     int32_t (*min_dist2)(const mp_point *points, uint64_t n, const mp_rings *rings, double *out);
     void (*free_rings)(mp_rings *rings);
+    /* Appended in API 1.0 later than the entries above; check the table size the import gave.
+     * intersection_ex(a, b) or diff_ex(a, b) (MP_OP_INTERSECTION, MP_OP_DIFFERENCE): the islands of a
+     * boolean operation on rings, as the core's *_ex functions of Polygons (an ExPolygon operand gives
+     * the same result as its rings). Release with host->free_expolys. */
+    int32_t (*boolean_ex)(int32_t op, const mp_rings *a, const mp_rings *b, mp_expolys *out);
 } mp_geometry_v1;
 
 #ifdef __cplusplus

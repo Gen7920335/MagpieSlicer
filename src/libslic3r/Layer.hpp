@@ -298,12 +298,13 @@ private:
 enum SupportInnerType {
     stInnerNormal,
     stInnerTree,
-    // MAGPIE: a layer holding both normal and tree support (Mixed support module).
-    stInnerMixed
+    // MAGPIE: a layer holding both a normal and a tree support channel (support.compose slot, a support
+    // composer such as Mixed support merged two generators' layers).
+    stInnerMultiChannel
 };
 
-inline bool has_normal_channel(SupportInnerType type) { return type == stInnerNormal || type == stInnerMixed; }
-inline bool has_tree_channel(SupportInnerType type) { return type == stInnerTree || type == stInnerMixed; }
+inline bool has_normal_channel(SupportInnerType type) { return type == stInnerNormal || type == stInnerMultiChannel; }
+inline bool has_tree_channel(SupportInnerType type) { return type == stInnerTree || type == stInnerMultiChannel; }
 
 class SupportLayer : public Layer
 {

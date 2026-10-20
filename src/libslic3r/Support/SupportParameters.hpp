@@ -18,6 +18,7 @@
 #include "libslic3r/Slicing.hpp"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/Geometry.hpp"
+#include "libslic3r/ModHost/SupportStyle.hpp"
 
 namespace Slic3r {
 
@@ -142,12 +143,15 @@ struct SupportParameters {
         }
 
         SupportMaterialPattern  support_pattern = object_config.support_base_pattern;
+        // MAGPIE: the support.style slot (a native mod, ModHost/SupportStyle.hpp) may change the interface
+        // pattern, the wall counts and some interface layers; without one, Orca's.
+        this->style = ModHost::support_style(object, {int(this->num_top_interface_layers), int(this->num_bottom_interface_layers)});
         this->with_sheath = object_config.tree_support_wall_count > 0;
-        // MAGPIE: support_wall_loops >= 0 sets the walls of normal support on its own (-1 keeps Orca's).
-        this->normal_wall_loops = object_config.support_wall_loops.value;
+        // MAGPIE: a normal wall count >= 0 sets the walls of normal support on its own (-1 keeps Orca's).
+        this->normal_wall_loops = this->style.normal_wall_loops;
         if (this->normal_wall_loops >= 0 && !is_tree(object_config.support_type.value))
             this->with_sheath = this->normal_wall_loops > 0;
-        this->tree_wall_loops = object_config.tree_support_wall_loops.value;
+        this->tree_wall_loops = this->style.tree_wall_loops;
         this->base_fill_pattern =
             support_pattern == smpHoneycomb ? ipHoneycomb :
             this->support_density > 0.95 || this->with_sheath ? ipRectilinear : ipSupportBase;
@@ -169,15 +173,11 @@ struct SupportParameters {
             object_config.support_interface_pattern == smipConcentric ?
             ipConcentric :
             (contact_interface_density > 0.95 ? ipRectilinear : ipSupportBase);
-        // MAGPIE: support_interface_pattern_override and the interface sublayer (support_extras mod).
-        if (const auto p = interface_pattern_from_name(object_config.support_interface_pattern_override.value)) {
-            this->contact_fill_pattern       = *p;
+        // MAGPIE: the style's interface pattern (support.style slot).
+        if (this->style.interface_pattern) {
+            this->contact_fill_pattern       = *this->style.interface_pattern;
             this->interface_pattern_override = true;
         }
-        this->sublayer_start   = std::max(0, object_config.support_interface_sublayer_start.value);
-        this->sublayer_end     = object_config.support_interface_sublayer_end.value;
-        this->sublayer_pattern = interface_pattern_from_name(object_config.support_interface_sublayer_pattern.value).value_or(this->contact_fill_pattern);
-        this->sublayer_angle   = Geometry::deg2rad(float(object_config.support_interface_sublayer_angle.value));
         this->sublayer_temperature = std::max(0, object_config.support_interface_sublayer_temperature.value);
 
         this->raft_angle_1st_layer  = 0.f;
@@ -314,27 +314,26 @@ struct SupportParameters {
     InfillPattern           raft_interface_fill_pattern;
     // Pattern of the contact layers.
     InfillPattern 			contact_fill_pattern;
-    // MAGPIE (support_extras mod). normal_wall_loops / tree_wall_loops: -1 keeps Orca's walls.
+    // MAGPIE: the object's support style (support.style slot, ModHost/SupportStyle.hpp).
+    ModHost::SupportStyle   style;
+    // normal_wall_loops / tree_wall_loops: -1 keeps Orca's walls.
     int                     normal_wall_loops { -1 };
     int                     tree_wall_loops { -1 };
     bool                    interface_pattern_override { false };
-    // Interface layers sublayer_start..sublayer_end, counted from the contact layer (1), use
-    // sublayer_pattern and sublayer_angle; sublayer_start 0 turns it off.
-    int                     sublayer_start { 0 };
-    int                     sublayer_end { 0 };
-    InfillPattern           sublayer_pattern { ipRectilinear };
-    float                   sublayer_angle { 0.f };
-    // Nozzle temperature of the sublayers in degC; 0 keeps the filament temperature. When set, the
-    // sublayer fills are grouped in a collection marked interface_sublayer for G-code export.
+    // Nozzle temperature of the interface sublayers (the interface layers the style restyles) in degC; 0
+    // keeps the filament temperature. When set, the sublayer fills are grouped in a collection marked
+    // interface_sublayer for G-code export.
     int                     sublayer_temperature { 0 };
-    bool                    sublayer_enabled() const { return sublayer_start > 0; }
-    static std::optional<InfillPattern> interface_pattern_from_name(const std::string &name)
+    // Whether some interface layer has a pattern and angle of its own (an interface sublayer).
+    bool                    sublayer_enabled() const { return style.any_interface_layer(); }
+    // Interface layer `number` (1 = contact) of a stack of `total`, when it is a sublayer: its pattern
+    // (the contact pattern unless it has its own) and angle.
+    std::optional<std::pair<InfillPattern, float>> sublayer(int number, int total) const
     {
-        if (name == "triangles")   return ipTriangles;
-        if (name == "grid")        return ipGrid;
-        if (name == "rectilinear") return ipRectilinear;
-        if (name == "concentric")  return ipConcentric;
-        return std::nullopt;
+        const ModHost::InterfaceLayerStyle *s = style.interface_layer(number, total);
+        if (s == nullptr)
+            return std::nullopt;
+        return std::make_pair(s->pattern.value_or(this->contact_fill_pattern), s->angle);
     }
     // Shall the sparse (base) layers be printed with a single perimeter line (sheath) for robustness?
     bool                    with_sheath;

@@ -1,0 +1,12 @@
+{
+    "description": "A ceiling over a pillar with Mixed support on: normal support stands on the bed beside the pillar, tree support reaches over it, merged by this mod's split.",
+    "args": [
+        "--load-settings",
+        "presets/machine.json;presets/process.json",
+        "pillar.stl"
+    ],
+    "contains": [
+        ";TYPE:Support",
+        "; mods: mixed_support 2.0.0"
+    ]
+}

@@ -49,7 +49,7 @@ const LegacyKey legacy_keys[] = {
     { "crisp_corner_detail_toolhead", "multi_nozzle_walls.detail_toolhead", Kind::Int, false, "0" },
     { "crisp_corner_small_nozzle_wall_speed", "multi_nozzle_walls.small_wall_speed", Kind::FloatOrPercent, true },
     { "crisp_corner_large_nozzle_override_regions", "multi_nozzle_walls.override_regions", Kind::String, false, "" },
-    { "support_interface_sublayer_angle", "support_extras.sublayer_angle", Kind::Float, true },
+    { "support_interface_sublayer_angle", "support_extras.sublayer_angle", Kind::Float, false, "0" },
     { "support_interface_sublayer_temperature", "support_extras.sublayer_temperature", Kind::Int, true },
     { "cura_support_join_distance", "cura_support.join_distance", Kind::Float, false },
     { "cura_solid_support_raft", "cura_support.solid_first_layer", Kind::Bool, false },
@@ -59,6 +59,15 @@ const LegacyKey legacy_keys[] = {
     { "resin_support_tree_type", "resin_support.tree_type", Kind::String, false },
     { "resin_support_points_density_relative", "resin_support.points_density", Kind::Int, false },
     { "resin_support_enforcers_only", "resin_support.enforcers_only", Kind::Bool, false },
+};
+
+// Settings earlier builds of this line defined only for a mod's rules to write (support_extras before it became a
+// native mod). The mod's parameters, which mod_settings carries, are what the user set, so these are dropped
+// without migrating: a vendor profile that happens to carry one of the names (SeeMeCNC's support_wall_loops, a key
+// Orca does not define) must not turn a mod parameter on.
+const char *const removed_rule_keys[] = {
+    "support_interface_pattern_override", "support_interface_sublayer_start", "support_interface_sublayer_end",
+    "support_wall_loops", "tree_support_wall_loops",
 };
 
 // Line 1 settings handled below by hand (value maps, conditions), or not reproducible here.
@@ -224,10 +233,14 @@ bool stash_legacy_setting(std::string &opt_key, std::string &value, std::map<std
         return true;
     }
     if (opt_key == "support_interface_sublayer_pattern") {
-        // Line 1 stored a switch ("0"/"1"); this build stores the pattern name.
-        if (value != "0" && value != "1")
-            return false;
-        stash[opt_key] = value;
+        // Line 1 stored a switch ("0"/"1"); earlier builds of this line the pattern name a rule wrote, which is
+        // dropped like the other removed_rule_keys.
+        if (value == "0" || value == "1")
+            stash[opt_key] = value;
+        opt_key.clear();
+        return true;
+    }
+    if (in(removed_rule_keys, opt_key)) {
         opt_key.clear();
         return true;
     }

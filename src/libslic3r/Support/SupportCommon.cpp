@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <limits>
+#include <map>
 #include <memory>
 #include <math.h>
 #include <initializer_list>
@@ -612,7 +613,7 @@ void tree_supports_generate_paths(
         std::unique_ptr<ExtrusionEntityCollection> eec;
         ExPolygons                                 regions_to_draw_inner_wall{expoly};
         if (support_params.tree_wall_loops >= 1) {
-            // MAGPIE: tree_support_wall_loops walls (support_extras mod), as many as the branch has room
+            // MAGPIE: the support style's tree walls (support.style slot), as many as the branch has room
             // for, printed from the inside out; the innermost one gets the anchor below.
             for (int wall = 1; wall < support_params.tree_wall_loops; ++wall) {
                 ExPolygons next = offset2_ex(regions_to_draw_inner_wall, -1.5 * flow.scaled_width(), 0.5 * flow.scaled_width());
@@ -796,7 +797,7 @@ void fill_expolygons_with_sheath_generate_paths(
             eec->no_sort = true;
         }
         ExtrusionEntitiesPtr &out = no_sort ? eec->entities : dst;
-        // MAGPIE: support_wall_loops walls (support_extras mod); one otherwise, as Orca.
+        // MAGPIE: the support style's normal walls (support.style slot); one otherwise, as Orca.
         const size_t wall_count = support_params.normal_wall_loops > 1 ? size_t(support_params.normal_wall_loops) : 1;
         ExPolygons   walls{expoly};
         for (size_t wall = 0; wall < wall_count && !walls.empty(); ++wall) {
@@ -1421,17 +1422,6 @@ std::vector<double> half_height_support_z_grid(const PrintObject &object)
     return cuts_mm;
 }
 
-bool support_interface_sublayer_selected(
-    bool enabled, int start_layer, int end_layer, int interface_number, int interface_total)
-{
-    if (!enabled || interface_total <= 1 || interface_number < 2)
-        return false;
-    // Magpie line 1: the range is clamped to the interface layers below the contact (numbers 2..total).
-    const int first = std::clamp(start_layer, 2, interface_total);
-    const int last  = std::clamp(end_layer, first, interface_total);
-    return interface_number >= first && interface_number <= last;
-}
-
 std::pair<double, double> half_height_support_band_limits_mm(const PrintObject &object)
 {
     // Nominal H/2 band and half of it. The logical support grid keeps independent support
@@ -1858,10 +1848,16 @@ void generate_support_toolpaths(
         auto filler_base_interface  = std::unique_ptr<Fill>(base_interface_layers.empty() ? nullptr :
             Fill::new_from_type(base_interface_density > 0.95 || support_params.with_sheath ? ipRectilinear : ipSupportBase));
         auto filler_support         = std::unique_ptr<Fill>(Fill::new_from_type(support_params.base_fill_pattern));
-        // MAGPIE: filler of the interface sublayer.
-        auto filler_sublayer        = std::unique_ptr<Fill>(support_params.sublayer_enabled() ? Fill::new_from_type(support_params.sublayer_pattern) : nullptr);
-        if (filler_sublayer)
-            filler_sublayer->set_bounding_box(bbox_object);
+        // MAGPIE: fillers of the interface sublayers, one per pattern, made at first use.
+        std::map<InfillPattern, std::unique_ptr<Fill>> filler_sublayers;
+        auto filler_sublayer = [&filler_sublayers, &bbox_object](InfillPattern pattern) {
+            std::unique_ptr<Fill> &filler = filler_sublayers[pattern];
+            if (!filler) {
+                filler.reset(Fill::new_from_type(pattern));
+                filler->set_bounding_box(bbox_object);
+            }
+            return filler.get();
+        };
         filler_interface->set_bounding_box(bbox_object);
         if (filler_first_layer_ptr)
             filler_first_layer_ptr->set_bounding_box(bbox_object);
@@ -2015,10 +2011,9 @@ void generate_support_toolpaths(
                         layer_ex.layer->layer_type == SupporLayerType::BottomInterface ? bottom_interface_numbers[support_layer_id] : 0;
                     const int interface_total = bottom_interface ?
                         int(support_params.num_bottom_interface_layers) : int(support_params.num_top_interface_layers);
-                    const bool use_sublayer = !interface_as_base && !raft_contact &&
-                        support_interface_sublayer_selected(support_params.sublayer_enabled(), support_params.sublayer_start,
-                                                            support_params.sublayer_end, interface_number, interface_total);
-                    auto *filler = raft_contact ? filler_raft_contact : use_sublayer ? filler_sublayer.get() : filler_interface.get();
+                    const auto restyle = interface_as_base || raft_contact ? std::nullopt : support_params.sublayer(interface_number, interface_total);
+                    const bool use_sublayer = restyle.has_value();
+                    auto *filler = raft_contact ? filler_raft_contact : use_sublayer ? filler_sublayer(restyle->first) : filler_interface.get();
                     auto interface_flow = layer_ex.layer->bridging ?
                         Flow::bridging_flow(layer_ex.layer->height, support_params.support_material_bottom_interface_flow.nozzle_diameter()) :
                         (raft_contact ? &support_params.raft_interface_flow :
@@ -2033,7 +2028,7 @@ void generate_support_toolpaths(
                             // Use interface angle for the interface layers.
                             raft_contact ?
                                 support_params.raft_interface_angle(support_layer.interface_id()) :
-                                use_sublayer ? support_params.sublayer_angle : support_interface_angle;
+                                use_sublayer ? restyle->second : support_interface_angle;
                     // ORCA: pick density based on interface type.
                     double density = raft_contact ? support_params.raft_interface_density :
                         interface_as_base ? support_params.support_density :
@@ -2048,7 +2043,7 @@ void generate_support_toolpaths(
                         density = std::min(1., filler->spacing / (filler->spacing + gap_mm));
                     }
                     filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / density));
-                    const InfillPattern pattern = use_sublayer ? support_params.sublayer_pattern : support_params.contact_fill_pattern;
+                    const InfillPattern pattern = use_sublayer ? restyle->first : support_params.contact_fill_pattern;
                     FillParams fill_params;
                     fill_params.density     = float(density);
                     fill_params.dont_adjust = true;

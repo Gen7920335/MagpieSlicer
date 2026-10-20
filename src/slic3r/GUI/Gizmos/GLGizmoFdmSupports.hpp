@@ -88,15 +88,22 @@ private:
     size_t m_object_id;
     std::vector<ObjectBase::Timestamp> m_volume_timestamps;
 
-    // MAGPIE: with the mixed_support mod on, the left button paints a support channel as well:
-    // normal or tree support. The painting keeps the states below in one selector and splits them
-    // into supported_facets and support_channel_facets when it is stored.
+    // MAGPIE: while a mod's support paint channels apply (its manifest's gui paint_channels and paint_when,
+    // e.g. Mixed support's normal and tree channels), the left button paints a channel as well. The
+    // painting keeps the states below in one selector and splits them into supported_facets and
+    // support_channel_facets (channel 0 as ENFORCER, channel 1 as BLOCKER) when it is stored.
     EnforcerBlockerType get_left_button_state_type() const override;
-    // Whether the selectors were built for Mixed painting: read once in update_from_model_object, so
+    struct PaintChannel
+    {
+        wxString  label;
+        ColorRGBA color;
+    };
+    // Whether the selectors were built for channel painting: read once in update_from_model_object, so
     // painting, colours and storing always agree with the selectors (and no config copy per call).
-    bool                is_mixed_mode() const { return m_mixed_mode; }
-    bool                read_mixed_mode() const;
-    bool                m_mixed_mode = false;
+    bool                      is_mixed_mode() const { return !m_paint_channels.empty(); }
+    std::vector<PaintChannel> read_paint_channels() const;
+    std::vector<PaintChannel> m_paint_channels;
+    const PaintChannel       &current_channel() const { return m_paint_channels[m_mixed_paint_state == MixedTreeState && m_paint_channels.size() > 1 ? 1 : 0]; }
     static constexpr EnforcerBlockerType MixedNormalState = EnforcerBlockerType::Extruder3;
     static constexpr EnforcerBlockerType MixedTreeState   = EnforcerBlockerType::Extruder4;
     EnforcerBlockerType                  m_mixed_paint_state = MixedNormalState;

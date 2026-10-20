@@ -469,21 +469,19 @@ void GLGizmoFdmSupports::on_render_input_window(float x, float y, float bottom_l
     if (is_mixed_mode()) {
         ImGui::AlignTextToFramePadding();
         m_imgui->text(_L("Paint support as"));
-        ImGui::SameLine();
         // The style's check mark is white, invisible on the light panel: the dot takes the channel colour.
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.95f, 0.45f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.2f, 0.75f, 0.3f, 1.f));
-        if (m_imgui->radio_button(_L("Normal"), m_mixed_paint_state == MixedNormalState))
-            m_mixed_paint_state = MixedNormalState;
-        ImGui::PopStyleColor(2);
-        ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.65f, 1.f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.25f, 0.5f, 0.95f, 1.f));
-        if (m_imgui->radio_button(_L("Tree"), m_mixed_paint_state == MixedTreeState))
-            m_mixed_paint_state = MixedTreeState;
-        ImGui::PopStyleColor(2);
+        for (size_t i = 0; i < m_paint_channels.size(); ++i) {
+            const PaintChannel        &channel = m_paint_channels[i];
+            const EnforcerBlockerType  state   = i == 0 ? MixedNormalState : MixedTreeState;
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(channel.color.r(), channel.color.g(), channel.color.b(), 1.f));
+            ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.8f * channel.color.r(), 0.8f * channel.color.g(), 0.8f * channel.color.b(), 1.f));
+            if (m_imgui->radio_button(channel.label, m_mixed_paint_state == state))
+                m_mixed_paint_state = state;
+            ImGui::PopStyleColor(2);
+        }
         if (ImGui::IsItemHovered())
-            m_imgui->tooltip(_L("Left-click paints the selected Mixed support channel. Right-click blocks support. Shift+left-click returns the area to automatic assignment."),
+            m_imgui->tooltip(_L("Left-click paints the selected support channel. Right-click blocks support. Shift+left-click returns the area to automatic assignment."),
                              m_imgui->scaled(20.f));
         ImGui::Separator();
     }
@@ -551,19 +549,31 @@ void GLGizmoFdmSupports::render_tooltip_button(float x, float y) {
     
     auto shortcuts = get_shortcuts();
     if (is_mixed_mode() && !shortcuts.empty() && m_current_tool != ImGui::GapFillIcon)
-        shortcuts.front().second = m_mixed_paint_state == MixedNormalState ? _L("Paint normal support") : _L("Paint tree support");
+        // TRN %1% is a support paint channel, such as "Normal" or "Tree".
+        shortcuts.front().second = format_wxstr(_L("Paint %1% support"), current_channel().label);
     GLGizmoUtils::render_tooltip_button(m_imgui, m_parent, shortcuts, x, y);
 }
 
-bool GLGizmoFdmSupports::read_mixed_mode() const
+std::vector<GLGizmoFdmSupports::PaintChannel> GLGizmoFdmSupports::read_paint_channels() const
 {
+    std::vector<PaintChannel> channels;
     const auto *sel_info = m_c->selection_info();
-    if (sel_info == nullptr || sel_info->model_object() == nullptr)
-        return false;
+    const auto  mods     = ModHost::active_mods();
+    if (sel_info == nullptr || sel_info->model_object() == nullptr || !mods)
+        return channels;
     DynamicPrintConfig config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
     config.apply(sel_info->model_object()->config.get());
-    const auto enabled = ModHost::param_value(config, "mixed_support.enable");
-    return enabled && std::holds_alternative<bool>(*enabled) && std::get<bool>(*enabled);
+    const ModHost::Mod *mod = ModHost::active_paint_channel_mod(*mods, config);
+    if (mod == nullptr)
+        return channels;
+    const std::string language = into_u8(wxGetApp().current_language_code_safe());
+    for (const ModHost::ModGuiItem &item : mod->gui.paint_channels) {
+        ColorRGBA color;
+        if (!decode_color(item.color, color))
+            color = ColorRGBA::WHITE();
+        channels.push_back({wxString::FromUTF8(ModHost::localized_text(item.labels, language, item.label.empty() ? item.id : item.label)), color});
+    }
+    return channels;
 }
 
 EnforcerBlockerType GLGizmoFdmSupports::get_left_button_state_type() const
@@ -699,17 +709,15 @@ void GLGizmoFdmSupports::update_from_model_object(bool first_update)
     m_channel_timestamps.clear();
 
     int volume_id = -1;
-    m_mixed_mode          = read_mixed_mode();
-    const bool mixed_mode = m_mixed_mode;
+    m_paint_channels      = read_paint_channels();
+    const bool mixed_mode = is_mixed_mode();
     std::vector<ColorRGBA> ebt_colors;
     ebt_colors.push_back(GLVolume::NEUTRAL_COLOR);
-    // With Mixed support, plain enforcers (automatic channel) show yellow, normal green, tree blue.
+    // With paint channels, plain enforcers (automatic channel) show yellow and each channel its own colour.
     ebt_colors.push_back(mixed_mode ? ColorRGBA{1.f, 0.8f, 0.25f, 1.f} : TriangleSelectorGUI::enforcers_color);
     ebt_colors.push_back(TriangleSelectorGUI::blockers_color);
-    if (mixed_mode) {
-        ebt_colors.emplace_back(0.35f, 0.95f, 0.45f, 1.f);
-        ebt_colors.emplace_back(0.35f, 0.65f, 1.f, 1.f);
-    }
+    for (size_t i = 0; mixed_mode && i < 2; ++i)
+        ebt_colors.push_back(i < m_paint_channels.size() ? m_paint_channels[i].color : ColorRGBA::WHITE());
     for (const ModelVolume* mv : mo->volumes) {
         if (! mv->is_model_part())
             continue;
@@ -756,8 +764,7 @@ wxString GLGizmoFdmSupports::handle_snapshot_action_name(bool shift_down, GLGizm
         action_name = ("Unselect all");
     else {
         if (button_down == Button::Left)
-            action_name = is_mixed_mode() ? (m_mixed_paint_state == MixedNormalState ? "Paint normal support" : "Paint tree support") :
-                                            "Enforce supports";
+            action_name = is_mixed_mode() ? ("Paint " + current_channel().label.utf8_string() + " support") : "Enforce supports";
         else
             action_name = ("Block supports");
     }

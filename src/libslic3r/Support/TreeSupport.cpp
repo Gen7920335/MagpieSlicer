@@ -1731,28 +1731,33 @@ void TreeSupport::generate_toolpaths()
                 std::shared_ptr<Fill> filler_interface = std::shared_ptr<Fill>(Fill::new_from_type(m_support_params.contact_fill_pattern));
                 std::shared_ptr<Fill> filler_Roof1stLayer = std::shared_ptr<Fill>(Fill::new_from_type(ipRectilinear));
                 filler_interface->set_bounding_box(bbox_object);
-                // MAGPIE: the interface sublayer (support_extras mod), as for the other generators (line 1).
-                std::shared_ptr<Fill> filler_sublayer = m_support_params.sublayer_enabled() ?
-                    std::shared_ptr<Fill>(Fill::new_from_type(m_support_params.sublayer_pattern)) : nullptr;
-                if (filler_sublayer)
-                    filler_sublayer->set_bounding_box(bbox_object);
+                // MAGPIE: the interface sublayers (support.style slot), as for the other generators (line 1); one
+                // filler per pattern, made at first use.
+                std::map<InfillPattern, std::shared_ptr<Fill>> filler_sublayers;
+                auto filler_sublayer = [&filler_sublayers, &bbox_object](InfillPattern pattern) {
+                    std::shared_ptr<Fill> &filler = filler_sublayers[pattern];
+                    if (!filler) {
+                        filler = std::shared_ptr<Fill>(Fill::new_from_type(pattern));
+                        filler->set_bounding_box(bbox_object);
+                    }
+                    return filler.get();
+                };
                 // Interface paths of a roof or floor: the sublayer's own pattern, angle and (marked) temperature
                 // on the layers it covers, counted from the contact (1); triangles keep the line spacing per
                 // direction, unanchored.
                 auto extrude_interface = [&](ExPolygons &areas, FillParams fill_params, bool interface_as_base, const Flow &flow,
                                              int interface_number, int interface_total) {
-                    const bool use_sublayer = filler_sublayer && !interface_as_base &&
-                        support_interface_sublayer_selected(true, m_support_params.sublayer_start, m_support_params.sublayer_end,
-                                                            interface_number, interface_total);
+                    const auto restyle = interface_as_base ? std::nullopt : m_support_params.sublayer(interface_number, interface_total);
+                    const bool use_sublayer = restyle.has_value();
                     Fill *filler = filler_interface.get();
                     if (use_sublayer) {
-                        filler              = filler_sublayer.get();
+                        filler              = filler_sublayer(restyle->first);
                         filler->spacing     = filler_interface->spacing;
-                        filler->angle       = m_support_params.sublayer_angle;
+                        filler->angle       = restyle->second;
                         filler->fixed_angle = true;
                         filler->layer_id    = size_t(-1);
                     }
-                    const InfillPattern pattern = use_sublayer ? m_support_params.sublayer_pattern : m_support_params.contact_fill_pattern;
+                    const InfillPattern pattern = use_sublayer ? restyle->first : m_support_params.contact_fill_pattern;
                     if (!interface_as_base && pattern == ipTriangles && (use_sublayer || m_support_params.interface_pattern_override)) {
                         fill_params.multiline             = 1;
                         fill_params.density_per_direction = true;

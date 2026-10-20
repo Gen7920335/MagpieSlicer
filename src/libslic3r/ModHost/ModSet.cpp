@@ -567,6 +567,10 @@ Mod ModSet::parse_mod(const std::string &json_text)
         if (!it->is_object())
             mod_fail(mod.id, "\"gui\" must be an object");
         mod.gui.paint_channels = parse_gui_items(*it, "paint_channels", where, true);
+        if (mod.gui.paint_channels.size() > 2)
+            mod_fail(mod.id, "\"gui\".paint_channels: at most two channels");
+        if (std::string when = optional_string(*it, "paint_when"); !when.empty())
+            mod.gui.paint_when = parse_expr(when, where + " gui paint_when");
         mod.gui.aux_towers     = parse_gui_items(*it, "aux_towers", where, false);
         mod.gui.legends        = parse_gui_items(*it, "legends", where, false);
         mod.gui.calibrations   = parse_gui_items(*it, "calibrations", where, false);
@@ -1006,6 +1010,23 @@ std::optional<ExprValue> param_value(const DynamicPrintConfig &config, const std
     ModSet::ValueSources sources;
     sources.print = &config;
     return mods->value_of(key, sources);
+}
+
+const Mod *active_paint_channel_mod(const ModSet &mods, const DynamicPrintConfig &config)
+{
+    const ExprLookup lookup = [&config](const std::string &name, std::optional<size_t>) { return param_value(config, name); };
+    for (const Mod &mod : mods.mods()) {
+        if (mod.gui.paint_channels.empty())
+            continue;
+        if (!mod.gui.paint_when)
+            return &mod;
+        try {
+            if (expr_truthy(mod.gui.paint_when->evaluate(lookup)))
+                return &mod;
+        } catch (const ExprError &) {
+        }
+    }
+    return nullptr;
 }
 
 bool param_visible(const ModParam &param, const ExprLookup &lookup)

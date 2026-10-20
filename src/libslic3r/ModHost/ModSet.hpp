@@ -116,7 +116,10 @@ struct ModGuiItem
 
 struct ModGui
 {
-    std::vector<ModGuiItem> paint_channels; // support painting channels, saved in 3MF under the mod's id
+    // Support painting channels (at most two: the paint tool stores channel 0 and 1 besides plain
+    // enforcers, ModelVolume::support_channel_facets), shown while paint_when holds (always without it).
+    std::vector<ModGuiItem> paint_channels;
+    std::optional<Expr>     paint_when;
     std::vector<ModGuiItem> aux_towers;     // auxiliary towers the core places, previews and drags
     std::vector<ModGuiItem> legends;        // per-layer numbers the preview legend shows
     std::vector<ModGuiItem> calibrations;   // Calibration menu entries
@@ -252,6 +255,9 @@ void load_active_mods_from_data_dir();
 // stored in `config` (mod_settings / printer_mod_settings), else the parameter's default. Nothing
 // when no active mod declares the parameter or the stored value has the wrong type.
 std::optional<ExprValue> param_value(const DynamicPrintConfig &config, const std::string &key);
+// The first active mod (in load order) with support painting channels whose gui paint_when holds under `config`,
+// or nullptr. A condition that cannot be evaluated does not hold.
+const Mod *active_paint_channel_mod(const ModSet &mods, const DynamicPrintConfig &config);
 
 // `override_json`'s values laid over `base_json`'s, per parameter (both objects keyed
 // "<mod id>.<name>"). How a part's or modifier's region_mod_settings joins its object's. Text

@@ -82,20 +82,32 @@ Each slot and service is defined by its own C header in `mods/sdk/include/`, nex
 | slot `accel.batch` v1 | `magpie_accel.h` | Batch accelerator (`Accel/BatchAccel.*`). Four inner loops (facet layer ranges, rectilinear crossings, Lightning boundary distances, tree support contact points) keep their CPU functions as the reference; the core offers a loop's items as one batch and computes it itself when the accelerator declines. The accelerator asks for a mode at the start of each slice; in Verify mode the core recomputes every item and throws the batch away on any difference, so an accelerator cannot change the G-code. Trusted mode (no check) is granted to official mods only; any other mod asking for it is checked anyway. |
 | slot `wall.plan` v1 | `magpie_slot_wall_plan.h` | Wall planner (`ModHost/WallPlanner.*`). The core opens the planner for each region it builds or routes walls of (open reads the planner's parameters and the region's settings once; the printer's nozzles and filaments are handed over as numbers and strings) and asks per layer for the detail nozzle and the toolhead of the whole layer's walls, per island for the plan (wall counts, overlap, infill compensation; the island comes simplified as the walls follow it), and per wall tag for the filament. The core keeps the detail flow (the outer wall width resolved on the detail nozzle), the Classic and Arachne generators that print a plan, the wall tags, the tool ordering and G-code routing, and the line width checks, for which the planner lists the filaments it may use. Picked by the wall_planner value; a value no loaded mod provides stops the slice. |
 | slot `support.areas` v1 | `magpie_support.h` | Support generator by areas (`ModHost/NativeSupport.*`). The core hands over an object's islands, enforcers, blockers, an optional mask and the printable area, gets back body, roof and bottom areas per layer, and builds Orca support layers from them (raft, interfaces, toolpaths). Picked by the support_generator value, after the built-in generators. |
+| slot `support.compose` v1 | `magpie_slot_support_compose.h` | Support composer (`ModHost/NativeCompose.*`). The mod builds an object's support out of the core's generators: the core gives it support demand (Orca's normal support's overhangs or a support.areas mod's), the build plate shadow and the two support paint channels per object layer, runs Orca's normal support, a support.areas mod or Orca's tree support (with a style, optionally clear of a normal set's plastic) on the mod's masks and keeps each result as a set the mod names by a handle; the mod finally merges a normal and a tree set into the object's support layers (layers of both at one height become a multi-channel layer, `stInnerMultiChannel`, the normal set owning overlaps). The core owns every layer; an exception in a core generator is kept and rethrown once the mod returns, never thrown into the mod. Picked by the support_generator value, after the built-in generators and support.areas. |
+| slot `support.style` v1 | `magpie_slot_support_style.h` | Support style (`ModHost/SupportStyle.*`, read in `SupportParameters`). Every loaded implementation is opened per object (object-scope parameters apply); one with nothing to change returns no state and is not used, two that both style an object stop the slice. The style gives the interface pattern, the normal and tree wall counts (-1 to 10) and, per interface layer number of each interface stack size the object prints, a pattern and angle of its own (interface sublayers); the core asks once per object and keeps the answers. The sublayer temperature stays the core setting `support_interface_sublayer_temperature` (written by the support_extras rule while its sublayers are on) until the G-code hooks are generic. |
 | slot `gcode.time_plan` v1 | `magpie_slot_time_plan.h` | Time planner (`ModHost/SlotRegistry.*`, `GCode::apply_layer_time_plan`). The core marks wait sites in the exported G-code, estimates their intervals and hands the numbers over; the planner returns per-site waits, park choices, a tower cut and warning kinds, which the core checks (counts, indices, finite non-negative waits) before writing them. Picked by layer_time_planner; a name no mod provides stops the slice. |
-| service `core.geometry` v1 | `magpie_geometry.h` | The core's own ClipperUtils operations (offset, booleans, simplify, union_ex, area, nearest-edge distances), so a mod that came out of the core computes exactly the polygons it computed inside it. Services named `core.*` need no `depends`. |
+| service `core.geometry` v1 | `magpie_geometry.h` | The core's own ClipperUtils operations (offset, booleans, simplify, union_ex, area, nearest-edge distances, and appended later intersection_ex/diff_ex: a mod checks the table size), so a mod that came out of the core computes exactly the polygons it computed inside it. Services named `core.*` need no `depends`. |
 
 ## Official mods
 
 Official mods live in `mods/<id>/` (source, `mod.json`, `tests/`) and build, with the SDK template only,
 into package folders `<build>/official_mods/<id>/`: `cuda_compute` (fills `accel.batch`), `cura_support`
-(fills `support.areas` as "cura" and offers `cura.support_areas`) and `multi_nozzle_walls` (fills `wall.plan` as
-"multi_nozzle"). They are signed with `--mod-sign` and
+(fills `support.areas` as "cura" and offers `cura.support_areas`), `multi_nozzle_walls` (fills `wall.plan` as
+"multi_nozzle"), `mixed_support` (fills `support.compose` as "mixed" and offers `mixed_support.plan`, its split of support
+demand, which the core's tests call) and `support_extras` (fills `support.style` as "extras"). They are signed with `--mod-sign` and
 the official key, which stays off the repository, and installed like any package. Tests load the build
 folders directly (`magpie_use_official_mods` in `tests/CMakeLists.txt`; `fff_print/test_helpers.cpp`
 makes their slots active for the whole run). A mod's own unit tests (`mods/<id>/unit/`, `tests/mods/CMakeLists.txt`) compile
 its sources with Catch2 and nothing of the core; the core's side of its slot is tested through the built
 library. `layer_time_blend` fills `gcode.time_plan` as "blend".
+
+## Declarative GUI
+
+The core's GUI reads what a mod declares in its manifest and draws it; no mod code runs in the GUI.
+`gui.paint_channels` (at most two, `id`, `color`, `label`/`label_<lang>`) with `gui.paint_when` (an expression over
+parameters) gives the support paint tool its channels: while the first such mod's condition holds, the tool offers
+the channels next to plain enforcers, paints them in their colours and stores channel 0 and 1 in
+`ModelVolume::support_channel_facets` (3MF attribute names of line 1, so its projects keep their painting); the
+support.compose host hands them to the mod as `paint_channel` 0 and 1.
 
 ## Native mods in the G-code
 
