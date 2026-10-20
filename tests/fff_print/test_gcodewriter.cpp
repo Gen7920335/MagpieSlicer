@@ -1787,3 +1787,33 @@ TEST_CASE("Initial filament start G-code tolerates a list shorter than the filam
 
     REQUIRE_NOTHROW(Slic3r::Test::gcode(print));
 }
+
+// A filament id that set_extruders() did not register (an id in a gap or past the last one) must not move the
+// writer to another filament, and must not read past the registered list.
+TEST_CASE("Writer keeps the active tool when asked for an unregistered filament", "[GCodeWriter]")
+{
+    const unsigned int missing_id = GENERATE(1u, 3u); // gap and past-the-end lookup
+    CAPTURE(missing_id);
+    GCodeWriter writer;
+    PrintConfig config;
+    config.apply(multifilament_config(3), true);
+    writer.apply_print_config(config);
+    writer.set_extruders({0, 2});
+
+    writer.init_extruder(missing_id);
+    CHECK(writer.filament() == nullptr);
+    CHECK(writer.set_extruder(missing_id).empty());
+    CHECK(writer.filament() == nullptr);
+
+    writer.init_extruder(0);
+    REQUIRE(writer.filament() != nullptr);
+    const Extruder *original = writer.filament();
+    CHECK(writer.set_extruder(missing_id).empty());
+    CHECK(writer.filament() == original);
+    CHECK(writer.toolchange(missing_id, 0).empty());
+    CHECK(writer.filament() == original);
+
+    writer.set_extruder(2);
+    REQUIRE(writer.filament() != nullptr);
+    CHECK(writer.filament()->id() == 2);
+}

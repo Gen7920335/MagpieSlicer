@@ -677,6 +677,79 @@ TEST_CASE("Nozzle edits reslice the same Print like a fresh Print", "[MultiNozzl
     CHECK(edited == expected);
 }
 
+// The detail nozzle is chosen by the filaments' colour, type and solubility while the walls are built, so an
+// edit to any of them must rebuild the walls of the same Print exactly like a fresh Print.
+TEST_CASE("Material edits reslice the same Print like a fresh Print", "[MultiNozzleWalls][Invalidation]")
+{
+    const int edit = GENERATE(0, 1, 2); // colour, type, soluble
+    CAPTURE(edit);
+    DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, "classic", true);
+    config.set_key_value("filament_colour", new ConfigOptionStrings{ "#FF0000", "#FF0000" });
+    config.set_key_value("filament_type", new ConfigOptionStrings{ "PLA", "PLA" });
+    config.set_key_value("filament_soluble", new ConfigOptionBools{ false, false });
+    Print print;
+    Model model;
+    init_print({ cube(8) }, print, model, config);
+    print.process();
+    // Before the edit the same-colour smaller nozzle prints the detail walls.
+    REQUIRE(tools_for_role(Slic3r::Test::gcode(print), "perimeter") == std::set<int>{ 0, 1 });
+
+    // Edit the config the Print was set up with (init_print adds its own test settings).
+    config = print.full_print_config();
+    if (edit == 0)
+        config.set_key_value("filament_colour", new ConfigOptionStrings{ "#FF0000", "#0000FF" });
+    else if (edit == 1)
+        config.set_key_value("filament_type", new ConfigOptionStrings{ "PLA", "PETG" });
+    else
+        config.set_key_value("filament_soluble", new ConfigOptionBools{ false, true });
+    print.apply(model, config);
+    REQUIRE_FALSE(print.objects().front()->is_step_done(posPerimeters));
+    print.process();
+    const std::string edited = Slic3r::Test::gcode(print);
+    // The other nozzle no longer matches, so the walls go back to the base nozzle alone.
+    CHECK(tools_for_role(edited, "perimeter") == std::set<int>{ 0 });
+
+    Print fresh;
+    fresh.apply(model, config);
+    fresh.process();
+    for (size_t layer = 0; layer < fresh.objects().front()->layers().size(); ++layer) {
+        CAPTURE(layer);
+        Points actual, expected;
+        print.objects().front()->layers()[layer]->regions().front()->perimeters.collect_points(actual);
+        fresh.objects().front()->layers()[layer]->regions().front()->perimeters.collect_points(expected);
+        CHECK(actual == expected);
+    }
+}
+
+// A part narrower than the planned walls (8 detail and 6 large walls need well over 2.4 mm) clips the plan:
+// it still slices, keeps fewer walls than planned, and the walls print only on the two nozzles.
+TEST_CASE("Narrow regions clip the wall plan and print on the two nozzles", "[MultiNozzleWalls][Narrow]")
+{
+    const char  *generator = GENERATE("classic", "arachne");
+    const double width_mm  = GENERATE(1.2, 2.4);
+    CAPTURE(generator, width_mm);
+    DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, generator, true);
+    config.set_deserialize_strict({ { "layer_height", 0.1 }, { "initial_layer_print_height", 0.1 }, { "wall_loops", 6 },
+                                    { "crisp_corner_small_nozzle_wall_count", 8 }, { "crisp_corner_interlace_small_nozzle_walls", true } });
+    Print print;
+    Model model;
+    REQUIRE_NOTHROW(init_print({ make_cube(width_mm, 20., 20.) }, print, model, config));
+    REQUIRE_NOTHROW(print.process());
+    const LayerRegion &region = *print.objects().front()->layers()[10]->regions().front();
+    std::vector<int> insets;
+    for (const ExtrusionEntity *wall : walls_of(region))
+        if (wall->inset_idx >= 0)
+            insets.push_back(wall->inset_idx);
+    REQUIRE_FALSE(insets.empty());
+    CHECK(insets.size() < size_t(8 + 6));
+    std::string output;
+    REQUIRE_NOTHROW(output = Slic3r::Test::gcode(print));
+    const std::set<int> tools = tools_for_role(output, "perimeter");
+    REQUIRE_FALSE(tools.empty());
+    CHECK(*tools.begin() >= 0);
+    CHECK(*tools.rbegin() <= 1);
+}
+
 TEST_CASE("Every detail wall prints at the detail nozzle's width", "[MultiNozzleWalls][Classic]")
 {
     // Before: Classic gave the inner detail walls (depth 1 and deeper) the large nozzle's width,

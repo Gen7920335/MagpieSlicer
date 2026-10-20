@@ -12,6 +12,7 @@
 #include "Line.hpp"
 #include "LocalesUtils.hpp"
 #include "libslic3r.h"
+#include <boost/log/trivial.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -41,6 +42,23 @@
 
 #define FLAVOR_IS(val) this->config.gcode_flavor == val
 #define FLAVOR_IS_NOT(val) this->config.gcode_flavor != val
+
+namespace Slic3r {
+
+// Orca: the registered Extruder of a filament id, or nullptr when the id was not registered with set_extruders().
+// lower_bound alone returned the next registered filament for an id in a gap, or end() past the last one, and
+// toolchange() and set_extruder() switched to that or dereferenced end().
+static Extruder *find_filament_extruder(std::vector<Extruder> &extruders, unsigned int filament_id)
+{
+    auto it = Slic3r::lower_bound_by_predicate(extruders.begin(), extruders.end(), [filament_id](const Extruder &e) { return e.id() < filament_id; });
+    if (it != extruders.end() && it->id() == filament_id)
+        return &*it;
+    // PERMANENT DIAGNOSTIC: names the unregistered filament; the caller keeps the current tool.
+    BOOST_LOG_TRIVIAL(error) << "GCodeWriter: filament " << filament_id << " is not registered; the tool is not changed";
+    return nullptr;
+}
+
+} // namespace Slic3r
 
 namespace Slic3r {
 
@@ -798,10 +816,11 @@ std::string GCodeWriter::toolchange_prefix() const
 std::string GCodeWriter::toolchange(unsigned int filament_id, int nozzle_id)
 {
     // set the new extruder
-    auto filament_extruder_iter = Slic3r::lower_bound_by_predicate(m_filament_extruders.begin(), m_filament_extruders.end(), [filament_id](const Extruder &e) { return e.id() < filament_id; });
-    assert(filament_extruder_iter != m_filament_extruders.end() && filament_extruder_iter->id() == filament_id);
-    m_curr_extruder_id = filament_extruder_iter->extruder_id();
-    m_curr_filament_extruder[m_curr_extruder_id] = &*filament_extruder_iter;
+    Extruder *filament_extruder = find_filament_extruder(m_filament_extruders, filament_id);
+    if (filament_extruder == nullptr)
+        return {};
+    m_curr_extruder_id = filament_extruder->extruder_id();
+    m_curr_filament_extruder[m_curr_extruder_id] = filament_extruder;
     m_cached_extruder_idx = get_extruder_index(this->config, filament_id);
 
     // return the toolchange command
@@ -1672,9 +1691,10 @@ void GCodeWriter::add_object_change_labels(std::string& gcode)
 
 std::string GCodeWriter::set_extruder(unsigned int filament_id)
 {
-    auto filament_ext_it = Slic3r::lower_bound_by_predicate(m_filament_extruders.begin(), m_filament_extruders.end(), [filament_id](const Extruder &e) { return e.id() < filament_id; });
-    unsigned int extruder_id = filament_ext_it->extruder_id();
-    assert(filament_ext_it != m_filament_extruders.end() && filament_ext_it->id() == filament_id);
+    const Extruder *filament_extruder = find_filament_extruder(m_filament_extruders, filament_id);
+    if (filament_extruder == nullptr)
+        return {};
+    unsigned int extruder_id = filament_extruder->extruder_id();
     // Orca: writer-only context (calibration paths) has no nozzle grouping; the
     // filament's own extruder id is the correct degenerate nozzle value.
     return this->need_toolchange(filament_id) ? this->toolchange(filament_id, (int) extruder_id) : "";
@@ -1683,10 +1703,11 @@ std::string GCodeWriter::set_extruder(unsigned int filament_id)
 void GCodeWriter::init_extruder(unsigned int filament_id)
 {
     if (m_curr_extruder_id == -1 && filament_id != -1) {
-        auto filament_extruder_iter = Slic3r::lower_bound_by_predicate(m_filament_extruders.begin(), m_filament_extruders.end(), [filament_id](const Extruder &e) { return e.id() < filament_id; });
-        assert(filament_extruder_iter != m_filament_extruders.end() && filament_extruder_iter->id() == filament_id);
-        m_curr_extruder_id = filament_extruder_iter->extruder_id();
-        m_curr_filament_extruder[m_curr_extruder_id] = &*filament_extruder_iter;
+        Extruder *filament_extruder = find_filament_extruder(m_filament_extruders, filament_id);
+        if (filament_extruder == nullptr)
+            return;
+        m_curr_extruder_id = filament_extruder->extruder_id();
+        m_curr_filament_extruder[m_curr_extruder_id] = filament_extruder;
         m_cached_extruder_idx = get_extruder_index(this->config, filament_id);
     }
 }

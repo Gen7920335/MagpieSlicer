@@ -6499,9 +6499,8 @@ void GCodeProcessor::process_M104(const GCodeReader::GCodeLine& line)
     float new_temp;
     if (line.has_value('S', new_temp)) {
         m_extruder_temps[filament_id] = new_temp;
-        if (m_estimate_temperature_waits) {
-            nozzle_temperature_at(size_t(filament_id), estimated_now()).target = new_temp;
-        }
+        // Orca: the temperature model behind the M109 wait estimate follows every target.
+        nozzle_temperature_at(size_t(filament_id), estimated_now()).target = new_temp;
     }
 }
 
@@ -6593,18 +6592,26 @@ void GCodeProcessor::process_M109(const GCodeReader::GCodeLine& line)
 
     float target = 0.f;
     const bool both_ways = line.has_value('R', target);
-    if (m_estimate_temperature_waits && (both_ways || line.has_value('S', target))) {
+    if (both_ways || line.has_value('S', target)) {
         // The firmware finishes the moves, then waits until the nozzle reaches the target (M109 S waits
         // only while heating on Marlin; R both ways).
         size_t id = size_t(filament_id);
         if (float val; both_ways && line.has_value('T', val))
             id = size_t(val);
-        simulate_st_synchronize(0.f);
+        // Orca: a wait inside the print (a tool change, a temperature change between layers) takes time; Orca
+        // counted it as none. Waits before the first layer (start G-code heat-up) and BBL's virtual VM109 stay
+        // at none, as in Orca, and leave the nozzle at the target. Rates: layer_time_blend_heat_rate/_cool_rate.
+        const bool estimate = !m_virtual_temperature_wait && (m_estimate_temperature_waits || m_layer_id > 0);
+        if (estimate)
+            simulate_st_synchronize(0.f);
         const double       now  = estimated_now();
         NozzleTemperature &t    = nozzle_temperature_at(id, now);
         const bool         wait = both_ways || target > t.current;
         t.target                = target;
-        if (wait && std::abs(target - t.current) > 0.f) {
+        if (! estimate) {
+            if (wait)
+                t.current = target;
+        } else if (wait && std::abs(target - t.current) > 0.f) {
             const float seconds = std::abs(target - t.current) / (target > t.current ? m_heat_rate : m_cool_rate);
             t.current           = target;
             t.time_s            = now + seconds;
@@ -6616,7 +6623,9 @@ void GCodeProcessor::process_M109(const GCodeReader::GCodeLine& line)
 
 void GCodeProcessor::process_VM109(const GCodeReader::GCodeLine& line)
 {
+    m_virtual_temperature_wait = true;
     process_M109(line);
+    m_virtual_temperature_wait = false;
 }
 
 void GCodeProcessor::process_M132(const GCodeReader::GCodeLine& line)
