@@ -195,6 +195,12 @@ template<typename F> void for_each_extrusion_path(const ExtrusionEntity &entity,
     }
 }
 
+// Orca: whether a wall entity belongs to the inner walls (inner_wall_filament_id). Overhang segments carry
+// erOverhangPerimeter in inner and outer walls alike, so a loop whose first path is an overhang reads as an
+// outer wall from role(). The wall's first non-overhang segment decides; a wall that is all overhang goes by the
+// generator's inset index (0 = outer wall). A collection is inner only when it holds walls and every one is inner.
+bool is_inner_wall(const ExtrusionEntity &entity);
+
 } // namespace Slic3r
 
 #endif

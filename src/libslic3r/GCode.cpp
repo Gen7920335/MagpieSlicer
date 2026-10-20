@@ -6446,7 +6446,7 @@ void append_half_layer_model_tasks(const PrintObject &object, size_t parent_inde
                     unsigned filament = tools.extruder(root, region->region());
                     if (perimeter) {
                         // Orca prints inner walls with the inner wall filament when it differs.
-                        if (entity.role() == erPerimeter && region_config.outer_wall_filament_id.value != region_config.inner_wall_filament_id.value &&
+                        if (is_inner_wall(entity) && region_config.outer_wall_filament_id.value != region_config.inner_wall_filament_id.value &&
                             region_config.inner_wall_filament_id.value > 0)
                             filament = unsigned(region_config.inner_wall_filament_id.value - 1);
                         if (planner != nullptr && planner->wall_filament)
@@ -8412,20 +8412,25 @@ LayerResult GCode::process_layer(
                             }
                         }
 
+                        // Orca: inner and outer walls are told apart by is_inner_wall(), not by role(): a loop
+                        // that starts with an overhang segment has the overhang role in inner walls too.
                         bool split_mixed_perimeters =
                             entity_type == ObjectByExtruder::Island::Region::PERIMETERS &&
                             region.config().outer_wall_filament_id.value != region.config().inner_wall_filament_id.value &&
-                            extrusions->role() == erMixed;
+                            ! is_inner_wall(*extrusions) &&
+                            std::any_of(extrusions->entities.begin(), extrusions->entities.end(),
+                                        [](const ExtrusionEntity *entity) { return entity != nullptr && is_inner_wall(*entity); });
 
                         if (split_mixed_perimeters) {
                             auto outer_perimeters = std::make_unique<ExtrusionEntityCollection>();
                             auto inner_perimeters = std::make_unique<ExtrusionEntityCollection>();
                             for (const ExtrusionEntity *entity : extrusions->entities) {
-                                const ExtrusionRole role = entity->role();
-                                if (role == erExternalPerimeter || role == erOverhangPerimeter)
-                                    outer_perimeters->append(*entity);
-                                else if (role == erPerimeter)
+                                if (entity == nullptr)
+                                    continue;
+                                if (is_inner_wall(*entity))
                                     inner_perimeters->append(*entity);
+                                else
+                                    outer_perimeters->append(*entity);
                             }
 
                             if (!outer_perimeters->entities.empty()) {

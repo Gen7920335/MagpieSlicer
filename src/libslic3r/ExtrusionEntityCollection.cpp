@@ -160,4 +160,30 @@ double ExtrusionEntityCollection::min_mm3_per_mm() const
     return min_mm3_per_mm;
 }
 
+bool is_inner_wall(const ExtrusionEntity &entity)
+{
+    if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+        bool has_wall = false;
+        for (const ExtrusionEntity *child : collection->entities) {
+            if (child == nullptr)
+                continue;
+            if (!is_inner_wall(*child))
+                return false;
+            has_wall = true;
+        }
+        return has_wall;
+    }
+    // The first segment that is not an overhang carries the wall's own role (H/2 shells restate the outer role on
+    // their second loop, so the role is preferred over the inset).
+    ExtrusionRole wall_role = erNone;
+    for_each_extrusion_path(entity, [&wall_role](const ExtrusionPath &path) {
+        if (wall_role == erNone && path.role() != erOverhangPerimeter)
+            wall_role = path.role();
+    });
+    if (wall_role != erNone)
+        return wall_role == erPerimeter;
+    // Overhang only: the generator's inset index decides (0 = outer wall); unknown counts as outer, as before.
+    return entity.inset_idx > 0;
+}
+
 }

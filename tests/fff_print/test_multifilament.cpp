@@ -4,6 +4,8 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/catch_message.hpp>
 #include "libslic3r/GCode/GCodeProcessor.hpp"
+#include "libslic3r/GCode/ToolOrdering.hpp"
+#include "libslic3r/ExtrusionEntityCollection.hpp"
 #include "libslic3r/GCodeReader.hpp"
 
 #include "test_helpers.hpp"
@@ -254,6 +256,115 @@ static bool trace_entries_match(const std::string& a, const std::string& b)
     if (x.time_s.has_value() != y.time_s.has_value())
         return false;
     return timings_match(x.lead_s, y.lead_s) && time_is_rounded_lead(x);
+}
+
+// Tools that print extrusions under each ";TYPE:" label of the G-code.
+static std::map<std::string, std::set<int>> tools_by_type(const std::string &gcode)
+{
+    std::map<std::string, std::set<int>> tools;
+    std::string type;
+    int current_tool = 0;
+    GCodeReader reader;
+    reader.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const std::string cmd(line.cmd());
+        const std::string raw(line.raw());
+        if (raw.rfind(";TYPE:", 0) == 0)
+            type = raw.substr(6);
+        else if (cmd.size() >= 2 && cmd[0] == 'T' && std::isdigit((unsigned char) cmd[1]))
+            current_tool = std::stoi(cmd.substr(1));
+        else if (line.extruding(self) && line.dist_XY(self) > 0. && !type.empty()) // not a prime or unretract
+            tools[type].insert(current_tool);
+    });
+    return tools;
+}
+
+// Overhang segments carry the overhang role in inner walls too, so a wall loop whose first path is an
+// overhang must still go to the filament of the wall it is: the generator's inset index decides.
+TEST_CASE("A wall's filament follows the wall, not an overhang at its start", "[MultiFilament]")
+{
+    PrintRegionConfig config;
+    config.outer_wall_filament_id.value = 2;
+    config.inner_wall_filament_id.value = 1;
+    const PrintRegion region(config);
+    const LayerTools tools(0.2);
+    auto filament_of = [&](const ExtrusionLoop &loop) {
+        ExtrusionEntityCollection walls;
+        walls.append(loop);
+        return tools.extruder(walls, region); // zero-based: outer filament 2 -> 1, inner filament 1 -> 0
+    };
+    const int inset = GENERATE(-1, 0, 1, 3);
+    CAPTURE(inset);
+
+    // An overhang first, then the wall's own segments: the wall's role decides, whatever the inset says.
+    ExtrusionLoop inner{ExtrusionPath(erOverhangPerimeter)};
+    inner.paths.emplace_back(erPerimeter);
+    inner.inset_idx = inset;
+    CHECK(filament_of(inner) == 0u);
+    ExtrusionLoop outer{ExtrusionPath(erOverhangPerimeter)};
+    outer.paths.emplace_back(erExternalPerimeter);
+    outer.inset_idx = inset;
+    CHECK(filament_of(outer) == 1u);
+
+    // A wall that is all overhang goes by its inset; unknown counts as outer, as before.
+    ExtrusionLoop overhang{ExtrusionPath(erOverhangPerimeter)};
+    overhang.inset_idx = inset;
+    CHECK(filament_of(overhang) == (inset > 0 ? 0u : 1u));
+
+    // A collection holding an outer wall is not an inner wall collection.
+    ExtrusionEntityCollection walls;
+    walls.append(inner);
+    CHECK(is_inner_wall(walls));
+    walls.append(outer);
+    CHECK_FALSE(is_inner_wall(walls));
+}
+
+TEST_CASE("Inner and outer walls keep their filaments on overhangs", "[MultiFilament]")
+{
+    const char *generator = GENERATE("classic", "arachne");
+    CAPTURE(generator);
+    const std::string gcode = slice({ TestMesh::overhang },
+        multifilament_config(2, {
+            { "wall_generator",         generator },
+            { "wall_loops",             3 },
+            { "outer_wall_filament_id", 1 },
+            { "inner_wall_filament_id", 2 },
+            { "enable_support",         0 },
+            { "skirt_loops",            0 },
+            { "brim_type",              "no_brim" },
+        }));
+    const auto tools = tools_by_type(gcode);
+    REQUIRE(tools.count("Inner wall") == 1);
+    REQUIRE(tools.count("Outer wall") == 1);
+    CHECK(tools.at("Inner wall") == std::set<int>{ 1 });
+    CHECK(tools.at("Outer wall") == std::set<int>{ 0 });
+}
+
+// Support with a skirt and a brim on one, two and four configured filaments slices and exports.
+TEST_CASE("Support pipeline remains valid with multiple configured extruders", "[MultiFilament][SupportMaterial]")
+{
+    const int extruder_count = GENERATE(1, 2, 4);
+    DYNAMIC_SECTION("extruders=" << extruder_count) {
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_num_extruders(extruder_count);
+        config.set_deserialize_strict({
+            { "layer_height",               0.4 },
+            { "initial_layer_print_height", 0.4 },
+            { "enable_support",             1 },
+            { "skirt_loops",                1 },
+            { "skirt_distance",             0 },
+            { "brim_type",                  "outer_only" },
+            { "brim_width",                 5 },
+        });
+        Print print;
+        Model model;
+        REQUIRE_NOTHROW(init_print({ TestMesh::overhang }, print, model, config));
+        REQUIRE(print.objects().size() == 1);
+        REQUIRE_NOTHROW(print.process());
+        REQUIRE_FALSE(print.objects().front()->support_layers().empty());
+        std::string out;
+        REQUIRE_NOTHROW(out = gcode(print));
+        CHECK(out.find(";TYPE:Support") != std::string::npos);
+    }
 }
 
 // Tool index = filament id - 1; brim and skirt follow the wall filament.
