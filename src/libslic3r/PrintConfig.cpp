@@ -7395,18 +7395,6 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionString(""));
 
-    // MAGPIE: lifts the object off the bed (or raft) by this much, for support modules whose
-    // support also grows under the object's bottom (resin-style support). Set by mod rules.
-    def = this->add("object_elevation", coFloat);
-    def->label = L("Object elevation");
-    def->category = L("Support");
-    def->tooltip = L("Lifts the object above the build plate or raft so that support can grow under it.");
-    def->sidetext = L("mm");
-    def->min = 0;
-    def->max = 150;
-    def->mode = comDevelop;
-    def->set_default_value(new ConfigOptionFloat(0.));
-
     // MAGPIE: the interface sublayer temperature, written by the support_extras mod's rule (mods/support_extras)
     // while its sublayers are on. Its default leaves Orca's G-code unchanged.
     def = this->add("support_interface_sublayer_temperature", coInt);

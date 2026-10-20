@@ -1,0 +1,3 @@
+{ "type": "process", "name": "resin support mod test", "from": "User", "instantiation": "true", "version": "2.4.0.0",
+  "enable_support": "1", "support_type": "normal(auto)", "support_interface_top_layers": "2",
+  "mod_settings": "{\"resin_support.enable\":true,\"resin_support.tree_type\":\"branching\"}" }

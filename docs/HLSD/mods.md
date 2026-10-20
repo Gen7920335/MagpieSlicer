@@ -84,7 +84,7 @@ an empty value keeps Orca's own behaviour.
 
 | Slot | Setting | Modules | What the module gets and gives |
 |---|---|---|---|
-| `support.generator` | `support_generator` | `orca`, `resin`; `cura` (native mod `cura_support`, C slot `support.areas`), `mixed` (native mod `mixed_support`, C slot `support.compose`) | fills an object's support layers |
+| `support.generator` | `support_generator` | `orca`; `cura` (native mod `cura_support`, C slot `support.areas`), `mixed` (native mod `mixed_support`, C slot `support.compose`), `resin` (native mod `resin_support`, C slot `support.contacts`) | fills an object's support layers |
 | `support.style` | (every loaded implementation) | `extras` (native mod `support_extras`) | how an object's support is printed: interface pattern, normal and tree wall counts, interface sublayers; a C slot ([native-mods.md](native-mods.md)) |
 | `wall.plan` | `wall_planner` | `multi_nozzle` (native mod `multi_nozzle_walls`) | splits a region's walls between two nozzles; a C slot ([native-mods.md](native-mods.md)) |
 | `gcode.time_plan` | `layer_time_planner` | `blend` (native mod `layer_time_blend`) | the wait sites of a print (estimated interval since the previous site, park trip, tower block times, chain breaks, guessed intervals) in, per-site waits, park choice, tower cut and warnings out |

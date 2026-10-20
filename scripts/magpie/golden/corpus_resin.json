@@ -1,0 +1,199 @@
+{
+    "description": "Resin support corpus: the resin support mod (mods/resin_support, PrusaSlicer 2.9.6 SLA points and trees printed through Orca's normal support) with both tree types, the object lift with and without raft, threshold angle, pillar and head settings, build plate only, a tree support type (ignored), interfaces, support off, enforcers only, several models and the X1C. Used as the gate when resin support moved from the core into its native mod: the built-in and the mod build must give identical normalized G-code (the '; mods:' header line aside).",
+    "printers": {
+        "u1": {
+            "machine": "presets/u1_04_machine.json",
+            "process": "presets/u1_04_process.json",
+            "filaments": [
+                "presets/u1_pla.json"
+            ],
+            "bed_type": "High Temp Plate"
+        },
+        "x1c": {
+            "machine": "presets/x1c_04_machine.json",
+            "process": "presets/x1c_04_process.json",
+            "filaments": [
+                "presets/x1c_pla.json"
+            ],
+            "bed_type": "Textured PEI Plate"
+        }
+    },
+    "cases": [
+        {
+            "name": "overhang_default",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"resin_support.enable\":true}"
+            }
+        },
+        {
+            "name": "overhang_branching",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.tree_type\":\"branching\"}"
+            }
+        },
+        {
+            "name": "overhang_no_lift",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.default_object_elevation\":0}"
+            }
+        },
+        {
+            "name": "overhang_branching_no_lift_raft",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "raft_layers": "2",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.tree_type\":\"branching\",\"resin_support.branching_object_elevation\":0}"
+            }
+        },
+        {
+            "name": "overhang_raft_lift",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "raft_layers": "3",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.default_object_elevation\":2.5}"
+            }
+        },
+        {
+            "name": "overhang_threshold_30",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_threshold_angle": "30",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.points_density\":60}"
+            }
+        },
+        {
+            "name": "overhang_zigzag_wide",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.default_pillar_connection_mode\":\"zigzag\",\"resin_support.default_pillar_diameter\":1.6,\"resin_support.default_head_front_diameter\":0.8,\"resin_support.default_base_diameter\":6}"
+            }
+        },
+        {
+            "name": "overhang_branching_cross_buildplate",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.tree_type\":\"branching\",\"resin_support.branching_pillar_connection_mode\":\"cross\",\"resin_support.branching_buildplate_only\":true}"
+            }
+        },
+        {
+            "name": "overhang_tree_type_ignored",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "tree(auto)",
+                "mod_settings": "{\"resin_support.enable\":true}"
+            }
+        },
+        {
+            "name": "overhang_interfaces",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "support_interface_top_layers": "3",
+                "support_interface_bottom_layers": "2",
+                "support_top_z_distance": "0.1",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.points_density\":150}"
+            }
+        },
+        {
+            "name": "overhang_support_off",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "0",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"resin_support.enable\":true}"
+            }
+        },
+        {
+            "name": "overhang_enforcers_only",
+            "printer": "u1",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.enforcers_only\":true}"
+            }
+        },
+        {
+            "name": "frog_legs_default",
+            "printer": "u1",
+            "model": "tests/data/frog_legs.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.points_density\":50}"
+            }
+        },
+        {
+            "name": "a_upsidedown_branching",
+            "printer": "u1",
+            "model": "tests/data/A_upsidedown.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.tree_type\":\"branching\",\"resin_support.points_density\":50}"
+            }
+        },
+        {
+            "name": "idler_default_critical_angle",
+            "printer": "u1",
+            "model": "tests/data/extruder_idler.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.default_critical_angle\":30,\"resin_support.default_max_bridge_length\":8}"
+            }
+        },
+        {
+            "name": "tee_branching",
+            "printer": "u1",
+            "model": "external:tee.stl",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"resin_support.enable\":true,\"resin_support.tree_type\":\"branching\"}"
+            }
+        },
+        {
+            "name": "overhang_default_x1c",
+            "printer": "x1c",
+            "model": "tests/data/overhang.obj",
+            "process": {
+                "enable_support": "1",
+                "support_type": "normal(auto)",
+                "mod_settings": "{\"resin_support.enable\":true}"
+            }
+        }
+    ]
+}

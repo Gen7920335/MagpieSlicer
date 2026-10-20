@@ -37,7 +37,9 @@ struct SlicingParameters
          const PrintObjectConfig         &object_config,
          coordf_t                         object_height,
          const std::vector<unsigned int> &object_extruders,
-         const Vec3d                     &object_shrinkage_compensation);
+         const Vec3d                     &object_shrinkage_compensation,
+         // MAGPIE: how far a mod lifts the object when it has support (object.z_offset slot), mm.
+         coordf_t                         object_z_offset = 0.);
 
     // Has any raft layers?
     bool        has_raft() const { return raft_layers() > 0; }
@@ -105,6 +107,8 @@ struct SlicingParameters
     coordf_t    raft_contact_top_z { 0 };
     // In case of a zero-gap raft interface, object_print_z_min == raft_contact_top_z, otherwise there is a gap between the raft and the 1st object layer.
     coordf_t 	object_print_z_min { 0 };
+    // MAGPIE: how far a mod lifted the object above that (object.z_offset), included in object_print_z_min; 0 when not lifted.
+    coordf_t    object_z_offset { 0 };
     // This value of maximum print Z is scaled by shrinkage compensation in the Z-axis.
     coordf_t 	object_print_z_max { 0 };
     

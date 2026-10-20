@@ -4,21 +4,8 @@
 #include <libslic3r/SLA/SpatIndex.hpp>
 //#include <libslic3r/SLA/Contour3D.hpp>
 #include <libslic3r/TriangleMeshSlicer.hpp>
-#include <boost/log/trivial.hpp>
-#include <algorithm>
-#include <utility>
-#include <cstdlib>
 
 #include "ConcaveHull.hpp"
-#include "libslic3r/ClipperUtils.hpp"
-#include "libslic3r/Tesselate.hpp"
-#include "libslic3r/MTUtils.hpp"
-#include "libslic3r/TriangulateWall.hpp"
-#include "libslic3r/I18N.hpp"
-#include "admesh/stl.h"
-#include "libslic3r/Point.hpp"
-#include "libslic3r/TriangleMesh.hpp"
-#include "libslic3r/libslic3r.h"
 
 #include "libslic3r/Point.hpp"
 #include "libslic3r/ExPolygon.hpp"
@@ -44,6 +31,9 @@
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/Polygon.hpp"
 
+//! macro used to mark string used at localization,
+//! return same string
+#define L(s) Slic3r::I18N::translate(s)
 
 namespace Slic3r { namespace sla {
 
@@ -534,7 +524,7 @@ std::string PadConfig::validate() const
     if (brim_size_mm < MIN_BRIM_SIZE_MM ||
         bottom_offset() > brim_size_mm + wing_distance() ||
         get_waffle_offset(*this) <= MIN_BRIM_SIZE_MM)
-        return _u8L("Pad brim size is too small for the current configuration.");
+        return L("Pad brim size is too small for the current configuration.");
 
     return "";
 }

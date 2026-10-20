@@ -1,0 +1,13 @@
+{
+    "description": "The overhang model with resin support (branching tree) on: support and its interface are printed, by this mod.",
+    "args": [
+        "--load-settings",
+        "presets/machine.json;presets/process.json",
+        "overhang.obj"
+    ],
+    "contains": [
+        ";TYPE:Support",
+        ";TYPE:Support interface",
+        "resin_support 2.0.0"
+    ]
+}

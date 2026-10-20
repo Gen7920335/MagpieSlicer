@@ -394,6 +394,7 @@ src/slic3r/GUI/TaskManager.cpp
 src/slic3r/GUI/Widgets/ProgressDialog.hpp
 src/slic3r/GUI/Widgets/StepCtrl.cpp
 src/libslic3r/ModHost/Builtin/MixedSupport.cpp
+src/libslic3r/ModHost/ObjectZOffset.cpp
 src/slic3r/GUI/ModBrowserDialog.cpp
 src/slic3r/GUI/ModManagerDialog.cpp
 src/slic3r/GUI/ModObjectSettingsDialog.cpp

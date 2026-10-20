@@ -41,7 +41,9 @@
 #include "format.hpp"
 #include "ModHost/ModSet.hpp"
 #include "ModHost/NativeCompose.hpp"
+#include "ModHost/NativeContacts.hpp"
 #include "ModHost/NativeSupport.hpp"
+#include "ModHost/ObjectZOffset.hpp"
 #include "ModHost/SlotRegistry.hpp"
 #include "AABBTreeIndirect.hpp"
 #include "AABBTreeLines.hpp"
@@ -1657,7 +1659,6 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "mmu_segmented_region_max_width"
             || opt_key == "mmu_segmented_region_interlocking_depth"
             || opt_key == "raft_layers"
-            || opt_key == "object_elevation"
             || opt_key == "raft_contact_distance"
             || opt_key == "slice_closing_radius"
             || opt_key == "slicing_mode"
@@ -1694,9 +1695,10 @@ bool PrintObject::invalidate_state_by_config_options(
             steps.emplace_back(posSlice);
         } else if (opt_key == "enable_support") {
             steps.emplace_back(posSupportMaterial);
-            // MAGPIE: an object_elevation lifts the object only while it has support (Slicing.cpp),
-            // so switching support moves its layers.
-            if (m_config.object_elevation.value > 0.)
+            // MAGPIE: a mod's object lift (object.z_offset) applies only while the object has support
+            // (Slicing.cpp), so switching support moves its layers.
+            if (std::string error; ModHost::object_z_offset(this->print()->full_print_config(), m_config, this->model_object()->name, &error) > 0. ||
+                !error.empty())
                 steps.emplace_back(posSlice);
             if (m_config.support_top_z_distance == 0.) {
             	// Enabling / disabling supports while soluble support interface is enabled.
@@ -4487,8 +4489,12 @@ void PrintObject::update_slicing_parameters()
               object_height = hr.object_height;
               belt_floor    = hr.floor_params;
           }
+          std::string lift_error;
           m_slicing_params = SlicingParameters::create_from_config(pcfg, m_config, object_height,
-                                                                   this->object_extruders(), this->print()->shrinkage_compensation());
+                                                                   this->object_extruders(), this->print()->shrinkage_compensation(),
+                                                                   // Two mods lifting the object: no lift here, Print::validate stops the slice.
+                                                                   ModHost::object_z_offset(this->print()->full_print_config(), m_config,
+                                                                                            this->model_object()->name, &lift_error));
           // Populate belt floor parameters into slicing params for support clipping.
           m_slicing_params.belt_floor_shear_factor = belt_floor.shear_factor;
           m_slicing_params.belt_floor_from_axis    = belt_floor.from_axis;
@@ -4555,7 +4561,10 @@ SlicingParameters PrintObject::slicing_parameters(const DynamicPrintConfig &full
             belt_floor   = hr.floor_params;
         }
     }
-    SlicingParameters params = SlicingParameters::create_from_config(print_config, object_config, object_max_z, object_extruders, object_shrinkage_compensation);
+    std::string       lift_error;
+    SlicingParameters params = SlicingParameters::create_from_config(print_config, object_config, object_max_z, object_extruders, object_shrinkage_compensation,
+                                                                     // Two mods lifting the object stop the slice; here, outside it, no lift.
+                                                                     ModHost::object_z_offset(full_config, object_config, model_object.name, &lift_error));
     params.belt_floor_shear_factor = belt_floor.shear_factor;
     params.belt_floor_from_axis    = belt_floor.from_axis;
     params.belt_floor_z_shift     = belt_floor.z_shift;
@@ -5090,6 +5099,10 @@ void PrintObject::_generate_support_material()
         }
         if (const ModHost::NativeEntry *composer = ModHost::NativeCompose::find(name)) {
             ModHost::NativeCompose::generate(*this, *composer);
+            return;
+        }
+        if (const ModHost::NativeEntry *contacts = ModHost::NativeContacts::find(name)) {
+            ModHost::NativeContacts::generate(*this, *contacts);
             return;
         }
         throw Slic3r::SlicingError(Slic3r::format(_u8L("Support generator \"%1%\" is not installed."), name));

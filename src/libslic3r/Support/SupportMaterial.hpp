@@ -29,9 +29,10 @@ struct SupportMaterialOverrides
     // Per object layer, where contacts may go. When set (and contact_demand is not), Orca detects
     // overhangs as usual and keeps only the parts inside the mask; layers past the end get none.
     const std::vector<Polygons>         *contact_mask = nullptr;
-    // The module's support body cut at a print Z (mm). When set, it replaces Orca's propagation of
-    // the contacts down to the bed; the cross-sections are then trimmed by the object as usual.
-    std::function<ExPolygons(coordf_t)>  body_at_z;
+    // The module's support body cut at the print Z (mm) of each intermediate support layer, one list of
+    // islands per Z, in one call. When set, it replaces Orca's propagation of the contacts down to the
+    // bed; the cross-sections are then trimmed by the object as usual.
+    std::function<std::vector<ExPolygons>(const std::vector<coordf_t> &)> body_at;
     // Print every support island, even one narrower than the fill pattern's line spacing, as the
     // body of a support tree is made of such pillars.
     bool                                 keep_narrow_islands = false;

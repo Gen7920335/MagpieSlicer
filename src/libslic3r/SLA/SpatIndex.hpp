@@ -1,23 +1,16 @@
-///|/ Copyright (c) Prusa Research 2020 Tomáš Mészáros @tamasmeszaros
-///|/
-///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
-///|/
 #ifndef SLA_SPATINDEX_HPP
 #define SLA_SPATINDEX_HPP
 
 #include <Eigen/Core>
 #include <functional>
 #include <cstddef>
-#include <libslic3r/BoundingBox.hpp>
-#include <stddef.h>
 #include <memory>
 #include <utility>
 #include <vector>
-#include <Eigen/Geometry>
-#include <functional>
-#include <cstddef>
 
-#include "libslic3r/Point.hpp"
+#include <Eigen/Geometry>
+
+#include <libslic3r/BoundingBox.hpp>
 
 namespace Slic3r {
 namespace sla {

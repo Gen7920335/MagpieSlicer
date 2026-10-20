@@ -422,9 +422,9 @@ SupportGeneratorLayersPtr generate_raft_base(
             Polygons  trimming;
             // BBS: if first layer of support is intersected with object island, it must have the same function as brim unless in nobrim mode.
             // brim_object_gap is changed to 0 by default, it's no longer appropriate to use it to determine the gap of first layer support.
-            // MAGPIE: a lifted object (object_elevation) does not stand on its footprint, so the first
+            // MAGPIE: a lifted object (a mod's object.z_offset) does not stand on its footprint, so the first
             // support layer keeps the feet under it.
-            if (object.config().object_elevation.value <= 0. || ! object.config().enable_support.value)
+            if (slicing_params.object_z_offset <= 0.)
                 trimming = offset(object.layers().front()->lslices, (float) scale_(support_params.gap_xy_first_layer), SUPPORT_SURFACES_OFFSET_PARAMETERS);
             if (inflate_factor_1st_layer > SCALED_EPSILON) {
                 // Inflate in multiple steps to avoid leaking of the support 1st layer through object walls.

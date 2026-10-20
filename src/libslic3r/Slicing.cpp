@@ -73,7 +73,8 @@ SlicingParameters SlicingParameters::create_from_config(
     const PrintObjectConfig         &object_config,
     coordf_t                         object_height,
     const std::vector<unsigned int> &object_extruders,
-    const Vec3d                     &object_shrinkage_compensation)
+    const Vec3d                     &object_shrinkage_compensation,
+    coordf_t                         object_z_offset)
 {
     coordf_t initial_layer_print_height                      = (print_config.initial_layer_print_height.value <= 0) ? 
         object_config.layer_height.value : print_config.initial_layer_print_height.value;
@@ -234,12 +235,13 @@ SlicingParameters SlicingParameters::create_from_config(
         params.object_print_z_uncompensated_max += print_z;
     }
 
-    // MAGPIE: a support module may lift the object; with the default 0 nothing moves. Only an object
-    // with support of its own is lifted (as in line 1), so it never prints in the air.
-    if (const coordf_t elevation = object_config.object_elevation.value; elevation > 0. && object_config.enable_support.value) {
-        params.object_print_z_min += elevation;
-        params.object_print_z_max += elevation;
-        params.object_print_z_uncompensated_max += elevation;
+    // MAGPIE: a mod may lift the object (object.z_offset); with 0 nothing moves. Only an object with
+    // support of its own is lifted (as in line 1), so it never prints in the air.
+    if (object_z_offset > 0. && object_config.enable_support.value) {
+        params.object_z_offset = object_z_offset;
+        params.object_print_z_min += object_z_offset;
+        params.object_print_z_max += object_z_offset;
+        params.object_print_z_uncompensated_max += object_z_offset;
     }
 
     params.valid = true;

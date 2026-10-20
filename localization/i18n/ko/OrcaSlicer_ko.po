@@ -575,6 +575,11 @@ msgstr "서포트 채널에 병합할 수 없는 압출이 있습니다."
 msgid "The mods %1% and %2% both change how the support of object \"%3%\" is printed. Turn one of them off."
 msgstr "모드 %1%과(와) %2%이(가) 모두 오브젝트 \"%3%\"의 서포트 출력 방식을 바꿉니다. 하나를 끄세요."
 
+# AI Translated
+#, boost-format
+msgid "The mods %1% and %2% both lift object \"%3%\" off the bed. Turn one of them off."
+msgstr "모드 %1%과(와) %2%이(가) 모두 오브젝트 \"%3%\"를 바닥에서 띄웁니다. 하나를 끄세요."
+
 msgid "Support generated"
 msgstr "서포트 생성됨"
 

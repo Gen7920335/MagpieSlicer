@@ -1305,7 +1305,6 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionString,              support_generator))
     // MAGPIE: this object's values of object-scope mod parameters (JSON, see PrintConfig.cpp).
     ((ConfigOptionString,              object_mod_settings))
-    ((ConfigOptionFloat,               object_elevation))
     ((ConfigOptionInt,                 support_interface_sublayer_temperature))
     // MAGPIE: low temperature support interface (resources/mods/low_temp_interface.json).
     ((ConfigOptionBool,                single_nozzle_low_temperature_interface))

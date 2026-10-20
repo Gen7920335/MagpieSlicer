@@ -62,12 +62,12 @@ const LegacyKey legacy_keys[] = {
 };
 
 // Settings earlier builds of this line defined only for a mod's rules to write (support_extras before it became a
-// native mod). The mod's parameters, which mod_settings carries, are what the user set, so these are dropped
+// native mod, and the resin support's object_elevation, now the object.z_offset slot). The mod's parameters, which mod_settings carries, are what the user set, so these are dropped
 // without migrating: a vendor profile that happens to carry one of the names (SeeMeCNC's support_wall_loops, a key
 // Orca does not define) must not turn a mod parameter on.
 const char *const removed_rule_keys[] = {
     "support_interface_pattern_override", "support_interface_sublayer_start", "support_interface_sublayer_end",
-    "support_wall_loops", "tree_support_wall_loops",
+    "support_wall_loops", "tree_support_wall_loops", "object_elevation",
 };
 
 // Line 1 settings handled below by hand (value maps, conditions), or not reproducible here.

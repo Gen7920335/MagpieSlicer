@@ -37,6 +37,7 @@
 #include <memory>
 #include "FilamentGroupUtils.hpp"
 #include "MultiNozzleUtils.hpp"
+#include "ModHost/ObjectZOffset.hpp"
 #include "ModHost/WallPlanner.hpp"
 #include <chrono>
 #include <optional>
@@ -2148,6 +2149,15 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         // TRN %1%: one or more mod ids, %2%: the mod id whose value is used, %3%: a setting key, %4%: its value.
         warn(Slic3r::format(_u8L("Mods %1% and %2% both set \"%3%\"; the value \"%4%\" of %2% is used. Turn off the mods you do not want."),
                             c.other_mods, c.used_mod, c.setting, c.used_value), c.setting);
+
+    // MAGPIE: an object two mods lift off the bed (object.z_offset), or whose lift failed: the slicing heights
+    // took no lift, so the slice must not run.
+    for (const PrintObject *object : m_objects) {
+        std::string error;
+        ModHost::object_z_offset(m_full_print_config, object->config(), object->model_object()->name, &error);
+        if (!error.empty())
+            return {error, object};
+    }
 
     // MAGPIE: say when absolute line widths were scaled to each nozzle (scale_absolute_line_widths_to_nozzles),
     // from the print config or an object, part or layer range override.

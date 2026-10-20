@@ -1,16 +1,24 @@
 {
     // Resin support: PrusaSlicer 2.9.6's SLA support points and support trees (Default and Branching),
-    // printed with Orca's support toolpaths by the built-in "resin" support generator. Orca's own
+    // printed with Orca's support toolpaths. A native mod filling the support.contacts slot as the
+    // "resin" generator and the object.z_offset slot (the object elevation). Orca's own
     // support settings (Z/X/Y distances, interface layers and pattern, raft, threshold angle,
     // enforcers and blockers) still apply. The parameters below are PrusaSlicer's SLA support
     // settings, one set per tree strategy. Head and pillar sizes thinner than one support line are
     // widened to it.
     "id": "resin_support",
     "name": "Resin support", "name_ko": "레진 서포트",
-    "version": "1.0.0",
+    "version": "2.0.0",
+    "api": { "major": 1, "min_minor": 0 },
+    "binary": "resin_support",
+    "slots": [ { "slot": "support.contacts", "version": 1, "impl": "resin" },
+               { "slot": "object.z_offset", "version": 1, "impl": "resin" } ],
+    "thread_safe": true,
+    // enable, tree_type and the two elevations decide the object's lift (object.z_offset), which moves
+    // every layer: they re-slice.
     "params": {
-        "enable":                                  { "invalidates": ["posSupportMaterial"], "type": "bool",   "default": false,     "label": "Use resin support", "label_ko": "레진 서포트 사용" },
-        "tree_type":                               { "invalidates": ["posSupportMaterial"], "type": "string", "default": "default", "label": "Tree type (default or branching)", "label_ko": "트리 유형 (default 또는 branching)" },
+        "enable":                                  { "invalidates": ["posSlice"], "type": "bool",   "default": false,     "label": "Use resin support", "label_ko": "레진 서포트 사용" },
+        "tree_type":                               { "invalidates": ["posSlice"], "type": "string", "default": "default", "label": "Tree type (default or branching)", "label_ko": "트리 유형 (default 또는 branching)" },
         "points_density":                          { "invalidates": ["posSupportMaterial"], "type": "int",    "default": 100,       "unit": "%",   "label": "Support points density", "label_ko": "서포트 포인트 밀도" },
         "enforcers_only":                          { "invalidates": ["posSupportMaterial"], "type": "bool",   "default": false,     "label": "Support only in enforced regions", "label_ko": "강제 지정 영역에만 서포트" },
 
@@ -29,7 +37,7 @@
         "default_critical_angle":                  { "invalidates": ["posSupportMaterial"], "type": "float",  "default": 45,        "unit": "deg", "label": "Default: critical angle", "label_ko": "기본: 연결 임계각" },
         "default_max_bridge_length":               { "invalidates": ["posSupportMaterial"], "type": "float",  "default": 15.0,      "unit": "mm",  "label": "Default: max bridge length", "label_ko": "기본: 최대 브릿지 길이" },
         "default_max_pillar_link_distance":        { "invalidates": ["posSupportMaterial"], "type": "float",  "default": 10.0,      "unit": "mm",  "label": "Default: max pillar linking distance", "label_ko": "기본: 최대 기둥 연결 거리" },
-        "default_object_elevation":                { "invalidates": ["posSupportMaterial"], "type": "float",  "default": 5.0,       "unit": "mm",  "label": "Default: object elevation", "label_ko": "기본: 출력물 띄우기" },
+        "default_object_elevation":                { "invalidates": ["posSlice"], "type": "float",  "default": 5.0,       "unit": "mm",  "label": "Default: object elevation", "label_ko": "기본: 출력물 띄우기" },
 
         "branching_head_front_diameter":           { "invalidates": ["posSupportMaterial"], "type": "float",  "default": 0.4,       "unit": "mm",  "label": "Branching: pinhead front diameter", "label_ko": "가지형: 핀헤드 전면 직경" },
         "branching_head_width":                    { "invalidates": ["posSupportMaterial"], "type": "float",  "default": 1.0,       "unit": "mm",  "label": "Branching: pinhead width", "label_ko": "가지형: 핀헤드 폭" },
@@ -46,15 +54,10 @@
         "branching_critical_angle":                { "invalidates": ["posSupportMaterial"], "type": "float",  "default": 45,        "unit": "deg", "label": "Branching: critical angle", "label_ko": "가지형: 연결 임계각" },
         "branching_max_bridge_length":             { "invalidates": ["posSupportMaterial"], "type": "float",  "default": 5.0,       "unit": "mm",  "label": "Branching: max bridge length", "label_ko": "가지형: 최대 브릿지 길이" },
         "branching_max_pillar_link_distance":      { "invalidates": ["posSupportMaterial"], "type": "float",  "default": 10.0,      "unit": "mm",  "label": "Branching: max pillar linking distance", "label_ko": "가지형: 최대 기둥 연결 거리" },
-        "branching_object_elevation":              { "invalidates": ["posSupportMaterial"], "type": "float",  "default": 5.0,       "unit": "mm",  "label": "Branching: object elevation", "label_ko": "가지형: 출력물 띄우기" }
+        "branching_object_elevation":              { "invalidates": ["posSlice"], "type": "float",  "default": 5.0,       "unit": "mm",  "label": "Branching: object elevation", "label_ko": "가지형: 출력물 띄우기" }
     },
     "rules": [
         // Priority 1 puts this rule above cura_support's: with both mods on, resin support is used.
-        { "target": "support_generator", "value": "\"resin\"", "when": "resin_support.enable", "priority": 1 },
-        // Slicing lifts only objects with support of their own (per-object enable_support), so an
-        // object never prints in the air, and one with support enabled per object is still lifted.
-        { "target": "object_elevation",
-          "value": "if(resin_support.tree_type == \"branching\", resin_support.branching_object_elevation, resin_support.default_object_elevation)",
-          "when": "resin_support.enable" }
+        { "target": "support_generator", "value": "\"resin\"", "when": "resin_support.enable", "priority": 1 }
     ]
 }

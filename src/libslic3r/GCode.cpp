@@ -9950,7 +9950,6 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "mod_settings"sv,
         "object_mod_settings"sv,
         "region_mod_settings"sv,
-        "object_elevation"sv,
         "wall_planner"sv,
         "crisp_corner_small_nozzle_wall_speed"sv,
         "support_interface_sublayer_temperature"sv,

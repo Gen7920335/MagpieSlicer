@@ -1,5 +1,6 @@
-# MAGPIE: native mods built in this repository. Each is its own target built with the SDK template only
-# (mods/sdk/MagpieMod.cmake): none links against or includes the slicer core.
+# MAGPIE: native mods built in this repository. Each is its own target built with the SDK template
+# (mods/sdk/MagpieMod.cmake), which keeps the slicer core out of its reach; the one exception is the resin
+# support mod, whose PrusaSlicer SLA code links the core's geometry library statically (its CMakeLists.txt).
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/sdk/MagpieMod.cmake)
 
@@ -25,6 +26,7 @@ add_subdirectory(cura_support)
 add_subdirectory(layer_time_blend)
 add_subdirectory(mixed_support)
 add_subdirectory(multi_nozzle_walls)
+add_subdirectory(resin_support)
 add_subdirectory(support_extras)
 
 if (BUILD_TESTS)

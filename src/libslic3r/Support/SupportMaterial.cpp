@@ -503,13 +503,18 @@ void PrintObjectSupportMaterial::generate(PrintObject &object)
     BOOST_LOG_TRIVIAL(info) << "Support generator - Creating base layers";
 
     // Fill in intermediate layers between the top / bottom support contact layers, trim them by the object.
-    if (! m_overrides.body_at_z) {
+    if (! m_overrides.body_at) {
         this->generate_base_layers(object, bottom_contacts, top_contacts, intermediate_layers, layer_support_areas);
     } else {
         // MAGPIE: the module's support body replaces the propagated base layers. Its cross-sections
         // are trimmed by the object with the same gaps as Orca's own base layers.
-        for (SupportGeneratorLayer *layer : intermediate_layers)
-            layer->polygons = to_polygons(union_ex(m_overrides.body_at_z(layer->print_z)));
+        std::vector<coordf_t> print_z;
+        print_z.reserve(intermediate_layers.size());
+        for (const SupportGeneratorLayer *layer : intermediate_layers)
+            print_z.push_back(layer->print_z);
+        std::vector<ExPolygons> body = m_overrides.body_at(print_z);
+        for (size_t i = 0; i < intermediate_layers.size(); ++ i)
+            intermediate_layers[i]->polygons = i < body.size() ? to_polygons(union_ex(body[i])) : Polygons{};
         this->trim_support_layers_by_object(object, intermediate_layers, m_slicing_params.gap_support_object,
                                             m_slicing_params.gap_object_support, m_support_params.gap_xy);
     }
@@ -1841,7 +1846,7 @@ static inline std::pair<SupportGeneratorLayer*, SupportGeneratorLayer*> new_cont
     assert(layer.id() >= slicing_params.raft_layers());
     size_t layer_id = layer.id() - slicing_params.raft_layers();
 
-    // MAGPIE: the first layer of an object lifted above the raft contact (object_elevation). Its
+    // MAGPIE: the first layer of an object lifted above the raft contact (object.z_offset slot). Its
     // contact sits under the object like any other, not on the bed or the raft. Without a lift the
     // first layer's bottom is exactly raft_contact_top_z + gap_raft_object, so this stays false.
     const bool elevated_first_layer = layer_id == 0 &&

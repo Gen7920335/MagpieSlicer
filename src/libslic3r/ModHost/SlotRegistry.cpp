@@ -2,7 +2,6 @@
 
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/Print.hpp"
-#include "Builtin/ResinSupport.hpp"
 #include "NativeMods.hpp"
 
 #include "../../../mods/sdk/include/magpie_slot_time_plan.h"
@@ -33,9 +32,8 @@ void register_builtin_modules(Registry &registry)
     registry.support_generators["orca"] = {"orca", "Orca", [](PrintObject &object) { object.generate_orca_support_material(); }};
     // "cura" (CuraEngine's normal support areas) is the native mod mods/cura_support, a support.areas
     // implementation (NativeSupport.hpp).
-    // PrusaSlicer's SLA support points and trees, printed through Orca's normal-support pipeline. Its
-    // settings are the parameters of the bundled resin_support mod (resources/mods/resin_support.json).
-    registry.support_generators["resin"] = {"resin", "Resin", [](PrintObject &object) { ResinSupport::generate(object); }};
+    // "resin" (PrusaSlicer's SLA support points and trees) is the native mod mods/resin_support, a
+    // support.contacts implementation (NativeContacts.hpp).
     // "mixed" (normal and tree support in one object) is the native mod mods/mixed_support, a support.compose
     // implementation (NativeCompose.hpp).
     // "multi_nozzle" (multi-nozzle walls) is the native mod mods/multi_nozzle_walls, a wall.plan

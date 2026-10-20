@@ -25,7 +25,6 @@
 #include "SLA/RasterBase.hpp"
 #include "SLA/SupportPoint.hpp"
 #include "SLA/SupportTree.hpp"
-#include "SLA/SupportPointGenerator.hpp"
 #include "Execution/ExecutionTBB.hpp"
 #include "Point.hpp"
 #include "MTUtils.hpp"
@@ -330,34 +329,31 @@ private:
     // Caching the transformed (m_trafo) raw mesh of the object
     mutable CachedObject<TriangleMesh>      m_transformed_rmesh;
 
-    // Preprocessed slice topology for the latest automatic support point
-    // generator. Kept separately so a density-only change can reuse it.
-    sla::SupportPointGeneratorData          m_support_point_generator_data;
-
-    class SupportData
+    class SupportData : public sla::SupportableMesh
     {
     public:
-        sla::SupportableMesh    input;
+        sla::SupportTree::UPtr  support_tree_ptr; // the supports
         std::vector<ExPolygons> support_slices;   // sliced supports
         TriangleMesh tree_mesh, pad_mesh, full_mesh;
-        sla::SupportTreeOutput support_tree_output;
 
         inline SupportData(const TriangleMesh &t)
-            : input{t.its, {}, {}}
+            : sla::SupportableMesh{t.its, {}, {}}
+        {}
+
+        sla::SupportTree::UPtr &create_support_tree(const sla::JobController &ctl)
         {
-            input.zoffset = t.bounding_box().min.z();
+            support_tree_ptr = sla::SupportTree::create(*this, ctl);
+            tree_mesh = TriangleMesh{support_tree_ptr->retrieve_mesh(sla::MeshType::Support)};
+            return support_tree_ptr;
         }
 
-        void create_support_tree(const sla::JobController &ctl)
+        void create_pad(const ExPolygons &blueprint, const sla::PadConfig &pcfg)
         {
-            auto output = sla::create_support_tree(input, ctl);
-            tree_mesh = TriangleMesh{std::move(output.first)};
-            support_tree_output = std::move(output.second);
-        }
+            if (!support_tree_ptr)
+                return;
 
-        void create_pad(const sla::JobController &ctl)
-        {
-            pad_mesh = TriangleMesh{sla::create_pad(input, tree_mesh.its, ctl)};
+            support_tree_ptr->add_pad(blueprint, pcfg);
+            pad_mesh = TriangleMesh{support_tree_ptr->retrieve_mesh(sla::MeshType::Pad)};
         }
     };
 
