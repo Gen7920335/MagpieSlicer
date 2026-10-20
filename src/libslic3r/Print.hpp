@@ -17,6 +17,7 @@
 #include "BoundingBox.hpp"
 #include "ExtrusionEntityCollection.hpp"
 #include "Flow.hpp"
+#include "LineWidths.hpp"
 #include "Point.hpp"
 #include "PrintConfig.hpp"
 #include "Slicing.hpp"
@@ -165,6 +166,12 @@ public:
 	// 1-based extruder identifier for this region and role.
 	unsigned int 				extruder(FlowRole role) const;
     Flow                        flow(const PrintObject &object, FlowRole role, double layer_height, bool first_layer = false) const;
+    // MAGPIE: the flow of a region feature, on the nozzle the routing table (width_routes()) gives it.
+    Flow                        flow(const PrintObject &object, WidthFeature feature, double layer_height, bool first_layer) const;
+    // MAGPIE: the 0-based physical nozzle printing a region feature, by the routing table.
+    size_t                      printing_nozzle(const PrintObject &object, WidthFeature feature) const;
+    // MAGPIE: the region feature a flow role of PrintRegion::flow() prints.
+    static WidthFeature         width_feature(FlowRole role);
     // Average diameter of nozzles participating on extruding this region.
     coordf_t                    nozzle_dmr_avg(const PrintConfig &print_config) const;
     // Average diameter of nozzles participating on extruding this region.
@@ -596,8 +603,8 @@ public:
     // If ! m_slicing_params.valid, recalculate.
     void                    update_slicing_parameters();
 
-    // line_width_reference_mm: see scale_absolute_line_widths(); 0 leaves absolute widths as set.
-    static PrintObjectConfig object_config_from_model_object(const PrintObjectConfig &default_object_config, const ModelObject &object, size_t num_extruders, std::vector<int>& variant_index, double line_width_reference_mm = 0.);
+    // line_widths: see prepare_line_widths(); the default leaves the line widths as set.
+    static PrintObjectConfig object_config_from_model_object(const PrintObjectConfig &default_object_config, const ModelObject &object, size_t num_extruders, std::vector<int>& variant_index, const LineWidthContext &line_widths = {});
 
 private:
     void make_perimeters();
@@ -1157,12 +1164,12 @@ public:
 
     const PrintConfig&          config() const { return m_config; }
     // MAGPIE: the nozzle absolute line widths are scaled from on a printer with mixed nozzle sizes, mm; 0 otherwise.
-    double                      line_width_reference_mm() const { return m_line_width_reference_mm; }
+    double                      line_width_reference_mm() const { return m_line_width_context.reference_mm; }
     // MAGPIE: the nozzle (mm) a line width read for no particular extrusion is resolved on: the reference
     // nozzle on a printer with mixed nozzle sizes, which gives back an absolute width as set; else nozzle 0.
     double                      shared_line_width_nozzle() const
     {
-        return m_line_width_reference_mm > 0. ? m_line_width_reference_mm : m_config.nozzle_diameter.get_at(0);
+        return m_line_width_context.reference_mm > 0. ? m_line_width_context.reference_mm : m_config.nozzle_diameter.get_at(0);
     }
     // MAGPIE: full_print_config() with the line widths as the user set them, before
     // scale_absolute_line_widths_to_nozzles. Use it for anything written out or shown: the G-code config
@@ -1503,7 +1510,7 @@ private:
     std::vector<std::string> m_mod_rule_errors;
     // MAGPIE: the nozzle absolute line widths are scaled from (absolute_line_width_reference_nozzle), mm,
     // as of the last apply(); 0 on a printer with one nozzle size.
-    double                   m_line_width_reference_mm { 0. };
+    LineWidthContext         m_line_width_context;
     // MAGPIE: whether the last apply() restated any absolute line width of the print config, and those
     // widths as the user set them (everything written out shows these, see full_print_config_as_set()).
     bool                     m_line_widths_scaled { false };

@@ -1572,7 +1572,8 @@ bool PrintObject::invalidate_state_by_config_options(
 
     std::vector<PrintObjectStep> steps;
     bool invalidated = false;
-    for (const t_config_option_key &opt_key : opt_keys) {
+    // MAGPIE: a per-nozzle line width field invalidates what its line width does.
+    for (const t_config_option_key &opt_key : per_nozzle_keys_as_width_keys(opt_keys)) {
         if (   opt_key == "brim_width"
             || opt_key == "leading_brim_length"
             || opt_key == "extra_brim_width"
@@ -4235,15 +4236,16 @@ static void clamp_feature_filament_to_valid(ConfigOptionInt &opt, size_t num_ext
         opt.value = 1;
 }
 
-PrintObjectConfig PrintObject::object_config_from_model_object(const PrintObjectConfig &default_object_config, const ModelObject &object, size_t num_extruders, std::vector<int>& variant_index, double line_width_reference_mm)
+PrintObjectConfig PrintObject::object_config_from_model_object(const PrintObjectConfig &default_object_config, const ModelObject &object, size_t num_extruders, std::vector<int>& variant_index, const LineWidthContext &line_widths)
 {
     PrintObjectConfig config = default_object_config;
     {
         DynamicPrintConfig src_normalized(object.config.get());
         src_normalized.normalize_fdm();
         update_static_print_config_from_dynamic(config, src_normalized, variant_index, print_options_with_variant, 1);
-        // MAGPIE: an absolute width set on the object follows each nozzle like the print's own widths.
-        scale_absolute_line_widths(config, line_width_reference_mm);
+        // MAGPIE: an absolute width set on the object follows each nozzle like the print's own widths, and beats
+        // the per-nozzle field of that width.
+        prepare_line_widths(config, line_widths, { &src_normalized });
     }
     // MAGPIE: half-height outer walls need support built on the same half-height grid underneath them
     // (Magpie line 1 beta 6). This is the single owner of that rule for GUI, CLI and 3MF input.
@@ -4347,7 +4349,7 @@ static void apply_to_print_region_config(PrintRegionConfig &out, const DynamicPr
     }
 }
 
-PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &default_or_parent_region_config, const DynamicPrintConfig *layer_range_config, const ModelVolume &volume, size_t num_extruders, std::vector<int>& variant_index, double line_width_reference_mm = 0.)
+PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &default_or_parent_region_config, const DynamicPrintConfig *layer_range_config, const ModelVolume &volume, size_t num_extruders, std::vector<int>& variant_index, const LineWidthContext &line_widths = {})
 {
     PrintRegionConfig config = default_or_parent_region_config;
     FeatureFilamentOverrideMask feature_overrides;
@@ -4378,8 +4380,11 @@ PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &defau
     	apply_to_print_region_config(config, *layer_range_config, feature_overrides, variant_index);
     }
     // MAGPIE: absolute widths set on the object, part, modifier or layer range follow each nozzle like the
-    // print's own widths (scale_absolute_line_widths_to_nozzles).
-    scale_absolute_line_widths(config, line_width_reference_mm);
+    // print's own widths (scale_absolute_line_widths_to_nozzles), and beat the per-nozzle fields of those widths.
+    // Same order as applied above.
+    prepare_line_widths(config, line_widths,
+                        { volume.is_model_part() ? &volume.get_object()->config.get() : nullptr, &volume.config.get(),
+                          volume.material_id().empty() ? nullptr : &volume.material()->config.get(), layer_range_config });
     // Resolve feature defaults and clamp invalid extruders to index 1.
     clamp_feature_filament_to_valid(config.sparse_infill_filament_id, num_extruders);
     clamp_feature_filament_to_valid(config.outer_wall_filament_id, num_extruders);

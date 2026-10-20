@@ -1,5 +1,6 @@
 #include "libslic3r/StageTimer.hpp"
 #include "PerimeterGenerator.hpp"
+#include "LineWidths.hpp"
 #include "ModHost/SlotRegistry.hpp"
 #include "Arachne/utils/ExtrusionLine.hpp"
 #include "Arachne/utils/ExtrusionJunction.hpp"
@@ -101,11 +102,27 @@ using PerimeterGeneratorLoops = std::vector<PerimeterGeneratorLoop>;
 // MAGPIE: H/2 outer walls. A round, nozzle-diameter bridge cannot fit a half-height shell band. Only those shell
 // paths use a thin bridge cross section; ordinary/core bridges retain their original Flow. The width resolves on the
 // nozzle that prints the path (path_flow).
+// MAGPIE: the physical nozzle of a wall path that is known here only by its diameter (mm): the region's outer wall
+// nozzle when it has that diameter, then its inner wall nozzle, then the first nozzle of that diameter. This does not
+// follow the routing table: two nozzles of one diameter with different per-nozzle bridge widths are not told apart.
+// Filament maps are not applied, as everywhere in PerimeterGenerator.
+static size_t wall_path_nozzle(const PerimeterGenerator &generator, float nozzle_mm)
+{
+    const PrintConfig &pc = *generator.print_config;
+    auto same = [&](size_t nozzle) { return std::abs(float(pc.nozzle_diameter.get_at(nozzle)) - nozzle_mm) < float(EPSILON); }; // mm
+    for (const int filament : { generator.config->outer_wall_filament_id.value, generator.config->inner_wall_filament_id.value })
+        if (const size_t nozzle = printing_nozzle_index(pc, filament, false); same(nozzle))
+            return nozzle;
+    for (size_t nozzle = 0; nozzle < pc.nozzle_diameter.size(); ++nozzle)
+        if (same(nozzle))
+            return nozzle;
+    return 0;
+}
+
 static Flow half_layer_shell_bridge_flow(const PerimeterGenerator &generator, size_t /* depth */, const Flow &path_flow)
 {
-    const ConfigOptionFloatOrPercent &width = generator.config->bridge_line_width;
     const float nozzle = path_flow.nozzle_diameter();
-    const double explicit_width_mm = width.get_abs_value(nozzle);
+    const double explicit_width_mm = line_width_setting_on_nozzle(*generator.config, "bridge_line_width", wall_path_nozzle(generator, nozzle)).get_abs_value(nozzle);
     const float height_mm = float(0.5 * generator.layer_height);
     const Flow base(explicit_width_mm > 0. ? float(explicit_width_mm) : path_flow.width(), height_mm, nozzle);
     const double ratio = generator.config->bridge_flow.value;
@@ -1041,8 +1058,12 @@ void PerimeterGenerator::split_top_surfaces(const ExPolygons &orig_polygons, ExP
     // increase by half peri the inner space to fill the frontier between last and stored.
     top_fills = union_ex(top_fills, top_polygons);
     //set the clip to the external wall but go back inside by infill_extrusion_width/2 to be sure the extrusion won't go outside even with a 100% overlap.
-    double infill_spacing_unscaled = this->config->sparse_infill_line_width.get_abs_value(nozzle_diameter);
-    if (infill_spacing_unscaled == 0) infill_spacing_unscaled = Flow::auto_extrusion_width(frInfill, nozzle_diameter);
+    // MAGPIE: the sparse infill width on the nozzle printing the sparse infill (routing table), per-nozzle field
+    // included; Orca's own fallback (no line_width) is kept.
+    const size_t infill_nozzle           = printing_nozzle_index(*this->print_config, this->config->sparse_infill_filament_id.value, false);
+    const double infill_nozzle_diameter  = this->print_config->nozzle_diameter.get_at(infill_nozzle);
+    double infill_spacing_unscaled = line_width_setting_on_nozzle(*this->config, "sparse_infill_line_width", infill_nozzle).get_abs_value(infill_nozzle_diameter);
+    if (infill_spacing_unscaled == 0) infill_spacing_unscaled = Flow::auto_extrusion_width(frInfill, infill_nozzle_diameter);
     fill_clip = offset_ex(orig_polygons, double(ext_perimeter_spacing / 2.) - scale_(infill_spacing_unscaled / 2.));
     // ExPolygons oldLast = last;
 

@@ -43105,3 +43105,40 @@ msgstr "노즐 냉각 속도"
 # AI Translated
 msgid "How fast the nozzle cools, for estimating temperature waits when layer times are blended."
 msgstr "레이어 시간을 블렌딩할 때 온도 대기를 추정하는 데 쓰는 노즐 냉각 속도입니다."
+
+# AI Translated
+msgid "Line width for each nozzle, in mm, on a printer whose nozzles differ in size. 0 uses the line width setting, scaled to that nozzle."
+msgstr "노즐 크기가 서로 다른 프린터에서 노즐마다 쓸 선 너비(mm)입니다. 0이면 선 너비 설정을 그 노즐에 맞게 비율로 바꿔 씁니다."
+
+# AI Translated
+#, boost-format
+msgid "%1% is %2% mm wide on nozzle %3% (%4% mm), narrower than %5% mm (0.1 mm plus 0.4 times the nozzle), and may not extrude reliably."
+msgstr "%1%의 선 너비가 노즐 %3%(%4% mm)에서 %2% mm로, %5% mm(0.1 mm + 노즐의 0.4배)보다 좁아 제대로 압출되지 않을 수 있습니다."
+
+# AI Translated
+#, boost-format
+msgid "The line width of %1% mm set for nozzle %2% (%3% mm) is not wider than the layer height of %4% mm."
+msgstr "노즐 %2%(%3% mm)에 설정한 선 너비 %1% mm가 레이어 높이 %4% mm보다 넓지 않습니다."
+
+# AI Translated
+#, boost-format
+msgid "The line width of %1% mm set for nozzle %2% (%3% mm) is more than %4% times that nozzle."
+msgstr "노즐 %2%(%3% mm)에 설정한 선 너비 %1% mm가 그 노즐의 %4%배를 넘습니다."
+
+# AI Translated
+msgid "Line width per nozzle"
+msgstr "노즐별 선 너비"
+
+# AI Translated
+msgid "Line width for each nozzle, in mm, on a printer whose nozzles differ in size. An empty cell uses the line width setting, scaled to that nozzle; the greyed value is the width that gives."
+msgstr "노즐 크기가 서로 다른 프린터에서 노즐마다 쓸 선 너비(mm)입니다. 빈 칸은 선 너비 설정을 그 노즐에 맞게 비율로 바꿔 쓰며, 회색 값이 그 결과 너비입니다."
+
+# AI Translated
+#, boost-format
+msgid "Nozzle %1% (%2% mm)"
+msgstr "노즐 %1% (%2% mm)"
+
+# AI Translated
+#, boost-format
+msgid "%1% on nozzle %2% (%3% mm), in mm. Leave empty to use the line width setting."
+msgstr "노즐 %2%(%3% mm)의 %1% 선 너비(mm)입니다. 비워 두면 선 너비 설정을 씁니다."

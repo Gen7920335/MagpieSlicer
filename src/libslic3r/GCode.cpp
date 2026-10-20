@@ -7,6 +7,7 @@
 #include "GCodeCompatibility.hpp"
 #include "GCode/GCodeProcessor.hpp"
 #include "Flow.hpp"
+#include "LineWidths.hpp"
 #include "GCode/ThumbnailData.hpp"
 #include "GCode/ToolOrdering.hpp"
 #include "GCode/SnapmakerHomingPolicy.hpp"
@@ -743,9 +744,10 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         const double filament_diameter = config.filament_diameter.get_at(filament_id);
         // MAGPIE: a percentage width is a share of the nozzle, not of the filament.
         const double nozzle_diameter = config.nozzle_diameter.get_at(extruder_id);
-        float outer_wall_line_width = print.default_region_config().get_abs_value("outer_wall_line_width", nozzle_diameter);
+        // MAGPIE: and per-nozzle line width fields of this nozzle win.
+        float outer_wall_line_width = line_width_setting_on_nozzle(print.default_region_config(), "outer_wall_line_width", size_t(extruder_id)).get_abs_value(nozzle_diameter);
         if (outer_wall_line_width == 0.0) {
-            float default_line_width = print.default_object_config().get_abs_value("line_width", nozzle_diameter);
+            float default_line_width = line_width_setting_on_nozzle(print.default_object_config(), "line_width", size_t(extruder_id)).get_abs_value(nozzle_diameter);
             outer_wall_line_width = default_line_width == 0.0 ? filament_diameter : default_line_width;
         }
         Flow outer_wall_flow = Flow(outer_wall_line_width, config.layer_height, config.nozzle_diameter.get_at(extruder_id));
@@ -10071,8 +10073,10 @@ std::string GCode::extrude_loop(const ExtrusionLoop&                       loop_
     }
 
     if (enable_seam_slope && m_config.seam_slope_conditional.value && m_config.scarf_overhang_threshold.value > 0.0f) {
-        const auto _line_width = loop.role() == erExternalPerimeter ? m_config.outer_wall_line_width.get_abs_value(nozzle_diameter) :
-                                                                      m_config.inner_wall_line_width.get_abs_value(nozzle_diameter);
+        // MAGPIE: on the nozzle printing the loop, per-nozzle line width fields included.
+        const size_t nozzle     = m_writer.filament()->extruder_id();
+        const auto   _line_width = line_width_setting_on_nozzle(m_config, loop.role() == erExternalPerimeter ? "outer_wall_line_width" : "inner_wall_line_width", nozzle)
+                                     .get_abs_value(nozzle_diameter);
         enable_seam_slope      = seam_overhang < m_config.scarf_overhang_threshold.value * 0.01f * _line_width;
     }
 
@@ -11381,10 +11385,16 @@ static double widest_configured_width_ratio(const Print &print)
     const std::vector<double> &nozzles     = print.config().nozzle_diameter.values;
     const double               largest_mm  = nozzles.empty() ? 0. : *std::max_element(nozzles.begin(), nozzles.end());
     double                     widest      = 0.;
-    auto visit = [&widest, largest_mm](const ConfigBase &config) {
+    auto visit = [&widest, largest_mm, &nozzles](const ConfigBase &config) {
         for (const std::string &key : nozzle_relative_line_width_keys())
             if (const auto *width = config.option<ConfigOptionFloatOrPercent>(key); width != nullptr && width->value > 0.)
                 widest = std::max(widest, width->percent ? 0.01 * width->value : largest_mm > 0. ? width->value / largest_mm : 0.);
+        // A per-nozzle line width is a width for its own nozzle.
+        for (const char *key : per_nozzle_line_width_base_keys())
+            if (const auto *values = config.option<ConfigOptionFloats>(per_nozzle_line_width_key(key)); values != nullptr)
+                for (size_t nozzle = 0; nozzle < values->values.size() && nozzle < nozzles.size(); ++nozzle)
+                    if (values->values[nozzle] > 0. && nozzles[nozzle] > 0.)
+                        widest = std::max(widest, values->values[nozzle] / nozzles[nozzle]);
     };
     visit(print.config());
     visit(print.default_object_config());

@@ -63,12 +63,39 @@ const char *const special_keys[] = {
     "mixed_normal_support_generator", "support_interface_sublayer_pattern", "support_interface_sublayer_pattern_type",
     "support_interface_sublayer_start_layer", "support_interface_sublayer_end_layer", "support_wall_count",
 };
-const char *const unsupported_keys[] = {
+// Line 1's per-toolhead line widths (printer settings, mm or % of that toolhead's nozzle, 0 = the process width).
+// They become this build's per-nozzle line width fields (process settings, mm): "toolhead_<width key>".
+const char *const toolhead_width_keys[] = {
     "toolhead_bridge_line_width", "toolhead_initial_layer_line_width",
     "toolhead_inner_wall_line_width", "toolhead_internal_solid_infill_line_width", "toolhead_line_width",
     "toolhead_outer_wall_line_width", "toolhead_sparse_infill_line_width", "toolhead_support_line_width",
     "toolhead_top_surface_line_width",
 };
+
+// Line 1 writes these with neutral defaults ("0", "" or "nil" per toolhead); only a set value carries anything.
+bool toolhead_width_set(const std::string &value)
+{
+    return value != "0" && !value.empty() && value.find_first_not_of("nil,0% ") != std::string::npos;
+}
+
+// A line 1 toolhead width list ("0.17,0,50%,nil") as mm per nozzle: a percentage of that nozzle's diameter, and
+// 0 for an unset, unreadable or nil entry or a nozzle the printer does not have.
+std::vector<double> toolhead_widths_mm(const std::string &value, const std::vector<double> &nozzles_mm)
+{
+    std::vector<double> out(nozzles_mm.size(), 0.);
+    size_t begin = 0;
+    for (size_t idx = 0; idx < out.size() && begin <= value.size(); ++idx) {
+        const size_t      end   = std::min(value.find(',', begin), value.size());
+        const std::string entry = value.substr(begin, end - begin);
+        begin                   = end + 1;
+        char        *stop = nullptr;
+        const double v    = std::strtod(entry.c_str(), &stop);
+        if (stop == entry.c_str() || !(v > 0.))
+            continue;
+        out[idx] = *stop == '%' ? 0.01 * v * nozzles_mm[idx] : v;
+    }
+    return out;
+}
 
 // Line 1's resin support parameters: resin_support_<x> (default tree) and resin_branching_support_<x>.
 struct ResinKey { const char *suffix; Kind kind; };
@@ -170,7 +197,7 @@ bool stash_legacy_setting(std::string &opt_key, std::string &value, std::map<std
             opt_key.clear();
         return true;
     }
-    if (in(special_keys, opt_key) || in(unsupported_keys, opt_key) || resin_param(opt_key)) {
+    if (in(special_keys, opt_key) || in(toolhead_width_keys, opt_key) || resin_param(opt_key)) {
         stash[opt_key] = value;
         opt_key.clear();
         return true;
@@ -231,10 +258,24 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
         }
         else if (auto r = resin_param(key))
             set(r->first, convert(value, r->second));
-        else if (in(unsupported_keys, key)) {
-            // Line 1 writes these with neutral defaults ("0", "" or "nil" per toolhead); only a set value is lost.
-            if (value != "0" && !value.empty() && value.find_first_not_of("nil,0% ") != std::string::npos)
+        else if (in(toolhead_width_keys, key)) {
+            if (!toolhead_width_set(value))
+                continue;
+            // MAGPIE: into the per-nozzle line width field of the same width, in mm per nozzle. Only where the
+            // config holds process settings (a project, a full config); a printer preset alone cannot carry them.
+            const std::string width_key      = key.substr(std::string("toolhead_").size());
+            const std::string per_nozzle_key = per_nozzle_line_width_key(width_key);
+            const auto       *nozzles        = config.option<ConfigOptionFloats>("nozzle_diameter");
+            auto             *field          = config.option<ConfigOptionFloats>(per_nozzle_key);
+            if (nozzles == nullptr || nozzles->values.empty() || config.option(width_key) == nullptr) {
                 result.dropped.push_back(key);
+                continue;
+            }
+            // A field the file already sets keeps its values.
+            if (field != nullptr && std::any_of(field->values.begin(), field->values.end(), [](double v) { return v > 0.; }))
+                continue;
+            config.set_key_value(per_nozzle_key, new ConfigOptionFloats(toolhead_widths_mm(value, nozzles->values)));
+            result.migrated.push_back(per_nozzle_key);
         }
     }
     if (auto it = stash.find("support_type"); it != stash.end()) {

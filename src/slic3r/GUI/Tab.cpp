@@ -1,6 +1,7 @@
 //#include "slic3r/Utils/Serial.hpp"
 #include "Tab.hpp"
 #include "ModParamsPanel.hpp"
+#include "PerNozzleLineWidthsPanel.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
 #include "PresetHints.hpp"
 #include "libslic3r/IMEXHelpers.hpp"
@@ -2820,6 +2821,30 @@ void TabPrint::build()
         optgroup->append_single_option_line("internal_solid_infill_line_width","quality_settings_line_width#internal-solid-infill");
         optgroup->append_single_option_line("support_line_width","quality_settings_line_width#support");
         optgroup->append_single_option_line("bridge_line_width","quality_settings_line_width#bridge");
+        // MAGPIE: per-nozzle line widths, shown on a printer whose nozzles differ in size; not per object.
+        if (dynamic_cast<TabPrintModel*>(this) == nullptr) {
+            Line line{ "", "" };
+            line.full_width = 1;
+            line.widget = [this](wxWindow* parent) -> wxSizer* {
+                m_per_nozzle_line_widths = new PerNozzleLineWidthsPanel(parent);
+                // The page can be destroyed without clear_pages(); forget the panel then.
+                m_per_nozzle_line_widths->Bind(wxEVT_DESTROY, [this](wxWindowDestroyEvent& event) {
+                    if (event.GetEventObject() == m_per_nozzle_line_widths)
+                        m_per_nozzle_line_widths = nullptr;
+                    event.Skip();
+                });
+                m_per_nozzle_line_widths->on_change = [this](const std::string& key, const std::vector<double>& values) {
+                    m_config->set_key_value(key, new ConfigOptionFloats(values));
+                    update_dirty();
+                    on_value_change(key, m_config->opt_serialize(key));
+                };
+                load_per_nozzle_line_widths();
+                auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+                sizer->Add(m_per_nozzle_line_widths, 1, wxEXPAND);
+                return sizer;
+            };
+            optgroup->append_line(line);
+        }
 
         optgroup = page->new_optgroup(L("Seam"), L"param_seam");
         optgroup->append_single_option_line("seam_position", "quality_settings_seam#seam-position");
@@ -3337,6 +3362,13 @@ void TabPrint::reload_config()
 {
     this->compatible_widget_reload(m_compatible_printers);
     Tab::reload_config();
+    load_per_nozzle_line_widths();
+}
+
+void TabPrint::load_per_nozzle_line_widths()
+{
+    if (m_per_nozzle_line_widths != nullptr)
+        m_per_nozzle_line_widths->load(*m_config, m_preset_bundle->printers.get_edited_preset().config);
 }
 
 void TabPrint::update_description_lines()
@@ -3475,6 +3507,8 @@ void TabPrint::update()
     m_config_manipulation.update_print_fff_config(m_config, m_type < Preset::TYPE_COUNT, m_type == Preset::TYPE_PLATE);
 
     update_description_lines();
+    // MAGPIE: the greyed fallbacks follow the line width settings and the printer.
+    load_per_nozzle_line_widths();
     //BBS: GUI refactor
     //Layout();
     m_parent->Layout();
@@ -3499,6 +3533,7 @@ void TabPrint::clear_pages()
 
     m_recommended_thin_wall_thickness_description_line = nullptr;
     m_top_bottom_shell_thickness_explanation = nullptr;
+    m_per_nozzle_line_widths = nullptr;
 }
 
 //BBS: GUI refactor

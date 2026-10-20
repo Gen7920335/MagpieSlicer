@@ -1,4 +1,5 @@
 #include "PrintConfig.hpp"
+#include "LineWidths.hpp"
 #include "ModHost/LegacySettings.hpp"
 #include "CommonDefs.hpp"
 #include "Point.hpp"
@@ -138,14 +139,11 @@ size_t get_extruder_index(const GCodeConfig& config, unsigned int filament_id)
 
 double nozzle_diameter_for_filament(const PrintConfig& config, int filament_id, bool is_bbl_printer)
 {
-    int extruder = filament_id;
-    if (is_bbl_printer && config.nozzle_diameter.size() > 1 &&
-        filament_id >= 1 && static_cast<size_t>(filament_id - 1) < config.filament_map.size())
-        extruder = config.filament_map.get_at(filament_id - 1);
-    return config.nozzle_diameter.get_at(extruder - 1);
+    // MAGPIE: one mapping from filament to physical nozzle, shared with the line width accessor.
+    return config.nozzle_diameter.get_at(printing_nozzle_index(config, filament_id, is_bbl_printer));
 }
 
-double absolute_line_width_reference_nozzle(const DynamicPrintConfig &config)
+double absolute_line_width_reference_nozzle(const ConfigBase &config)
 {
     const auto *nozzles = config.option<ConfigOptionFloats>("nozzle_diameter");
     if (nozzles == nullptr || nozzles->values.empty())
@@ -178,6 +176,34 @@ const std::vector<std::string> &nozzle_relative_line_width_keys()
     return keys;
 }
 
+const std::array<const char *, 11> &per_nozzle_line_width_base_keys()
+{
+    static const std::array<const char *, 11> keys {
+        "line_width", "initial_layer_line_width", "outer_wall_line_width", "inner_wall_line_width",
+        "sparse_infill_line_width", "internal_solid_infill_line_width", "top_surface_line_width", "bridge_line_width",
+        "skin_infill_line_width", "skeleton_infill_line_width", "support_line_width",
+    };
+    return keys;
+}
+
+std::string per_nozzle_line_width_key(const std::string &width_key)
+{
+    return width_key + "_per_nozzle";
+}
+
+std::vector<t_config_option_key> per_nozzle_keys_as_width_keys(const std::vector<t_config_option_key> &opt_keys)
+{
+    std::vector<t_config_option_key> out = opt_keys;
+    for (t_config_option_key &key : out)
+        for (const char *width_key : per_nozzle_line_width_base_keys())
+            if (key == per_nozzle_line_width_key(width_key)) {
+                key = width_key;
+                break;
+            }
+    // A width key twice invalidates the same steps twice, so the order and duplicates of opt_keys are kept.
+    return out;
+}
+
 size_t scale_absolute_line_widths(ConfigBase &config, double reference_mm, DynamicConfig *as_set)
 {
     size_t scaled = 0;
@@ -195,6 +221,44 @@ size_t scale_absolute_line_widths(ConfigBase &config, double reference_mm, Dynam
         ++scaled;
     }
     return scaled;
+}
+
+LineWidthContext line_width_context(const ConfigBase &config)
+{
+    const auto *nozzles = config.option<ConfigOptionFloats>("nozzle_diameter");
+    return { nozzles != nullptr ? nozzles->values.size() : 0, absolute_line_width_reference_nozzle(config) };
+}
+
+size_t prepare_line_widths(ConfigBase &config, const LineWidthContext &context, const std::vector<const ConfigBase *> &overrides,
+                           DynamicConfig *as_set)
+{
+    for (const char *width_key : per_nozzle_line_width_base_keys()) {
+        const std::string per_nozzle_key = per_nozzle_line_width_key(width_key);
+        auto *per_nozzle = config.option<ConfigOptionFloats>(per_nozzle_key);
+        if (per_nozzle == nullptr)
+            continue;
+        // The last override that names the width or its field decides: a width without its field beats the field.
+        bool width_overridden = false;
+        for (const ConfigBase *source : overrides) {
+            if (source == nullptr)
+                continue;
+            if (source->option(per_nozzle_key) != nullptr)
+                width_overridden = false;
+            else if (source->option(width_key) != nullptr)
+                width_overridden = true;
+        }
+        std::vector<double> values = per_nozzle->values;
+        if (context.reference_mm <= 0. || width_overridden)
+            values.assign(1, 0.); // one nozzle size: ignored; overridden: every nozzle takes the width
+        else
+            values.resize(std::max<size_t>(context.nozzle_count, 1), 0.);
+        if (values != per_nozzle->values) {
+            if (as_set != nullptr)
+                as_set->set_key_value(per_nozzle_key, per_nozzle->clone());
+            per_nozzle->values = std::move(values);
+        }
+    }
+    return scale_absolute_line_widths(config, context.reference_mm, as_set);
 }
 
 void scale_absolute_line_widths_to_nozzles(DynamicPrintConfig &config)
@@ -9394,6 +9458,24 @@ void PrintConfigDef::init_fff_params()
                      "Otherwise, the rectilinear pattern will be used by default.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
+
+    // MAGPIE: per-nozzle line widths. One value per physical nozzle (nozzle_diameter order), in mm; 0 falls back
+    // to the line width setting itself (a percentage of that nozzle, or an absolute width scaled to it, see
+    // scale_absolute_line_widths_to_nozzles). Read only on a printer whose nozzles differ in size, and only through
+    // line_width_setting_on_nozzle() (LineWidths.hpp); an object, part or layer range that sets the line width
+    // itself takes precedence over these.
+    for (const char *width_key : per_nozzle_line_width_base_keys()) {
+        const ConfigOptionDef &width_def = this->options.at(width_key);
+        def = this->add(per_nozzle_line_width_key(width_key), coFloats);
+        def->label    = width_def.label;
+        def->category = width_def.category;
+        def->tooltip  = L("Line width for each nozzle, in mm, on a printer whose nozzles differ in size. 0 uses the line width setting, scaled to that nozzle.");
+        def->sidetext = L("mm");
+        def->min      = 0;
+        def->max      = 10;
+        def->mode     = comAdvanced;
+        def->set_default_value(new ConfigOptionFloats{ 0. });
+    }
 }
 
 void PrintConfigDef::init_extruder_option_keys()

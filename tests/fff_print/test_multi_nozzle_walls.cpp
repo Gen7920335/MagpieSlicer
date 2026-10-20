@@ -804,7 +804,9 @@ namespace {
 // of the rule, not the slicer's converted config: a percentage of that nozzle; an absolute width as set on a
 // printer with one nozzle size, else scaled by nozzle / reference nozzle (printer_variant when the printer has
 // that diameter, else the largest nozzle); 0 falls back to line_width, then to the automatic width (rounded by
-// Flow::new_from_config_width like the slicer). Support prints exactly that width. Walls and fills
+// Flow::new_from_config_width like the slicer). On a mixed printer a setting's per-nozzle field, where it is
+// above 0 for the tool's nozzle, is that width in mm instead (the fixtures print filament n on toolhead n, so the
+// tool is the nozzle). Support prints exactly that width. Walls and fills
 // legitimately differ from it, so they get bands measured over the golden and feature corpora (2026-10-20):
 // walls 1.0-1.25 x (Arachne keeps the nominal width on long walls, spiral vase 1.245, interlocking 1.04), fills
 // 0.61-1.29 x (narrow strips, area fitting). A width resolved on another nozzle is 2.7 x or 0.4 x. Geometry
@@ -844,13 +846,21 @@ std::vector<std::string> width_mismatches(const Print &print, const std::string 
         for (double d : nozzles)
             if (std::abs(d - std::atof(variant->value.c_str())) <= EPSILON)
                 reference_mm = d;
-    auto resolve = [&](const char *key, FlowRole role, double nozzle_mm) {
+    // The setting `key` on nozzle `nozzle` (0-based): its per-nozzle value as set, else the setting scaled.
+    auto setting_on = [&](const std::string &key, size_t nozzle) {
+        if (const auto *field = config.option<ConfigOptionFloats>(key + "_per_nozzle");
+            mixed && field != nullptr && nozzle < field->values.size() && field->values[nozzle] > 0.)
+            return ConfigOptionFloatOrPercent(field->values[nozzle], false);
         ConfigOptionFloatOrPercent width = *config.option<ConfigOptionFloatOrPercent>(key);
-        if (width.value == 0.)
-            width = *config.option<ConfigOptionFloatOrPercent>("line_width");
         if (mixed && !width.percent && width.value > 0.)
-            width.value *= nozzle_mm / reference_mm;
-        return double(Flow::new_from_config_width(role, width, float(nozzle_mm), 0.1f).width());
+            width.value *= nozzles[nozzle] / reference_mm;
+        return width;
+    };
+    auto resolve = [&](const char *key, FlowRole role, size_t nozzle) {
+        ConfigOptionFloatOrPercent width = setting_on(key, nozzle);
+        if (width.value == 0.)
+            width = setting_on("line_width", nozzle);
+        return double(Flow::new_from_config_width(role, width, float(nozzles[nozzle]), 0.1f).width());
     };
 
     std::map<std::tuple<int, std::string, int>, std::map<double, double>> groups; // -> width mm -> length mm
@@ -889,12 +899,13 @@ std::vector<std::string> width_mismatches(const Print &print, const std::string 
         }
         if (length_mm < expected.min_length_mm)
             continue;
-        const double nozzle_mm = nozzle_diameter_for_filament(print.config(), tool_id + 1, print.is_BBL_printer());
+        const size_t nozzle    = size_t(tool_id); // filament n on toolhead n
+        const double nozzle_mm = nozzles.at(nozzle);
         std::vector<double> nominal;
         for (const auto &[key, flow_role] : expected.keys)
-            nominal.push_back(resolve(key, flow_role, nozzle_mm));
-        if (layer_id == 0 && config.option<ConfigOptionFloatOrPercent>("initial_layer_line_width")->value > 0.)
-            nominal.push_back(resolve("initial_layer_line_width", frPerimeter, nozzle_mm));
+            nominal.push_back(resolve(key, flow_role, nozzle));
+        if (layer_id == 0 && setting_on("initial_layer_line_width", nozzle).value > 0.)
+            nominal.push_back(resolve("initial_layer_line_width", frPerimeter, nozzle));
         const bool ok = std::any_of(nominal.begin(), nominal.end(), [&](double n) {
             return mode_mm >= expected.band.first * n - tolerance_mm && mode_mm <= expected.band.second * n + tolerance_mm;
         });
@@ -926,7 +937,10 @@ TEST_CASE("Every role on a mixed-nozzle printer prints the width resolved on its
     const bool  small_first    = GENERATE(true, false);
     const char *wall_generator = GENERATE("classic", "arachne");
     const bool  detail_walls   = GENERATE(false, true);
-    DYNAMIC_SECTION((small_first ? "0.15/0.4 " : "0.4/0.15 ") << wall_generator << (detail_walls ? " detail walls" : "")) {
+    // Per-nozzle fields: none; line 1's Hilda profile (0.17 mm for every width on the 0.15 mm nozzle); that plus
+    // 0.5 mm inner walls and sparse infill on the 0.4 mm nozzle.
+    const int   fields         = GENERATE(0, 1, 2);
+    DYNAMIC_SECTION((small_first ? "0.15/0.4 " : "0.4/0.15 ") << wall_generator << (detail_walls ? " detail walls" : "") << " fields " << fields) {
         const int small = small_first ? 1 : 2, large = small_first ? 2 : 1; // filaments, 1-based
         DynamicPrintConfig config = two_nozzle_config(small_first ? 0.15 : 0.4, small_first ? 0.4 : 0.15, large, wall_generator, detail_walls);
         config.set_deserialize_strict({
@@ -939,6 +953,17 @@ TEST_CASE("Every role on a mixed-nozzle printer prints the width resolved on its
             { "support_filament", small }, { "support_interface_filament", small },
             { "top_shell_layers", 3 }, { "bottom_shell_layers", 3 },
         });
+        auto on_small = [small_first](const char *small_mm, const char *large_mm) {
+            return small_first ? std::string(small_mm) + "," + large_mm : std::string(large_mm) + "," + small_mm;
+        };
+        if (fields >= 1)
+            for (const char *key : { "line_width", "initial_layer_line_width", "outer_wall_line_width", "inner_wall_line_width",
+                                     "sparse_infill_line_width", "internal_solid_infill_line_width", "top_surface_line_width",
+                                     "support_line_width", "bridge_line_width" })
+                config.set_deserialize_strict({ { std::string(key) + "_per_nozzle", on_small("0.17", "0") } });
+        if (fields == 2)
+            config.set_deserialize_strict({ { "inner_wall_line_width_per_nozzle", on_small("0.17", "0.5") },
+                                            { "sparse_infill_line_width_per_nozzle", on_small("0.17", "0.5") } });
         // A 20 mm table on a 10 mm leg: the top overhangs 5 mm on every side.
         TriangleMesh mesh = make_cube(10., 10., 6.);
         mesh.translate(5.f, 5.f, 0.f);

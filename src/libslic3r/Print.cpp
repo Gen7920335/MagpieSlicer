@@ -373,7 +373,8 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
                                      object->config().support_half_layer_height.value);
     });
 
-    for (const t_config_option_key &opt_key : opt_keys) {
+    // MAGPIE: a per-nozzle line width field invalidates what its line width does.
+    for (const t_config_option_key &opt_key : per_nozzle_keys_as_width_keys(opt_keys)) {
         if (steps_gcode.find(opt_key) != steps_gcode.end()) {
             // These options only affect G-code export or they are just notes without influence on the generated G-code,
             // so there is nothing to invalidate.
@@ -1891,6 +1892,101 @@ static std::string line_width_error(bool too_small, double reference_mm)
             reference_mm).str();
 }
 
+// MAGPIE: Cura's lower bound for a line width on one nozzle (fdmprinter line widths, minimum_value_warning):
+// 0.1 mm + 0.4 x the nozzle diameter, at most the nozzle diameter itself. A width resolved on the wrong nozzle lands
+// below it (0.17 mm on 0.4 mm: bound 0.26 mm). The cap only acts below a 1/6 mm nozzle, where Cura's bound is wider
+// than the nozzle (0.16 mm for 0.15 mm) and would flag the usual 100-105 % widths. Only for features printed at their set width: walls with the Classic generator (Arachne varies
+// them), infill, surfaces, support; not bridges or gap fill. Each feature is resolved on the nozzle the routing table
+// gives it, on the first and the other layers. Returns the first finding, empty when there is none.
+static std::string narrow_line_width_warning(const Print &print)
+{
+    constexpr double bound_base_mm      = 0.1; // mm
+    constexpr double bound_nozzle_share = 0.4; // x nozzle diameter
+    const PrintConfig &pc = print.config();
+    auto name = [](WidthFeature feature) -> std::string {
+        switch (feature) {
+        case WidthFeature::OuterWall:           return L("Outer wall");
+        case WidthFeature::InnerWall:           return L("Inner wall");
+        case WidthFeature::SparseInfill:        return L("Sparse infill");
+        case WidthFeature::InternalSolidInfill: return L("Internal solid infill");
+        case WidthFeature::TopSurface:          return L("Top surface");
+        case WidthFeature::BottomSurface:       return L("Bottom surface");
+        case WidthFeature::SkinInfill:          return L("Skin line width");
+        case WidthFeature::SkeletonInfill:      return L("Skeleton line width");
+        case WidthFeature::Support:             return L("Support");
+        case WidthFeature::SupportInterface:    return L("Support interface");
+        case WidthFeature::Skirt:               return L("Skirt");
+        case WidthFeature::Brim:                return L("Brim");
+        default:                                return {};
+        }
+    };
+    auto narrow = [&](WidthFeature feature, const WidthConfigs &configs, size_t nozzle) -> std::string {
+        const double nozzle_mm = pc.nozzle_diameter.get_at(nozzle);
+        const double bound_mm  = std::min(bound_base_mm + bound_nozzle_share * nozzle_mm, nozzle_mm);
+        for (const bool first_layer : { false, true })
+            if (const double width_mm = feature_line_width_mm(feature, configs, nozzle, first_layer); width_mm < bound_mm)
+                // TRN %1%: a feature such as "Outer wall", %2%: width in mm, %3%: nozzle number, %4%: its diameter in mm, %5%: the bound in mm.
+                return (boost::format(L("%1% is %2% mm wide on nozzle %3% (%4% mm), narrower than %5% mm (0.1 mm plus 0.4 times the nozzle), and may not extrude reliably.")) %
+                        name(feature) % width_mm % (nozzle + 1) % nozzle_mm % bound_mm).str();
+        return {};
+    };
+    for (const PrintObject *object : print.objects()) {
+        for (const PrintRegion &region : object->all_regions()) {
+            const PrintRegionConfig &rc = region.config();
+            const WidthConfigs configs { &pc, &object->config(), &rc };
+            std::vector<WidthFeature> features;
+            if (rc.wall_loops.value > 0 && object->config().wall_generator.value == PerimeterGeneratorType::Classic)
+                features.insert(features.end(), { WidthFeature::OuterWall, WidthFeature::InnerWall });
+            if (rc.sparse_infill_density.value > 0.)
+                features.push_back(rc.sparse_infill_pattern.value == ipLockedZag ? WidthFeature::SkinInfill : WidthFeature::SparseInfill);
+            if (rc.sparse_infill_density.value > 0. && rc.sparse_infill_pattern.value == ipLockedZag)
+                features.push_back(WidthFeature::SkeletonInfill);
+            features.push_back(WidthFeature::InternalSolidInfill);
+            if (rc.top_shell_layers.value > 0)
+                features.push_back(WidthFeature::TopSurface);
+            if (rc.bottom_shell_layers.value > 0)
+                features.push_back(WidthFeature::BottomSurface);
+            for (const WidthFeature feature : features)
+                if (std::string warning = narrow(feature, configs, region.printing_nozzle(*object, feature)); !warning.empty())
+                    return warning;
+        }
+        if (object->has_support() || object->has_raft()) {
+            const WidthConfigs configs { &pc, &object->config(), nullptr };
+            for (const WidthFeature feature : { WidthFeature::Support, WidthFeature::SupportInterface })
+                if (std::string warning = narrow(feature, configs, feature_printing_nozzle(feature, configs, print.is_BBL_printer())); !warning.empty())
+                    return warning;
+        }
+    }
+    return {};
+}
+
+// MAGPIE: a per-nozzle line width value is an absolute width for one nozzle, so it is checked on that nozzle: wider
+// than the layer height it prints at, and at most MAX_LINE_WIDTH_MULTIPLIER x the nozzle. Only the nozzles in
+// `nozzles` (0-based, those that print) are checked; a value of 0 or below takes the setting and is not checked.
+// Heights and widths in mm. Returns the error, empty when the values are fine.
+static std::string per_nozzle_line_width_error(const ConfigBase &config, const char *width_key, const std::set<size_t> &nozzles,
+                                               const PrintConfig &print_config, double height_mm)
+{
+    const auto *values = config.option<ConfigOptionFloats>(per_nozzle_line_width_key(width_key));
+    if (values == nullptr)
+        return {};
+    for (const size_t nozzle : nozzles) {
+        if (nozzle >= values->values.size() || values->values[nozzle] <= 0.)
+            continue;
+        const double width_mm  = values->values[nozzle];
+        const double nozzle_mm = print_config.nozzle_diameter.get_at(nozzle);
+        if (width_mm <= height_mm)
+            // TRN %1%: width in mm, %2%: nozzle number, %3%: its diameter in mm, %4%: layer height in mm.
+            return (boost::format(L("The line width of %1% mm set for nozzle %2% (%3% mm) is not wider than the layer height of %4% mm.")) %
+                    width_mm % (nozzle + 1) % nozzle_mm % height_mm).str();
+        if (width_mm > nozzle_mm * MAX_LINE_WIDTH_MULTIPLIER)
+            // TRN %1%: width in mm, %2%: nozzle number, %3%: its diameter in mm, %4%: a factor.
+            return (boost::format(L("The line width of %1% mm set for nozzle %2% (%3% mm) is more than %4% times that nozzle.")) %
+                    width_mm % (nozzle + 1) % nozzle_mm % MAX_LINE_WIDTH_MULTIPLIER).str();
+    }
+    return {};
+}
+
 // MAGPIE (Magpie line 1): half-height (H/2) outer walls and support print their roles at half the
 // layer height, so each role is checked against the nozzle of the filament that prints it at the
 // height it actually prints at, instead of the full layer against the smallest nozzle. Skirt, brim
@@ -1902,21 +1998,25 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
     const PrintConfig       &pc     = print.config();
     std::set<int>            used_filaments; // 1-based
     StringObjectException    error;
-    auto check = [&](int filament, const ConfigOptionFloatOrPercent &width, double height_mm, bool first, const char *width_key) {
+    // MAGPIE: width_key names a setting of `holder` (the region or object config); it and its fallbacks are read on
+    // the filament's nozzle, per-nozzle line width fields included.
+    auto check = [&](int filament, const ConfigBase &holder, const char *width_key, double height_mm, bool first) {
         if (!error.string.empty())
             return;
         filament = std::max(1, filament);
         used_filaments.insert(filament);
-        const double nozzle_mm = nozzle_diameter_for_filament(pc, filament, print.is_BBL_printer());
+        const size_t nozzle    = printing_nozzle_index(pc, filament, print.is_BBL_printer());
+        const double nozzle_mm = pc.nozzle_diameter.get_at(nozzle);
         if (height_mm > nozzle_mm + EPSILON) {
             error = {L("Layer height cannot exceed nozzle diameter."), &object, first && !object.has_raft() ? "initial_layer_print_height" : "layer_height"};
             return;
         }
-        ConfigOptionFloatOrPercent role_width = width;
-        if (first && !object.has_raft() && pc.initial_layer_line_width.value > 0.)
-            role_width = pc.initial_layer_line_width;
+        ConfigOptionFloatOrPercent role_width = line_width_setting_on_nozzle(holder, width_key, nozzle);
+        if (first && !object.has_raft())
+            if (const ConfigOptionFloatOrPercent initial = line_width_setting_on_nozzle(pc, "initial_layer_line_width", nozzle); initial.value > 0.)
+                role_width = initial;
         if (role_width.value == 0.)
-            role_width = config.line_width;
+            role_width = line_width_setting_on_nozzle(config, "line_width", nozzle);
         const double width_mm = role_width.get_abs_value(nozzle_mm);
         if (width_mm != 0. && width_mm <= height_mm)
             error = {line_width_error(true, print.line_width_reference_mm()), &object, width_key};
@@ -1933,38 +2033,39 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
             const int inner = rc.inner_wall_filament_id.value > 0 ? rc.inner_wall_filament_id.value : outer;
             if (rc.wall_loops.value > 0) {
                 const bool detail_walls = rc.use_smaller_nozzles_in_crisp_corners.value;
-                check(outer, rc.outer_wall_line_width, outer_mm, first, "outer_wall_line_width");
+                check(outer, rc, "outer_wall_line_width", outer_mm, first);
                 // With detail walls the large nozzle prints the inner walls even when the wall count is small.
                 if (rc.wall_loops.value > outer_count || detail_walls)
-                    check(inner, rc.inner_wall_line_width, full_mm, first, "inner_wall_line_width");
+                    check(inner, rc, "inner_wall_line_width", full_mm, first);
                 // Multi-nozzle detail walls: the detail tool (the planner's own choice) prints the outer
                 // walls; walls beyond the half-height ones print at full height.
                 if (detail_walls)
                     if (const auto detail = ModHost::MultiNozzleWalls::detail_tool(pc, rc, unsigned(outer)); detail)
-                        check(int(detail.filament_1based), rc.outer_wall_line_width,
-                              rc.crisp_corner_small_nozzle_wall_count.value > outer_count ? full_mm : outer_mm, first, "outer_wall_line_width");
+                        check(int(detail.filament_1based), rc, "outer_wall_line_width",
+                              rc.crisp_corner_small_nozzle_wall_count.value > outer_count ? full_mm : outer_mm, first);
                 // Large-nozzle override ranges print every wall of their layers with one toolhead (line 1).
                 for (const std::string &text : rc.crisp_corner_large_nozzle_override_regions.values)
                     if (const auto range = ModHost::MultiNozzleWalls::parse_override_range(text); range && range->toolhead_1based > 0) {
                         const auto tool = ModHost::MultiNozzleWalls::tool_for_filament(pc, range->toolhead_1based);
                         if (! tool)
                             continue;
-                        check(int(tool.filament_1based), rc.outer_wall_line_width, outer_mm, first, "outer_wall_line_width");
+                        check(int(tool.filament_1based), rc, "outer_wall_line_width", outer_mm, first);
                         if (rc.wall_loops.value > outer_count)
-                            check(int(tool.filament_1based), rc.inner_wall_line_width, full_mm, first, "inner_wall_line_width");
+                            check(int(tool.filament_1based), rc, "inner_wall_line_width", full_mm, first);
                     }
             }
             if (rc.sparse_infill_density.value > 0.)
-                check(rc.sparse_infill_filament_id.value, rc.sparse_infill_line_width, full_mm, first, "sparse_infill_line_width");
+                check(rc.sparse_infill_filament_id.value, rc, "sparse_infill_line_width", full_mm, first);
             if (rc.sparse_infill_density.value > 0. || rc.top_shell_layers.value > 0 || rc.bottom_shell_layers.value > 0) {
-                check(rc.internal_solid_filament_id.value, rc.internal_solid_infill_line_width, full_mm, first, "internal_solid_infill_line_width");
-                check(rc.internal_solid_filament_id.value, rc.skin_infill_line_width, full_mm, first, "skin_infill_line_width");
-                check(rc.internal_solid_filament_id.value, rc.skeleton_infill_line_width, full_mm, first, "skeleton_infill_line_width");
+                check(rc.internal_solid_filament_id.value, rc, "internal_solid_infill_line_width", full_mm, first);
+                // Skin and skeleton print with the sparse infill filament (routing table, width_routes()).
+                check(rc.sparse_infill_filament_id.value, rc, "skin_infill_line_width", full_mm, first);
+                check(rc.sparse_infill_filament_id.value, rc, "skeleton_infill_line_width", full_mm, first);
             }
             if (rc.top_shell_layers.value > 0)
-                check(rc.top_surface_filament_id.value, rc.top_surface_line_width, full_mm, first, "top_surface_line_width");
+                check(rc.top_surface_filament_id.value, rc, "top_surface_line_width", full_mm, first);
             if (rc.bottom_shell_layers.value > 0)
-                check(rc.bottom_surface_filament_id.value, rc.internal_solid_infill_line_width, full_mm, first, "internal_solid_infill_line_width");
+                check(rc.bottom_surface_filament_id.value, rc, "internal_solid_infill_line_width", full_mm, first);
         }
         if (object.has_support() || object.has_raft()) {
             const double support_mm = config.support_half_layer_height.value ? 0.5 * full_mm : full_mm;
@@ -1976,17 +2077,17 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
                     for (const unsigned int extruder : object.object_extruders())
                         candidates.push_back(int(extruder) + 1);
                 for (const int candidate : candidates) {
-                    check(candidate, config.support_line_width, support_mm, first, "support_line_width");
+                    check(candidate, config, "support_line_width", support_mm, first);
                     // Raft bands are not split by H/2: they print at their own, full heights (line 1).
                     if (object.has_raft()) {
                         const SlicingParameters &sp = object.slicing_parameters();
                         const double raft_mm = std::max({ sp.first_print_layer_height, sp.base_raft_layer_height,
                                                           sp.interface_raft_layer_height, sp.contact_raft_layer_height });
-                        check(candidate, config.support_line_width, raft_mm, true, "support_line_width");
+                        check(candidate, config, "support_line_width", raft_mm, true);
                     }
                     // The temperature drop tower prints full layers with the interface filament (line 1).
                     if (config.single_nozzle_low_temperature_interface.value && config.support_interface_temperature_drop_tower.value)
-                        check(candidate, config.support_line_width, full_mm, first, "support_line_width");
+                        check(candidate, config, "support_line_width", full_mm, first);
                 }
             }
         }
@@ -2043,10 +2144,10 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 
     // MAGPIE: say when absolute line widths were scaled to each nozzle (scale_absolute_line_widths_to_nozzles),
     // from the print config or an object, part or layer range override.
-    if (m_line_width_reference_mm > 0.) {
+    if (m_line_width_context.reference_mm > 0.) {
         auto has_absolute_width = [this](const DynamicPrintConfig &config) {
             DynamicPrintConfig copy = config;
-            return scale_absolute_line_widths(copy, m_line_width_reference_mm) > 0;
+            return scale_absolute_line_widths(copy, m_line_width_context.reference_mm) > 0;
         };
         bool scaled = m_line_widths_scaled;
         for (const PrintObject *object : m_objects) {
@@ -2059,7 +2160,10 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         }
         if (scaled)
             warn((boost::format(L("This printer has nozzles of different sizes, so absolute line widths are taken as widths for the %1% mm nozzle and scaled to each nozzle. Enter a percentage to set a width relative to each nozzle.")) %
-                  m_line_width_reference_mm).str(), "line_width");
+                  m_line_width_context.reference_mm).str(), "line_width");
+        // Only on such a printer: there a width can be resolved on a nozzle it was not meant for.
+        if (std::string warning = narrow_line_width_warning(*this); !warning.empty())
+            warn(std::move(warning), "line_width");
     }
 
     std::vector<unsigned int> extruders = this->extruders();
@@ -2688,7 +2792,7 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                 return {L("One or more object were assigned an extruder that the printer does not have.")};
 #endif
 
-        auto validate_extrusion_width = [min_nozzle_diameter, max_nozzle_diameter, reference_mm = m_line_width_reference_mm](const ConfigBase &config, const char *opt_key, double layer_height, std::string &err_msg) -> bool {
+        auto validate_extrusion_width = [min_nozzle_diameter, max_nozzle_diameter, reference_mm = m_line_width_context.reference_mm](const ConfigBase &config, const char *opt_key, double layer_height, std::string &err_msg) -> bool {
             double extrusion_width_min = config.get_abs_value(opt_key, min_nozzle_diameter);
             double extrusion_width_max = config.get_abs_value(opt_key, max_nozzle_diameter);
             if (extrusion_width_min == 0) {
@@ -2819,23 +2923,50 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 				for (const PrintRegion &region : object->all_regions())
                     if (!half_layer_object && !validate_extrusion_width(region.config(), opt_key, layer_height, err_msg))
 		            	return  {err_msg, object, opt_key};
+            // MAGPIE: per-nozzle line widths, each on its own nozzle (H/2 objects: validate_half_layer_nozzles).
+            if (!half_layer_object) {
+                std::set<size_t> printing_nozzles;
+                for (const unsigned int extruder_id : extruders)
+                    printing_nozzles.insert(printing_nozzle_index(m_config, int(extruder_id) + 1, this->is_BBL_printer()));
+                auto per_nozzle_error = [&](const ConfigBase &config, const char *width_key, double height_mm) -> StringObjectException {
+                    if (std::string error = per_nozzle_line_width_error(config, width_key, printing_nozzles, m_config, height_mm); !error.empty())
+                        return { error, object, per_nozzle_line_width_key(width_key) };
+                    return {};
+                };
+                for (const auto &[holder, width_key, height_mm] : std::initializer_list<std::tuple<const ConfigBase *, const char *, double>> {
+                         { &m_config, "initial_layer_line_width", initial_layer_print_height },
+                         { &object->config(), "line_width", layer_height },
+                         { &object->config(), "support_line_width", layer_height } })
+                    if (StringObjectException error = per_nozzle_error(*holder, width_key, height_mm); !error.string.empty())
+                        return error;
+                for (const PrintRegion &region : object->all_regions())
+                    for (const char *width_key : { "outer_wall_line_width", "inner_wall_line_width", "sparse_infill_line_width",
+                                                   "internal_solid_infill_line_width", "top_surface_line_width", "skin_infill_line_width",
+                                                   "skeleton_infill_line_width" })
+                        if (StringObjectException error = per_nozzle_error(region.config(), width_key, layer_height); !error.string.empty())
+                            return error;
+            }
 
             const bool allow_thin_bridge_width = object->config().thick_bridges && object->config().thick_internal_bridges;
             for (const PrintRegion &region : object->all_regions()) {
-                const auto &bridge_width_opt = region.config().bridge_line_width;
                 for (FlowRole bridge_role : { frPerimeter, frInfill, frSolidInfill, frTopSolidInfill }) {
-                    const double nozzle_diameter = nozzle_diameter_for_filament(m_config, region.extruder(bridge_role), this->is_BBL_printer());
-                    const double bridge_width    = bridge_width_opt.get_abs_value(nozzle_diameter);
+                    // MAGPIE: on the bridged feature's nozzle, its per-nozzle bridge width included.
+                    const size_t nozzle          = region.printing_nozzle(*object, PrintRegion::width_feature(bridge_role));
+                    const double nozzle_diameter = m_config.nozzle_diameter.get_at(nozzle);
+                    const ConfigOptionFloatOrPercent bridge_setting = line_width_setting_on_nozzle(region.config(), "bridge_line_width", nozzle);
+                    const double bridge_width    = bridge_setting.get_abs_value(nozzle_diameter);
+                    // The error points at the per-nozzle field when the width came from it.
+                    const char  *bridge_key      = bridge_setting == region.config().bridge_line_width ? "bridge_line_width" : "bridge_line_width_per_nozzle";
                     if (bridge_width <= 0.)
                         continue;
                     if (bridge_width > nozzle_diameter) {
                         err_msg = L("Bridge line width must not exceed nozzle diameter");
-                        return { err_msg, object, "bridge_line_width" };
+                        return { err_msg, object, bridge_key };
                     }
                     // MAGPIE: an H/2 object is checked against its tallest layer.
                     if (!allow_thin_bridge_width && bridge_width <= (half_layer_object ? max_height_mm : layer_height)) {
-                        err_msg = line_width_error(true, m_line_width_reference_mm);
-                        return { err_msg, object, "bridge_line_width" };
+                        err_msg = line_width_error(true, m_line_width_context.reference_mm);
+                        return { err_msg, object, bridge_key };
                     }
                 }
             }

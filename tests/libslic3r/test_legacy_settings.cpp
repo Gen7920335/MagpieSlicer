@@ -173,3 +173,40 @@ TEST_CASE("A file without line 1 settings loads without mod_settings changes", "
     CHECK(config.opt_serialize("support_type") == "tree(auto)");
     CHECK(config.opt_serialize("support_interface_pattern") == "grid");
 }
+
+TEST_CASE("Line 1 toolhead line widths become per-nozzle line widths in mm", "[LegacySettings][LineWidths]")
+{
+    BundledMods mods;
+    // A percentage is of that toolhead's nozzle: 50 % of 0.2 mm is 0.1 mm. nil and 0 take the process width.
+    const DynamicPrintConfig config = load({
+        { "nozzle_diameter", { "0.15", "0.4", "0.2", "0.4" } },
+        { "line_width", "0.42" }, { "outer_wall_line_width", "0.42" }, { "support_line_width", "0.42" },
+        { "toolhead_line_width", "0.17,0,0.17,0" },
+        { "toolhead_outer_wall_line_width", "0.17,0,50%,nil" },
+        { "toolhead_support_line_width", "0,0,0,0" },
+    });
+    CHECK_FALSE(config.has("toolhead_outer_wall_line_width"));
+    CHECK_FALSE(config.has("toolhead_line_width"));
+    REQUIRE(config.has("outer_wall_line_width_per_nozzle"));
+    const std::vector<double> outer = config.option<ConfigOptionFloats>("outer_wall_line_width_per_nozzle")->values;
+    REQUIRE(outer.size() == 4);
+    CHECK_THAT(outer[0], Catch::Matchers::WithinAbs(0.17, 1e-12));
+    CHECK(outer[1] == 0.);
+    CHECK_THAT(outer[2], Catch::Matchers::WithinAbs(0.1, 1e-12));
+    CHECK(outer[3] == 0.);
+    CHECK(config.option<ConfigOptionFloats>("line_width_per_nozzle")->values == std::vector<double>{ 0.17, 0., 0.17, 0. });
+    // A list of zeros sets nothing.
+    CHECK_FALSE(config.has("support_line_width_per_nozzle"));
+}
+
+TEST_CASE("Line 1 toolhead line widths without process settings to land in are dropped", "[LegacySettings][LineWidths]")
+{
+    BundledMods mods;
+    // A printer preset alone: nozzle_diameter but no line width settings.
+    const DynamicPrintConfig config = load({
+        { "nozzle_diameter", { "0.15", "0.4" } },
+        { "toolhead_outer_wall_line_width", "0.17,0" },
+    });
+    CHECK_FALSE(config.has("toolhead_outer_wall_line_width"));
+    CHECK_FALSE(config.has("outer_wall_line_width_per_nozzle"));
+}

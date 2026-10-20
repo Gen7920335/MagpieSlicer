@@ -1736,25 +1736,23 @@ TEST_CASE("Every read of a nozzle-relative line width key is in the reviewed tab
 {
     static const std::map<std::string, size_t> reviewed {
         { "src/libslic3r/Config.cpp", 1 },
-        { "src/libslic3r/Fill/Fill.cpp", 2 },
         { "src/libslic3r/Fill/FillAdaptive.cpp", 1 },
         { "src/libslic3r/Fill/Lightning/Generator.cpp", 6 },
-        { "src/libslic3r/Flow.cpp", 20 },
-        { "src/libslic3r/GCode.cpp", 6 },
+        { "src/libslic3r/Flow.cpp", 17 },
+        { "src/libslic3r/GCode.cpp", 5 },
         { "src/libslic3r/GCode/ToolOrdering.cpp", 4 },
         { "src/libslic3r/Layer.cpp", 2 },
-        { "src/libslic3r/LayerRegion.cpp", 5 },
+        { "src/libslic3r/LineWidths.cpp", 19 },
         { "src/libslic3r/ModHost/Builtin/CuraSupport.cpp", 4 },
         { "src/libslic3r/ModHost/Builtin/MultiNozzleWalls.cpp", 1 },
         { "src/libslic3r/MultiMaterialSegmentation.cpp", 2 },
         { "src/libslic3r/PerimeterGenerator.cpp", 2 },
         { "src/libslic3r/PlaceholderParser.cpp", 4 },
         { "src/libslic3r/Preset.cpp", 11 },
-        { "src/libslic3r/Print.cpp", 34 },
-        { "src/libslic3r/PrintConfig.cpp", 32 },
+        { "src/libslic3r/Print.cpp", 38 },
+        { "src/libslic3r/PrintConfig.cpp", 35 },
         { "src/libslic3r/PrintObject.cpp", 13 },
         { "src/libslic3r/PrintObjectSlice.cpp", 1 },
-        { "src/libslic3r/PrintRegion.cpp", 8 },
         { "src/libslic3r/Support/SupportMaterial.cpp", 1 },
         { "src/libslic3r/Support/SupportParameters.hpp", 2 },
         { "src/libslic3r/Support/TreeSupport.cpp", 2 },
@@ -1791,6 +1789,69 @@ TEST_CASE("Every read of a nozzle-relative line width key is in the reviewed tab
             size_t count = 0;
             for (std::string line; std::getline(in, line);)
                 count += names_key(line) ? 1 : 0;
+            if (count > 0)
+                found[boost::filesystem::relative(it->path(), root).generic_string()] = count;
+        }
+    std::string table;
+    for (const auto &[file, count] : found)
+        table += "        { \"" + file + "\", " + std::to_string(count) + " },\n";
+    INFO("Current table, after checking every changed read:\n" << table);
+    CHECK(found == reviewed);
+}
+
+// MAGPIE: the per-nozzle line width fields (<key>_per_nozzle) are read through line_width_setting_on_nozzle()
+// (LineWidths.hpp), which applies them on the nozzle printing the feature. Code that reads a field itself (by name,
+// as a member, or through per_nozzle_line_width_key / per_nozzle_line_width_base_keys) can skip the precedence and
+// the one-nozzle-size rule, so every source line doing so is counted per file, the way the test above counts the
+// width keys. A new or grown count fails until the read was checked; then set the count printed below.
+TEST_CASE("Every direct read of a per-nozzle line width field is in the reviewed table", "[Config]")
+{
+    // Reviewed 2026-10-20: the accessor (LineWidths.cpp), its definitions and preparation (PrintConfig), the preset
+    // key list, line 1 migration, per-nozzle validation and the bridge error key (Print.cpp), the output check's
+    // bound (GCode.cpp, which reads the values on purpose so it does not trust the accessor), the region merge test
+    // (Layer.cpp), the placeholder width (Flow.cpp) and the settings tab table.
+    static const std::map<std::string, size_t> reviewed {
+        { "src/libslic3r/Flow.cpp", 1 },
+        { "src/libslic3r/GCode.cpp", 2 },
+        { "src/libslic3r/Layer.cpp", 2 },
+        { "src/libslic3r/LineWidths.cpp", 2 },
+        { "src/libslic3r/ModHost/LegacySettings.cpp", 1 },
+        { "src/libslic3r/Preset.cpp", 4 },
+        { "src/libslic3r/Print.cpp", 3 },
+        { "src/libslic3r/PrintConfig.cpp", 8 },
+        { "src/libslic3r/PrintConfig.hpp", 13 },
+        { "src/slic3r/GUI/PerNozzleLineWidthsPanel.cpp", 1 },
+    };
+    const boost::filesystem::path root = boost::filesystem::path(std::string(TEST_DATA_DIR)).parent_path().parent_path();
+    auto ident = [](char c) { return std::isalnum((unsigned char) c) || c == '_'; };
+    auto names_field = [&](const std::string &line) {
+        const size_t first = line.find_first_not_of(" \t");
+        if (first != std::string::npos && (line.compare(first, 2, "//") == 0 || line[first] == '*'))
+            return false;
+        if (line.find("per_nozzle_line_width_key(") != std::string::npos || line.find("per_nozzle_line_width_base_keys(") != std::string::npos)
+            return true;
+        for (const char *key : per_nozzle_line_width_base_keys()) {
+            const std::string field = per_nozzle_line_width_key(key);
+            for (size_t i = line.find(field); i != std::string::npos; i = line.find(field, i + 1)) {
+                const size_t j      = i + field.size();
+                const char   before = i > 0 ? line[i - 1] : ' ';
+                const char   after  = j < line.size() ? line[j] : ' ';
+                if (! ident(before) && ! ident(after))
+                    return true;
+            }
+        }
+        return false;
+    };
+    std::map<std::string, size_t> found;
+    for (const char *dir : { "src/libslic3r", "src/slic3r" })
+        for (boost::filesystem::recursive_directory_iterator it(root / dir), end; it != end; ++it) {
+            const std::string ext = it->path().extension().string();
+            if (! boost::filesystem::is_regular_file(it->path()) || (ext != ".cpp" && ext != ".hpp" && ext != ".h"))
+                continue;
+            boost::nowide::ifstream in(it->path().string());
+            size_t count = 0;
+            for (std::string line; std::getline(in, line);)
+                count += names_field(line) ? 1 : 0;
             if (count > 0)
                 found[boost::filesystem::relative(it->path(), root).generic_string()] = count;
         }

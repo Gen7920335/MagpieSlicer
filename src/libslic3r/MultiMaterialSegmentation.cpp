@@ -2,6 +2,7 @@
 #include "BoundingBox.hpp"
 #include "ClipperUtils.hpp"
 #include "Config.hpp"
+#include "LineWidths.hpp"
 #include "EdgeGrid.hpp"
 #include "Geometry/VoronoiOffset.hpp"
 #include "Geometry/Voronoi.hpp"
@@ -1226,11 +1227,13 @@ static bool is_volume_sinking(const indexed_triangle_set &its, const Transform3d
 
 double resolve_outer_wall_line_width(const PrintRegionConfig &region_config, const PrintObjectConfig &object_config, const PrintConfig &print_config)
 {
-    // A filament id of 0 underflows, and get_at() then falls back to the first nozzle.
-    const double               nozzle_diameter = print_config.nozzle_diameter.get_at(region_config.outer_wall_filament_id - 1);
-    ConfigOptionFloatOrPercent width           = region_config.outer_wall_line_width;
+    // A filament id of 0 underflows, and get_at() then falls back to the first nozzle. MAGPIE: per-nozzle line
+    // width fields of that nozzle included.
+    const size_t               nozzle          = printing_nozzle_index(print_config, region_config.outer_wall_filament_id.value, false);
+    const double               nozzle_diameter = print_config.nozzle_diameter.get_at(nozzle);
+    ConfigOptionFloatOrPercent width           = line_width_setting_on_nozzle(region_config, "outer_wall_line_width", nozzle);
     if (width.value == 0)
-        width = object_config.line_width;
+        width = line_width_setting_on_nozzle(object_config, "line_width", nozzle);
     if (!width.percent && width.value <= 0.)
         return Flow::auto_extrusion_width(frExternalPerimeter, float(nozzle_diameter));
     return width.get_abs_value(nozzle_diameter);

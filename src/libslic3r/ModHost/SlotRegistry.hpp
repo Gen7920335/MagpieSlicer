@@ -51,9 +51,9 @@ struct WallPlanner
     // would otherwise use base_filament_1based; 0 keeps Orca's choice.
     std::function<unsigned int(const PrintConfig &, const PrintRegionConfig &, size_t layer_id, ExtrusionToolHint hint,
                                unsigned int base_filament_1based)> wall_filament;
-    // The nozzle diameter (mm) that prints every wall of layer layer_id when the planner moves the whole layer's
-    // walls to another nozzle, so their widths are resolved on it; 0 keeps the region's own nozzle.
-    std::function<double(const PrintConfig &, const PrintRegionConfig &, size_t layer_id)> layer_wall_nozzle;
+    // The physical nozzle (1-based toolhead) that prints every wall of layer layer_id when the planner moves the
+    // whole layer's walls to another nozzle, so their widths are resolved on it; 0 keeps the region's own nozzle.
+    std::function<unsigned int(const PrintConfig &, const PrintRegionConfig &, size_t layer_id)> layer_wall_toolhead;
 };
 
 const WallPlanner *find_wall_planner(const std::string &name);

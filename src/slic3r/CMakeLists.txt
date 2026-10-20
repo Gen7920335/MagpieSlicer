@@ -298,6 +298,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/ModBrowserDialog.hpp
     GUI/ModParamsPanel.cpp
     GUI/ModParamsPanel.hpp
+    GUI/PerNozzleLineWidthsPanel.cpp
+    GUI/PerNozzleLineWidthsPanel.hpp
     GUI/IdleScheduler.cpp
     GUI/IdleScheduler.hpp
     GUI/ImageGrid.cpp

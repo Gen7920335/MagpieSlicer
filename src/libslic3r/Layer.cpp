@@ -185,6 +185,9 @@ bool Layer::is_perimeter_compatible(const Print& print, const PrintRegion& a, co
 		&& config.wall_direction                         == other_config.wall_direction
 		&& config.opt_serialize("inner_wall_line_width") == other_config.opt_serialize("inner_wall_line_width")
 		&& config.opt_serialize("outer_wall_line_width") == other_config.opt_serialize("outer_wall_line_width")
+		// MAGPIE: and their per-nozzle fields.
+		&& config.inner_wall_line_width_per_nozzle == other_config.inner_wall_line_width_per_nozzle
+		&& config.outer_wall_line_width_per_nozzle == other_config.outer_wall_line_width_per_nozzle
 		&& config.detect_thin_wall                  == other_config.detect_thin_wall
 		&& config.infill_wall_overlap              == other_config.infill_wall_overlap
         && config.top_bottom_infill_wall_overlap              == other_config.top_bottom_infill_wall_overlap
@@ -259,6 +262,9 @@ void Layer::make_perimeters()
 
 	        if (layerms.size() == 1) {  // optimization
 	            (*layerm)->fill_surfaces.surfaces.clear();
+                // MAGPIE: the generator appends to it; a second run of this step (a wall width changed) kept the first
+                // run's polygons too, and the narrow solid infill (concentric internal) filled their union.
+                (*layerm)->fill_no_overlap_expolygons.clear();
                 (*layerm)->make_perimeters((*layerm)->slices, {*layerm}, &(*layerm)->fill_surfaces, &(*layerm)->fill_no_overlap_expolygons);
 	            (*layerm)->fill_expolygons = to_expolygons((*layerm)->fill_surfaces.surfaces);
 	        } else {

@@ -11,54 +11,41 @@
 
 namespace Slic3r {
 
+WidthFeature PrintRegion::width_feature(FlowRole role)
+{
+    switch (role) {
+    case frExternalPerimeter: return WidthFeature::OuterWall;
+    case frPerimeter:         return WidthFeature::InnerWall;
+    case frInfill:            return WidthFeature::SparseInfill;
+    case frSolidInfill:       return WidthFeature::InternalSolidInfill;
+    case frTopSolidInfill:    return WidthFeature::TopSurface;
+    default:                  throw Slic3r::InvalidArgument("Unknown role");
+    }
+}
+
 // 1-based extruder identifier for this region and role.
 unsigned int PrintRegion::extruder(FlowRole role) const
 {
-    size_t extruder = 0;
-    if (role == frPerimeter)
-        extruder = m_config.inner_wall_filament_id;
-    else if (role == frExternalPerimeter)
-        extruder = m_config.outer_wall_filament_id;
-    else if (role == frInfill)
-        extruder = m_config.sparse_infill_filament_id;
-    else if (role == frSolidInfill)
-        extruder = m_config.internal_solid_filament_id;
-    else if (role == frTopSolidInfill)
-        extruder = m_config.top_surface_filament_id;
-    else
-        throw Slic3r::InvalidArgument("Unknown role");
-    return extruder;
+    // MAGPIE: the filament setting comes from the routing table.
+    return unsigned((m_config.*width_route(width_feature(role)).region_filament).value);
 }
 
 Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_height, bool first_layer) const
 {
-    const PrintConfig          &print_config = object.print()->config();
-    ConfigOptionFloatOrPercent config_width;
-    // Get extrusion width from configuration.
-    // (might be an absolute value, or a percent value, or zero for auto)
-    if (first_layer && print_config.initial_layer_line_width.value > 0) {
-        config_width = print_config.initial_layer_line_width;
-    } else if (role == frExternalPerimeter) {
-        config_width = m_config.outer_wall_line_width;
-    } else if (role == frPerimeter) {
-        config_width = m_config.inner_wall_line_width;
-    } else if (role == frInfill) {
-        config_width = m_config.sparse_infill_line_width;
-    } else if (role == frSolidInfill) {
-        config_width = m_config.internal_solid_infill_line_width;
-    } else if (role == frTopSolidInfill) {
-        config_width = m_config.top_surface_line_width;
-    } else {
-        throw Slic3r::InvalidArgument("Unknown role");
-    }
+    return this->flow(object, width_feature(role), layer_height, first_layer);
+}
 
-    if (config_width.value == 0)
-        config_width = object.config().line_width;
-    
-    // Get the configured nozzle_diameter for the extruder associated to the flow role requested.
-    // Here this->extruder(role) - 1 may underflow to MAX_INT, but then the get_at() will follback to zero'th element, so everything is all right.
-    auto nozzle_diameter = float(nozzle_diameter_for_filament(print_config, this->extruder(role), object.print()->is_BBL_printer()));
-    return Flow::new_from_config_width(role, config_width, nozzle_diameter, float(layer_height));
+size_t PrintRegion::printing_nozzle(const PrintObject &object, WidthFeature feature) const
+{
+    return feature_printing_nozzle(feature, { &object.print()->config(), &object.config(), &m_config }, object.print()->is_BBL_printer());
+}
+
+Flow PrintRegion::flow(const PrintObject &object, WidthFeature feature, double layer_height, bool first_layer) const
+{
+    // MAGPIE: the width setting (might be an absolute value, a percent value, or zero for auto) and the nozzle it
+    // is resolved on both come from the routing table, the per-nozzle line width fields included.
+    const WidthConfigs configs { &object.print()->config(), &object.config(), &m_config };
+    return feature_flow(feature, configs, this->printing_nozzle(object, feature), float(layer_height), first_layer);
 }
 
 coordf_t PrintRegion::nozzle_dmr_avg(const PrintConfig &print_config) const

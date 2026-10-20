@@ -8,6 +8,7 @@
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/ExPolygon.hpp"
 #include "libslic3r/Flow.hpp"
+#include "libslic3r/LineWidths.hpp"
 #include "libslic3r/ModHost/SlotRegistry.hpp"
 #include "libslic3r/PerimeterGenerator.hpp"
 #include "libslic3r/PrintConfig.hpp"
@@ -244,8 +245,10 @@ WallPlanner make_planner()
         WallTool base, detail;
         if (!detail_available(g, base, detail))
             return std::nullopt;
-        // The outer wall width resolved on the detail nozzle (percent of it, or Orca's automatic width).
-        const ConfigOptionFloatOrPercent &width = g.config->outer_wall_line_width;
+        // The outer wall width resolved on the detail nozzle (its per-nozzle value, a percent of it, or Orca's
+        // automatic width). Unlike the routing table's outer wall chain, no line_width or first layer width.
+        // Resolved on the double diameter, as before the per-nozzle fields.
+        const ConfigOptionFloatOrPercent width = line_width_setting_on_nozzle(*g.config, "outer_wall_line_width", detail.toolhead_1based - 1);
         double width_mm = (!width.percent && width.value <= 0.) ? Flow::auto_extrusion_width(frExternalPerimeter, float(detail.nozzle_diameter)) :
                                                                   width.get_abs_value(detail.nozzle_diameter);
         // Narrowest width with a positive spacing at this layer height, mm.
@@ -279,11 +282,11 @@ WallPlanner make_planner()
         p.infill_compensation = detail < p.requested_detail_walls ? std::max<coord_t>(0, p.large_spacing - p.detail_spacing) : 0;
         return p;
     };
-    planner.layer_wall_nozzle = [](const PrintConfig &config, const PrintRegionConfig &region, std::size_t layer_id) -> double {
+    planner.layer_wall_toolhead = [](const PrintConfig &config, const PrintRegionConfig &region, std::size_t layer_id) -> unsigned int {
         if (const unsigned int toolhead = override_toolhead(region, layer_id, config.nozzle_diameter.values.size()))
             if (const WallTool t = tool_for_toolhead(config, toolhead, base_wall_filament(region)))
-                return t.nozzle_diameter;
-        return 0.;
+                return t.toolhead_1based;
+        return 0;
     };
     planner.wall_filament = [](const PrintConfig &config, const PrintRegionConfig &region, std::size_t layer_id, ExtrusionToolHint hint,
                                unsigned int base_filament_1based) -> unsigned int {

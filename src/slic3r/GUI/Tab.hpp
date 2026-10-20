@@ -149,6 +149,7 @@ protected:
 
 using PageShp = std::shared_ptr<Page>;
 class ModParamsPanel;
+class PerNozzleLineWidthsPanel;
 
 class Tab: public wxPanel
 {
@@ -550,8 +551,12 @@ public:
 	bool 		supports_printer_technology(const PrinterTechnology tech) const override { return tech == ptFFF; }
 
 private:
+	// MAGPIE: shows the per-nozzle line widths for the selected printer's nozzles.
+	void		load_per_nozzle_line_widths();
+
 	ogStaticText*	m_recommended_thin_wall_thickness_description_line = nullptr;
 	ogStaticText*	m_top_bottom_shell_thickness_explanation = nullptr;
+	PerNozzleLineWidthsPanel* m_per_nozzle_line_widths = nullptr;
 };
 
 class TabPrintModel : public TabPrint

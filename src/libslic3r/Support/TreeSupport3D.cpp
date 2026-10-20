@@ -17,6 +17,7 @@
 #include "libslic3r/ExPolygon.hpp"
 #include "Fill/Fill.hpp"
 #include "libslic3r/Flow.hpp"
+#include "libslic3r/LineWidths.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
 #include "Layer.hpp"
 #include "libslic3r/Point.hpp"
@@ -254,8 +255,10 @@ static std::vector<std::pair<TreeSupportSettings, std::vector<size_t>>> group_me
     const coordf_t radius_sample_resolution = g_config_tree_support_collision_resolution;
 
     // calc the extrudable expolygons of each layer
-    // MAGPIE: resolve a percentage width on the support nozzle instead of reading its number as mm.
-    const coordf_t extrusion_width = config.line_width.get_abs_value(nozzle_diameter_for_filament(print_config, config.support_filament, print_object.print()->is_BBL_printer()));
+    // MAGPIE: resolve a percentage width on the support nozzle instead of reading its number as mm; per-nozzle
+    // line width field included.
+    const size_t   width_nozzle    = feature_printing_nozzle(WidthFeature::Support, { &print_config, &config, nullptr }, print_object.print()->is_BBL_printer());
+    const coordf_t extrusion_width = line_width_setting_on_nozzle(config, "line_width", width_nozzle).get_abs_value(print_config.nozzle_diameter.get_at(width_nozzle));
     const coordf_t extrusion_width_scaled = scale_(extrusion_width);
     tbb::parallel_for(tbb::blocked_range<size_t>(0, print_object.layer_count()),
         [&](const tbb::blocked_range<size_t>& range) {

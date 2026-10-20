@@ -1,4 +1,5 @@
 #include "libslic3r/StageTimer.hpp"
+#include "libslic3r/LineWidths.hpp"
 #include <algorithm>
 #include <assert.h>
 #include <regex>
@@ -1060,6 +1061,10 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 				params.flow   = params.bridge ?
 					//Orca: enable thick bridge based on config
 					layerm.bridging_flow(extrusion_role, is_thick_bridge) :
+					// MAGPIE: a bottom surface is printed by bottom_surface_filament_id, so its width is resolved on that
+					// nozzle (routing table) rather than on the internal solid infill's.
+					params.extrusion_role == erBottomSurface ?
+					layerm.region().flow(*layer.object(), WidthFeature::BottomSurface, (surface.thickness == -1) ? layer.height : surface.thickness, layer.id() == 0) :
 					layerm.flow(extrusion_role, (surface.thickness == -1) ? layer.height : surface.thickness);
 
 				params.role_speed = 0;
@@ -1096,12 +1101,16 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 				//get locked region param
 				if (params.pattern == ipLockedZag){
 					const PrintObject *object = layerm.layer()->object();
-					auto nozzle_diameter = float(nozzle_diameter_for_filament(object->print()->config(), layerm.region().extruder(extrusion_role), object->print()->is_BBL_printer()));
-					Flow skin_flow = params.bridge ? params.flow : Flow::new_from_config_width(extrusion_role, region_config.skin_infill_line_width, nozzle_diameter, float((surface.thickness == -1) ? layer.height : surface.thickness));
+					// MAGPIE: skin and skeleton widths on the sparse infill nozzle (routing table), per-nozzle fields included.
+					const WidthConfigs lock_configs { &object->print()->config(), &object->config(), &region_config };
+					const float        lock_height = float((surface.thickness == -1) ? layer.height : surface.thickness);
+					Flow skin_flow = params.bridge ? params.flow :
+						feature_flow(WidthFeature::SkinInfill, lock_configs, layerm.region().printing_nozzle(*object, WidthFeature::SkinInfill), lock_height, false);
 					//add skin flow
 					append_flow_param(lock_param.skin_flow_params, skin_flow, surface.expolygon);
 
-					Flow skeleton_flow = params.bridge ? params.flow : Flow::new_from_config_width(extrusion_role, region_config.skeleton_infill_line_width, nozzle_diameter, float((surface.thickness == -1) ? layer.height : surface.thickness)) ;
+					Flow skeleton_flow = params.bridge ? params.flow :
+						feature_flow(WidthFeature::SkeletonInfill, lock_configs, layerm.region().printing_nozzle(*object, WidthFeature::SkeletonInfill), lock_height, false);
 					// add skeleton flow
 					append_flow_param(lock_param.skeleton_flow_params, skeleton_flow, surface.expolygon);
 

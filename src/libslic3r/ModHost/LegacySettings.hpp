@@ -25,7 +25,7 @@ bool stash_legacy_setting(std::string &opt_key, std::string &value, std::map<std
 
 struct LegacyMigration
 {
-    std::vector<std::string> migrated; // "<mod>.<param>" values written to mod_settings
+    std::vector<std::string> migrated; // "<mod>.<param>" values written to mod_settings, and per-nozzle line width keys set
     std::vector<std::string> dropped;  // line 1 settings this build cannot reproduce
 };
 

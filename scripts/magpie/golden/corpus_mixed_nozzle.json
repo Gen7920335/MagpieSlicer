@@ -1,5 +1,5 @@
 {
- "_comment": "MAGPIE: U1 with 0.15 mm and 0.4 mm nozzles and the stock absolute line widths of its 0.4 mm process. Absolute widths follow each nozzle (scale_absolute_line_widths_to_nozzles); vanilla Orca prints 0.42 mm from the 0.15 mm nozzle here, so these cases are compared with their own earlier runs, not with vanilla. bridge_line_width is 0: Orca's preset check (PrintConfig.cpp, 'Bridge line width must not exceed nozzle diameter') rejects an absolute bridge width above the smallest nozzle before slicing, on vanilla too.",
+ "_comment": "MAGPIE: U1 with 0.15 mm and 0.4 mm nozzles and the stock absolute line widths of its 0.4 mm process. Absolute widths follow each nozzle (scale_absolute_line_widths_to_nozzles); vanilla Orca prints 0.42 mm from the 0.15 mm nozzle here, so these cases are compared with their own earlier runs, not with vanilla. bridge_line_width is 0: Orca's preset check (PrintConfig.cpp, 'Bridge line width must not exceed nozzle diameter') rejects an absolute bridge width above the smallest nozzle before slicing, on vanilla too. mixed_per_nozzle_*: per-nozzle line width fields; mixed_per_nozzle_hilda carries line 1's Hilda toolhead widths (0.17 mm on the 0.15 mm nozzles) except the bridge, whose 0.17 mm exceeds the 0.15 mm nozzle and is rejected by Orca's bridge rule.",
  "printers": {
   "u1mixed": {
    "machine": "presets/u1_04_machine.json",
@@ -188,6 +188,104 @@
     "brim_width": "3",
     "skirt_loops": "1",
     "bridge_line_width": "0"
+   },
+   "cli_args": [
+    "--filament-colour",
+    "#F2754E;#F2754E;#F2754E;#F2754E"
+   ]
+  },
+  {
+   "name": "mixed_per_nozzle_hilda",
+   "printer": "u1mixed",
+   "model": "tests/data/multinozzle_feature_matrix.obj",
+   "machine": {
+    "nozzle_diameter": [
+     "0.15",
+     "0.4",
+     "0.15",
+     "0.4"
+    ],
+    "max_layer_height": [
+     "0.12",
+     "0.32",
+     "0.12",
+     "0.32"
+    ],
+    "min_layer_height": [
+     "0.04",
+     "0.08",
+     "0.04",
+     "0.08"
+    ]
+   },
+   "process": {
+    "outer_wall_filament_id": "2",
+    "inner_wall_filament_id": "2",
+    "sparse_infill_filament_id": "2",
+    "internal_solid_filament_id": "2",
+    "top_surface_filament_id": "2",
+    "bottom_surface_filament_id": "2",
+    "layer_height": "0.12",
+    "initial_layer_print_height": "0.12",
+    "mod_settings": "{\"multi_nozzle_walls.enable\": true, \"multi_nozzle_walls.small_wall_count\": 2, \"multi_nozzle_walls.interlock\": true, \"multi_nozzle_walls.detail_toolhead\": 1, \"half_layer.outer_walls\": true}",
+    "bridge_line_width": "0",
+    "line_width_per_nozzle": "0.17,0,0.17,0",
+    "initial_layer_line_width_per_nozzle": "0.17,0,0.17,0",
+    "outer_wall_line_width_per_nozzle": "0.17,0,0.17,0",
+    "inner_wall_line_width_per_nozzle": "0.17,0,0.17,0",
+    "sparse_infill_line_width_per_nozzle": "0.17,0,0.17,0",
+    "internal_solid_infill_line_width_per_nozzle": "0.17,0,0.17,0",
+    "top_surface_line_width_per_nozzle": "0.17,0,0.17,0",
+    "support_line_width_per_nozzle": "0.17,0,0.17,0"
+   },
+   "cli_args": [
+    "--filament-colour",
+    "#F2754E;#F2754E;#F2754E;#F2754E"
+   ]
+  },
+  {
+   "name": "mixed_per_nozzle_support_small",
+   "printer": "u1mixed",
+   "model": "tests/data/overhang.obj",
+   "machine": {
+    "nozzle_diameter": [
+     "0.15",
+     "0.4",
+     "0.15",
+     "0.4"
+    ],
+    "max_layer_height": [
+     "0.12",
+     "0.32",
+     "0.12",
+     "0.32"
+    ],
+    "min_layer_height": [
+     "0.04",
+     "0.08",
+     "0.04",
+     "0.08"
+    ]
+   },
+   "process": {
+    "outer_wall_filament_id": "2",
+    "inner_wall_filament_id": "2",
+    "sparse_infill_filament_id": "2",
+    "internal_solid_filament_id": "2",
+    "top_surface_filament_id": "2",
+    "bottom_surface_filament_id": "2",
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_filament": "3",
+    "support_interface_filament": "3",
+    "layer_height": "0.12",
+    "initial_layer_print_height": "0.12",
+    "brim_type": "outer_only",
+    "brim_width": "3",
+    "skirt_loops": "1",
+    "bridge_line_width": "0",
+    "support_line_width_per_nozzle": "0.2,0,0.2,0",
+    "inner_wall_line_width_per_nozzle": "0,0.5,0,0.5"
    },
    "cli_args": [
     "--filament-colour",
