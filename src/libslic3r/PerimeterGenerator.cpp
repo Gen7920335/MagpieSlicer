@@ -110,7 +110,7 @@ using PerimeterGeneratorLoops = std::vector<PerimeterGeneratorLoop>;
 
 // MAGPIE: the physical nozzle of an outer wall path tagged `hint`, as the G-code routes it: the wall planner's filament
 // for the hint (wall.plan wall_filament, GCode's process_layer and H/2 task collection), else the region's outer wall
-// filament. Filament maps are not applied, as everywhere in PerimeterGenerator.
+// filament, on the nozzle a BBL filament_map routes that filament to.
 static size_t outer_wall_path_nozzle(const PerimeterGenerator &generator, ExtrusionToolHint hint)
 {
     const unsigned int base     = unsigned(std::max(1, generator.config->outer_wall_filament_id.value));
@@ -118,7 +118,7 @@ static size_t outer_wall_path_nozzle(const PerimeterGenerator &generator, Extrus
     if (generator.wall_planner != nullptr)
         if (const unsigned int f = generator.wall_planner->wall_filament(size_t(generator.layer_id), hint, base))
             filament = f;
-    return printing_nozzle_index(*generator.print_config, int(filament), false);
+    return printing_nozzle_index(*generator.print_config, int(filament), generator.is_bbl_printer);
 }
 
 // MAGPIE: H/2 outer walls. A round, nozzle-diameter bridge cannot fit a half-height shell band. Only those shell
@@ -1067,9 +1067,9 @@ void PerimeterGenerator::split_top_surfaces(const ExPolygons &orig_polygons, ExP
     // increase by half peri the inner space to fill the frontier between last and stored.
     top_fills = union_ex(top_fills, top_polygons);
     //set the clip to the external wall but go back inside by infill_extrusion_width/2 to be sure the extrusion won't go outside even with a 100% overlap.
-    // MAGPIE: the sparse infill width on the nozzle printing the sparse infill (routing table), per-nozzle field
-    // included; Orca's own fallback (no line_width) is kept.
-    const size_t infill_nozzle           = printing_nozzle_index(*this->print_config, this->config->sparse_infill_filament_id.value, false);
+    // MAGPIE: the sparse infill width on the nozzle printing the sparse infill (routing table, BBL filament_map
+    // included), per-nozzle field included; Orca's own fallback (no line_width) is kept.
+    const size_t infill_nozzle           = printing_nozzle_index(*this->print_config, this->config->sparse_infill_filament_id.value, this->is_bbl_printer);
     const double infill_nozzle_diameter  = this->print_config->nozzle_diameter.get_at(infill_nozzle);
     double infill_spacing_unscaled = line_width_setting_on_nozzle(*this->config, "sparse_infill_line_width", infill_nozzle).get_abs_value(infill_nozzle_diameter);
     if (infill_spacing_unscaled == 0) infill_spacing_unscaled = Flow::auto_extrusion_width(frInfill, infill_nozzle_diameter);

@@ -185,6 +185,7 @@ static void make_region_perimeters(const LayerRegion &source,
     g.layer_id              = (int)layer.id();
     // MAGPIE: wall.plan slot.
     g.wall_planner          = wall_planner.get();
+    g.is_bbl_printer        = layer.object()->print()->is_BBL_printer();
     // MAGPIE: H/2 outer walls (false for the normal pass).
     g.half_layer_outer_walls = half_layer_outer_walls;
     g.gap_demands           = gap_demands;

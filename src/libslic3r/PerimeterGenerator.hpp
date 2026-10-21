@@ -141,6 +141,8 @@ public:
     // MAGPIE: the wall planner of this region (wall.plan slot), or nullptr; and the current island's
     // number of detail walls and whether its walls are tagged for routing.
     const ModHost::WallPlanner *wall_planner { nullptr };
+    // MAGPIE: the print's Bambu Lab flag: filament_map routes a filament to its nozzle (printing_nozzle_index).
+    bool                        is_bbl_printer { false };
     int                         detail_wall_count { 0 };
     bool                        detail_wall_routing { false };
     // MAGPIE: smaller_ext_perimeter_flow is the wall planner's detail nozzle flow, so Classic's narrow-loop walls

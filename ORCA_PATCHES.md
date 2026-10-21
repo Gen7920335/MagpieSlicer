@@ -164,12 +164,26 @@ Format: what was wrong, what changed, where, the guard test.
 - `resolve_outer_wall_line_width` (multi-material segmentation) takes the printer's BBL flag; it read the outer
   wall filament's number as its nozzle. Test: "The painted outer wall width follows a BBL filament map".
 
+## H/2 shell bridges and the one-wall-top infill clip on the BBL-mapped nozzle
+
+- Wrong: PerimeterGenerator's `outer_wall_path_nozzle` (the H/2 shell bridge width) and the single-top-wall sparse
+  infill clip read the filament's number as its nozzle (`is_bbl_printer = false`). Per-nozzle width fields only
+  count when the nozzle sizes differ, so only a mixed-size BBL printer is affected: an H2D with 0.4/0.8 mm nozzles,
+  filament 1 mapped to the 0.8 mm nozzle and bridge_line_width_per_nozzle 0.3/0.6 printed the H/2 overhang walls
+  0.3 mm wide on the 0.8 mm nozzle; the same print with the nozzles swapped printed 0.6 mm.
+- Change: `PerimeterGenerator::is_bbl_printer` (the Print's flag, set in LayerRegion) goes to both reads.
+- Test: "H/2 shell bridges of a BBL printer take the bridge width of the nozzle filament_map names"
+  (test_multi_nozzle_walls.cpp); 4 of 8 assertions fail with both reads back on `false`. The clip read alone
+  changed no output in the BBL corpus (D:\claude\goldenblwall\corpus3.json: pyramid, cube, slab, tee with only
+  one wall on top and 0.4/0.8 mm nozzles); it is changed for the same routing, without a failing test.
+
 ## Known Orca bugs not patched
 
 - PerimeterGenerator reads `nozzle_diameter.get_at(outer_wall_filament_id - 1)` (bridge margin, gap fill, fuzzy
-  skin) and Magpie's `outer_wall_path_nozzle` / single-top-wall infill clip pass `is_bbl_printer = false`, so a BBL
-  filament_map is not applied there. Not changed: no case with an output difference was found (a step model with
-  the single top wall gave the same top infill to 0.01 mm with the sparse infill on 0.4 or 0.8 mm).
+  skin, overhang detection), so a BBL filament_map is not applied there. Not changed (vanilla Orca's reads). On an
+  H2D with 0.4/0.8 mm nozzles and filament 1 mapped to the 0.8 mm nozzle, the outer wall overhang segments start
+  and end about 1.2 mm apart from the same print with the nozzles swapped (overhang.obj, tee.stl); cause ASSUMED
+  to be these reads (not toggled).
 - The Type-1 tower (`WipeTower::set_extruder`) takes one line width for every tool from the nozzle of the last
   configured filament: on a U1 0.4/0.4/0.6/0.6 printing with the 0.4 mm nozzles only, the tower prints 0.75 mm
   lines; making the unused fourth nozzle 0.4 mm gives 0.5 mm. Per-tool widths are separate work (about 200 sites).

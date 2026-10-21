@@ -1651,6 +1651,48 @@ TEST_CASE("H/2 shell bridges take the bridge width of the nozzle that prints the
     CHECK(widths.count(1) == 0);
 }
 
+// MAGPIE: on a BBL printer filament_map names the nozzle a filament prints on. Here filament 1 prints the walls on
+// nozzle 2 (0.8 mm), so its H/2 shell bridges take nozzle 2's bridge width; reading filament 1 as nozzle 1 gave them
+// the 0.4 mm nozzle's field (the 0.3 mm lines a 0.4/0.8 mm H2D printed with the map swapped).
+TEST_CASE("H/2 shell bridges of a BBL printer take the bridge width of the nozzle filament_map names", "[MultiNozzleWalls][HalfLayer][Widths][FilamentMap]")
+{
+    OfficialMods mods;
+    const char *engine = GENERATE("classic", "arachne");
+    CAPTURE(engine);
+    DynamicPrintConfig config = two_nozzle_config(0.4, 0.8, 1, engine, false); // mm
+    config.set_key_value("enable_support", new ConfigOptionBool(false));
+    config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+    config.set_key_value("filament_map", new ConfigOptionInts{ 2, 1 });
+    // Bridge widths per nozzle, mm.
+    config.set_key_value(per_nozzle_line_width_key("bridge_line_width"), new ConfigOptionFloats{ 0.3, 0.6 });
+    half_layer_params(config, true);
+    Print print;
+    print.is_BBL_printer() = true;
+    Model model;
+    init_print({ TestMesh::overhang }, print, model, config);
+    REQUIRE(print.config().filament_map.values == std::vector<int>{ 2, 1 });
+    const std::string output = Slic3r::Test::gcode(print);
+    // A BBL printer names features "; FEATURE: <role>" and widths "; LINE_WIDTH: <mm>".
+    std::map<long, size_t> overhang_widths; // um -> moves
+    bool        overhang = false;
+    double      width    = 0.; // mm
+    GCodeReader reader;
+    reader.parse_buffer(output, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw());
+        if (raw.rfind("; FEATURE: ", 0) == 0)
+            overhang = raw == "; FEATURE: Overhang wall";
+        else if (raw.rfind("; LINE_WIDTH: ", 0) == 0)
+            width = std::stod(raw.substr(14));
+        else if (overhang && line.extruding(self) && line.dist_XY(self) > 0)
+            ++overhang_widths[std::lround(width * 1000.)];
+    });
+    for (const auto &[um, n] : overhang_widths)
+        UNSCOPED_INFO(n << " overhang wall moves " << um << " um wide");
+    REQUIRE(! overhang_widths.empty());
+    CHECK(overhang_widths.count(600) == 1);
+    CHECK(overhang_widths.count(300) == 0);
+}
+
 namespace {
 
 // A wedge standing on the bed: a triangle 3 mm wide at y = 0 tapering to a point at y = -20 mm, height_mm tall. Its
