@@ -815,3 +815,69 @@ TEST_CASE("Support merge eligibility compares material IDs in the same domain", 
     const SupportParameters parameters(object);
     CHECK(parameters.can_merge_support_regions == (model_material == explicit_material));
 }
+
+TEST_CASE("The Cura support generator keeps the top Z distance that is not a whole number of layers", "[SupportMaterial]")
+{
+    // CuraEngine prints the support right under the model lower by what the top Z distance leaves past whole layers
+    // (its fractional roof). Before the port printed it a whole layer up: with 0.1 mm on 0.25 mm layers the support
+    // touched the bar. The bar's underside is at 10 mm, a layer boundary for both layer heights. A lowered layer
+    // thinner than min_layer_height (0.07 mm) is left out, and the gap is then the next whole layer.
+    const auto [layer_height, top_z_distance, roof_layers, top_mm] = GENERATE(table<double, double, int, double>({
+        { 0.25, 0.1, 3, 10. - 0.1 },  // 0.15 mm lowered roof
+        { 0.25, 0.1, 0, 10. - 0.1 },  // 0.15 mm lowered body (no roof)
+        { 0.2, 0.3, 3, 10. - 0.3 },   // 0.1 mm lowered roof over a whole empty layer
+        { 0.25, 0.2, 3, 10. - 0.25 }, // 0.05 mm would be too thin: one whole layer
+        { 0.2, 0.2, 3, 10. - 0.2 },   // a whole layer: nothing lowered
+    }));
+    CAPTURE(layer_height, top_z_distance, roof_layers);
+    Slic3r::Test::OfficialMods mods;
+    Slic3r::Print print;
+    Slic3r::Test::init_and_process_print({ support_tee() }, print, {
+        { "enable_support", 1 }, { "support_type", "normal(auto)" }, { "mod_settings", R"({"cura_support.enable": true})" },
+        { "layer_height", layer_height }, { "first_layer_height", layer_height }, { "min_layer_height", "0.07" },
+        { "support_top_z_distance", top_z_distance }, { "support_interface_top_layers", roof_layers },
+        { "support_interface_bottom_layers", 0 } });
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(!object.support_layers().empty());
+    double top = 0.;
+    for (const SupportLayer *layer : object.support_layers())
+        if (!layer->support_fills.empty())
+            top = std::max(top, layer->print_z);
+    CHECK_THAT(top, Catch::Matchers::WithinAbs(top_mm, 1e-6));
+}
+
+TEST_CASE("Cura conical support covers every overhang of an object placed off the origin", "[SupportMaterial]")
+{
+    // The printable area the generator clips conical support with was moved into object coordinates by the
+    // object's centre only, not by where the instance sits on the bed: only the part beyond the adhesion margin in
+    // +X and +Y kept its support. The tee is placed by its instance (arranged), so its stem is at x = -5..5 mm in
+    // object coordinates and its two 10 mm overhangs lie on either side.
+    Slic3r::Test::OfficialMods mods;
+    Slic3r::Print print;
+    Slic3r::Test::init_and_process_print({ support_tee() }, print, {
+        { "enable_support", 1 }, { "support_type", "normal(auto)" },
+        { "mod_settings", R"({"cura_support.enable": true, "cura_support.conical_enabled": true})" },
+        { "layer_height", 0.2 }, { "first_layer_height", 0.2 }, { "support_top_z_distance", 0.2 },
+        { "support_interface_top_layers", 0 }, { "support_interface_bottom_layers", 0 } });
+    const PrintObject &object = *print.objects().front();
+    const double       mm2    = SCALING_FACTOR * SCALING_FACTOR;
+    const BoundingBox  box    = get_extents(object.layers().back()->lslices);
+    const coord_t      mid_x  = (box.min.x() + box.max.x()) / 2;
+    const Polygon left  = BoundingBox(Point(box.min.x() - scaled<coord_t>(20.), box.min.y() - scaled<coord_t>(20.)),
+                                      Point(mid_x, box.max.y() + scaled<coord_t>(20.))).polygon();
+    const Polygon right = BoundingBox(Point(mid_x, box.min.y() - scaled<coord_t>(20.)),
+                                      Point(box.max.x() + scaled<coord_t>(20.), box.max.y() + scaled<coord_t>(20.))).polygon();
+    size_t checked = 0;
+    for (const SupportLayer *layer : object.support_layers()) {
+        if (layer->print_z < 7. || layer->print_z > 9.)
+            continue;
+        CAPTURE(layer->print_z);
+        const double left_mm2  = area(intersection_ex(layer->support_islands, ExPolygons{ ExPolygon(left) })) * mm2;
+        const double right_mm2 = area(intersection_ex(layer->support_islands, ExPolygons{ ExPolygon(right) })) * mm2;
+        // Measured after the fix: equal sides. Before, the -X overhang had none.
+        CHECK(left_mm2 > 50.);
+        CHECK(right_mm2 > 50.);
+        ++checked;
+    }
+    CHECK(checked > 5);
+}

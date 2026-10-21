@@ -3590,12 +3590,15 @@ bool GCode::place_layer_time_tower(const Print &print)
     const double side   = m_layer_time_tower_size;                                      // mm
     const double skirt  = layer_time_tower_skirt(m_config.skirt_loops.value, m_config.skirt_distance.value, nozzle); // mm
 
+    // The printable area, the stored position and the prime tower are in plate coordinates; an instance's shift puts
+    // it on the bed, the plate's origin further, so the objects come back into the plate's frame.
+    const Vec2d plate_origin(print.get_plate_origin().x(), print.get_plate_origin().y());
     std::vector<LayerTimeTowerObject> objects;
     for (const PrintObject *object : print.objects())
         for (const PrintInstance &instance : object->instances()) {
             BoundingBox box = object->bounding_box();
             box.translate(instance.shift);
-            objects.push_back({ BoundingBoxf(unscale(box.min), unscale(box.max)), object->config().brim_width.value });
+            objects.push_back({ BoundingBoxf(unscale(box.min) - plate_origin, unscale(box.max) - plate_origin), object->config().brim_width.value });
         }
     std::optional<LayerTimeTowerPrimeTower> prime_tower;
     if (m_wipe_tower && print.has_wipe_tower()) {
@@ -3626,18 +3629,29 @@ std::string GCode::extrude_layer_time_tower(coordf_t print_z)
     // Tower speed, mm/s: slow, so its line re-primes the nozzle after the wait.
     constexpr double tower_speed = 30.;
     const double nozzle = m_config.nozzle_diameter.get_at(this->cur_extruder_index()); // mm
-    // The tower's layer is as tall as the step since its last one (a support-only layer between adds to it).
+    // The tower's layer is as tall as the step since its last one (a support-only layer between adds to it). A step
+    // taller than the nozzle's tallest layer (max_layer_height, mm; 0.75 nozzle diameters when unset), as under an
+    // object that starts up on support, is printed as several loops, each at its own Z and the last at print_z: a
+    // bead that tall has no flow (Flow::spacing() threw and stopped the slice).
     const double height = print_z - m_layer_time_tower_last_z; // mm
     if (height <= EPSILON)
         return {};
-    const Flow flow(Flow::auto_extrusion_width(frPerimeter, float(nozzle)), float(height), float(nozzle));
-    auto to_point = [this](const Vec2d &p) { return Point(scaled<coord_t>(Vec2d(p - m_origin))); };
+    double max_loop_height = m_config.max_layer_height.get_at(this->cur_extruder_index()); // mm
+    if (max_loop_height <= EPSILON)
+        max_loop_height = 0.75 * nozzle;
+    const int    loops       = std::max(1, int(std::ceil(height / max_loop_height - EPSILON)));
+    const double loop_height = height / loops; // mm
+    const Flow flow(Flow::auto_extrusion_width(frPerimeter, float(nozzle)), float(loop_height), float(nozzle));
+    // The tower's spot is in plate coordinates (place_layer_time_tower); the plate's origin puts it on the bed.
+    const Vec3d plate_origin_3d = m_print != nullptr ? m_print->get_plate_origin() : Vec3d::Zero();
+    const Vec2d plate_origin(plate_origin_3d.x(), plate_origin_3d.y());
+    auto to_point = [this, &plate_origin](const Vec2d &p) { return Point(scaled<coord_t>(Vec2d(p + plate_origin - m_origin))); };
     // A square's outline inset by half a line, starting at its lower left corner.
     auto square = [&](double left, double bottom, double size) {
         Polyline polyline;
         polyline.points = { to_point(Vec2d(left, bottom)), to_point(Vec2d(left + size, bottom)), to_point(Vec2d(left + size, bottom + size)),
                             to_point(Vec2d(left, bottom + size)), to_point(Vec2d(left, bottom)) };
-        ExtrusionPath path(erWipeTower, flow.mm3_per_mm(), flow.width(), float(height));
+        ExtrusionPath path(erWipeTower, flow.mm3_per_mm(), flow.width(), float(loop_height));
         path.polyline = Polyline3(std::move(polyline));
         return path;
     };
@@ -3645,14 +3659,22 @@ std::string GCode::extrude_layer_time_tower(coordf_t print_z)
     const double left    = m_layer_time_tower_origin.x() + m_layer_time_tower_brim;
     const double bottom  = m_layer_time_tower_origin.y() + m_layer_time_tower_brim;
     std::string  gcode;
-    if (!m_layer_time_tower_brim_done) {
-        for (int line = LAYER_TIME_TOWER_BRIM_LINES; line >= 1; --line) {
-            const double offset = line * double(flow.spacing()) - half; // mm, outward from the tower's outline
-            gcode += this->_extrude(square(left - offset, bottom - offset, m_layer_time_tower_side + 2. * offset), "layer time tower brim", tower_speed);
+    for (int loop = 1; loop <= loops; ++loop) {
+        if (loops > 1) {
+            // Down to this loop's top: the tower ends at the previous loop and the nozzle is over its hollow, away
+            // from the objects; the last loop ends at the layer's Z, where the block ends.
+            const double z = loop == loops ? print_z : m_layer_time_tower_last_z + loop * loop_height;
+            gcode += m_writer.travel_to_z(z, "layer time tower: loop height", true);
         }
-        m_layer_time_tower_brim_done = true;
+        if (!m_layer_time_tower_brim_done) {
+            for (int line = LAYER_TIME_TOWER_BRIM_LINES; line >= 1; --line) {
+                const double offset = line * double(flow.spacing()) - half; // mm, outward from the tower's outline
+                gcode += this->_extrude(square(left - offset, bottom - offset, m_layer_time_tower_side + 2. * offset), "layer time tower brim", tower_speed);
+            }
+            m_layer_time_tower_brim_done = true;
+        }
+        gcode += this->_extrude(square(left + half, bottom + half, m_layer_time_tower_side - 2. * half), "layer time tower", tower_speed);
     }
-    gcode += this->_extrude(square(left + half, bottom + half, m_layer_time_tower_side - 2. * half), "layer time tower", tower_speed);
     m_layer_time_tower_last_z = print_z;
     return gcode;
 }
@@ -3692,6 +3714,9 @@ std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
     }
     const Vec2f writer_offset = m_writer.get_xy_offset();
     auto emitted = [&writer_offset](const Vec2d &p) { return Vec2d(p.x() - writer_offset.x(), p.y() - writer_offset.y()); };
+    // The tower's spot and the park position are in plate coordinates (place_layer_time_tower,
+    // layer_time_park_position); the plate's origin puts them on the bed, where the writer's offset takes it off again.
+    const Vec2d plate_origin(print.get_plate_origin().x(), print.get_plate_origin().y());
     if (m_layer_time_wait_at == LayerTimeWaitAt::Tower) {
         // MAGPIE: in an H/2 frame every travel keeps the bands' clearance, measured from the logical layer the
         // nozzle works for. The site comes before the frame's first band, so the tower block travels as the
@@ -3709,7 +3734,7 @@ std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
         m_need_change_layer_lift_z = false;
         gcode += this->retract();
         gcode += ";" + GCodeProcessor::wait_tower_begin_tag() + "\n";
-        const Vec2d center = m_layer_time_tower_origin + Vec2d(0.5, 0.5) * (m_layer_time_tower_side + 2. * m_layer_time_tower_brim);
+        const Vec2d center = m_layer_time_tower_origin + Vec2d(0.5, 0.5) * (m_layer_time_tower_side + 2. * m_layer_time_tower_brim) + plate_origin;
         gcode += this->travel_to(Point(scaled<coord_t>(Vec2d(center - m_origin))), erWipeTower, "travel to the layer time tower");
         site.at_tower = true;
         site.z        = m_writer.get_position().z();
@@ -3726,7 +3751,7 @@ std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
         if ((m_layer_time_wait_at == LayerTimeWaitAt::Park || m_layer_time_wait_at == LayerTimeWaitAt::PurgeTower) && m_last_pos_defined) {
             if (std::optional<Vec2d> park = this->layer_time_park_position(print, print_z)) {
                 const Vec2d here = emitted(this->point_to_gcode(this->last_pos()));
-                const Vec2d there = emitted(*park);
+                const Vec2d there = emitted(*park + plate_origin);
                 site.can_park     = true;
                 site.x            = here.x();
                 site.y            = here.y();

@@ -605,6 +605,14 @@ ModLoadResult load_mods(const ModLoadOptions &options)
     auto take = [&](Candidate &c) {
         Mod &mod = c.mod;
         if (disabled.count(mod.id)) {
+            // A reload (after a JSON mod was installed) keeps the native code the start loaded, and with it the
+            // manifest of a mod turned off meanwhile: without the manifest its code ran on with its parameters
+            // unknown, and the settings dropped them (review 2026-10-22). It turns off at the next start.
+            if (const NativeMod *loaded = !options.load_native && options.loaded_native ? options.loaded_native->find(mod.id) : nullptr) {
+                result.notes.push_back(mod.id + ": turns off at the next start");
+                mods.push_back(loaded->manifest());
+                return;
+            }
             result.notes.push_back(mod.id + ": turned off");
             return;
         }

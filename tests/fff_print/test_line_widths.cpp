@@ -3,6 +3,7 @@
 #include <catch2/catch_all.hpp>
 
 #include "libslic3r/Format/3mf.hpp"
+#include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/LineWidths.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Print.hpp"
@@ -13,6 +14,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -418,4 +420,53 @@ TEST_CASE("Placeholders resolve a line width on the current nozzle with its per-
     // One nozzle size: the field is not read.
     config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.4, 0.4 });
     CHECK_THAT(Flow::extrusion_width("outer_wall_line_width", config, 0), WithinAbs(0.4, 1e-6));
+}
+
+// MAGPIE: on a BBL printer filament_map names the nozzle printing a filament (printing_nozzle_index), and an automatic
+// map mode derives the map from the sliced objects (ToolOrdering), after the walls were sliced with the map the config
+// held: on an H2D with 0.4 and 0.8 mm nozzles the walls of the 0.8 mm nozzle came out 0.42 mm wide (review
+// 2026-10-22). Now the objects are sliced again with the derived map (Print::reslice_for_derived_filament_map).
+TEST_CASE("An automatic filament map slices the walls on the nozzle it derives", "[LineWidths][FilamentMap]")
+{
+    // Each nozzle has a wall width of its own; whichever nozzle the engine picks, the walls are that nozzle's width.
+    auto slice_with = [](const std::vector<int> &initial_map) {
+        DynamicPrintConfig config = two_nozzles(0.4, 0.8);
+        config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmAutoForFlush;
+        config.set_key_value("filament_map", new ConfigOptionInts(initial_map));
+        config.set_key_value("filament_colour", new ConfigOptionStrings{ "#F2754E", "#F2754E" });
+        config.set_deserialize_strict({ { "outer_wall_line_width_per_nozzle", "0.42,0.84" }, { "inner_wall_line_width_per_nozzle", "0.42,0.84" } });
+        Print print;
+        print.is_BBL_printer() = true;
+        Model model;
+        init_print({ make_cube(20., 20., 20.) }, print, model, config);
+        print.process();
+        const std::string output = gcode(print);
+        // A BBL printer names features "; FEATURE: <role>" and widths "; LINE_WIDTH: <mm>".
+        std::set<double> wall_widths;
+        double           width = 0.;
+        std::string      role;
+        GCodeReader      reader;
+        reader.parse_buffer(output, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+            const std::string raw(line.raw());
+            if (raw.rfind("; FEATURE: ", 0) == 0)
+                role = raw.substr(11);
+            else if (raw.rfind("; LINE_WIDTH: ", 0) == 0)
+                width = std::stod(raw.substr(14));
+            else if (line.extruding(self) && line.dist_XY(self) > 0 && (role == "Outer wall" || role == "Inner wall"))
+                wall_widths.insert(width);
+        });
+        return std::make_pair(print.config().filament_map.values, wall_widths);
+    };
+    const auto [derived, widths] = slice_with({ 1, 1 });
+    REQUIRE(derived.size() == 2);
+    REQUIRE(derived[0] >= 1);
+    REQUIRE(derived[0] <= 2);
+    // Started from the other nozzle, the engine derives the same map, and the walls follow it both times.
+    const auto [derived_again, widths_again] = slice_with({ derived[0] == 1 ? 2 : 1, derived[1] });
+    CHECK(derived_again == derived);
+    const double expected = derived[0] == 1 ? 0.42 : 0.84; // mm, the derived nozzle's wall width
+    for (const std::set<double> &found : { widths, widths_again }) {
+        REQUIRE(found.size() == 1);
+        CHECK_THAT(*found.begin(), WithinAbs(expected, 1e-3));
+    }
 }

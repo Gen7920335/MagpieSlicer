@@ -3507,20 +3507,8 @@ void ToolOrdering::reorder_extruders_for_minimum_flush_volume(bool reorder_first
         // Write the maps back for every mode: used filaments adopt the engine's extruder/nozzle
         // choice, unused ones keep their config assignment. In manual modes the extruder map
         // mirrors the user's map (a deviation throws in get_recommended_filament_maps).
-        if (!derived_maps.empty()) {
-            // Orca: the config maps are the merge base; fall back to a synthesized base when no
-            // producer sized them to the filament count (CLI runs until the per-filament
-            // synthesis lands there), where indexing per filament would run out of bounds.
-            std::vector<int> base_filament_map = print_config->filament_map.values;
-            if (base_filament_map.size() != derived_maps.size())
-                base_filament_map.assign(derived_maps.size(), 1);
-            std::vector<int> base_volume_map = print_config->filament_volume_map.values;
-            if (base_volume_map.size() != derived_maps.size())
-                base_volume_map.assign(derived_maps.size(), (int)nvtStandard);
-            m_print->update_filament_maps_to_config(FilamentGroupUtils::update_used_filament_values(base_filament_map, derived_maps, used_filaments),
-                                                    FilamentGroupUtils::update_used_filament_values(base_volume_map, grouping_result.get_volume_map(), used_filaments),
-                                                    grouping_result.get_nozzle_map());
-        }
+        if (!derived_maps.empty())
+            m_print->write_back_recommended_filament_maps(grouping_result, used_filaments);
         std::transform(filament_maps.begin(), filament_maps.end(), filament_maps.begin(), [](int value) { return value - 1; });
 
         if (m_print->is_BBL_printer())

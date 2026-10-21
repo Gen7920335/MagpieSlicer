@@ -1205,3 +1205,53 @@ TEST_CASE("The tower preview shows the tower the G-code prints", "[LowTemperatur
     CHECK(printed == !(brush_on && brush_set));
     CHECK(ModHost::gcode_events_tower_preview(config).has_value() == printed);
 }
+
+TEST_CASE("Cura interface sublayers apply above a raft", "[LowTemperatureInterface][Sublayer][SupportExtras]")
+{
+    OfficialMods mods;
+    // Before: a raft's contact layer counted as a contact of the interface stacks, so with Cura (which emits no
+    // contact layers of its own) no interface layer was numbered and no sublayer printed at its temperature.
+    DynamicPrintConfig config = sublayer_temperature_config(false, 185);
+    config.set_deserialize_strict({ { "raft_layers", 2 } });
+    set_mod_params(config, { { "cura_support.enable", true } });
+    Print print;
+    init_and_process_print({ TestMesh::overhang }, print, config);
+    const TemperatureTrace trace = trace_temperatures(Slic3r::Test::gcode(print), config);
+    CHECK(std::count(trace.targets.begin(), trace.targets.end(), 185) > 0);
+    REQUIRE_FALSE(trace.model_temperatures.empty());
+    for (const int temperature_c : trace.model_temperatures)
+        CHECK(temperature_c == 220);
+}
+
+TEST_CASE("The temperature drop tower prints at the same place on a later plate", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    // Review 2026-10-22: the tower's position is in plate coordinates and the writer takes the plate's origin off
+    // every move, so without the origin added the tower of plate 2 came out left of the bed (X < 0, a move the
+    // printer cannot make). Same model at the same place on its plate: the moves are the same.
+    OfficialMods mods;
+    const DynamicPrintConfig config = tower_config(TowerSettings{});
+    auto moves_on_plate = [&config](const Vec3d &plate_origin) {
+        Print print;
+        Model model;
+        std::vector<TriangleMesh> meshes;
+        meshes.push_back(mesh(TestMesh::overhang, Vec3d(100. + plate_origin.x(), 100. + plate_origin.y(), 0.)));
+        init_print(std::move(meshes), print, model, config, nullptr, /*arrange=*/false);
+        print.set_plate_origin(plate_origin);
+        const std::string  output = Slic3r::Test::gcode(print);
+        std::istringstream in(output);
+        std::vector<std::string> moves;
+        size_t                   tower_lines = 0;
+        for (std::string line; std::getline(in, line);) {
+            if (line.rfind("G1 ", 0) == 0 || line.rfind("G0 ", 0) == 0)
+                moves.push_back(line);
+            tower_lines += line.find("; temperature drop tower") != std::string::npos;
+        }
+        REQUIRE(tower_lines > 0);
+        return moves;
+    };
+    const std::vector<std::string> first = moves_on_plate(Vec3d::Zero()), second = moves_on_plate(Vec3d(324., 0., 0.));
+    REQUIRE(!first.empty());
+    CHECK(first == second);
+    for (const std::string &line : second)
+        CHECK(line.find(" X-") == std::string::npos);
+}

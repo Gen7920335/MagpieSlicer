@@ -1353,6 +1353,9 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
         double estimated_now() const;
         // The nozzle's temperature model brought up to `now`.
         NozzleTemperature &nozzle_temperature_at(size_t filament_id, double now);
+        // The filament whose model an M104/M109 sets: its I word, else the filament in the tool its T word names,
+        // else `filament_id` (the current one).
+        size_t temperature_model_filament(const GCodeReader::GCodeLine &line, int filament_id) const;
         float m_preheat_time;
         int m_preheat_steps;
         bool m_disable_m73;

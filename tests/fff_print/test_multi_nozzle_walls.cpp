@@ -1955,12 +1955,23 @@ TEST_CASE("Chosen toolheads and override ranges resolve to the filaments mapped 
 {
     OfficialMods           mods;
     const std::vector<int> map{ 3, 1, 4, 2 };
-    SECTION("a smaller nozzle with the walls' colour wins over the chosen toolhead") {
+    SECTION("the chosen toolhead wins over a smaller nozzle with the walls' colour") {
+        // Gen, 2026-10-22: the designated tool always prints the detail walls. Toolhead 1 (0.15 mm) holds filament 2,
+        // red; the walls' blue is also on toolhead 2 (0.2 mm, filament 4), which came first before.
         const auto detail = open_planner(mapped_four_nozzle_config(map, { "#0000FF", "#FF0000", "#00FF00", "#0000FF" }, 1),
                                          { { "enable", true }, { "detail_toolhead", 1 } }, true)->detail_tool(0);
         REQUIRE(detail);
-        CHECK(detail.filament_1based == 4);
+        CHECK(detail.filament_1based == 2);
+        CHECK(detail.toolhead_1based == 1);
+    }
+    SECTION("the chosen toolhead wins when every filament has the walls' colour") {
+        // Four tools in one colour: before, the smallest nozzle holding that colour (toolhead 1) printed the detail
+        // walls whatever toolhead was chosen, so a chosen toolhead 2 printed with toolhead 1.
+        const auto detail = open_planner(mapped_four_nozzle_config(map, { "#F2754E", "#F2754E", "#F2754E", "#F2754E" }, 1),
+                                         { { "enable", true }, { "detail_toolhead", 2 } }, true)->detail_tool(0);
+        REQUIRE(detail);
         CHECK(detail.toolhead_1based == 2);
+        CHECK(detail.filament_1based == 4);
     }
     SECTION("the chosen toolhead prints the filament mapped to it when no smaller nozzle has the walls' colour") {
         const auto detail = open_planner(mapped_four_nozzle_config(map, { "#0000FF", "#FF0000", "#00FF00", "#FFFF00" }, 1),

@@ -145,8 +145,9 @@ WallTool tool_for_toolhead(const State &s, unsigned int toolhead, unsigned int p
     return first;
 }
 
-// The tool for the detail (outer) walls of walls printed by base_filament: the smallest nozzle that holds the same
-// material in the same colour; failing that, detail_toolhead when it is smaller; otherwise the base tool itself.
+// The tool for the detail (outer) walls of walls printed by base_filament: detail_toolhead when it is chosen (not 0),
+// smaller and holds a filament; failing that, the smallest nozzle that holds the same material in the same colour;
+// failing that, with a chosen toolhead, any smaller nozzle with the same material; otherwise the base tool itself.
 WallTool detail_tool_for(const State &s, unsigned int base_filament)
 {
     const WallTool base = tool_for_filament(s, base_filament);
@@ -177,12 +178,15 @@ WallTool detail_tool_for(const State &s, unsigned int base_filament)
         }
         return found;
     };
-    if (const WallTool same = best(true))
-        return same;
+    // The chosen toolhead prints the detail walls with the filament mapped to it, whatever colour the others hold
+    // (Gen, 2026-10-22: the designated tool always wins); before, a smaller nozzle in the walls' colour came first,
+    // and with every filament in one colour a chosen T4 printed with T1.
     const int manual = s.detail_toolhead;
     if (manual > 0 && smaller(unsigned(manual)))
         if (const WallTool t = tool_for_toolhead(s, unsigned(manual), base.filament))
             return t;
+    if (const WallTool same = best(true))
+        return same;
     // Auto keeps the assigned colour; an explicit toolhead may fall back to any smaller nozzle.
     if (manual > 0)
         if (const WallTool any = best(false))

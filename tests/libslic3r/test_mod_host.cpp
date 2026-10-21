@@ -8,6 +8,7 @@
 #include <libslic3r/PrintConfig.hpp>
 
 #include <boost/filesystem/path.hpp>
+#include <clocale>
 
 #include <map>
 #include <set>
@@ -709,4 +710,36 @@ TEST_CASE("The official mods' slot settings name steps, so a changed parameter r
         CHECK(steps.count("psGCodeExport") == 1);
     }
     CHECK(official.invalidated_steps("{}", R"({"multi_nozzle_walls.small_wall_speed": 30})").count("psGCodeExport") == 1);
+}
+
+TEST_CASE("Numbers in expressions and percent values read with a decimal point in any C locale", "[ModHost]")
+{
+    // The GUI sets the C locale from the language; with a decimal comma std::strtod read "0.5" as 0 and the
+    // tokenizer then looped on ".5" without consuming it.
+    const char *saved = std::setlocale(LC_NUMERIC, nullptr);
+    const std::string saved_name = saved ? saved : "C";
+    const char *comma = std::setlocale(LC_NUMERIC, "de_DE.UTF-8");
+    if (comma == nullptr)
+        comma = std::setlocale(LC_NUMERIC, "German_Germany.1252");
+    if (comma == nullptr)
+        SKIP("no locale with a decimal comma");
+    CHECK(eval_number("0.5 + 0.25") == 0.75);
+    CHECK(eval_number("max(1,5)") == 5.);
+    CHECK(eval_number(".5") == 0.5);
+    const char *end = nullptr;
+    CHECK(parse_decimal(" 12.5%", &end) == 12.5);
+    CHECK(std::string(end) == "%");
+    std::setlocale(LC_NUMERIC, saved_name.c_str());
+}
+
+TEST_CASE("A decimal is written with the digits that read back to the same value", "[ModHost]")
+{
+    for (const double v : { 0.1, 1234.5678, 0.1234567, 1e-7, 2.5, 100. }) {
+        CAPTURE(v);
+        const std::string text = format_decimal(v);
+        const char       *end  = nullptr;
+        CHECK(parse_decimal(text.c_str(), &end) == v);
+        CHECK(*end == '\0');
+    }
+    CHECK(format_decimal(0.1) == "0.1");
 }

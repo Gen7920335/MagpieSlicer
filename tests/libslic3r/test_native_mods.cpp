@@ -310,6 +310,25 @@ TEST_CASE("Installed native code loads only with a trusted signature, from a cac
         CHECK(result.mods->find_mod("magpie_test_mod") == nullptr);
         CHECK(any_contains(result.errors, "the files differ from what \"test-official\" signed"));
     }
+    SECTION("a damaged cached copy is copied again") {
+        TestKey key("test-verified", KeyRole::Verified);
+        sign_package(package.string(), key.key.private_pem, key.id);
+        std::string cached;
+        {
+            const ModLoadResult result = load_mods(options);
+            INFO(joined(result.errors));
+            REQUIRE(result.native->find("magpie_test_mod") != nullptr);
+            cached = result.native->find("magpie_test_mod")->loaded_path();
+        }
+        // Cut short as a crash during the copy leaves it. Before, a cached file was never checked again, so the
+        // mod failed to load on every start.
+        const auto size = fs::file_size(cached);
+        fs::resize_file(cached, 1000);
+        const ModLoadResult result = load_mods(options);
+        INFO(joined(result.errors));
+        REQUIRE(result.native->find("magpie_test_mod") != nullptr);
+        CHECK(fs::file_size(cached) == size);
+    }
 }
 
 TEST_CASE("A bundled package loads unsigned, and with a signature only when it verifies", "[NativeMods]")
@@ -584,4 +603,37 @@ TEST_CASE("Test case arguments naming files of the tests folder are made absolut
     CHECK(cases[0].args[2] == (tests / "model.obj").string());
     // One part that is not a file of the folder leaves the argument as written.
     CHECK(cases[0].args[3] == "presets/machine.json;missing.json");
+}
+
+TEST_CASE("A native mod turned off keeps its manifest until the next start", "[NativeMods]")
+{
+    TempDir        dir;
+    const fs::path installed = dir.path / "mods";
+    const fs::path package   = installed / "magpie_test_mod";
+    copy_dir(test_mods_dir() / "magpie_test_mod", package);
+    ModLoadOptions options;
+    options.installed_dir = installed.string();
+    options.cache_dir     = (dir.path / "cache").string();
+    TestKey key("test-verified", KeyRole::Verified);
+    sign_package(package.string(), key.key.private_pem, key.id);
+    const ModLoadResult started = load_mods(options);
+    INFO(joined(started.errors));
+    REQUIRE(started.native->find("magpie_test_mod") != nullptr);
+    REQUIRE(started.mods->find_mod("magpie_test_mod") != nullptr);
+    // Turned off while running, then a reload (a JSON mod was installed): the code stays loaded, so the manifest
+    // does too. Before (review 2026-10-22) the reload dropped the manifest while the code ran on, and the settings
+    // dropped the mod's parameters.
+    set_mod_enabled(installed.string(), "magpie_test_mod", false);
+    options.load_native   = false;
+    options.loaded_native = started.native;
+    const ModLoadResult reloaded = load_mods(options);
+    INFO(joined(reloaded.errors));
+    CHECK(reloaded.mods->find_mod("magpie_test_mod") != nullptr);
+    CHECK(any_contains(reloaded.notes, "magpie_test_mod: turns off at the next start"));
+    // The next start, without the running code, leaves it off.
+    options.load_native   = true;
+    options.loaded_native = nullptr;
+    const ModLoadResult next = load_mods(options);
+    CHECK(next.mods->find_mod("magpie_test_mod") == nullptr);
+    CHECK(any_contains(next.notes, "magpie_test_mod: turned off"));
 }

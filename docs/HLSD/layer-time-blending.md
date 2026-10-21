@@ -65,8 +65,11 @@ when a wait is next to them.
   the layer's Z (the lazy layer raise, done early); shorter ones are a bare G4.
 - `tower` (the mod's default): a hollow 15 mm square tower with a 5-line brim, printed one loop
   per layer next to the objects (20 mm off their bounding box) or at the plate's
-  `layer_time_blend_tower_x/_y`. The nozzle waits over its center, then prints the loop, which
-  re-primes it. Each layer's part is a self-contained block that starts and ends retracted at the
+  `layer_time_blend_tower_x/_y`, in plate coordinates like the park position and the printable area
+  (the plate's origin puts them on the bed). The nozzle waits over its center, then prints the loop,
+  which re-primes it. A step taller than the nozzle's `max_layer_height` since the tower's last loop
+  (the first object layer on a raft) is printed as several loops, each at its own Z, the last at
+  the layer's. Each layer's part is a self-contained block that starts and ends retracted at the
   layer's Z, so the blocks above the last wait that needs the tower are left out; the planner picks
   the lowest cut that keeps every limit. With absolute E a left-out block that does not end with the
   writer's own `G92 E0` is replaced by a `G92` to the E it ended at, so the moves after it push no

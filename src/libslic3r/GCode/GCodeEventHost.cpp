@@ -31,7 +31,14 @@ struct GCodeEventWriter
     // The G-code being built at the event in progress, or null outside one, or once a writer function of this call
     // failed (output is then dropped).
     static std::string *out(GCode &g) { return g.m_gcode_event_error ? nullptr : g.m_gcode_event_output; }
-    static Point        plate(const GCode &g, double x, double y) { return Point(scaled<coord_t>(Vec2d(Vec2d(x, y) - g.m_origin))); }
+    // A point in plate coordinates (mm): the frame of the printable area and a tower's stored position. The plate's
+    // origin puts it on the bed, where the objects and the current origin are; the writer takes the origin off again
+    // (plate 2 and up: without it the moves came out left of the bed).
+    static Point        plate(const GCode &g, double x, double y)
+    {
+        const Vec3d plate_origin = g.m_print != nullptr ? g.m_print->get_plate_origin() : Vec3d::Zero();
+        return Point(scaled<coord_t>(Vec2d(Vec2d(x, y) + Vec2d(plate_origin.x(), plate_origin.y()) - g.m_origin)));
+    }
 
     // Runs a writer function's body; an exception is kept for the core to rethrow after the mod returns, so none
     // crosses into the mod. `fallback` is what the mod gets then.

@@ -734,3 +734,134 @@ TEST_CASE("A stored layer time tower position over an object does not print", "[
     CHECK(spot->origin.x() < 90.);
     CHECK(spot->fits);
 }
+
+TEST_CASE("A tower that does not fit parks instead", "[LayerTimeBlend]")
+{
+    // Review 2026-10-22: the core parked, but the planner read wait_at "tower" and planned in-place waits.
+    DynamicPrintConfig config = wait_at_config("tower", 2., {{"tower_size", "400"}, {"in_place_max", "2"}}, {{"park_x", "10"}, {"park_y", "190"}});
+    const std::string  out    = slice_mesh(pillar_with_slab(), config);
+    CHECK(out.find("G1 X10 Y190") != std::string::npos);
+    check_blended(measured_intervals(out), 2.);
+}
+
+TEST_CASE("In a by-object print the waits park above the objects already printed", "[LayerTimeBlend]")
+{
+    // The tower is not printed by object, so the waits park; a trip from the second object must clear the
+    // first, which is finished (16 mm tall), by the in-place lift (1 mm).
+    DynamicPrintConfig config = wait_at_config("tower", 2., {{"in_place_max", "2"}}, {{"park_x", "10"}, {"park_y", "190"}});
+    config.set_deserialize_strict({{"print_sequence", "by object"}});
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    Print print;
+    Model model;
+    std::vector<TriangleMesh> meshes;
+    for (const float x : {60.f, 140.f}) {
+        TriangleMesh mesh = pillar_with_slab();
+        mesh.translate(x, 100.f, 0.f);
+        meshes.push_back(std::move(mesh));
+    }
+    init_print(std::move(meshes), print, model, config, nullptr, /*arrange=*/false);
+    const std::vector<std::string> lines = lines_of(gcode(print));
+    double max_layer_z = 0.;
+    size_t parked = 0, parked_over_first = 0;
+    for (size_t i = 0; i + 1 < lines.size(); ++i) {
+        if (lines[i].rfind(";Z:", 0) == 0)
+            max_layer_z = std::max(max_layer_z, std::stod(lines[i].substr(3)));
+        if (lines[i].rfind("G1 Z", 0) != 0 || lines[i + 1].find("X10 Y190") == std::string::npos)
+            continue;
+        CHECK(*axis_value(lines[i], 'Z') >= max_layer_z + 1. - 1e-3);
+        ++parked;
+        parked_over_first += max_layer_z > 15.;
+    }
+    CHECK(parked > 0);
+    CHECK(parked_over_first > 0);
+}
+
+TEST_CASE("The tower catches up on a raft in loops no taller than the nozzle's tallest layer", "[LayerTimeBlend]")
+{
+    // Review 2026-10-22: the tower's layer was as tall as the step since its last one, and the first site comes
+    // with the first object layer, on top of a 12-layer raft (3.6 mm): a 3.6 mm bead has no flow (Flow::spacing()
+    // threw and the slice stopped). Now the first block prints that height in loops of at most max_layer_height
+    // (0.3 mm here, set below), each at its own Z; the blocks above print one loop as before.
+    DynamicPrintConfig config = wait_at_config("tower", 10.);
+    config.set_deserialize_strict({{"raft_layers", "12"}, {"max_layer_height", "0.3"}});
+    const std::vector<std::string> lines = lines_of(slice_mesh(pillar_with_slab(), config));
+    const std::string begin_tag = ";MAGPIE_WAIT_TOWER_BEGIN", end_tag = ";MAGPIE_WAIT_TOWER_END";
+    std::vector<size_t> loops_per_block; // tower loops (the "layer time tower" extrusions) of each block
+    std::vector<double> z_per_block;     // the Z the block's last loop is printed at
+    bool   in_block = false;
+    double z        = 0.;
+    for (const std::string &line : lines) {
+        if (line == begin_tag) {
+            in_block = true;
+            loops_per_block.push_back(0);
+            z_per_block.push_back(0.);
+        } else if (line == end_tag) {
+            in_block = false;
+        } else if (in_block) {
+            if (const std::optional<double> value = axis_value(line, 'Z'))
+                z = *value;
+            if (line.find("; layer time tower") != std::string::npos && line.find("brim") == std::string::npos) {
+                ++loops_per_block.back();
+                z_per_block.back() = z;
+            }
+        }
+    }
+    REQUIRE(loops_per_block.size() > 2);
+    // The first block spans the raft: at least 3.6 mm / 0.3 mm loops; the next ones one loop each.
+    CHECK(loops_per_block.front() >= 12);
+    CHECK(loops_per_block[1] == 1);
+    // Each block ends at its layer's Z: the blocks' Z values rise by one layer (0.3 mm) from the first.
+    CHECK_THAT(z_per_block[1] - z_per_block[0], WithinAbs(0.3, 1e-3));
+}
+
+TEST_CASE("On a later plate the tower and the park position stay where they are on the first", "[LayerTimeBlend]")
+{
+    // Review 2026-10-22: the tower's spot, the park position and the printable area are in plate coordinates;
+    // the objects are on the bed, the plate's origin further, and the writer takes the origin off every move.
+    // The tower and the park position went out without it: on plate 2 they came out left of the bed (X < 0).
+    // Same model at the same place on its plate: the moves are the same.
+    const char *wait_at = GENERATE("tower", "park");
+    CAPTURE(wait_at);
+    const DynamicPrintConfig config = wait_at_config(wait_at, 2., {{"in_place_max", "2"}}, {{"park_x", "10"}, {"park_y", "190"}});
+    auto moves_on_plate = [&config](const Vec3d &plate_origin) {
+        BundledMods mods;
+        REQUIRE(mods.errors.empty());
+        Print print;
+        Model model;
+        TriangleMesh mesh = pillar_with_slab();
+        mesh.translate(float(100. + plate_origin.x()), float(100. + plate_origin.y()), 0.f);
+        std::vector<TriangleMesh> meshes;
+        meshes.push_back(std::move(mesh));
+        init_print(std::move(meshes), print, model, config, nullptr, /*arrange=*/false);
+        print.set_plate_origin(plate_origin);
+        std::vector<std::string> moves;
+        for (const std::string &line : lines_of(gcode(print)))
+            if (line.rfind("G1 ", 0) == 0 || line.rfind("G0 ", 0) == 0)
+                moves.push_back(line);
+        return moves;
+    };
+    const std::vector<std::string> first = moves_on_plate(Vec3d::Zero()), second = moves_on_plate(Vec3d(324., 0., 0.));
+    REQUIRE(!first.empty());
+    CHECK(first == second);
+    // No move left of the bed.
+    for (const std::string &line : second)
+        CHECK(line.find(" X-") == std::string::npos);
+    if (std::string(wait_at) == "park")
+        CHECK(std::any_of(second.begin(), second.end(), [](const std::string &line) { return line.find("X10 Y190") != std::string::npos; }));
+}
+
+TEST_CASE("A temperature set for another tool leaves the printing nozzle's model alone", "[LayerTimeBlend][GCodeProcessor]")
+{
+    // Review 2026-10-22: an M104 with a T word (a preheat or cool-down of another tool, as the slicer writes for
+    // a tool change ahead) set the current filament's target, so its model cooled to the other tool's temperature
+    // and the next M109 on the printing tool counted a heat-up. The layer change tag as the processor reads it.
+    const std::string layer_change = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Layer_Change) + "\n";
+    // Inside the print: cool tool 1 to 150 degC, move 10 s, confirm 200 degC on the printing tool: nothing to wait for.
+    const std::string other_tool = "G90\nM83\nG1 X0 Y0 F600\nM109 S200\n" + layer_change + "M104 T1 S150\nG1 X100 F600\nM109 S200\nG1 X0 F600\n";
+    const std::string none       = "G90\nM83\nG1 X0 Y0 F600\nM109 S200\n" + layer_change + "G1 X100 F600\nM109 S200\nG1 X0 F600\n";
+    CHECK_THAT(estimated_time(other_tool, false), WithinAbs(estimated_time(none, false), 0.5));
+    // The same cool-down of the printing tool itself: 10 s of cooling at 1 degC/s, heated back at 2 degC/s (5 s).
+    const std::string own_tool = "G90\nM83\nG1 X0 Y0 F600\nM109 S200\n" + layer_change + "M104 S150\nG1 X100 F600\nM109 S200\nG1 X0 F600\n";
+    CHECK(estimated_time(own_tool, false) > estimated_time(none, false) + 4.);
+}

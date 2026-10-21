@@ -8,6 +8,7 @@
 #include "Polygon.hpp"
 #include "Print.hpp"
 #include "ModHost/ModSet.hpp"
+#include "ModHost/ObjectZOffset.hpp"
 #include "BeltTransform.hpp"
 #include "FilamentMixer.hpp"
 #include "Slicing.hpp"
@@ -1710,6 +1711,17 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
             if (! steps.empty())
                 for (PrintObject *object : m_objects)
                     update_apply_status(object->invalidate_mod_steps(steps));
+            // MAGPIE: a mod's object lift (object.z_offset) is applied by the slicing parameters (posSlice), and it
+            // follows which generator supports the object: a parameter of another mod that takes the object over
+            // (cura_support.enable declares posSupportMaterial only) ends the resin lift, so the object is sliced
+            // again when its lift changes (review 2026-10-22: it stayed lifted over support that was no longer there).
+            for (PrintObject *object : m_objects) {
+                std::string  old_error, new_error;
+                const double old_lift = ModHost::object_z_offset(m_full_print_config, object->config(), object->model_object()->name, &old_error);
+                const double new_lift = ModHost::object_z_offset(new_full_config, object->config(), object->model_object()->name, &new_error);
+                if (old_lift != new_lift || old_error != new_error)
+                    update_apply_status(object->invalidate_step(posSlice));
+            }
         }
         m_placeholder_parser.clear_config();
         // clear_config() wiped the constructor-set "version"; restore it for custom G-code.

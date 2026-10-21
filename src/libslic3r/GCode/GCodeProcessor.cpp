@@ -6493,6 +6493,29 @@ GCodeProcessor::NozzleTemperature &GCodeProcessor::nozzle_temperature_at(size_t 
     return t;
 }
 
+size_t GCodeProcessor::temperature_model_filament(const GCodeReader::GCodeLine &line, int filament_id) const
+{
+    // The filament whose temperature an M104/M109 names: its I word (the filament, 0-based, in the lines the
+    // slicer writes for a BBL printer), else its T word (the physical tool, physical_extruder_map, with the filament
+    // loaded in it), else the current filament. Before, the model of the current filament took every target, so a
+    // preheat of the next tool (M104 T<n>) counted as a change of the one printing.
+    float value = 0.f;
+    if (line.has_value('I', value) && value >= 0.f)
+        return size_t(value);
+    if (line.has_value('T', value) && value >= 0.f) {
+        int extruder = int(value);
+        for (size_t logical = 0; logical < m_physical_extruder_map.size(); ++logical)
+            if (m_physical_extruder_map[logical] == int(value)) {
+                extruder = int(logical);
+                break;
+            }
+        if (extruder >= 0 && size_t(extruder) < m_filament_id.size() && m_filament_id[extruder] != (unsigned char) (-1))
+            return size_t(m_filament_id[extruder]);
+        return size_t(extruder);
+    }
+    return size_t(std::max(0, filament_id));
+}
+
 void GCodeProcessor::process_M104(const GCodeReader::GCodeLine& line)
 {
     int filament_id = get_filament_id();
@@ -6500,7 +6523,7 @@ void GCodeProcessor::process_M104(const GCodeReader::GCodeLine& line)
     if (line.has_value('S', new_temp)) {
         m_extruder_temps[filament_id] = new_temp;
         // Orca: the temperature model behind the M109 wait estimate follows every target.
-        nozzle_temperature_at(size_t(filament_id), estimated_now()).target = new_temp;
+        nozzle_temperature_at(temperature_model_filament(line, filament_id), estimated_now()).target = new_temp;
     }
 }
 
@@ -6595,9 +6618,7 @@ void GCodeProcessor::process_M109(const GCodeReader::GCodeLine& line)
     if (both_ways || line.has_value('S', target)) {
         // The firmware finishes the moves, then waits until the nozzle reaches the target (M109 S waits
         // only while heating on Marlin; R both ways).
-        size_t id = size_t(filament_id);
-        if (float val; both_ways && line.has_value('T', val))
-            id = size_t(val);
+        const size_t id = temperature_model_filament(line, filament_id);
         // Orca: a wait inside the print (a tool change, a temperature change between layers) takes time; Orca
         // counted it as none. Waits before the first layer (start G-code heat-up) and BBL's virtual VM109 stay
         // at none, as in Orca, and leave the nozzle at the target. Rates: set_temperature_rates.

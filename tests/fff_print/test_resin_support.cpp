@@ -244,3 +244,27 @@ TEST_CASE("Every resin support setting survives a slicing mutation", "[ResinSupp
             CHECK_FALSE(print.objects().front()->support_layers().empty());
     }
 }
+
+TEST_CASE("Turning on a mod that takes the support over slices the lifted object again", "[ResinSupport][Elevation]")
+{
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    // Resin support lifts the object by its elevation; mixed support (priority 2, its enable declares
+    // posSupportMaterial only) outranks it once on, and the lift ends with it. Before (review 2026-10-22) the slice
+    // kept the lift: the object stayed in the air over support that was no longer there.
+    DynamicPrintConfig config = resin_config({{"resin_support.default_object_elevation", 5.}});
+    Print print;
+    Model model;
+    init_print({column_under_ceiling(8.)}, print, model, config);
+    print.process();
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(object.slicing_parameters().object_print_z_min > 4.);
+    nlohmann::json values = nlohmann::json::parse(config.opt_string("mod_settings"));
+    values["mixed_support.enable"] = true;
+    config.set_key_value("mod_settings", new ConfigOptionString(values.dump()));
+    print.apply(model, config);
+    CHECK_FALSE(object.is_step_done(posSlice));
+    print.process();
+    REQUIRE(ModHost::support_generator_name(print.full_print_config(), object.config()) == "mixed");
+    CHECK_THAT(object.slicing_parameters().object_print_z_min, Catch::Matchers::WithinAbs(0., 1e-9));
+}

@@ -3626,6 +3626,9 @@ std::map<ObjectID, unsigned int> getObjectExtruderMap(const Print& print) {
 void Print::process(long long *time_cost_with_cache, bool use_cache)
 {
     MAGPIE_STAGE_TIMER("print.process");
+    // MAGPIE: one derived-map reslice per outermost call (reslice_for_derived_filament_map).
+    ++m_filament_map_reslice_depth;
+    ScopeGuard reslice_depth_guard([this]() { --m_filament_map_reslice_depth; });
     long long start_time = 0, end_time = 0;
     if (time_cost_with_cache)
         *time_cost_with_cache = 0;
@@ -3956,7 +3959,12 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
         }
     }
 
-
+    // MAGPIE: objects sliced with a filament map the automatic mode then changed are sliced again with the derived
+    // one (printing_nozzle_index gives the widths from it): once, from the top, where their slices are kept.
+    if (m_filament_map_reslice_depth == 1 && this->reslice_for_derived_filament_map()) {
+        this->process(time_cost_with_cache, use_cache);
+        return;
+    }
 
     if (this->set_started(psWipeTower)) {
         {
@@ -4092,19 +4100,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                         filament_maps = derived_maps;
                         // Write the maps back: used filaments adopt the engine's extruder/nozzle
                         // choice, unused ones keep their config assignment.
-                        // Orca: the config maps are the merge base; fall back to a synthesized base
-                        // when no producer sized them to the filament count (CLI runs until the
-                        // per-filament synthesis lands there), where indexing per filament would
-                        // run out of bounds.
-                        std::vector<int> base_filament_map = m_config.filament_map.values;
-                        if (base_filament_map.size() != derived_maps.size())
-                            base_filament_map.assign(derived_maps.size(), 1);
-                        std::vector<int> base_volume_map = m_config.filament_volume_map.values;
-                        if (base_volume_map.size() != derived_maps.size())
-                            base_volume_map.assign(derived_maps.size(), (int)nvtStandard);
-                        update_filament_maps_to_config(FilamentGroupUtils::update_used_filament_values(base_filament_map, derived_maps, used_filaments),
-                                                       FilamentGroupUtils::update_used_filament_values(base_volume_map, grouping_result.get_volume_map(), used_filaments),
-                                                       grouping_result.get_nozzle_map());
+                        this->write_back_recommended_filament_maps(grouping_result, used_filaments);
                     }
                 }
                 // check map valid both in auto and mannual mode
@@ -4983,6 +4979,71 @@ void Print::finalize_first_layer_convex_hull()
     m_first_layer_convex_hull = Geometry::convex_hull(m_first_layer_convex_hull.points);
 }
 
+bool Print::write_back_recommended_filament_maps(const MultiNozzleUtils::LayeredNozzleGroupResult &grouping_result, const std::vector<unsigned int> &used_filaments)
+{
+    const std::vector<int> derived_maps = grouping_result.get_extruder_map(false); // 1-based
+    if (derived_maps.empty())
+        return false;
+    // Orca: the config maps are the merge base; fall back to a synthesized base when no producer sized them to the
+    // filament count (CLI runs until the per-filament synthesis lands there), where indexing per filament would run
+    // out of bounds.
+    std::vector<int> base_filament_map = m_config.filament_map.values;
+    if (base_filament_map.size() != derived_maps.size())
+        base_filament_map.assign(derived_maps.size(), 1);
+    std::vector<int> base_volume_map = m_config.filament_volume_map.values;
+    if (base_volume_map.size() != derived_maps.size())
+        base_volume_map.assign(derived_maps.size(), (int) nvtStandard);
+    const std::vector<int> before = m_config.filament_map.values;
+    update_filament_maps_to_config(FilamentGroupUtils::update_used_filament_values(base_filament_map, derived_maps, used_filaments),
+                                   FilamentGroupUtils::update_used_filament_values(base_volume_map, grouping_result.get_volume_map(), used_filaments),
+                                   grouping_result.get_nozzle_map());
+    return m_config.filament_map.values != before;
+}
+
+bool Print::reslice_for_derived_filament_map()
+{
+    // Only where the map changes what is sliced: nozzles of several sizes (the per-nozzle widths, line_width_reference_mm)
+    // on a BBL printer (printing_nozzle_index reads filament_map there) in an automatic map mode. A selector print is
+    // mapped per layer by its own plan.
+    if (!m_isBBLPrinter || m_config.nozzle_diameter.size() <= 1 || !(this->line_width_reference_mm() > 0.) ||
+        !is_auto_filament_map_mode(m_config.filament_map_mode) || this->is_dynamic_group_reorder())
+        return false;
+    const std::vector<int> before = m_config.filament_map.values;
+    if (m_config.print_sequence == PrintSequence::ByObject && m_objects.size() > 1) {
+        // The per-instance orderings the by-object branch of process() groups from.
+        const auto &is_mixed  = m_config.filament_is_mixed.values;
+        const auto &comp_strs = m_config.filament_mixed_components.values;
+        const bool  has_mixed = has_any_mixed_filament(is_mixed);
+        std::vector<std::vector<unsigned int>> all_filaments;
+        for (const PrintObject *object : m_objects)
+            for (size_t instance = 0; instance < object->instances().size(); ++instance) {
+                const ToolOrdering ordering(*object, (unsigned int) -1, false, instance);
+                for (const LayerTools &layer_tools : ordering.layer_tools())
+                    all_filaments.emplace_back(has_mixed ? expand_mixed_filaments(layer_tools.extruders, is_mixed, comp_strs) : layer_tools.extruders);
+            }
+        const std::vector<unsigned int> used_filaments = collect_sorted_used_filaments(all_filaments);
+        const auto physical_unprintables  = this->get_physical_unprintable_filaments(used_filaments);
+        auto       geometric_unprintables = this->get_geometric_unprintable_filaments();
+        if (has_mixed)
+            expand_mixed_slots_in_unprintables(geometric_unprintables, is_mixed, comp_strs);
+        const auto filament_unprintable_volumes = this->get_filament_unprintable_flow(used_filaments);
+        const auto grouping_result = ToolOrdering::get_recommended_filament_maps(all_filaments, this, m_config.filament_map_mode, physical_unprintables,
+                                                                                 geometric_unprintables, filament_unprintable_volumes);
+        this->write_back_recommended_filament_maps(grouping_result, used_filaments);
+    } else {
+        // The by-layer ordering derives the map and writes it back as it is sorted.
+        ToolOrdering ordering(*this, (unsigned int) -1, false);
+        ordering.sort_and_build_data(*this, (unsigned int) -1, false);
+    }
+    if (m_config.filament_map.values == before)
+        return false;
+    // PERMANENT DIAGNOSTIC: the objects were sliced with a map the automatic mode then changed.
+    BOOST_LOG_TRIVIAL(info) << "filament_map derived from the sliced objects differs from the map they were sliced with; slicing them again with it";
+    for (PrintObject *object : m_objects)
+        object->invalidate_step(posPerimeters);
+    return true;
+}
+
 void Print::update_filament_maps_to_config(std::vector<int> f_maps, std::vector<int> f_volume_maps, std::vector<int> f_nozzle_maps)
 {
     if ((m_config.filament_map.values != f_maps) || (m_config.filament_volume_map.values != f_volume_maps) || (m_config.filament_nozzle_map.values != f_nozzle_maps))
@@ -5135,16 +5196,7 @@ void Print::update_to_config_by_nozzle_group_result(const MultiNozzleUtils::Laye
         // No filament actually migrated between nozzles, so the plan reduces to a single
         // grouping: write all maps like the static paths do, and the next apply re-derives
         // identical slots from the written maps.
-        std::vector<int> base_filament_map = m_config.filament_map.values;
-        if (base_filament_map.size() != derived_maps.size())
-            base_filament_map.assign(derived_maps.size(), 1);
-        std::vector<int> base_volume_map = m_config.filament_volume_map.values;
-        if (base_volume_map.size() != derived_maps.size())
-            base_volume_map.assign(derived_maps.size(), (int)nvtStandard);
-        const std::vector<unsigned int> used_filaments = group_result.get_used_filaments();
-        update_filament_maps_to_config(FilamentGroupUtils::update_used_filament_values(base_filament_map, derived_maps, used_filaments),
-                                       FilamentGroupUtils::update_used_filament_values(base_volume_map, group_result.get_volume_map(), used_filaments),
-                                       group_result.get_nozzle_map());
+        this->write_back_recommended_filament_maps(group_result, group_result.get_used_filaments());
         return;
     }
 

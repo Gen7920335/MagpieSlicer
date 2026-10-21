@@ -1267,6 +1267,16 @@ public:
     // migration. A result without migration reduces to a single grouping and takes the
     // three-map write-back like the static paths.
     void update_to_config_by_nozzle_group_result(const MultiNozzleUtils::LayeredNozzleGroupResult& group_result);
+    // MAGPIE: the three maps of a grouping result written back (update_filament_maps_to_config): the used filaments
+    // take the engine's extruder, volume and nozzle choice, the others keep the config's. True when filament_map
+    // changed. The one write-back of the by-layer, by-object and selector paths.
+    bool write_back_recommended_filament_maps(const MultiNozzleUtils::LayeredNozzleGroupResult &grouping_result, const std::vector<unsigned int> &used_filaments);
+    // MAGPIE: on a printer whose nozzles differ in size the line widths follow filament_map (printing_nozzle_index),
+    // which an automatic map mode derives from the sliced objects (ToolOrdering), after they were sliced with the
+    // map the config held. Derives it now, and when it differs invalidates the objects' perimeters (and what follows)
+    // so process() slices them again with it: true then. The second derivation sees the same filaments per layer
+    // and gives the same map, so it runs once per process() (m_filament_map_reslice_depth).
+    bool reslice_for_derived_filament_map();
     void apply_config_for_render(const DynamicConfig &config);
 
     // 1 based group ids
@@ -1672,7 +1682,9 @@ private:
     ConflictResultOpt m_conflict_result;
     FakeWipeTower     m_fake_wipe_tower;
     bool              m_has_auto_filament_map_result{false};
-    
+    // MAGPIE: process() calls in progress; see reslice_for_derived_filament_map.
+    int               m_filament_map_reslice_depth{0};
+
     std::vector<std::set<int>> m_geometric_unprintable_filaments;
 
     //SoftFever: calibration

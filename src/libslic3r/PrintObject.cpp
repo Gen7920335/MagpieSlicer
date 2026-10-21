@@ -1995,6 +1995,19 @@ bool PrintObject::invalidate_state_by_config_options(
                     return opt ? opt->value : std::string();
                 };
                 invalidated |= this->invalidate_mod_steps(mods->invalidated_steps(text(old_config), text(new_config)));
+                // MAGPIE: the object's lift (object.z_offset, applied in posSlice) follows which generator supports
+                // it, which any of these values may change: sliced again when it does (see Print::apply).
+                if (opt_key == "object_mod_settings") {
+                    PrintObjectConfig old_object_config = m_config, new_object_config = m_config;
+                    old_object_config.object_mod_settings.value = text(old_config);
+                    new_object_config.object_mod_settings.value = text(new_config);
+                    std::string        old_error, new_error;
+                    const std::string &name = this->model_object()->name;
+                    if (ModHost::object_z_offset(this->print()->full_print_config(), old_object_config, name, &old_error) !=
+                            ModHost::object_z_offset(this->print()->full_print_config(), new_object_config, name, &new_error) ||
+                        old_error != new_error)
+                        steps.emplace_back(posSlice);
+                }
             }
         } else {
             // for legacy, if we can't handle this option let's invalidate all steps
