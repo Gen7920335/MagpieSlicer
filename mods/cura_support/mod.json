@@ -5,7 +5,7 @@
     // threshold angle) still apply; the parameters below are the CuraEngine settings Orca has no setting for.
     "id": "cura_support",
     "name": "Cura support", "name_ko": "Cura 서포트",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "api": { "major": 1, "min_minor": 0 },
     "binary": "cura_support",
     // Picked for an object's support while enable holds; mixed_support (priority 2) and resin_support (1) go first.
@@ -14,7 +14,7 @@
     "params": {
         "enable":                       { "invalidates": ["posSupportMaterial"], "type": "bool",  "default": false, "label": "Use Cura support", "label_ko": "Cura 서포트 사용" },
         "join_distance":                { "invalidates": ["posSupportMaterial"], "type": "float", "default": 2.0,   "unit": "mm",  "label": "Support join distance", "label_ko": "서포트 연결 거리" },
-        "min_feature_width":            { "invalidates": ["posSupportMaterial"], "type": "float", "default": 0.0,   "unit": "mm",  "label": "Minimum feature width (0 = 85% of the support line width)", "label_ko": "최소 형상 폭 (0 = 서포트 선 폭의 85%)" },
+        "min_feature_width":            { "invalidates": ["posSupportMaterial"], "type": "float", "default": 0.0,   "unit": "mm",  "label": "Minimum feature width (0 = 85% of the nozzle size)", "label_ko": "최소 형상 폭 (0 = 노즐 크기의 85%)" },
         "z_overrides_xy":               { "invalidates": ["posSupportMaterial"], "type": "bool",  "default": true,  "label": "Z distance overrides X/Y distance", "label_ko": "Z 거리가 X/Y 거리보다 우선" },
         "xy_distance_overhang":         { "invalidates": ["posSupportMaterial"], "type": "float", "default": 0.2,   "unit": "mm",  "label": "Minimum X/Y distance at overhangs", "label_ko": "오버행의 최소 X/Y 거리" },
         "stair_step_height":            { "invalidates": ["posSupportMaterial"], "type": "float", "default": 0.3,   "unit": "mm",  "label": "Stair step height", "label_ko": "계단 높이" },

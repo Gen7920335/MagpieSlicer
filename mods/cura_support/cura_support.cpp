@@ -23,7 +23,7 @@
 #include <vector>
 
 #define CURA_MOD_ID "cura_support"
-#define CURA_MOD_VERSION "1.1.0"
+#define CURA_MOD_VERSION "1.2.0"
 
 MAGPIE_MOD_DEFINE(CURA_MOD_ID, CURA_MOD_VERSION)
 
@@ -124,7 +124,7 @@ template<class Fn> void parallel_layers(mp_ctx *ctx, size_t begin, size_t end, F
 struct ModSettings
 {
     double join_distance_mm         = 2.0;  // support_join_distance
-    double min_feature_width_mm     = 0.;   // min_even_wall_line_width; 0 = 0.85 x support line width
+    double min_feature_width_mm     = 0.;   // min_even_wall_line_width; 0 = Cura's default, 0.85 x nozzle size
     bool   z_overrides_xy           = true; // support_xy_overrides_z == z_overrides_xy
     double xy_distance_overhang_mm  = 0.2;  // support_xy_distance_overhang
     double stair_step_height_mm     = 0.3;  // support_bottom_stair_step_height
@@ -212,6 +212,9 @@ struct Inputs
     coord_t roof_line_width;
     coord_t bottom_line_width;
     Polygon machine_border;        // printable area, for conical support
+    coord_t adhesion_size;         // room the brim, skirt or raft takes inside the printable area
+    coord_t support_nozzle;        // machine_nozzle_size of support_infill_extruder_nr
+    coord_t object_nozzle;         // machine_nozzle_size of the mesh's extruder
     double  layer_height_mm;
 
     std::vector<ExPolygons> slices;    // the object's islands per layer
@@ -248,6 +251,9 @@ Inputs gather_inputs(mp_ctx *ctx, const mp_support_input_v1 &c)
     const int bottom      = int(config_f64(ctx, "support_interface_bottom_layers"));
     in.bottom_layer_count = size_t(std::max(0, bottom < 0 ? top_layers : bottom));
 
+    in.adhesion_size  = coord_t(c.adhesion_margin);
+    in.support_nozzle = coord_t(c.support_nozzle_diameter);
+    in.object_nozzle  = coord_t(c.object_nozzle_diameter);
     in.machine_border.points.assign(reinterpret_cast<const Point *>(c.printable_area.pts),
                                     reinterpret_cast<const Point *>(c.printable_area.pts) + c.printable_area.n);
 
@@ -370,8 +376,19 @@ Polygons varying_xy_disallowed_area(const Inputs &in, size_t layer_idx, const Mo
     return cura_offset(cura_offset(moved, smooth), -smooth);
 }
 
+// Cura's half_min_feature_width, min_even_wall_line_width + 10 um, for the settings of the extruder with nozzle
+// `nozzle`. min_even_wall_line_width defaults to min_wall_line_width, machine_nozzle_size * 0.85, which the
+// frontend hands the engine in whole micrometres.
+coord_t half_min_feature_width(const ModSettings &s, coord_t nozzle)
+{
+    if (s.min_feature_width_mm > 0.)
+        return coord_t(scale_(s.min_feature_width_mm) + um(10.));
+    const double nozzle_um = double(nozzle) * scaling_factor() * 1000.;
+    return um(std::round(0.85 * nozzle_um)) + um(10.);
+}
+
 // AreaSupport::join.
-Polygons join(const Inputs &in, const ModSettings &s, const Polygons &layer_up, const Polygons &layer_this, coord_t half_min_feature)
+Polygons join(const Inputs &in, const ModSettings &s, const Polygons &layer_up, const Polygons &layer_this)
 {
     Polygons joined;
     const double conical_angle = deg2rad(s.conical_angle_deg);
@@ -381,13 +398,16 @@ Polygons join(const Inputs &in, const ModSettings &s, const Polygons &layer_up, 
         const coord_t smallest = scale_(s.conical_min_width_mm);
         const Polygons insetted    = cura_offset(layer_up, -smallest / 2);
         const Polygons small_parts = diff(layer_up, cura_offset(insetted, smallest / 2 + um(20.)));
-        Polygons border{in.machine_border};
+        // Room for the platform adhesion around the support.
+        const Polygons border = cura_offset(Polygons{in.machine_border}, -in.adhesion_size);
         joined = intersection(union_(union_(layer_this, cura_offset(layer_up, conical_offset)), small_parts), border);
     } else {
         joined = union_(layer_this, layer_up);
     }
     const coord_t join_distance = scale_(s.join_distance_mm);
     if (join_distance > 0) {
+        // Read from the support infill extruder's settings.
+        const coord_t half_min_feature = half_min_feature_width(s, in.support_nozzle);
         joined = union_(cura_offset(cura_offset(cura_offset(joined, -half_min_feature), join_distance + half_min_feature, jtRound),
                                     -join_distance, jtRound),
                         joined);
@@ -598,7 +618,8 @@ Areas compute_areas(mp_ctx *ctx, const Inputs &in, const ModSettings &s)
     }
 
     // X/Y disallowed and sloped areas (generateSupportAreasForMesh, first parallel loop).
-    const coord_t half_min_feature = (s.min_feature_width_mm > 0. ? scale_(s.min_feature_width_mm) : coord_t(0.85 * double(in.support_line_width))) + um(10.);
+    // Read from the mesh's settings.
+    const coord_t half_min_feature = half_min_feature_width(s, in.object_nozzle);
     const double  sloped_angle     = deg2rad(s.stair_step_min_slope_deg);
     const coord_t sloped_width     = um(10.) + coord_t(double(in.layer_thickness) / bounded_tan(sloped_angle)) / 2;
     std::vector<Polygons> xy_disallowed(layer_count), sloped(layer_count);
@@ -646,7 +667,7 @@ Areas compute_areas(mp_ctx *ctx, const Inputs &in, const ModSettings &s)
         }
         if (idx + 1 < layer_count) {
             const Polygons model_on_layer = idx > 0 ? in.outlines[idx] : Polygons{};
-            layer_this = diff(join(in, s, support[idx + 1], layer_this, half_min_feature), model_on_layer);
+            layer_this = diff(join(in, s, support[idx + 1], layer_this), model_on_layer);
         }
         if (use_towers) {
             for (const ExPolygon &part : union_ex(layer_this)) {

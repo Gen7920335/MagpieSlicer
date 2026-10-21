@@ -1141,3 +1141,104 @@ TEST_CASE("A changed support module parameter regenerates the support", "[Suppor
     CHECK_FALSE(print.objects().front()->is_step_done(posSupportMaterial));
     CHECK(print.objects().front()->is_step_done(posSlice));
 }
+
+// Every point of the support extrusions of `layer`, in bed coordinates.
+static void support_points_on_bed(const ExtrusionEntityCollection &collection, const Point &shift, Points &out)
+{
+    for (const ExtrusionEntity *entity : collection.entities) {
+        if (entity == nullptr)
+            continue;
+        if (const auto *children = dynamic_cast<const ExtrusionEntityCollection *>(entity))
+            support_points_on_bed(*children, shift, out);
+        else {
+            // Keep the polyline: a range-for over a temporary's member reads a destroyed object.
+            const Polyline polyline = entity->as_polyline();
+            for (const Point &p : polyline.points)
+                out.push_back(p + shift);
+        }
+    }
+}
+
+TEST_CASE("Cura support keeps features as narrow as 85% of the nozzle size", "[CuraSupport]")
+{
+    BundledMods mods;
+    // Before: the minimum feature width came from the support line width (0.85 x 0.7 mm + 10 um, so
+    // support narrower than 1.21 mm was opened away); CuraEngine's min_even_wall_line_width is
+    // 0.85 x machine_nozzle_size (0.34 mm + 10 um here, removing only what is narrower than 0.70 mm).
+    // A 1.0 mm wide beam sticking out of a cube needs support under its whole length.
+    const double beam_width = 1.0, beam_from_x = 8., beam_to_x = 20., beam_z = 8.;
+    TriangleMesh fixture = make_cube(8., 8., beam_z);
+    TriangleMesh beam    = make_cube(beam_to_x - beam_from_x, beam_width, 1.2);
+    beam.translate(float(beam_from_x), 3.5f, float(beam_z));
+    fixture.merge(beam);
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"nozzle_diameter", "0.4"},
+        {"support_line_width", 0.7}, {"enable_support", true}});
+    line1(config, "support_type", "normal_cura(auto)");
+
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{fixture}, print, model, config, nullptr, /*arrange=*/false);
+    print.process();
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(ModHost::support_generator_name(print.full_print_config(), object.config()) == "cura");
+
+    // Support layers well under the beam (below 7 mm, clear of the top Z distance) with support lines under
+    // the beam's free part (x 10 to 20 mm on the bed).
+    size_t layers = 0, layers_under_beam = 0;
+    for (const SupportLayer *layer : object.support_layers()) {
+        if (layer->print_z > beam_z - 1.)
+            continue;
+        ++layers;
+        Points points;
+        support_points_on_bed(layer->support_fills, object.instances().front().shift, points);
+        layers_under_beam += std::any_of(points.begin(), points.end(),
+                                         [](const Point &p) { return p.x() > scale_(10.) && p.x() < scale_(beam_to_x); });
+    }
+    CAPTURE(layers, layers_under_beam);
+    REQUIRE(layers > 0);
+    CHECK(layers_under_beam == layers);
+}
+
+TEST_CASE("Cura conical support leaves room for the brim inside the printable area", "[CuraSupport]")
+{
+    BundledMods mods;
+    // Before: conical support was clipped to the printable area itself, so near the bed's edge it spread
+    // into the room the brim needs. CuraEngine clips it to the printable area shrunk by the adhesion's
+    // width (AreaSupport::join); here a 5 mm brim with no gap and no skirt.
+    const double brim_width = 5.;
+    TriangleMesh fixture = make_cube(4., 4., 10.);
+    fixture.translate(10.f, 4.f, 0.f);
+    TriangleMesh ceiling = make_cube(20., 4., 1.2);
+    ceiling.translate(2.f, 4.f, 10.f);
+    fixture.merge(ceiling);
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"enable_support", true},
+        {"printable_area", "0x0,30x0,30x20,0x20"}, {"brim_type", "outer_only"}, {"brim_width", brim_width},
+        {"brim_object_gap", 0}, {"skirt_loops", 0}});
+    line1(config, "support_type", "normal_cura(auto)");
+    set_mod_params(config, {{"cura_support.conical_enabled", true}, {"cura_support.conical_angle", -30.}});
+
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{fixture}, print, model, config, nullptr, /*arrange=*/false);
+    print.process();
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(ModHost::support_generator_name(print.full_print_config(), object.config()) == "cura");
+
+    // The ceiling's left end (x = 2 mm) sits inside the brim's room, and a negative conical angle widens the
+    // support towards the bed (10 mm at 30 degrees: 5.8 mm), past x = 0 mm. Nothing may come within 5 mm of
+    // the edges.
+    Points points;
+    for (const SupportLayer *layer : object.support_layers())
+        support_points_on_bed(layer->support_fills, object.instances().front().shift, points);
+    REQUIRE_FALSE(points.empty());
+    coord_t min_x = points.front().x(), min_y = points.front().y();
+    for (const Point &p : points) {
+        min_x = std::min(min_x, p.x());
+        min_y = std::min(min_y, p.y());
+    }
+    CAPTURE(unscale<double>(min_x), unscale<double>(min_y));
+    CHECK(min_x >= scale_(brim_width) - scale_(0.001));
+    CHECK(min_y >= scale_(brim_width) - scale_(0.001));
+}

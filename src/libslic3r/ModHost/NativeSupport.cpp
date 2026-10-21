@@ -49,6 +49,27 @@ void rings_of(const std::vector<Polygons> &layers, std::vector<std::vector<mp_ri
     }
 }
 
+// How far the first layer's adhesion reaches past the object, in mm: the raft's expansion, else the outer brim,
+// with the skirt's loops around that. An automatic brim is counted at the configured brim width, the width it
+// is sized from before the object's own estimate.
+double adhesion_margin_mm(const PrintObject &object)
+{
+    const PrintObjectConfig &config = object.config();
+    const Print             &print  = *object.print();
+    if (object.has_raft())
+        return config.raft_expansion.value + std::max(0., config.raft_first_layer_expansion.value);
+    double reach = 0.;
+    if (object.has_brim() && config.brim_type != btInnerOnly)
+        reach = config.brim_object_gap.value + config.brim_width.value;
+    if (print.has_skirt() && print.config().skirt_loops.value > 0) {
+        // The outermost loop's centreline sits skirt_distance - spacing / 2 + loops * spacing past the brim
+        // (Print::_make_skirt), and its outer edge half a line width further.
+        const Flow flow = print.skirt_flow();
+        reach += print.config().skirt_distance.value + (print.config().skirt_loops.value - 0.5) * flow.spacing() + flow.width() / 2.;
+    }
+    return reach;
+}
+
 void gather(const PrintObject &object, const std::vector<Polygons> *mask, Input &in)
 {
     const size_t layer_count = object.layer_count();
@@ -104,6 +125,12 @@ void gather(const PrintObject &object, const std::vector<Polygons> *mask, Input 
     in.c.printable_area       = {view(in.printable_area), uint32_t(in.printable_area.points.size())};
     in.c.support_line_width   = int64_t(support_material_flow(&object).scaled_width());
     in.c.interface_line_width = int64_t(support_material_interface_flow(&object).scaled_width());
+    const Flow support_flow   = support_material_flow(&object);
+    in.c.support_nozzle_diameter = int64_t(scale_(support_flow.nozzle_diameter()));
+    in.c.object_nozzle_diameter  = object.num_printing_regions() > 0 ?
+        int64_t(scale_(object.printing_region(0).flow(object, frPerimeter, object.config().layer_height.value).nozzle_diameter())) :
+        in.c.support_nozzle_diameter;
+    in.c.adhesion_margin = int64_t(scale_(adhesion_margin_mm(object)));
 }
 
 Polygons polygons_of(const mp_rings &rings)
