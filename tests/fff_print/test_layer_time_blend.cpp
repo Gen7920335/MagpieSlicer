@@ -582,3 +582,49 @@ TEST_CASE("Under H/2 a wait site starts each full layer only", "[LayerTimeBlend]
     // The 53 layers of the plain slice: half-height passes are no layers of their own.
     CHECK(count_lines_starting(out, site_tag) == 53);
 }
+
+// The tower block comes at the start of a layer, before the H/2 frame's first band: its travels used to find no
+// logical layer and stop the slice ("Half-height travel requires an explicit logical parent layer").
+TEST_CASE("Under H/2 the tower waits happen over the tower, at the layer's height", "[LayerTimeBlend]")
+{
+    DynamicPrintConfig config = wait_at_config("tower", 10.);
+    Slic3r::Test::half_layer_params(config, true);
+    const std::string              out   = slice_mesh(pillar_with_slab(), config);
+    const std::vector<std::string> lines = lines_of(out);
+    const std::string begin_tag = ";MAGPIE_WAIT_TOWER_BEGIN", end_tag = ";MAGPIE_WAIT_TOWER_END";
+    size_t blocks = 0, waits_in_block = 0, block_extrusions = 0;
+    bool   in_block = false;
+    double z = 0., layer_z = 0.;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const std::string &line = lines[i];
+        if (line.rfind(";Z:", 0) == 0)
+            layer_z = std::stod(line.substr(3));
+        if (std::optional<double> v = axis_value(line, 'Z'))
+            z = *v;
+        if (line == begin_tag) {
+            in_block = true;
+            ++blocks;
+        } else if (line == end_tag) {
+            in_block = false;
+        } else if (in_block) {
+            if (line == site_tag && lines[i - 1].rfind("G4 P", 0) == 0)
+                ++waits_in_block;
+            const bool xy = axis_value(line, 'X') || axis_value(line, 'Y');
+            // Never below the layer: the travel over to the tower keeps at least the layer's height.
+            if (xy)
+                CHECK(z >= layer_z - 1e-6);
+            if (xy && axis_value(line, 'E') && *axis_value(line, 'E') > 0.) {
+                CHECK_THAT(z, WithinAbs(layer_z, 1e-6));
+                ++block_extrusions;
+            }
+        }
+    }
+    CHECK_FALSE(in_block);
+    CHECK(blocks > 0);
+    CHECK(waits_in_block > 0);
+    CHECK(block_extrusions > 0);
+    // One site per full layer, each in its layer's block, as without H/2; the blocks left out above the last wait
+    // take their sites along (where the cut falls follows the layer times, which H/2 changes).
+    CHECK(count_lines_starting(out, site_tag) == blocks);
+    CHECK(blocks < 53);
+}

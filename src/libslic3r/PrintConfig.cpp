@@ -10801,6 +10801,10 @@ void DynamicPrintConfig::set_num_filaments(unsigned int num_filaments)
     }
 }
 
+// MAGPIE: reference_mm is absolute_line_width_reference_nozzle() of the config the user set (mm, 0 when every nozzle
+// has one size). FullPrintConfig has no printer_variant, so DynamicPrintConfig::validate passes its own.
+static std::map<std::string, std::string> validate_print_config(const FullPrintConfig &cfg, bool under_cli, double reference_mm);
+
 //BBS: pass map to recording all invalid valies
 std::map<std::string, std::string> DynamicPrintConfig::validate(bool under_cli)
 {
@@ -10813,7 +10817,7 @@ std::map<std::string, std::string> DynamicPrintConfig::validate(bool under_cli)
         FullPrintConfig fpc;
         fpc.apply(*this, true);
         // Verify this print options through the FullPrintConfig.
-        return Slic3r::validate(fpc, under_cli);
+        return validate_print_config(fpc, under_cli, absolute_line_width_reference_nozzle(*this));
     }
     default:
         //FIXME no validation on SLA data?
@@ -12541,6 +12545,11 @@ void update_static_print_config_from_dynamic(ConfigBase& config, const DynamicPr
 //FIXME localize this function.
 std::map<std::string, std::string> validate(const FullPrintConfig &cfg, bool under_cli)
 {
+    return validate_print_config(cfg, under_cli, absolute_line_width_reference_nozzle(cfg));
+}
+
+static std::map<std::string, std::string> validate_print_config(const FullPrintConfig &cfg, bool under_cli, double reference_mm)
+{
     std::map<std::string, std::string> error_message;
     // --layer-height
     if (cfg.get_abs_value("layer_height") <= 0) {
@@ -12713,6 +12722,17 @@ std::map<std::string, std::string> validate(const FullPrintConfig &cfg, bool und
             std::string key(widths[i]);
             double abs_width = cfg.get_abs_value(key, max_nozzle_diameter);
             double allowed_max = (key == "bridge_line_width") ? min_nozzle_diameter : MAX_LINE_WIDTH_MULTIPLIER * max_nozzle_diameter;
+            // MAGPIE: on a printer whose nozzles differ in size each nozzle prints the bridge width resolved on itself: a
+            // percentage over that nozzle, an absolute width restated over the reference nozzle
+            // (scale_absolute_line_widths_to_nozzles). So the width is checked as a fraction of its nozzle, here for
+            // every nozzle at once; Print::validate checks each printing nozzle again with its per-nozzle bridge field.
+            // Orca resolved a percentage on the largest nozzle and compared it with the smallest, which refused 100 %.
+            if (key == "bridge_line_width" && reference_mm > 0.) {
+                const auto  &bridge             = cfg.bridge_line_width;
+                const double fraction_of_nozzle = bridge.percent ? bridge.value / 100. : bridge.value / reference_mm;
+                abs_width                       = fraction_of_nozzle * min_nozzle_diameter; // mm on the smallest nozzle
+                allowed_max                     = min_nozzle_diameter;
+            }
             if (abs_width > allowed_max) {
                 if (key == "bridge_line_width")
                     error_message.emplace(key, _u8L("Bridge line width must not exceed nozzle diameter: ") + std::to_string(abs_width));

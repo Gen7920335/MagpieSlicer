@@ -61,6 +61,28 @@ SCENARIO("Generic config validation performs as expected.", "[Config]") {
     }
 }
 
+// MAGPIE: on a mixed-nozzle printer the bridge width is checked as a fraction of each nozzle (absolute widths over the
+// reference nozzle), as the slice resolves it. Orca's check read 100 % on the 0.4 mm nozzle against the 0.15 mm one and
+// refused the stock U1 0.4 profiles (absolute 0.4 mm bridges) on a 0.15/0.4 mm printer.
+TEST_CASE("The bridge width check follows each nozzle on a mixed-nozzle printer", "[Config]") {
+    auto bridge_error = [](const char *nozzles, const char *bridge) {
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_deserialize_strict("nozzle_diameter", nozzles);
+        config.set_deserialize_strict("bridge_line_width", bridge);
+        return config.validate().count("bridge_line_width") > 0;
+    };
+    // 0.15 mm and 0.4 mm nozzles; the reference nozzle is the largest (no printer_variant set).
+    CHECK_FALSE(bridge_error("0.15,0.4", "100%"));
+    CHECK_FALSE(bridge_error("0.15,0.4", "0.4"));   // 100 % of the 0.4 mm reference
+    CHECK_FALSE(bridge_error("0.15,0.4", "0"));
+    CHECK(bridge_error("0.15,0.4", "101%"));
+    CHECK(bridge_error("0.15,0.4", "0.41"));        // 102.5 % of the reference, also over the 0.15 mm nozzle
+    // One nozzle size: Orca's check as it was.
+    CHECK_FALSE(bridge_error("0.4,0.4", "0.4"));
+    CHECK(bridge_error("0.4,0.4", "0.41"));
+    CHECK(bridge_error("0.4", "101%"));
+}
+
 SCENARIO("Config accessor functions perform as expected.", "[Config]") {
     GIVEN("A config generated from default options") {
         Slic3r::DynamicPrintConfig config = Slic3r::DynamicPrintConfig::full_print_config();

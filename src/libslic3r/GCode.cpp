@@ -3741,6 +3741,15 @@ std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
     const Vec2f writer_offset = m_writer.get_xy_offset();
     auto emitted = [&writer_offset](const Vec2d &p) { return Vec2d(p.x() - writer_offset.x(), p.y() - writer_offset.y()); };
     if (m_layer_time_wait_at == LayerTimeWaitAt::Tower) {
+        // MAGPIE: in an H/2 frame every travel keeps the bands' clearance, measured from the logical layer the
+        // nozzle works for. The site comes before the frame's first band, so the tower block travels as the
+        // frame's own full layer (m_layer, the object layer at print_z): without one, travel_to stopped the slice.
+        const Layer *const logical_before   = m_logical_layer;
+        const double       reference_before = m_half_layer_motion_reference_height;
+        if (m_half_layer_dispatch_active && m_logical_layer == nullptr && m_layer != nullptr) {
+            m_logical_layer                      = m_layer;
+            m_half_layer_motion_reference_height = m_layer->height;
+        }
         // A block that starts and ends retracted, at the layer's Z, with the same pending lift: the export
         // can leave it out above the last wait that needs the tower.
         gcode += this->retract();
@@ -3759,6 +3768,8 @@ std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
         gcode += this->extrude_layer_time_tower(print_z);
         gcode += this->retract();
         gcode += ";" + GCodeProcessor::wait_tower_end_tag() + "\n";
+        m_logical_layer                      = logical_before;
+        m_half_layer_motion_reference_height = reference_before;
     } else {
         if ((m_layer_time_wait_at == LayerTimeWaitAt::Park || m_layer_time_wait_at == LayerTimeWaitAt::PurgeTower) && m_last_pos_defined) {
             if (std::optional<Vec2d> park = this->layer_time_park_position(print, print_z)) {
