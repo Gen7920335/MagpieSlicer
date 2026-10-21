@@ -14,6 +14,7 @@
 #include "PrintConfig.hpp"
 #include "Model.hpp"
 #include "Config.hpp"
+#include "LineWidths.hpp"
 
 // #define SLIC3R_DEBUG
 
@@ -74,8 +75,15 @@ SlicingParameters SlicingParameters::create_from_config(
     coordf_t                         object_height,
     const std::vector<unsigned int> &object_extruders,
     const Vec3d                     &object_shrinkage_compensation,
-    coordf_t                         object_z_offset)
+    coordf_t                         object_z_offset,
+    bool                             is_bbl_printer)
 {
+    // MAGPIE: the 1-based nozzle the *_from_nozzle() helpers take, of the 1-based filament `filament_id`. Orca handed
+    // them object_extruders' 0-based ids, which read the previous nozzle's limits (filament 3 of a 0.4/0.4/0.6
+    // printer got 0.32 mm instead of 0.48 mm), and never applied a BBL filament_map.
+    auto nozzle_of_filament = [&print_config, is_bbl_printer](int filament_id) {
+        return int(printing_nozzle_index(print_config, filament_id, is_bbl_printer)) + 1;
+    };
     coordf_t initial_layer_print_height                      = (print_config.initial_layer_print_height.value <= 0) ? 
         object_config.layer_height.value : print_config.initial_layer_print_height.value;
 
@@ -84,8 +92,8 @@ SlicingParameters SlicingParameters::create_from_config(
     // which is consistent with the requirement that if support_filament == 0 resp. support_interface_filament == 0,
     // support will not trigger tool change, but it will use the current nozzle instead.
     // In that case all the nozzles have to be of the same diameter.
-    coordf_t support_material_extruder_dmr           = print_config.nozzle_diameter.get_at(object_config.support_filament.value - 1);
-    coordf_t support_material_interface_extruder_dmr = print_config.nozzle_diameter.get_at(object_config.support_interface_filament.value - 1);
+    coordf_t support_material_extruder_dmr           = print_config.nozzle_diameter.get_at(nozzle_of_filament(object_config.support_filament.value) - 1);
+    coordf_t support_material_interface_extruder_dmr = print_config.nozzle_diameter.get_at(nozzle_of_filament(object_config.support_interface_filament.value) - 1);
 
     // ORCA: store Z distance
     const coordf_t support_top_z_gap    = object_config.support_top_z_distance.value;
@@ -134,11 +142,11 @@ SlicingParameters SlicingParameters::create_from_config(
     if (object_config.enable_support.value || params.base_raft_layers > 0 || object_config.enforce_support_layers > 0) {
         // Has some form of support. Add the support layers to the minimum / maximum layer height limits.
         params.min_layer_height = std::max(
-            min_layer_height_from_nozzle(print_config, object_config.support_filament), 
-            min_layer_height_from_nozzle(print_config, object_config.support_interface_filament));
+            min_layer_height_from_nozzle(print_config, nozzle_of_filament(object_config.support_filament)),
+            min_layer_height_from_nozzle(print_config, nozzle_of_filament(object_config.support_interface_filament)));
         params.max_layer_height = std::min(
-            max_layer_height_from_nozzle(print_config, object_config.support_filament), 
-            max_layer_height_from_nozzle(print_config, object_config.support_interface_filament));
+            max_layer_height_from_nozzle(print_config, nozzle_of_filament(object_config.support_filament)),
+            max_layer_height_from_nozzle(print_config, nozzle_of_filament(object_config.support_interface_filament)));
         params.max_suport_layer_height = params.max_layer_height;
     }
 
@@ -147,8 +155,8 @@ SlicingParameters SlicingParameters::create_from_config(
         params.max_layer_height = std::min(params.max_layer_height, max_layer_height_from_nozzle(print_config, 0));
     } else {
         for (unsigned int extruder_id : object_extruders) {
-            params.min_layer_height = std::max(params.min_layer_height, min_layer_height_from_nozzle(print_config, extruder_id));
-            params.max_layer_height = std::min(params.max_layer_height, max_layer_height_from_nozzle(print_config, extruder_id));
+            params.min_layer_height = std::max(params.min_layer_height, min_layer_height_from_nozzle(print_config, nozzle_of_filament(int(extruder_id) + 1)));
+            params.max_layer_height = std::min(params.max_layer_height, max_layer_height_from_nozzle(print_config, nozzle_of_filament(int(extruder_id) + 1)));
         }
     }
 

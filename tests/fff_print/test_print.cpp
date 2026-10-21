@@ -2012,3 +2012,39 @@ TEST_CASE("The extrusion width check rejects a width resolved on another nozzle 
     // 0.18 mm fin (0.39 x), so that defect class is guarded by the planner tests instead.
     CHECK_FALSE(extrusion_width_exceeds_nozzle_bound(erExternalPerimeter, 0.17, 0.4, 1.05));
 }
+
+// Orca handed the variable layer height helpers 0-based filament ids where they take 1-based nozzles, so a filament
+// read the previous nozzle's limits, and a BBL filament_map was never applied. Three nozzles, 0.4 / 0.4 / 0.6 mm,
+// with layer height limits 0.08-0.32 / 0.08-0.32 / 0.12-0.48 mm.
+TEST_CASE("Variable layer height limits come from the nozzle each filament prints on", "[Print][Slicing][FilamentMap]")
+{
+    const bool bbl = GENERATE(false, true);
+    DynamicPrintConfig config = Slic3r::Test::multifilament_config(3);
+    set_toolhead_nozzle_diameter(config, 0, 0.4);
+    set_toolhead_nozzle_diameter(config, 1, 0.4);
+    set_toolhead_nozzle_diameter(config, 2, 0.6);
+    size_flush_to_nozzles(config);
+    config.set_key_value("min_layer_height", new ConfigOptionFloats{0.08, 0.08, 0.12});
+    config.set_key_value("max_layer_height", new ConfigOptionFloats{0.32, 0.32, 0.48});
+    config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"enable_support", false},
+                                   {"raft_layers", 0}, {"enable_prime_tower", false}});
+    if (bbl) {
+        config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+        config.set_key_value("filament_map", new ConfigOptionInts{3, 1, 2}); // filament 1 on the 0.6 mm nozzle
+    }
+    // Every role on one filament: filament 3 (the 0.6 mm nozzle by its number), or filament 1 (the 0.6 mm nozzle by
+    // the BBL map).
+    const int filament = bbl ? 1 : 3;
+    std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{{{"extruder", filament}, {"outer_wall_filament_id", filament},
+        {"inner_wall_filament_id", filament}, {"sparse_infill_filament_id", filament}, {"internal_solid_filament_id", filament},
+        {"top_surface_filament_id", filament}, {"bottom_surface_filament_id", filament}}};
+    Print print;
+    print.is_BBL_printer() = bbl;
+    Model model;
+    init_print({ cube(10) }, print, model, config, &overrides);
+    REQUIRE(print.objects().front()->object_extruders() == std::vector<unsigned int>{unsigned(filament - 1)});
+    const SlicingParameters &params = print.objects().front()->slicing_parameters();
+    CAPTURE(bbl);
+    CHECK_THAT(params.min_layer_height, Catch::Matchers::WithinAbs(0.12, 1e-9));
+    CHECK_THAT(params.max_layer_height, Catch::Matchers::WithinAbs(0.48, 1e-9));
+}

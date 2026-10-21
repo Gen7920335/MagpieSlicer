@@ -61,3 +61,20 @@ TEST_CASE("Multi-material segmentation resolves the outer-wall line width", "[Mu
                      Catch::Matchers::WithinAbs(c.expected, 1e-9));
     }
 }
+
+// MAGPIE: a BBL printer prints the outer wall filament on the nozzle filament_map gives it; other printers on the
+// nozzle of its number.
+TEST_CASE("The painted outer wall width follows a BBL filament map", "[MultiMaterialSegmentation][FilamentMap]")
+{
+    PrintConfig print_config;
+    print_config.nozzle_diameter.values = {0.4, 0.8};
+    print_config.filament_map.values    = {2, 1}; // filament 1 on the 0.8 mm nozzle, filament 2 on the 0.4 mm one
+    PrintObjectConfig object_config;
+    object_config.line_width = ConfigOptionFloatOrPercent(0., false);
+    PrintRegionConfig region_config;
+    region_config.outer_wall_line_width        = ConfigOptionFloatOrPercent(120., true);
+    region_config.outer_wall_filament_id.value = 1;
+
+    CHECK_THAT(resolve_outer_wall_line_width(region_config, object_config, print_config, true), Catch::Matchers::WithinAbs(0.96, 1e-9));
+    CHECK_THAT(resolve_outer_wall_line_width(region_config, object_config, print_config, false), Catch::Matchers::WithinAbs(0.48, 1e-9));
+}

@@ -3979,6 +3979,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
         // position, missing a fresh collision. The tower geometry (tool_changes) is stored in the local
         // frame and is position independent, so re-checking here with the current position is correct.
         this->validate_compacted_wipe_tower_clearance();
+        this->validate_generated_wipe_tower_footprint();
     }
 
     if (this->set_started(psSkirtBrim)) {
@@ -5956,28 +5957,78 @@ void Print::_make_wipe_tower()
                                                   config().wipe_tower_rotation_angle, config().wipe_tower_cone_angle,
                                                   {scale_(origin.x()), scale_(origin.y())});
     }
+}
 
-    // The clamps and checks above work from estimates; re-test the exact generated footprint
-    // so an off-plate tower fails with a clear error instead of exporting unprintable G-code
-    // (validate() only sees the mesh on its next run).
-    if (m_wipe_tower_data.wipe_tower_mesh_data) {
-        Polygon footprint = m_wipe_tower_data.wipe_tower_mesh_data->bottom; // includes brim and rib offset
-        footprint.rotate(Geometry::deg2rad(m_config.wipe_tower_rotation_angle.value));
-        footprint.translate(Point(scale_(m_config.wipe_tower_x.get_at(m_plate_index)),
-                                  scale_(m_config.wipe_tower_y.get_at(m_plate_index))));
-        const Polygons printable_polys = this->get_extruder_shared_printable_polygon();
-        if (!printable_polys.empty() && !diff(Polygons{footprint}, printable_polys).empty()) {
-            const BoundingBox fp = get_extents(footprint);
-            const BoundingBox pr = get_extents(printable_polys);
-            BOOST_LOG_TRIVIAL(error) << boost::format("wipe tower footprint [%1%,%2%]-[%3%,%4%] leaves printable [%5%,%6%]-[%7%,%8%]") %
-                unscaled(fp.min.x()) % unscaled(fp.min.y()) % unscaled(fp.max.x()) % unscaled(fp.max.y()) %
-                unscaled(pr.min.x()) % unscaled(pr.min.y()) % unscaled(pr.max.x()) % unscaled(pr.max.y());
-            throw Slic3r::SlicingError(L("Prime tower is partially outside the printable area, and it cannot be printed.\n"));
-        }
-        // The cutter/purge corner is a physical obstacle — the brim must stay out like the body.
-        if (!intersection(get_bed_excluded_area(m_config), Polygons{footprint}).empty())
-            throw Slic3r::SlicingError(L("Prime tower is too close to an exclusion area, and collisions will be caused.\n"));
+// The generated tower's footprint (brim and rib offset included) at the configured position, in
+// the frame of the shared printable polygon. Empty before the tower exists.
+std::optional<Polygon> Print::generated_wipe_tower_footprint() const
+{
+    if (!m_wipe_tower_data.wipe_tower_mesh_data)
+        return std::nullopt;
+    Polygon footprint = m_wipe_tower_data.wipe_tower_mesh_data->bottom;
+    footprint.rotate(Geometry::deg2rad(m_config.wipe_tower_rotation_angle.value));
+    footprint.translate(Point(scale_(m_config.wipe_tower_x.get_at(m_plate_index)),
+                              scale_(m_config.wipe_tower_y.get_at(m_plate_index))));
+    return footprint;
+}
+
+// The clamps and checks before generation work from estimates; re-test the exact generated
+// footprint so an off-plate tower fails with a clear error instead of exporting unprintable
+// G-code. Run after psWipeTower is done, so a caller that catches the error still finds the
+// generated tower (Print::generated_wipe_tower_refit) and the GUI shows the real one.
+void Print::validate_generated_wipe_tower_footprint() const
+{
+    const std::optional<Polygon> footprint = this->generated_wipe_tower_footprint();
+    if (!footprint)
+        return;
+    const Polygons printable_polys = this->get_extruder_shared_printable_polygon();
+    if (!printable_polys.empty() && !diff(Polygons{*footprint}, printable_polys).empty()) {
+        // PERMANENT DIAGNOSTIC: the generated footprint against the bed, which the error does not say.
+        const BoundingBox fp = get_extents(*footprint);
+        const BoundingBox pr = get_extents(printable_polys);
+        BOOST_LOG_TRIVIAL(error) << boost::format("wipe tower footprint [%1%,%2%]-[%3%,%4%] leaves printable [%5%,%6%]-[%7%,%8%]") %
+            unscaled(fp.min.x()) % unscaled(fp.min.y()) % unscaled(fp.max.x()) % unscaled(fp.max.y()) %
+            unscaled(pr.min.x()) % unscaled(pr.min.y()) % unscaled(pr.max.x()) % unscaled(pr.max.y());
+        throw Slic3r::SlicingError(L("Prime tower is partially outside the printable area, and it cannot be printed.\n"));
     }
+    // The cutter/purge corner is a physical obstacle — the brim must stay out like the body.
+    if (!intersection(get_bed_excluded_area(m_config), Polygons{*footprint}).empty())
+        throw Slic3r::SlicingError(L("Prime tower is too close to an exclusion area, and collisions will be caused.\n"));
+}
+
+std::optional<Vec2d> Print::generated_wipe_tower_refit() const
+{
+    const std::optional<Polygon> footprint = this->generated_wipe_tower_footprint();
+    if (!footprint || !this->is_step_done(psWipeTower))
+        return std::nullopt;
+    const Polygons printable_polys = this->get_extruder_shared_printable_polygon();
+    if (printable_polys.empty() || diff(Polygons{*footprint}, printable_polys).empty())
+        return std::nullopt;
+    // Same rule as the GUI drag clamp, which holds the real tower's box WIPE_TOWER_MARGIN (mm) inside.
+    const Vec2f shift = WipeTower::move_box_inside_polygon(get_extents(*footprint), printable_polys, scaled<coord_t>(WIPE_TOWER_MARGIN));
+    if (shift.isZero())
+        return std::nullopt;
+    Polygon moved = *footprint;
+    moved.translate(Point(scaled<coord_t>(shift.x()), scaled<coord_t>(shift.y())));
+    if (!diff(Polygons{moved}, printable_polys).empty() || !intersection(get_bed_excluded_area(m_config), Polygons{moved}).empty())
+        return std::nullopt;
+    // Never onto an object: the space the placement kept free was sized from the estimate.
+    // Instance hulls as layered_print_cleareance_valid builds them, moved into the tower's frame.
+    const Vec3d plate_origin = this->get_plate_origin();
+    const Point to_tower_frame(-scaled<coord_t>(plate_origin.x()), -scaled<coord_t>(plate_origin.y()));
+    for (const PrintObject *object : m_objects)
+        for (const PrintInstance &inst : object->instances())
+            for (const ModelVolume *v : object->model_object()->volumes) {
+                if (!v->is_model_part())
+                    continue;
+                Polygon hull = v->get_convex_hull_2d(Geometry::assemble_transform(Vec3d::Zero(), inst.model_instance->get_rotation(),
+                                                                                  inst.model_instance->get_scaling_factor(), inst.model_instance->get_mirror()));
+                hull.translate(inst.shift - object->center_offset());
+                hull.translate(to_tower_frame);
+                if (!intersection(Polygons{moved}, Polygons{hull}).empty())
+                    return std::nullopt;
+            }
+    return Vec2d(m_config.wipe_tower_x.get_at(m_plate_index) + shift.x(), m_config.wipe_tower_y.get_at(m_plate_index) + shift.y());
 }
 
 // Generate a recommended G-code output file name based on the format template, default extension, and template parameters

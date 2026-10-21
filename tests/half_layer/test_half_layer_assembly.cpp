@@ -2669,3 +2669,80 @@ TEST_CASE("Half-height frames print upper-plane support after the lower outer-wa
     }
     CHECK(frames_with_both > 0);
 }
+
+// The pre-slice tower estimate purges once per filament and layer; H/2 frames visit tools more often (A-B-A), so the
+// generated Type1 tower is deeper than the box the placement reserved. Placed by the estimate near the bed edge, the
+// real tower then leaves the bed: the check has to report it with the generated tower kept (so a caller can see it),
+// and Print::generated_wipe_tower_refit() has to give a position where that same tower fits.
+TEST_CASE("A half-layer tower placed by the estimate is refitted onto the bed once generated", "[HalfLayer][ExecutionTower][TowerPlacement]")
+{
+    auto config = multifilament_config(2);
+    config.set_num_extruders(2);
+    set_toolhead_nozzle_diameter(config, 0, 0.4);
+    set_toolhead_nozzle_diameter(config, 1, 0.4);
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false},
+        {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"},
+        {"prime_tower_brim_width", 3}, {"wipe_tower_rotation_angle", 0},
+        {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"wall_loops", 2},
+        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
+    size_flush_to_nozzles(config);
+    config.set_key_value("grab_length", new ConfigOptionFloats{0., 0.});
+    // The outer wall on filament 1 and everything else on filament 2: each layer prints the lower outer pass, the
+    // core and the upper outer pass, so filament 1 is visited twice.
+    // Two objects of different filaments, as the plate's tower needs (one object of one filament prints none).
+    std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides;
+    for (int extruder : {1, 2})
+        overrides.push_back({{"extruder", extruder}, {"outer_wall_filament_id", 1}, {"inner_wall_filament_id", 2},
+            {"sparse_infill_filament_id", 2}, {"internal_solid_filament_id", 2}, {"top_surface_filament_id", 2},
+            {"bottom_surface_filament_id", 2}});
+    Print print;
+    print.is_BBL_printer() = true; // Type1 tower
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(10.), cube(10.)}, print, model, config, &overrides);
+    REQUIRE(print.wipe_tower_type() == WipeTowerType::Type1);
+
+    const WipeTowerData &estimate = print.wipe_tower_data(2);
+    const double estimated_side_mm = std::max(estimate.width, estimate.depth) + 2. * estimate.brim_width;
+    REQUIRE(estimated_side_mm > 0.);
+    REQUIRE(print.has_wipe_tower());
+    REQUIRE_NOTHROW(print.process());
+    REQUIRE(print.wipe_tower_data().tool_changes.size() > 0);
+    const std::optional<Polygon> generated_at_50 = print.generated_wipe_tower_footprint();
+    REQUIRE(generated_at_50);
+    const BoundingBox generated_box = get_extents(*generated_at_50);
+    const double generated_depth_mm = unscaled(generated_box.size().y());
+    CAPTURE(estimated_side_mm, generated_depth_mm);
+    // The precondition of the bug: the generated tower is larger than the box the estimate reserved.
+    REQUIRE(generated_depth_mm > estimated_side_mm + 1.);
+
+    // Where the placement would put the estimated box: flush with the far bed edge (200 mm test bed), 1 mm in.
+    const Polygons bed = print.get_extruder_shared_printable_polygon();
+    const BoundingBox bed_box = get_extents(bed);
+    const double edge_x_mm = unscaled(bed_box.max.x()) - estimated_side_mm - 1. + estimate.brim_width;
+    const double edge_y_mm = unscaled(bed_box.max.y()) - estimated_side_mm - 1. + estimate.brim_width;
+    config.set_deserialize_strict({{"wipe_tower_x", std::to_string(edge_x_mm)}, {"wipe_tower_y", std::to_string(edge_y_mm)}});
+    print.apply(model, config);
+    REQUIRE_THROWS_AS(print.process(), Slic3r::SlicingError);
+    // The generated tower survives the error, and it is the same tower: generation does not depend on the position.
+    REQUIRE(print.is_step_done(psWipeTower));
+    const std::optional<Polygon> generated_at_edge = print.generated_wipe_tower_footprint();
+    REQUIRE(generated_at_edge);
+    CHECK(get_extents(*generated_at_edge).size() == generated_box.size());
+    CHECK_FALSE(diff(Polygons{*generated_at_edge}, bed).empty());
+
+    const std::optional<Vec2d> refit = print.generated_wipe_tower_refit();
+    REQUIRE(refit);
+    config.set_deserialize_strict({{"wipe_tower_x", std::to_string(refit->x())}, {"wipe_tower_y", std::to_string(refit->y())}});
+    print.apply(model, config);
+    REQUIRE(print.validate().string.empty());
+    REQUIRE_NOTHROW(print.process());
+    const std::optional<Polygon> refitted = print.generated_wipe_tower_footprint();
+    REQUIRE(refitted);
+    CHECK(diff(Polygons{*refitted}, bed).empty());
+    CHECK(get_extents(*refitted).size() == generated_box.size());
+    // A tower that fits needs no refit.
+    CHECK_FALSE(print.generated_wipe_tower_refit());
+}

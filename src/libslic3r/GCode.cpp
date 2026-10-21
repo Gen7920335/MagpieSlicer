@@ -1549,7 +1549,10 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
                 wipe_next_start_point_str = start_pos_str;
             } else {
                 // BBS:change travel_path
-                Vec3f gcode_last_pos;
+                // MAGPIE: seeded with the head's position, as at the Type2 tower-gap route: the parser only sets
+                // the axes the change_filament_gcode moves, and one that moves none in XY (Snapmaker U1) left the
+                // route starting at uninitialized coordinates, a different travel into the tower on every run.
+                Vec3f gcode_last_pos = gcodegen.writer().get_position().cast<float>();
                 GCodeProcessor::get_last_position_from_gcode(toolchange_gcode_str, gcode_last_pos);
                 Vec2f       gcode_last_pos2d{gcode_last_pos[0], gcode_last_pos[1]};
                 Point       gcode_last_pos2d_object = gcodegen.gcode_to_point(gcode_last_pos2d.cast<double>() + plate_origin_2d.cast<double>());

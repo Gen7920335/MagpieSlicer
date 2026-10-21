@@ -1417,6 +1417,14 @@ public:
     Vec2d translate_to_print_space(const Vec2d &point) const;
     // Orca: precise counterpart of compacted_wipe_tower_clearance_valid(), run once the tower exists.
     void                validate_compacted_wipe_tower_clearance() const;
+    // MAGPIE: the generated tower against the bed, run once the tower exists.
+    void                validate_generated_wipe_tower_footprint() const;
+    std::optional<Polygon> generated_wipe_tower_footprint() const;
+    // MAGPIE: a wipe_tower_x/y that brings a generated tower which leaves the bed back onto it
+    // (the GUI drag clamp's rule), or nothing when it fits already, cannot fit, or would land on
+    // an object or exclusion area. Callers that placed the tower from the pre-slice estimate use
+    // it; the tower itself is position independent, so it is not regenerated.
+    std::optional<Vec2d> generated_wipe_tower_refit() const;
     float               get_wipe_tower_depth() const { return m_wipe_tower_data.depth; }
     BoundingBoxf        get_wipe_tower_bbx() const { return m_wipe_tower_data.bbx; }
     Vec2f               get_rib_offset() const { return m_wipe_tower_data.rib_offset; }

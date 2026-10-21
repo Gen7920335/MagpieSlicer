@@ -39,7 +39,9 @@ struct SlicingParameters
          const std::vector<unsigned int> &object_extruders,
          const Vec3d                     &object_shrinkage_compensation,
          // MAGPIE: how far a mod lifts the object when it has support (object.z_offset slot), mm.
-         coordf_t                         object_z_offset = 0.);
+         coordf_t                         object_z_offset = 0.,
+         // MAGPIE: a BBL printer prints each filament on the nozzle filament_map gives it (printing_nozzle_index).
+         bool                             is_bbl_printer = false);
 
     // Has any raft layers?
     bool        has_raft() const { return raft_layers() > 0; }

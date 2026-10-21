@@ -6993,13 +6993,39 @@ int CLI::run(int argc, char **argv)
                                 const PrintConfig& print_config = print_fff->config();
                                 Model::setExtruderParams(m_print_config, filament_count);
                                 Model::setPrintSpeedTable(m_print_config, print_config);
+                                // MAGPIE: the tower was placed from the pre-slice estimate, which cannot see
+                                // the extra tool visits per layer some prints make (H/2 frames). When the
+                                // generated tower then leaves the bed, put it back with the GUI drag clamp's
+                                // rule and slice once more - where a user of the GUI would drag it.
+                                auto process_refitting_tower = [&](const std::function<void()> &run) {
+                                    try {
+                                        run();
+                                    } catch (const Slic3r::SlicingError &) {
+                                        const std::optional<Vec2d> refit = print_fff != nullptr ? print_fff->generated_wipe_tower_refit() : std::nullopt;
+                                        if (!refit)
+                                            throw;
+                                        BOOST_LOG_TRIVIAL(warning) << boost::format("plate %1%: generated wipe tower leaves the bed at {%2%, %3%}, moved to {%4%, %5%}")
+                                            % (index + 1) % new_print_config.option<ConfigOptionFloats>("wipe_tower_x")->get_at(index)
+                                            % new_print_config.option<ConfigOptionFloats>("wipe_tower_y")->get_at(index) % refit->x() % refit->y();
+                                        const ConfigOptionFloat wt_x_opt(refit->x()), wt_y_opt(refit->y());
+                                        for (DynamicPrintConfig *cfg : {&m_print_config, &new_print_config}) {
+                                            cfg->option<ConfigOptionFloats>("wipe_tower_x", true)->set_at(&wt_x_opt, index, 0);
+                                            cfg->option<ConfigOptionFloats>("wipe_tower_y", true)->set_at(&wt_y_opt, index, 0);
+                                        }
+                                        print->apply(model, new_print_config);
+                                        std::vector<StringObjectException> refit_warnings;
+                                        if (!print->validate(&refit_warnings).string.empty())
+                                            throw;
+                                        run();
+                                    }
+                                };
                                 if (load_slicedata) {
                                     std::string plate_dir = load_slice_data_dir+"/"+std::to_string(index+1);
                                     int ret = print->load_cached_data(plate_dir);
                                     if (ret) {
                                         BOOST_LOG_TRIVIAL(warning) << "plate "<< index+1<< ": load Slicing data error, ret=" << ret;
                                         BOOST_LOG_TRIVIAL(warning) << "plate "<< index+1<< ": switch normal slicing";
-                                        print->process();
+                                        process_refitting_tower([&] { print->process(); });
                                     }
                                     else {
                                         BOOST_LOG_TRIVIAL(info) << "plate "<< index+1<< ": load cached data success, go on.";
@@ -7009,12 +7035,12 @@ int CLI::run(int argc, char **argv)
                                             cli_status_callback(slicing_status);
                                         }
 #endif
-                                        print->process(nullptr, true);
+                                        process_refitting_tower([&] { print->process(nullptr, true); });
                                         BOOST_LOG_TRIVIAL(info) << "plate "<< index+1<< ": finished print::process.";
                                     }
                                 }
                                 else {
-                                    print->process(&time_using_cache);
+                                    process_refitting_tower([&] { print->process(&time_using_cache); });
                                     BOOST_LOG_TRIVIAL(info) << "print::process: first time_using_cache is " << time_using_cache << " secs.";
                                 }
                                 if (printer_technology == ptFFF) {

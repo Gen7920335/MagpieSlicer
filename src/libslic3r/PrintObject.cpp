@@ -4488,7 +4488,8 @@ void PrintObject::update_slicing_parameters()
                                                                    this->object_extruders(), this->print()->shrinkage_compensation(),
                                                                    // Two mods lifting the object: no lift here, Print::validate stops the slice.
                                                                    ModHost::object_z_offset(this->print()->full_print_config(), m_config,
-                                                                                            this->model_object()->name, &lift_error));
+                                                                                            this->model_object()->name, &lift_error),
+                                                                   this->print()->is_BBL_printer());
           // Populate belt floor parameters into slicing params for support clipping.
           m_slicing_params.belt_floor_shear_factor = belt_floor.shear_factor;
           m_slicing_params.belt_floor_from_axis    = belt_floor.from_axis;
@@ -4558,7 +4559,9 @@ SlicingParameters PrintObject::slicing_parameters(const DynamicPrintConfig &full
     std::string       lift_error;
     SlicingParameters params = SlicingParameters::create_from_config(print_config, object_config, object_max_z, object_extruders, object_shrinkage_compensation,
                                                                      // Two mods lifting the object stop the slice; here, outside it, no lift.
-                                                                     ModHost::object_z_offset(full_config, object_config, model_object.name, &lift_error));
+                                                                     ModHost::object_z_offset(full_config, object_config, model_object.name, &lift_error),
+                                                                     // No Print here: Bambu Lab printers are told by printer_model, as the CLI does.
+                                                                     print_config.printer_model.value.compare(0, 9, "Bambu Lab") == 0);
     params.belt_floor_shear_factor = belt_floor.shear_factor;
     params.belt_floor_from_axis    = belt_floor.from_axis;
     params.belt_floor_z_shift     = belt_floor.z_shift;

@@ -115,13 +115,66 @@ Format: what was wrong, what changed, where, the guard test.
 - 14f2813893: support base/interface merge compares filaments in one index domain.
 - 15f976e3bf / 3272a672c6: absolute line widths follow each nozzle on printers with different nozzle sizes.
 
-## Known Orca bug not patched
+## Variable layer height limits on the printing nozzle
 
-- `SlicingParameters::create_from_config` reads the nozzle-indexed `min_layer_height`, `max_layer_height` and
-  `nozzle_diameter` with filament ids. On a Bambu multi-nozzle printer whose filament-to-nozzle map is not the
-  identity, the variable layer height limits come from the wrong nozzle. Fixing it needs to know whether the
-  printer maps filaments to nozzles (Bambu) at every caller, including the GUI layer editor; non-Bambu printers
-  use the filament index as the nozzle and are not affected.
+- Wrong: `SlicingParameters::create_from_config` handed `min/max_layer_height_from_nozzle()` (1-based nozzle) the
+  0-based ids of `object_extruders()`, so every filament but the first read the previous nozzle's limits: filament 3
+  of a 0.4/0.4/0.6 mm printer (Snapmaker U1) got 0.08-0.32 mm instead of 0.12-0.48 mm, which layer height ranges
+  and adaptive layer height are clamped to. A BBL filament_map was never applied there either.
+- Change: each filament goes through `printing_nozzle_index()` (BBL map when the printer is Bambu Lab: the Print's
+  flag, or `printer_model` in the static `PrintObject::slicing_parameters()` the GUI layer editor uses); the support
+  and raft nozzle diameters too. Single-nozzle printers and filament 1 are unchanged.
+- Test: "Variable layer height limits come from the nozzle each filament prints on" (test_print.cpp); it fails with the old
+  reads.
+- Output: U1 corpus cases whose object uses the 0.6 mm nozzle change one or two auto-lift travels (frog_mn_classic_2w_il,
+  frog_mn_single_wall_top: one spiral lift becomes a slope lift; mixed_support_on_small, mixed_per_nozzle_support_small,
+  ltc_tower_mixed_nozzles: one tower approach no longer lifts). Layers, extrusions and Z are unchanged; the overhang test
+  for auto lift (`is_through_overhang`, z range [z - 0.4, z] in float) took 3 layers before and 2 after at layer 8 of the
+  frog, so a layer sits on that boundary and its print_z moved below 1e-4 mm with the new minimum layer height
+  (0.08 -> 0.12 mm, which `generate_object_layers` steps with). Measured with a probe on frog_mn_classic_2w_il; the
+  three tower cases are ASSUMED to be the same boundary (reverting the fix makes all five identical to main).
+
+## Type-1 tower approach starts where the head is
+
+- Wrong: with `prime_tower_skip_points` the Type-1 toolchange routes the travel into the tower from the position
+  parsed out of `change_filament_gcode`. `get_last_position_from_gcode()` only sets the axes the G-code moves, and
+  the `Vec3f` it filled was uninitialized, so a change G-code with no XY move (Snapmaker U1) started the route at
+  garbage: the travel into the tower (and the time estimate) differed on every run.
+- Change: the position is seeded with the writer's position first, as the Type-2 tower-gap route already did.
+- Check: the frog_wt2_classic_type1 setup (corpus_wipe_tower) sliced 6 times is byte-identical; the unfixed binary gave 4
+  different files in 4 runs.
+
+## Generated tower bed check after the tower step; CLI refit
+
+- Wrong: the exact footprint check of the generated tower threw inside `_make_wipe_tower`, so the step was never
+  done and nobody could see the tower that failed. The pre-slice placement (arrange, CLI clamp, GUI reload clamp)
+  sizes the tower with `estimate_wipe_tower_footprint`, which purges once per filament and layer; H/2 frames visit
+  tools more often (measured: 4 tool changes per layer against 1 without H/2 on frog + cube, U1 type-1 tower,
+  tower 77 x 90 mm against 45 x 44 mm), so a tower placed at the edge by the estimate left the bed and the CLI
+  stopped with "Prime tower is partially outside the printable area".
+- Change: `Print::validate_generated_wipe_tower_footprint()` runs after psWipeTower is done (every process());
+  `Print::generated_wipe_tower_refit()` gives the position the GUI drag clamp would give the real tower
+  (`move_box_inside_polygon`, WIPE_TOWER_MARGIN), refusing one that lands on an object hull or exclusion area; the
+  CLI applies it and slices once more. The GUI is unchanged apart from showing the real tower after the error.
+- Test: "A half-layer tower placed by the estimate is refitted onto the bed once generated"
+  (test_half_layer_assembly.cpp); with the check back inside the step it fails.
+
+## Painted outer wall width on the BBL-mapped nozzle
+
+- `resolve_outer_wall_line_width` (multi-material segmentation) takes the printer's BBL flag; it read the outer
+  wall filament's number as its nozzle. Test: "The painted outer wall width follows a BBL filament map".
+
+## Known Orca bugs not patched
+
+- PerimeterGenerator reads `nozzle_diameter.get_at(outer_wall_filament_id - 1)` (bridge margin, gap fill, fuzzy
+  skin) and Magpie's `outer_wall_path_nozzle` / single-top-wall infill clip pass `is_bbl_printer = false`, so a BBL
+  filament_map is not applied there. Not changed: no case with an output difference was found (a step model with
+  the single top wall gave the same top infill to 0.01 mm with the sparse infill on 0.4 or 0.8 mm).
+- The Type-1 tower (`WipeTower::set_extruder`) takes one line width for every tool from the nozzle of the last
+  configured filament: on a U1 0.4/0.4/0.6/0.6 printing with the 0.4 mm nozzles only, the tower prints 0.75 mm
+  lines; making the unused fourth nozzle 0.4 mm gives 0.5 mm. Per-tool widths are separate work (about 200 sites).
+- One object whose walls and infill use two filaments prints its tool changes without a tower: the plate's
+  filament count comes from the object's own filament, as in vanilla Orca.
 
 ## Tree support geometry width on the support body's nozzle
 
