@@ -10098,7 +10098,7 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
         "smooth_coefficient", "overhang_totally_speed", "silent_mode",
         "overhang_speed_classic",
         "anisotropic_surfaces", // superseded by top_surface_fill_order / bottom_surface_fill_order
-        // MAGPIE: the CUDA mod's mode, a mod parameter (cuda_compute.mode) since the mod became a native mod.
+        // MAGPIE: the removed CUDA mod's old mode key; projects that still carry it load without it.
         "cuda_compute",
         // Belt printer keys retired before the first release: the global-mode and
         // back-transform switches are presumed on, and the pre-slice axis remap, the

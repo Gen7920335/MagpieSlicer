@@ -4,7 +4,7 @@ This document contains conditional project-specific contracts. Read or search on
 
 # 1. Project Purpose
 
-- Magpie Slicer is an OrcaSlicer-based FDM slicer focused on mixed-nozzle toolheads, extended support generation and interfaces, low-temperature support interfaces, selected Snapmaker integration, and optional CUDA-assisted slicing.
+- Magpie Slicer is an OrcaSlicer-based FDM slicer focused on mixed-nozzle toolheads, extended support generation and interfaces, low-temperature support interfaces, and selected Snapmaker integration.
 - Preserve OrcaSlicer's normal workflows, project/profile compatibility, output correctness, and printer safety while adding opt-in Magpie behavior.
 - Generated geometry and G-code correctness outrank preview appearance and benchmark speed.
 
@@ -19,7 +19,7 @@ This document contains conditional project-specific contracts. Read or search on
 - Preview and G-code routing must consume the same resolved tool assignment used by geometry generation.
 - Prusa-style normal, Cura-style normal, Tree/Organic, Mixed, and Resin-style support must remain selectable and independent.
 - Low-temperature interface sequencing must remain isolated from the normal G-code path, with explicit and restored temporary state.
-- CUDA is optional and CPU-authoritative. GPU output must be exact or conservative and validated by deterministic CPU logic.
+- Slicing runs on the CPU only; there is no GPU (CUDA or Vulkan) path.
 - Stable Magpie and profiler builds must retain separate application, binary, configuration, installer, registry, and package identities.
 - Device transport/state ownership must remain separate from wxWidgets view lifetime. Asynchronous work must be cancellable or lifetime-gated.
 
@@ -89,9 +89,7 @@ This document contains conditional project-specific contracts. Read or search on
 - Orca geometry uses signed 64-bit fixed-point coordinates at 1e-6 mm.
 - Preserve established coordinate, unit, epsilon, winding, clipping, and polygon conventions.
 - Avoid unnecessary fixed-point/floating-point conversion and document unavoidable conversion boundaries.
-- Before GPU dispatch, prove intermediate and restored values fit. Use wider CPU preflight arithmetic when necessary.
-- Validate element count, byte-size multiplication, alignment, device limits, stable IDs, denominators, and restored coordinates.
-- If a GPU batch fails, discard the complete batch. Never combine partial GPU output with CPU output.
+- Validate element count, byte-size multiplication, stable IDs, denominators, and restored coordinates.
 - Treat empty polygons/intersections, degenerate loops, zero-length segments, invalid normals, narrow regions, duplicate/coincident geometry, tangent intersections, nearly parallel lines, disconnected output, zero denominators, and out-of-bed auxiliary geometry as expected edge cases.
 - Keep support paths inside their intended support region.
 - Do not solve support artifacts by clipping only the final rendered silhouette.
@@ -102,13 +100,11 @@ This document contains conditional project-specific contracts. Read or search on
 # 9. Performance Contract
 
 - Profile before optimizing geometry.
-- Separate timing for relevant stages, including support-area/Root candidates, Guide/Virtual Rib/Active Frontier work, collision/U-turn generation, clipping, pattern generation, path ordering, GPU dispatch, CPU validation, and G-code completion.
+- Separate timing for relevant stages, including support-area/Root candidates, Guide/Virtual Rib/Active Frontier work, collision/U-turn generation, clipping, pattern generation, path ordering, and G-code completion.
 - Avoid repeated polygon conversion, offset/intersection, bounding-box construction, tool resolution, and nozzle-width resolution inside hot loops.
 - Cache only immutable or revision-keyed data with explicit invalidation.
 - Reuse resolved nozzle widths, tool mappings, spatial candidates, and layer plans where ownership permits.
 - Minimize allocation and hash/set reconstruction in per-segment and per-wall loops.
-- Skip GPU dispatch when setup and transfer are unlikely to beat CPU work.
-- Auto mode uses bounded hardware/workload qualification, not expensive full duplicate slicing.
 - Optimization must not silently change normalized geometry, motion, extrusion, assignment, or G-code.
 
 # 10. Compatibility Contract
@@ -211,7 +207,6 @@ Run `git diff --check` before reporting completion when verification is authoriz
 - Do not assign different nozzles inside one connected cosmetic wall loop.
 - Do not derive physical nozzle geometry from a filament/material index.
 - Do not maintain a second persisted hotend/nozzle configuration beside printer-preset vectors.
-- Do not accept partial, unvalidated, overflow-prone, or device-failed CUDA results.
 - Do not remove or rename OrcaSlicer-owned calibration tools/models or compatibility identifiers as part of branding.
 - Do not reintroduce AUX-fan always-on controls that were explicitly removed.
 - Do not package or publish a portable archive under current policy.

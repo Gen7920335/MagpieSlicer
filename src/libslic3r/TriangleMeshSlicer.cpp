@@ -1,5 +1,4 @@
 #include "libslic3r/StageTimer.hpp"
-#include "libslic3r/Accel/BatchAccel.hpp"
 #include "ClipperUtils.hpp"
 #include "ExPolygon.hpp"
 #include "Point.hpp"
@@ -566,20 +565,6 @@ static FacetSliceType slice_facet_for_cut_mesh(
     return FacetSliceType::NoSlice;
 }
 
-// Layers [first, last) of zs a facet with vertex heights z spans, and its lowest vertex.
-// MAGPIE: also the CPU reference of the batch accelerator's facet layer ranges (Accel/BatchAccel.hpp).
-static inline Accel::LayerRange facet_layer_range(const std::array<float, 3> &z, const std::vector<float> &zs)
-{
-    // find facet extents
-    const float min_z = fminf(z[0], fminf(z[1], z[2]));
-    const float max_z = fmaxf(z[0], fmaxf(z[1], z[2]));
-    // find layer extents
-    auto min_layer = std::lower_bound(zs.begin(), zs.end(), min_z); // first layer whose slice_z is >= min_z
-    auto max_layer = std::upper_bound(min_layer, zs.end(), max_z); // first layer whose slice_z is > max_z
-    return { uint32_t(min_layer - zs.begin()), uint32_t(max_layer - zs.begin()),
-             uint32_t((z[1] == min_z) ? 1 : ((z[2] == min_z) ? 2 : 0)) };
-}
-
 template<typename TransformVertex>
 void slice_facet_at_zs(
     // Scaled or unscaled vertices. transform_vertex_fn may scale zs.
@@ -590,9 +575,7 @@ void slice_facet_at_zs(
     // Scaled or unscaled zs. If vertices have their zs scaled or transform_vertex_fn scales them, then zs have to be scaled as well.
     const std::vector<float>                         &zs,
     std::vector<IntersectionLines>                   &lines,
-    std::array<std::mutex, 64>                       &lines_mutex,
-    // MAGPIE: facet_layer_range() computed by the batch accelerator, or nullptr.
-    const Accel::LayerRange                          *gpu_range = nullptr)
+    std::array<std::mutex, 64>                       &lines_mutex)
 {
     stl_vertex vertices[3] { transform_vertex_fn(mesh_vertices[indices(0)]), transform_vertex_fn(mesh_vertices[indices(1)]), transform_vertex_fn(mesh_vertices[indices(2)]) };
 
@@ -600,11 +583,10 @@ void slice_facet_at_zs(
     const float min_z = fminf(vertices[0].z(), fminf(vertices[1].z(), vertices[2].z()));
     const float max_z = fmaxf(vertices[0].z(), fmaxf(vertices[1].z(), vertices[2].z()));
 
-    const Accel::LayerRange range = gpu_range ? *gpu_range :
-        facet_layer_range({ vertices[0].z(), vertices[1].z(), vertices[2].z() }, zs);
-    auto min_layer = zs.begin() + range.first;
-    auto max_layer = zs.begin() + range.last;
-    int  idx_vertex_lowest = int(range.lowest_vertex);
+    // find layer extents
+    auto min_layer = std::lower_bound(zs.begin(), zs.end(), min_z); // first layer whose slice_z is >= min_z
+    auto max_layer = std::upper_bound(min_layer, zs.end(), max_z); // first layer whose slice_z is > max_z
+    int  idx_vertex_lowest = (vertices[1].z() == min_z) ? 1 : ((vertices[2].z() == min_z) ? 2 : 0);
 
     for (auto it = min_layer; it != max_layer; ++ it) {
         IntersectionLine il;
@@ -630,28 +612,13 @@ static inline std::vector<IntersectionLines> slice_make_lines(
     MAGPIE_STAGE_TIMER("fn.slice_make_lines");
     std::vector<IntersectionLines>  lines(zs.size(), IntersectionLines());
     std::array<std::mutex, 64>      lines_mutex;
-    // MAGPIE: batch accelerator. The layer range of every facet in one batch; empty when no accelerator
-    // runs or it declined the batch, and then each facet finds its range on the CPU.
-    std::vector<Accel::LayerRange> gpu_ranges;
-    if (Accel::should_dispatch(Accel::Op::FacetLayerRanges, indices.size())) {
-        std::vector<std::array<float, 3>> facet_z(indices.size());
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, indices.size()), [&](const tbb::blocked_range<size_t> &range) {
-            for (size_t i = range.begin(); i < range.end(); ++ i)
-                for (int k = 0; k < 3; ++ k)
-                    facet_z[i][k] = transform_vertex_fn(vertices[indices[i](k)]).z();
-        });
-        throw_on_cancel_fn();
-        if (! Accel::mesh_layer_ranges(facet_z, zs, [&](size_t i) { return facet_layer_range(facet_z[i], zs); }, gpu_ranges))
-            gpu_ranges.clear();
-    }
     tbb::parallel_for(
         tbb::blocked_range<int>(0, int(indices.size())),
-        [&vertices, &transform_vertex_fn, &indices, &face_edge_ids, &zs, &lines, &lines_mutex, &gpu_ranges, throw_on_cancel_fn](const tbb::blocked_range<int> &range) {
+        [&vertices, &transform_vertex_fn, &indices, &face_edge_ids, &zs, &lines, &lines_mutex, throw_on_cancel_fn](const tbb::blocked_range<int> &range) {
             for (int face_idx = range.begin(); face_idx < range.end(); ++ face_idx) {
                 if ((face_idx & 0x0ffff) == 0)
                     throw_on_cancel_fn();
-                slice_facet_at_zs(vertices, transform_vertex_fn, indices[face_idx], face_edge_ids[face_idx], zs, lines, lines_mutex,
-                                  gpu_ranges.empty() ? nullptr : &gpu_ranges[face_idx]);
+                slice_facet_at_zs(vertices, transform_vertex_fn, indices[face_idx], face_edge_ids[face_idx], zs, lines, lines_mutex);
             }
         }
     );

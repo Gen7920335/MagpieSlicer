@@ -1,5 +1,4 @@
 #include "libslic3r/StageTimer.hpp"
-#include "Accel/BatchAccel.hpp"
 #include "ModHost/NativeMods.hpp"
 #include "ModHost/SlotChoice.hpp"
 #include "ModHost/SlotRegistry.hpp"
@@ -4958,8 +4957,6 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             if (const std::string id = ModHost::wall_planner_mod_id(print.full_print_config(), &object->config(), region.config()); !id.empty())
                 m_native_mods_used.insert(id);
     }
-    if (const std::string accelerator = Accel::session_mod(); !accelerator.empty())
-        m_native_mods_used.insert(accelerator);
     // The G-code event mods that affect this export (open flag MP_GCODE_USED or mark_used so far).
     if (m_gcode_events)
         for (const std::string &id : m_gcode_events->used())

@@ -16,7 +16,7 @@ OrcaSlicer 나이틀리 위에 모드(mod)로 기능을 얹은 슬라이서
 - **따로 설치:** 앱 키 `MagpieSlicerNext`, 실행 파일 `magpie-slicer-next`, 설치 이름 "Magpie Slicer Next". 설정 폴더와 파일 연결을 OrcaSlicer·1세대와 공유하지 않습니다. `orcaslicer://` 링크는 그대로 처리합니다.
 - **Orca 사용자 사전 설정 가져오기:** 처음 실행할 때 OrcaSlicer 데이터 폴더의 사용자 사전 설정을 한 번 복사합니다. 이미 있는 파일은 덮어쓰지 않습니다. 파일 > 가져오기 > "OrcaSlicer 사용자 사전 설정 가져오기"로 다시 실행할 수 있습니다.
 - **1세대 설정 이전:** 1세대 프로젝트·사전 설정을 열면 Magpie 전용 설정이 해당 모드 설정으로 옮겨집니다.
-- **GPU:** Vulkan은 빼고 CUDA만 남겼습니다. 측정 결과 지금은 CPU 경로가 더 빠르거나 같아 GPU 없이 슬라이스합니다.
+- **GPU:** 쓰지 않습니다. Vulkan에 이어 CUDA도 뺐습니다(측정 결과 CPU 경로가 더 빠르거나 같았음).
 
 ## 기본 모드
 

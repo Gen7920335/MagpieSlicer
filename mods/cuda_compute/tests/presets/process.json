@@ -1,3 +1,0 @@
-{ "type": "process", "name": "cuda compute mod test", "from": "User", "instantiation": "true", "version": "2.4.0.0",
-  "sparse_infill_pattern": "rectilinear", "enable_support": "1", "support_type": "tree(auto)", "support_style": "tree_slim",
-  "mod_settings": "{\"cuda_compute.mode\":\"on\"}" }

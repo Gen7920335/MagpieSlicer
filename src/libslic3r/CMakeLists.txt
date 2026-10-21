@@ -117,8 +117,6 @@ set(lisbslic3r_sources
     ModHost/Expr.hpp
     StageTimer.cpp
     StageTimer.hpp
-    Accel/BatchAccel.cpp
-    Accel/BatchAccel.hpp
     ModHost/ModIndex.cpp
     ModHost/ModIndex.hpp
     ModHost/LegacySettings.cpp

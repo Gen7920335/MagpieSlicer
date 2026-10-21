@@ -2,7 +2,6 @@
 //CuraEngine is released under the terms of the AGPLv3 or higher.
 
 #include "libslic3r/StageTimer.hpp"
-#include "libslic3r/Accel/BatchAccel.hpp"
 #include "DistanceField.hpp" //Class we're implementing.
 #include "../FillRectilinear.hpp"
 #include "../../ClipperUtils.hpp"
@@ -66,45 +65,21 @@ DistanceField::DistanceField(const coord_t& radius, const Polygons& current_outl
         const size_t unsupported_points_prev_size = m_unsupported_points.size();
         m_unsupported_points.resize(unsupported_points_prev_size + sampled_points.size());
 
-        // Find a squared distance to the source expolygon boundary.
-        // MAGPIE: also the CPU reference of the CUDA test mod's magpie_point_segment_distances kernel.
-        auto boundary_distance_squared = [&expoly = std::as_const(expoly)](const Point &sp) {
-            double d2 = std::numeric_limits<double>::max();
-            for (size_t icontour = 0; icontour <= expoly.holes.size(); ++icontour) {
-                const Polygon &contour = icontour == 0 ? expoly.contour : expoly.holes[icontour - 1];
-                if (contour.size() > 2) {
-                    Point prev = contour.points.back();
-                    for (const Point &p2 : contour.points) {
-                        d2   = std::min(d2, Line::distance_to_squared(sp, prev, p2));
-                        prev = p2;
-                    }
-                }
-            }
-            return d2;
-        };
-        // MAGPIE: batch accelerator. All sampled points in one batch against the same boundary edges.
-        std::vector<double> gpu_d2;
-        if (Accel::should_dispatch(Accel::Op::MinDistances, sampled_points.size())) {
-            Lines edges;
-            for (size_t icontour = 0; icontour <= expoly.holes.size(); ++icontour) {
-                const Polygon &contour = icontour == 0 ? expoly.contour : expoly.holes[icontour - 1];
-                if (contour.size() > 2) {
-                    Point prev = contour.points.back();
-                    for (const Point &p2 : contour.points) {
-                        edges.emplace_back(prev, p2);
-                        prev = p2;
-                    }
-                }
-            }
-            if (! Accel::min_distances_squared(sampled_points, edges,
-                    [&](size_t i) { return boundary_distance_squared(sampled_points[i]); }, gpu_d2))
-                gpu_d2.clear();
-        }
-
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, sampled_points.size()), [&self = *this, &sampled_points = std::as_const(sampled_points), &unsupported_points_prev_size = std::as_const(unsupported_points_prev_size), &boundary_distance_squared, &gpu_d2 = std::as_const(gpu_d2)](const tbb::blocked_range<size_t> &range) -> void {
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, sampled_points.size()), [&self = *this, &expoly = std::as_const(expoly), &sampled_points = std::as_const(sampled_points), &unsupported_points_prev_size = std::as_const(unsupported_points_prev_size)](const tbb::blocked_range<size_t> &range) -> void {
             for (size_t sp_idx = range.begin(); sp_idx < range.end(); ++sp_idx) {
                 const Point &sp = sampled_points[sp_idx];
-                const double d2 = gpu_d2.empty() ? boundary_distance_squared(sp) : gpu_d2[sp_idx];
+                // Find a squared distance to the source expolygon boundary.
+                double d2 = std::numeric_limits<double>::max();
+                for (size_t icontour = 0; icontour <= expoly.holes.size(); ++icontour) {
+                    const Polygon &contour = icontour == 0 ? expoly.contour : expoly.holes[icontour - 1];
+                    if (contour.size() > 2) {
+                        Point prev = contour.points.back();
+                        for (const Point &p2 : contour.points) {
+                            d2   = std::min(d2, Line::distance_to_squared(sp, prev, p2));
+                            prev = p2;
+                        }
+                    }
+                }
                 self.m_unsupported_points[unsupported_points_prev_size + sp_idx] = {sp, coord_t(std::sqrt(d2))};
                 assert(self.m_unsupported_points_bbox.contains(sp));
             }

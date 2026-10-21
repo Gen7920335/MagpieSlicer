@@ -1,5 +1,4 @@
 #include "libslic3r/StageTimer.hpp"
-#include "libslic3r/Accel/BatchAccel.hpp"
 #include <boost/date_time/posix_time/ptime.hpp>
 #include <boost/date_time/posix_time/posix_time_types.hpp>
 #include <cassert>
@@ -3975,22 +3974,6 @@ void TreeSupport::generate_contact_points()
                     overhang_bounds.inflated(-radius_scaled);
                     ExPolygons overhang_inner = offset_ex(overhang, -radius_scaled);
                     MAGPIE_STAGE_TIMER("fn.tree_contact_inside");
-                    // MAGPIE: batch accelerator. The inside test of every candidate in one batch; the
-                    // points are then inserted in the same order as below.
-                    if (Accel::active()) {
-                        Points candidates;
-                        for (const Point &candidate : grid_points)
-                            if (overhang_bounds.contains(candidate))
-                                candidates.push_back(candidate);
-                        std::vector<uint8_t> inside;
-                        if (Accel::points_in_expolygons(candidates, overhang_inner,
-                                [&](size_t i) { return is_inside_ex(overhang_inner, candidates[i]); }, inside)) {
-                            for (size_t i = 0; i < candidates.size(); ++i)
-                                if (inside[i])
-                                    insert_point(candidates[i], overhang, radius, false, add_interface);
-                            continue;
-                        }
-                    }
                     for (Point candidate : grid_points) {
                         if (overhang_bounds.contains(candidate)) {
                             // BBS: move_inside_expoly shouldn't be used if candidate is already inside, as it moves point to boundary and the inside is not well supported!

@@ -108,7 +108,7 @@ foreach ($required in @($installedExe, $installedDll, $installedResources, $inst
 }
 
 # MAGPIE: the official mods are bundled: a package folder each, with its library and, in a signed package, a SIGNATURE.
-$officialMods = @("cuda_compute", "cura_support", "half_layer", "layer_time_blend", "lesic", "low_temp_interface",
+$officialMods = @("cura_support", "half_layer", "layer_time_blend", "lesic", "low_temp_interface",
                   "mixed_support", "multi_nozzle_walls", "resin_support", "snapmaker_u1", "support_extras")
 $bundledModsDir = Join-Path $installedResources "mods"
 $signedMods = 0

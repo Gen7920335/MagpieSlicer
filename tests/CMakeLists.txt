@@ -88,7 +88,7 @@ function(orcaslicer_discover_tests TARGET)
     catch_discover_tests(${TARGET} ADD_TAGS_AS_LABELS)
 endfunction()
 
-# MAGPIE: a test target that slices with features now in official native mods (Cura support, CUDA)
+# MAGPIE: a test target that slices with features now in official native mods (Cura support and the others)
 # loads their package folders from the build tree (mods/CMakeLists.txt); they are built first.
 function(magpie_use_official_mods TARGET)
     if (MAGPIE_OFFICIAL_MOD_TARGETS)

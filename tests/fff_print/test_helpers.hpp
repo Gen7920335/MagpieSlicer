@@ -145,7 +145,7 @@ std::vector<std::string> role_sequence(const std::string &gcode, const std::vect
 
 // Makes the bundled mods (resources/mods) the active mods while it lives, and restores the
 // previous set afterwards. errors lists the mods that failed to load.
-// The official native mods built in this tree (mods/CMakeLists.txt: Cura support, CUDA), loaded once
+// The official native mods built in this tree (mods/CMakeLists.txt), loaded once
 // per test run. A listener in test_helpers.cpp makes their slots active for the whole run, so a test
 // that picks support_generator "cura" finds it as the application does with the mods installed.
 const ModHost::ModLoadResult &official_mods();

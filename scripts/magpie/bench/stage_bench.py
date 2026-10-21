@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-function slicing time, for choosing what to move to the GPU.
+"""Per-function slicing time, for finding where slicing spends its time.
 
 Needs a build configured with -DMAGPIE_SLICING_TIMING=ON. Each case is sliced `--repeat` times
 through the golden harness with MAGPIE_STAGE_TIMING_FILE set; the CLI writes, at exit, the summed
@@ -47,7 +47,7 @@ def cases():
         case('bunny_tree_slim', BUNNY, dict(support, support_type='tree(auto)', support_style='tree_slim')),
         case('bunny_x2_gyroid', BUNNY, {'sparse_infill_pattern': 'gyroid', 'sparse_infill_density': '15%'}, scale=2),
         case('frog_rectilinear', FROG, {'sparse_infill_pattern': 'rectilinear', 'sparse_infill_density': '40%'}),
-        # Heavy jobs, where a GPU's fixed dispatch cost matters least.
+        # Heavy jobs.
         case('benchy_x3_fine_gyroid', BENCHY, {'layer_height': '0.08', 'sparse_infill_pattern': 'gyroid',
                                                'sparse_infill_density': '25%'}, scale=3),
         case('bunny_x2_fine_tree', BUNNY, dict(support, support_type='tree(auto)', support_style='organic',

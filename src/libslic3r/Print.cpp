@@ -5,7 +5,6 @@
 #endif
 
 #include "libslic3r/StageTimer.hpp"
-#include "libslic3r/Accel/BatchAccel.hpp"
 
 #include "PrintBase.hpp"
 #include <utility>
@@ -3627,9 +3626,6 @@ std::map<ObjectID, unsigned int> getObjectExtruderMap(const Print& print) {
 void Print::process(long long *time_cost_with_cache, bool use_cache)
 {
     MAGPIE_STAGE_TIMER("print.process");
-    // MAGPIE: batch accelerator for the slicing steps below (Accel/BatchAccel.hpp); none runs unless a
-    // native mod provides one and its settings turn it on.
-    Accel::Session accel_session(this->full_print_config());
     long long start_time = 0, end_time = 0;
     if (time_cost_with_cache)
         *time_cost_with_cache = 0;

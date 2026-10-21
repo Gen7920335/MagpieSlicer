@@ -25,8 +25,6 @@ add_executable(${_TEST_NAME}_tests
     test_official_mod_texts.cpp
     test_native_mods.cpp
     test_layer_time_blend.cpp
-    test_batch_accel.cpp
-    test_cuda_compute.cpp
     test_mod_index.cpp
     test_legacy_settings.cpp
     test_line1_orca_fixes.cpp
@@ -114,7 +112,6 @@ magpie_use_official_mods(${_TEST_NAME}_tests)
 if (MAGPIE_TEST_MOD_TARGETS)
     add_dependencies(${_TEST_NAME}_tests ${MAGPIE_TEST_MOD_TARGETS})
     target_compile_definitions(${_TEST_NAME}_tests PRIVATE MAGPIE_TEST_MODS_DIR=R"\(${MAGPIE_TEST_MODS_DIR}\)")
-    target_compile_definitions(${_TEST_NAME}_tests PRIVATE MAGPIE_TEST_ACCEL_DIR=R"\(${MAGPIE_TEST_ACCEL_DIR}\)")
 endif ()
 
 orcaslicer_discover_tests(${_TEST_NAME}_tests)
