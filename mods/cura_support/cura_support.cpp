@@ -286,15 +286,18 @@ std::pair<Polygons, Polygons> basic_and_full_overhang(const Inputs &in, size_t l
     const size_t     layers_below     = size_t(std::lround(smooth_height_mm / layer_height_mm));
     const coord_t    max_dist         = coord_t(bounded_tan(in.support_angle_rad) * double(in.layer_thickness));
 
-    Polygons outlines_below = cura_offset(in.outlines[layer_idx - 1], max_dist);
+    const Polygons &original_outlines_below = in.outlines[layer_idx - 1];
+    Polygons        outlines_below          = cura_offset(original_outlines_below, max_dist);
     for (size_t k = 2; k <= layers_below && k <= layer_idx; ++k)
         outlines_below = union_(outlines_below, cura_offset(in.outlines[layer_idx - k], max_dist * coord_t(k)));
 
     Polygons basic = in.automatic ? diff(outlines, outlines_below) : Polygons{};
     if (!in.blockers[layer_idx].empty())
         basic = diff(basic, union_(in.blockers[layer_idx]));
+    // Forced support only where the layer below leaves something to hold up: none on vertical or top faces
+    // (CuraEngine 5.14, CURA-13349). Cura's EPSILON is 5 um.
     if (!in.enforcers[layer_idx].empty())
-        basic = union_(basic, in.enforcers[layer_idx]);
+        basic = union_(basic, intersection(in.enforcers[layer_idx], diff(outlines, cura_offset(original_outlines_below, um(5.)))));
 
     // +0.1 mm so it joins the support from the layer above more easily.
     const Polygons extended = cura_offset(basic, max_dist * coord_t(layers_below) + um(100.));
