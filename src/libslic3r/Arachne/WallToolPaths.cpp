@@ -45,11 +45,20 @@
 namespace Slic3r::Arachne
 {
 
-WallToolPathsParams make_paths_params(const int layer_id, const PrintObjectConfig &print_object_config, const PrintConfig &print_config)
+double min_bead_width_on_nozzle(const int layer_id, const PrintObjectConfig &print_object_config, double nozzle_diameter)
+{
+    const auto &min_bead_width_opt = layer_id == 0 ? print_object_config.initial_layer_min_bead_width : print_object_config.min_bead_width;
+    return min_bead_width_opt.value * 0.01 * nozzle_diameter;
+}
+
+WallToolPathsParams make_paths_params(const int layer_id, const PrintObjectConfig &print_object_config, const PrintConfig &print_config, double nozzle_diameter)
 {
     WallToolPathsParams input_params;
     {
-        const double min_nozzle_diameter = *std::min_element(print_config.nozzle_diameter.values.begin(), print_config.nozzle_diameter.values.end());
+        // MAGPIE: Orca takes the printer's smallest nozzle, which on a mixed-nozzle printer lets a large nozzle's walls
+        // narrow to half the small nozzle (ORCA_PATCHES.md); the walls pass the nozzle printing them.
+        const double min_nozzle_diameter = nozzle_diameter > 0. ? nozzle_diameter :
+            *std::min_element(print_config.nozzle_diameter.values.begin(), print_config.nozzle_diameter.values.end());
         if (const auto &min_feature_size_opt = print_object_config.min_feature_size)
             input_params.min_feature_size = min_feature_size_opt.value * 0.01 * min_nozzle_diameter;
 

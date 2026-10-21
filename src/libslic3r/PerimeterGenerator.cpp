@@ -2891,6 +2891,15 @@ void PerimeterGenerator::process_arachne()
                 inner_loop_number = wall_plan.total_walls - single_pass_walls - 1;
             } else
                 loop_number = wall_plan.total_walls - 1;
+        } else {
+            // MAGPIE: without a wall plan the region's wall nozzles print every wall, so Arachne's widths in % are
+            // taken of them, not of the printer's smallest nozzle (ORCA_PATCHES.md). With a plan the passes holding
+            // the detail walls keep Orca's smallest nozzle.
+            const double wall_nozzle = std::min(this->ext_perimeter_flow.nozzle_diameter(), this->perimeter_flow.nozzle_diameter());
+            const bool   is_top_or_bottom_layer = input_params.is_top_or_bottom_layer;
+            input_params = Arachne::make_paths_params(this->layer_id, *object_config, *print_config, wall_nozzle);
+            input_params.is_top_or_bottom_layer = is_top_or_bottom_layer;
+            input_params_tmp = input_params;
         }
         this->detail_wall_count   = wall_plan.active ? wall_plan.detail_walls : 0;
         this->detail_wall_routing = wall_plan.route;
@@ -3038,6 +3047,11 @@ void PerimeterGenerator::process_arachne()
                 // (detail nozzle spacing at depth 0) is not theirs: their first bead would take the detail width while
                 // its depth, and so its tool, is a large wall. Only the H/2 depths they hold carry a profile.
                 Arachne::WallToolPathsParams inner_params = input_params;
+                // MAGPIE: and the large nozzle prints them, so their min bead width is taken of it, not of the smallest
+                // nozzle the single pass keeps (ORCA_PATCHES.md). Min feature size and transition length stay the
+                // single pass's: taking them of the large nozzle too drops a detail wall loop.
+                if (wall_plan.active)
+                    inner_params.min_bead_width = Arachne::min_bead_width_on_nozzle(this->layer_id, *object_config, this->perimeter_flow.nozzle_diameter());
                 for (int depth = single_pass_walls; depth < full_pass_walls && is_half_layer_outer_wall(size_t(depth), half_layer_outer_walls); ++depth) {
                     inner_params.fixed_outer_wall_spacings.push_back(wall_flow_at_depth(size_t(depth)).scaled_spacing());
                     inner_params.fixed_outer_wall_overlaps.push_back(

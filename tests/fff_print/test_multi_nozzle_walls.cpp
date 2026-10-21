@@ -10,6 +10,8 @@
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/ModHost/WallPlanner.hpp"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/Tesselate.hpp"
+#include "libslic3r/TriangleMesh.hpp"
 
 #include "test_helpers.hpp"
 
@@ -1646,4 +1648,150 @@ TEST_CASE("H/2 shell bridges take the bridge width of the nozzle that prints the
     CHECK(widths[2].count("180") == 1);
     CHECK(widths[2].count("120") == 0);
     CHECK(widths.count(1) == 0);
+}
+
+namespace {
+
+// A wedge standing on the bed: a triangle 3 mm wide at y = 0 tapering to a point at y = -20 mm, height_mm tall. Its
+// walls narrow along it, down to Arachne's minimum bead width.
+TriangleMesh wedge(float height_mm)
+{
+    TriangleMesh mesh(its_make_prism(3.f, height_mm, 20.f)); // mm; triangle in XZ, extruded along Y
+    mesh.rotate_x(float(PI / 2.));                          // triangle in XY, extruded along Z
+    mesh.translate(0.f, 0.f, height_mm / 2.f);
+    return mesh;
+}
+
+// A prism of the polygon `outline` (mm, counter-clockwise) from z0 to z1 mm.
+TriangleMesh prism(const Polygon &outline, double z0, double z1)
+{
+    indexed_triangle_set its;
+    for (const auto &[z, up] : { std::pair{ z1, true }, std::pair{ z0, false } }) {
+        const std::vector<Vec3d> cap = triangulate_expolygon_3d(ExPolygon(outline), z, up ? NORMALS_UP : NORMALS_DOWN);
+        for (size_t i = 0; i + 2 < cap.size(); i += 3) {
+            const int first = int(its.vertices.size());
+            for (size_t k = 0; k < 3; ++k)
+                its.vertices.emplace_back(cap[i + k].cast<float>()); // mm
+            its.indices.emplace_back(first, first + 1, first + 2);
+        }
+    }
+    for (size_t i = 0; i < outline.size(); ++i) {
+        const Point &p = outline[i], &q = outline[(i + 1) % outline.size()];
+        const int    first = int(its.vertices.size());
+        its.vertices.emplace_back(unscale<float>(p.x()), unscale<float>(p.y()), float(z0));
+        its.vertices.emplace_back(unscale<float>(q.x()), unscale<float>(q.y()), float(z0));
+        its.vertices.emplace_back(unscale<float>(q.x()), unscale<float>(q.y()), float(z1));
+        its.vertices.emplace_back(unscale<float>(p.x()), unscale<float>(p.y()), float(z1));
+        its.indices.emplace_back(first, first + 1, first + 2);
+        its.indices.emplace_back(first, first + 2, first + 3);
+    }
+    its_merge_vertices(its);
+    return TriangleMesh(std::move(its));
+}
+
+// Wall moves of `tool` by bead spacing (;WIDTH less the rounded sides, height x (1 - pi / 4)), in um.
+std::map<long, size_t> wall_spacings_um(const std::string &gcode, int tool, double below_z_mm = 1e9)
+{
+    std::map<long, size_t> spacings;
+    int                    current_tool = -1;
+    bool                   wall         = false;
+    double                 width = 0., height = 0., z = 0.; // mm, the last ;WIDTH, ;HEIGHT and ;Z
+    std::istringstream     lines(gcode);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.size() >= 2 && line[0] == 'T' && std::isdigit((unsigned char) line[1]))
+            current_tool = std::stoi(line.substr(1));
+        else if (line.rfind(";TYPE:", 0) == 0)
+            wall = line == ";TYPE:Outer wall" || line == ";TYPE:Inner wall";
+        else if (line.rfind(";WIDTH:", 0) == 0)
+            width = std::stod(line.substr(7));
+        else if (line.rfind(";HEIGHT:", 0) == 0)
+            height = std::stod(line.substr(8));
+        else if (line.rfind(";Z:", 0) == 0)
+            z = std::stod(line.substr(3));
+        else if (wall && z < below_z_mm && current_tool == tool && line.rfind("G1 ", 0) == 0 && line.find(" E") != std::string::npos &&
+                 line.find(" E-") == std::string::npos && (line.find('X') != std::string::npos || line.find('Y') != std::string::npos))
+            ++spacings[std::lround((width - height * (1. - 0.25 * PI)) * 1000.)];
+    }
+    return spacings;
+}
+
+size_t moves_below(const std::map<long, size_t> &spacings_um, long below_um)
+{
+    size_t n = 0;
+    for (const auto &[spacing, moves] : spacings_um)
+        if (spacing < below_um)
+            n += moves;
+    return n;
+}
+
+} // namespace
+
+TEST_CASE("Arachne narrows a large nozzle's walls by its own nozzle, not the printer's smallest", "[MultiNozzleWalls][Arachne][Widths]")
+{
+    // Orca took Arachne's minimum bead width (50 %) of the printer's smallest nozzle, so on a 0.15/0.4 mm printer the
+    // 0.4 mm nozzle printed walls narrowing to 0.075 mm (Hilda final test, bug 3). With multi-nozzle walls off the
+    // walls are the 0.4 mm nozzle's alone and narrow as on a printer with 0.4 mm nozzles only.
+    OfficialMods mods;
+    auto spacings = [](double first_nozzle) {
+        DynamicPrintConfig config = two_nozzle_config(first_nozzle, 0.4, 2, "arachne", false); // mm
+        config.set_deserialize_strict({ { "layer_height", 0.2 }, { "initial_layer_print_height", 0.2 }, { "min_bead_width", "50%" } });
+        return wall_spacings_um(slice({ wedge(2.f) }, config), 1);
+    };
+    const std::map<long, size_t> mixed = spacings(0.15), large_only = spacings(0.4);
+    // Half of the smallest nozzle, 75 um, and half of the 0.4 mm nozzle, 200 um.
+    const size_t mixed_narrow = moves_below(mixed, 200), large_only_narrow = moves_below(large_only, 200);
+    INFO("0.4 mm nozzle wall moves under 200 um: " << mixed_narrow << " on the 0.15/0.4 mm printer, " << large_only_narrow << " with 0.4 mm only");
+    // Measured before the fix: 38 moves under 200 um on the mixed printer, 0 with 0.4 mm only.
+    REQUIRE(! mixed.empty());
+    CHECK(moves_below(mixed, 76) == 0);
+    CHECK(mixed == large_only);
+}
+
+TEST_CASE("Inner walls under a single top wall narrow by the large nozzle", "[MultiNozzleWalls][Arachne][Widths]")
+{
+    // With detail walls and one wall on top surfaces, the inner walls of a layer with a top surface are generated by a
+    // second Arachne pass, and the large nozzle prints them. That pass took the minimum bead width of the smallest
+    // nozzle, so where the single pass left a sliver inside the detail walls the 0.4 mm nozzle printed a 0.075 mm bead
+    // (Hilda final test, bug 3). The island is one of those from the 1/3 scale Hilda (layer 155, simplified to 0.02
+    // mm), with the figure's settings that matter; a 0.3 mm block on it gives the layers below 2 mm a top surface.
+    OfficialMods mods;
+    DynamicPrintConfig config = two_nozzle_config(0.15, 0.4, 2, "arachne", true); // mm
+    config.set_deserialize_strict({
+        { "wall_loops", 2 },
+        { "layer_height", 0.16 }, { "initial_layer_print_height", 0.16 }, // mm
+        { "only_one_wall_top", true },
+        { "min_bead_width", "50%" }, { "min_feature_size", "10%" },
+        { "precise_outer_wall", true }, { "wall_sequence", "inner wall/outer wall" },
+        { "top_shell_layers", 6 }, { "bottom_shell_layers", 4 },
+        { "line_width", 0.42 }, { "outer_wall_line_width", 0.42 }, { "inner_wall_line_width", 0.45 }, // mm
+        { "resolution", 0.005 }, { "wall_maximum_resolution", 0.05 }, { "wall_maximum_deviation", 0.005 }, // mm
+        { "slice_closing_radius", 0.01 }, { "precise_z_height", true }, { "reduce_crossing_wall", true } });
+    for (const char *key : { "line_width", "outer_wall_line_width", "inner_wall_line_width", "initial_layer_line_width" })
+        config.set_key_value(per_nozzle_line_width_key(key), new ConfigOptionFloats{ 0.17, 0. }); // mm on the 0.15 mm nozzle
+    Slic3r::Test::half_layer_params(config, true);
+    multi_nozzle_params(config, { { "small_wall_count", 2 }, { "interlock", true } });
+    Polygon island;
+    for (const auto &[x, y] : std::vector<std::pair<double, double>>{
+             { 0.129, -2.005 }, { 0.462, -1.862 }, { 0.632, -1.719 }, { 0.786, -1.53 }, { 0.898, -1.316 }, { 0.962, -1.099 },
+             { 0.984, -0.867 }, { 0.961, -0.629 }, { 0.853, -0.297 }, { 0.721, -0.08 }, { 0.562, 0.09 }, { 0.329, 0.257 },
+             { 0.662, 0.173 }, { 0.759, 0.184 }, { 0.699, 0.367 }, { 0.619, 0.433 }, { 0.368, 0.474 }, { 0.061, 0.589 },
+             { -0.252, 0.619 }, { -0.417, 0.602 }, { -0.588, 0.53 }, { -0.822, 0.349 }, { -0.9, 0.139 }, { -0.917, -0.018 },
+             { -0.82, 0.01 }, { -0.721, 0.191 }, { -0.511, 0.395 }, { -0.304, 0.442 }, { -0.484, 0.403 }, { -0.664, 0.231 },
+             { -0.759, 0.084 }, { -0.789, -0.245 }, { -0.742, -0.659 }, { -0.574, -1.352 }, { -0.406, -1.754 },
+             { -0.318, -1.869 }, { -0.187, -1.961 }, { -0.017, -2.012 } }) // mm
+        island.points.emplace_back(scaled<coord_t>(x), scaled<coord_t>(y));
+    REQUIRE(island.is_counter_clockwise());
+    TriangleMesh mesh = prism(island, 0., 2.);                                        // mm
+    mesh.merge(prism(Polygon::new_scale({ { -0.15, -0.15 }, { 0.15, -0.15 }, { 0.15, 0.15 }, { -0.15, 0.15 } }), 1.98, 2.6));
+    REQUIRE(mesh.volume() > 0.);
+    const std::map<long, size_t> large = wall_spacings_um(slice({ mesh }, config), 1);
+    size_t at_small_minimum = 0; // moves at half the 0.15 mm nozzle, 75 um
+    for (long um = 74; um <= 76; ++um)
+        if (auto it = large.find(um); it != large.end())
+            at_small_minimum += it->second;
+    // Measured: 30 moves (32 under 200 um) before the fix, 0 after.
+    INFO("0.4 mm nozzle wall moves at 75 um: " << at_small_minimum << ", under 200 um: " << moves_below(large, 200));
+    REQUIRE(! large.empty());
+    CHECK(at_small_minimum == 0);
+    CHECK(moves_below(large, 76) == 0);
 }

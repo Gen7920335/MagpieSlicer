@@ -49,7 +49,12 @@ public:
     coord_t wall_maximum_deviation  = meshfix_maximum_deviation();
 };
 
-WallToolPathsParams make_paths_params(const int layer_id, const PrintObjectConfig &print_object_config, const PrintConfig &print_config);
+// The widths given in % (min bead width, min feature size, transition length and deviation) are taken of
+// nozzle_diameter; 0 takes them of the printer's smallest nozzle (Orca). MAGPIE: walls pass the nozzle printing them.
+WallToolPathsParams make_paths_params(const int layer_id, const PrintObjectConfig &print_object_config, const PrintConfig &print_config,
+                                      double nozzle_diameter = 0.);
+// The min bead width (initial layer one on layer 0) of nozzle_diameter, mm.
+double min_bead_width_on_nozzle(const int layer_id, const PrintObjectConfig &print_object_config, double nozzle_diameter);
 
 class WallToolPaths
 {

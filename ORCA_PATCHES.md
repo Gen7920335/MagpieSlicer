@@ -77,6 +77,32 @@ Format: what was wrong, what changed, where, the guard test.
   pads the volumes to the project's filament count.
 - Test: "Minimum flush volumes from a config that lacks the filament lists" (tests/slic3rutils).
 
+## Arachne's minimum widths on a printer with mixed nozzles
+
+- Wrong: `Arachne::make_paths_params` takes the minimum bead width, minimum feature size and transition length
+  and deviation (% settings) of the printer's smallest nozzle. On a 0.15/0.4 mm printer the 0.4 mm nozzle's walls
+  narrowed to 0.075 mm (50 % of 0.15 mm); vanilla Orca does the same (1/3 scale Hilda, 0.12 mm layers: 1,356 moves
+  at 0.101 mm on the 0.4 mm nozzle).
+- Change: `make_paths_params` takes the nozzle the % settings refer to (0 keeps the smallest). Walls without a
+  multi-nozzle wall plan use the smaller of the region's outer and inner wall nozzles. With a plan, the single pass
+  and the full pass keep the smallest nozzle (taking the large one there makes the detail walls 0.41 mm and stops the
+  slice at the width check), and the inner wall pass under a single top wall takes only its minimum bead width of
+  the large walls' nozzle (taking minimum feature size and transition length too drops a detail wall loop).
+  Printers with one nozzle size are unchanged.
+- Counterfactual (1/3 Hilda, figure settings): 0.4 mm nozzle wall moves under 0.2 mm 22,313 -> 1,796 with
+  multi-nozzle walls off (a printer with 0.4 mm nozzles only: 1,693), 5,562 -> 1,150 with them on; the 0.092 /
+  0.109 mm fixed widths go.
+- Tests: "Arachne narrows a large nozzle's walls by its own nozzle, not the printer's smallest" and "Inner walls
+  under a single top wall narrow by the large nozzle" (test_multi_nozzle_walls.cpp; both fail without the change).
+
+## Bridge width check on a printer with mixed nozzles
+
+- Wrong: the preset check resolved a % bridge width on the largest nozzle and compared it with the smallest, so a
+  0.15/0.4 mm printer refused 100 % and the U1 profile's 0.4 mm.
+- Change: on a printer with mixed nozzles the width is checked as a fraction of its nozzle; the per-nozzle check in
+  `Print::validate` is unchanged. One-size printers keep Orca's check (commit d18ddd9e5f).
+- Test: "The bridge width check follows each nozzle on a mixed-nozzle printer" (test_config.cpp).
+
 ## Earlier core fixes (commits on magpie-next)
 
 - 0f401f7ce8: a layer height range without `layer_height` (3MF material-only range) inherits the object's
