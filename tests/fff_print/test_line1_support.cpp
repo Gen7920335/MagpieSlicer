@@ -1242,3 +1242,34 @@ TEST_CASE("Cura conical support leaves room for the brim inside the printable ar
     CHECK(min_x >= scale_(brim_width) - scale_(0.001));
     CHECK(min_y >= scale_(brim_width) - scale_(0.001));
 }
+
+TEST_CASE("Cura support adds no forced support along vertical walls", "[CuraSupport]")
+{
+    BundledMods mods;
+    // Before: an enforcer's area was added to the overhang as it was, so an enforcer around a plain cube
+    // made every layer an overhang, and the support expansion put a sleeve of support around the walls.
+    // CuraEngine 5.14 (CURA-13349) forces support only where a layer sticks out past the one below it.
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"enable_support", true},
+        {"support_expansion", 1.5}});
+    line1(config, "support_type", "normal_cura(auto)");
+
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{make_cube(10., 10., 10.)}, print, model, config, nullptr, /*arrange=*/false);
+    TriangleMesh enforcer_mesh = make_cube(12., 12., 10.);
+    enforcer_mesh.translate(-1.f, -1.f, 0.f);
+    model.objects.front()->add_volume(std::move(enforcer_mesh))->set_type(ModelVolumeType::SUPPORT_ENFORCER);
+    print.apply(model, print.full_print_config());
+    print.process();
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(ModHost::support_generator_name(print.full_print_config(), object.config()) == "cura");
+    // The enforcer must reach the support generator, or the check below proves nothing.
+    const std::vector<Polygons> enforcers = object.slice_support_enforcers();
+    REQUIRE(std::any_of(enforcers.begin(), enforcers.end(), [](const Polygons &layer) { return !layer.empty(); }));
+
+    size_t layers_with_support = 0;
+    for (const SupportLayer *layer : object.support_layers())
+        layers_with_support += layer->support_fills.entities.empty() ? 0 : 1;
+    CHECK(layers_with_support == 0);
+}
