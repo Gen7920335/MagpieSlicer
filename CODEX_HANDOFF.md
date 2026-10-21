@@ -15,6 +15,16 @@
 
 ## History
 
+### 2026-10-21 Cura support against the latest CuraEngine (branch cura-curaengine-sync, worktree D:\claude\magpie-next-cura)
+
+- CuraEngine main is still 47b0388 (fetched 2026-10-21). Its 5.14 release branch (5.14.0-beta.1) has one change in the ported range, CURA-13349 (2ddf5c3ae): forced support only where a layer sticks out past the one below. Ported (cura_support 1.2.0), Gen's call to take it before main has it.
+- Minimum feature width: KNOWN divergence, fixed. Cura's min_even_wall_line_width defaults to machine_nozzle_size * 0.85 (fdmprinter.def.json; mesh extruder in the main loop, support extruder in join); the port used 0.85 x the support line width. Slicing the corpus with the new mod but the old width gives the baseline G-code for all three changed cases, which is the attribution.
+- Conical support: KNOWN divergence, fixed. Cura clips it to the printable area shrunk by the adhesion width; the core now gives `adhesion_margin` (NativeSupport adhesion_margin_mm: raft expansion, else outer brim gap + width, plus the skirt's loops), in Orca's terms rather than Cura's formula (which counts the brim width twice and a skirt line per extruder). An automatic brim is counted at the configured brim_width.
+- `mp_support_input_v1` gains `support_nozzle_diameter`, `object_nozzle_diameter`, `adhesion_margin` (appended).
+- Tests "Cura support keeps features as narrow as 85% of the nozzle size", "Cura conical support leaves room for the brim inside the printable area", "Cura support adds no forced support along vertical walls" fail with the 1.1.0 mod source (0/34 layers; 0.18 mm from the edge; 48 layers) and pass now.
+- Gate (gen792, D:\claude\golden\cura: bin, datadir = islands copy with the new signed cura_support, gates.sh, cmp.py; baseline D:\claude\golden\islands\gate = main dec69a4e67): ctest 2745/2745; golden off 15/15 and all mods 15/15 identical; --mod-test 11/11; corpora identical apart from the `cura_support 1.2.0` header line in every Cura case, and support in frog_legs_cura, frog_legs_cura_raft, frog_legs_cura_build_plate_only (U1, support line width 0.42 on 0.4 nozzles: half feature width 0.35 instead of 0.367 mm).
+- Report: cura-port-vs-curaengine-20261021_KO.md (project files).
+
 ### 2026-10-21 Narrow islands in override ranges, H/2 first-layer brim (branch h2-brim-tool, worktree D:\claude\magpie-next-beta7)
 
 - Narrow islands inside a large-nozzle override range (`multi_nozzle_walls.override_regions`): no defect. On a fins/cones/blades model with Gen's figure settings (T1/T3 0.15, T2/T4 0.4 mm, 0.16 layer, H/2, interlace), override layers print walls with the same width/height/length sums as the mod off (Arachne and Classic, override to toolhead 2 and 4; `D:\claude\golden\islands\wlen.py`); the default case has 0 narrow walls on the 0.4 mm tool. In override layers `detail_tool` is empty, so the narrow-loop width is Orca's on the override nozzle (LayerRegion resolves wall flows there).
