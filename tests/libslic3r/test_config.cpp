@@ -1775,7 +1775,8 @@ TEST_CASE("Every read of a nozzle-relative line width key is in the reviewed tab
         { "src/libslic3r/PlaceholderParser.cpp", 4 },
         { "src/libslic3r/Preset.cpp", 11 },
         { "src/libslic3r/Print.cpp", 37 },
-        { "src/libslic3r/PrintConfig.cpp", 35 },
+        // Two more: the preset bridge check reads bridge_line_width as a fraction of its nozzle (validate_print_config).
+        { "src/libslic3r/PrintConfig.cpp", 37 },
         { "src/libslic3r/PrintObject.cpp", 13 },
         { "src/libslic3r/PrintObjectSlice.cpp", 1 },
         { "src/libslic3r/Support/SupportMaterial.cpp", 1 },
