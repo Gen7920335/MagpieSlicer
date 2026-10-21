@@ -53,6 +53,7 @@ struct State
     std::size_t              filament_diameter_count { 0 };
     std::vector<std::string> type, colour;
     std::vector<uint8_t>     soluble;
+    std::vector<uint32_t>    filament_toolhead; // the toolhead printing each filament; empty: filament n on toolhead n
 
     unsigned int base_filament { 1 }; // the region's outer wall filament, 1-based
     bool         enable { false };
@@ -110,10 +111,16 @@ std::vector<std::string> override_entries(const std::string &text)
 
 WallTool tool_for_filament(const State &s, unsigned int filament)
 {
-    if (filament == 0 || std::size_t(filament) > s.nozzle_mm.size() || std::size_t(filament) > s.filament_count())
+    if (filament == 0 || std::size_t(filament) > s.filament_count())
         return {};
-    const double nozzle = s.nozzle_mm[filament - 1];
-    return nozzle > EPSILON ? WallTool{filament, filament, nozzle} : WallTool{};
+    // The core's nozzle for the filament (on a BBL printer by filament_map); a host without the map: toolhead n.
+    unsigned int toolhead = filament;
+    if (!s.filament_toolhead.empty())
+        toolhead = std::size_t(filament) <= s.filament_toolhead.size() ? s.filament_toolhead[filament - 1] : 0u;
+    if (toolhead == 0 || std::size_t(toolhead) > s.nozzle_mm.size())
+        return {};
+    const double nozzle = s.nozzle_mm[toolhead - 1];
+    return nozzle > EPSILON ? WallTool{filament, toolhead, nozzle} : WallTool{};
 }
 
 // A tool on toolhead `toolhead`, preferring preferred_filament, then a filament of its colour.
@@ -335,6 +342,8 @@ mp_status open(void *, mp_ctx *ctx, const mp_wall_printer *printer, void **state
         for (uint32_t i = 0; i < printer->filament_colour_count; ++i)
             s->colour.emplace_back(printer->filament_colour[i]);
         s->soluble.assign(printer->filament_soluble, printer->filament_soluble + printer->filament_soluble_count);
+        if (printer->size >= offsetof(mp_wall_printer, filament_toolhead) + sizeof(printer->filament_toolhead) && printer->filament_toolhead != nullptr)
+            s->filament_toolhead.assign(printer->filament_toolhead, printer->filament_toolhead + printer->filament_toolhead_count);
 
         double outer = 0.;
         if (magpie::host()->config_f64(ctx, "outer_wall_filament_id", -1, &outer) != MP_OK)

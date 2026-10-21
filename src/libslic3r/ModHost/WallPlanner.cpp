@@ -15,6 +15,7 @@
 
 #include <boost/log/trivial.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <functional>
@@ -222,7 +223,8 @@ std::string wall_planner_mod_id(const DynamicPrintConfig &full_config, const Pri
 }
 
 std::unique_ptr<const WallPlanner> open_wall_planner(const DynamicPrintConfig &full_config, const PrintConfig &print_config,
-                                                     const PrintObjectConfig *object_config, const PrintRegionConfig &region_config)
+                                                     const PrintObjectConfig *object_config, const PrintRegionConfig &region_config,
+                                                     bool is_bbl_printer)
 {
     const std::string name = wall_planner_name(full_config, object_config, region_config);
     if (name.empty())
@@ -254,6 +256,10 @@ std::unique_ptr<const WallPlanner> open_wall_planner(const DynamicPrintConfig &f
     std::vector<uint8_t>            soluble;
     for (const unsigned char s : print_config.filament_soluble.values)
         soluble.push_back(s != 0 ? 1 : 0);
+    // The nozzle each filament prints on, as the core routes it.
+    std::vector<uint32_t> filament_toolhead(std::max({ print_config.filament_diameter.values.size(), types.size(), colours.size() }));
+    for (size_t idx = 0; idx < filament_toolhead.size(); ++idx)
+        filament_toolhead[idx] = uint32_t(printing_nozzle_index(print_config, int(idx + 1), is_bbl_printer) + 1);
     mp_wall_printer printer{};
     printer.size                    = sizeof(printer);
     printer.nozzle_count            = uint32_t(print_config.nozzle_diameter.values.size());
@@ -265,6 +271,8 @@ std::unique_ptr<const WallPlanner> open_wall_planner(const DynamicPrintConfig &f
     printer.filament_colour         = colours.data();
     printer.filament_soluble_count  = uint32_t(soluble.size());
     printer.filament_soluble        = soluble.data();
+    printer.filament_toolhead_count = uint32_t(filament_toolhead.size());
+    printer.filament_toolhead       = filament_toolhead.data();
 
     std::unique_ptr<WallPlanner> planner(new WallPlanner());
     planner->m_name  = name;

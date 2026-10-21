@@ -8,6 +8,7 @@
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/GCode/AuxiliaryTower.hpp"
+#include "libslic3r/GCode/AuxiliaryTowerUndo.hpp"
 #include "libslic3r/ModHost/GCodeEvents.hpp"
 
 #include "magpie_slot_gcode_events.h"
@@ -15,6 +16,10 @@
 
 #include "test_helpers.hpp"
 
+#include <cereal/archives/binary.hpp>
+#include <cereal/types/polymorphic.hpp>
+#include <cereal/types/string.hpp>
+#include <cereal/types/vector.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -903,6 +908,40 @@ TEST_CASE("Temperature drop tower automatic placement respects the mapped extrud
     CHECK(metrics.max_y < 188.0);
 }
 
+// MAGPIE: line 1 (Beta 7). The tower is printed with the nozzle that prints its filament: on a BBL printer
+// filament_map puts filament 1 on the 0.8 mm nozzle, so the tower is the one a 0.8 mm single-nozzle printer prints.
+TEST_CASE("Temperature drop tower uses the mapped physical extruder nozzle", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    OfficialMods mods;
+    TowerSettings reference_settings;
+    reference_settings.tower_x         = 20.0; // mm
+    reference_settings.tower_y         = 25.0; // mm
+    reference_settings.nozzle_diameter = 0.8;  // mm
+    const TowerMetrics reference = analyze_tower(tower_gcode(reference_settings));
+
+    TowerSettings mapped_settings;
+    mapped_settings.tower_x = reference_settings.tower_x;
+    mapped_settings.tower_y = reference_settings.tower_y;
+    DynamicPrintConfig config = tower_config(mapped_settings);
+    config.set_num_extruders(2);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.15, 0.8 })); // mm
+    config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+    config.set_key_value("filament_map", new ConfigOptionInts({ 2 }));
+    Print print;
+    print.is_BBL_printer() = true;
+    Model model;
+    init_print({ TestMesh::overhang }, print, model, config);
+    REQUIRE(print.config().filament_map.values == std::vector<int>{ 2 });
+    const TowerMetrics mapped = analyze_tower(Slic3r::Test::gcode(print));
+
+    check_passes_on_distinct_layers(mapped);
+    // G-code coordinates are written to 3 decimals; the bounds agree to within that, mm.
+    CHECK_THAT(mapped.min_x, Catch::Matchers::WithinAbs(reference.min_x, 0.03));
+    CHECK_THAT(mapped.min_y, Catch::Matchers::WithinAbs(reference.min_y, 0.03));
+    CHECK_THAT(mapped.max_x, Catch::Matchers::WithinAbs(reference.max_x, 0.03));
+    CHECK_THAT(mapped.max_y, Catch::Matchers::WithinAbs(reference.max_y, 0.03));
+}
+
 namespace {
 
 mp_flow_v1 core_flow(const Flow &f)
@@ -1020,6 +1059,64 @@ TEST_CASE("Temperature drop tower reads are safe for short vectors", "[LowTemper
     CHECK(aux_tower_position_at(&positions, 0) == 12.5);
     CHECK(aux_tower_position_at(&positions, 4) == -1.0);
     CHECK(aux_tower_position_at(nullptr, 0) == -1.0);
+}
+
+// MAGPIE: line 1 (Beta 7). Undo / Redo restores the tower positions of every plate, whatever their lists hold, after
+// the positions moved or a plate was deleted, and only touches them (true) when they differ. The Plater keeps the
+// positions in the snapshot's ModelWipeTower; the snapshot is archived as the Undo stack archives it.
+TEST_CASE("Tower Undo archive restores all plate coordinates and optional states", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    const int stored_state  = GENERATE(0, 1, 2, 3); // as stored: one plate, empty lists, three plates, uneven lists
+    const int deleted_plate = GENERATE(-1, 0, 1, 2); // -1: the positions move instead
+    CAPTURE(stored_state, deleted_plate);
+    const std::string tx = AUX_TOWER_POSITION_KEYS[0];
+    const std::string ty = AUX_TOWER_POSITION_KEYS[1];
+    DynamicConfig original;
+    original.set_key_value("wall_loops", new ConfigOptionInt(7));
+    switch (stored_state) {
+    case 0: original.set_key_value(tx, new ConfigOptionFloats{ 10. }); original.set_key_value(ty, new ConfigOptionFloats{ 20. }); break;
+    case 1: original.set_key_value(tx, new ConfigOptionFloats(std::vector<double>{})); original.set_key_value(ty, new ConfigOptionFloats(std::vector<double>{})); break;
+    case 2: original.set_key_value(tx, new ConfigOptionFloats{ -1., 65., 85. }); original.set_key_value(ty, new ConfigOptionFloats{ -1., 75., 95. }); break;
+    default: original.set_key_value(tx, new ConfigOptionFloats{ -1., 65. }); original.set_key_value(ty, new ConfigOptionFloats{ 75. }); break;
+    }
+    // A snapshot as the Undo stack keeps one: captured into the Model's wipe tower, archived and read back. A later
+    // capture replaces an earlier one.
+    auto snapshot = [](std::initializer_list<const DynamicConfig *> captures) {
+        Model saved;
+        for (const DynamicConfig *config : captures)
+            capture_aux_tower_positions(*config, saved.wipe_tower.temperature_drop_x, saved.wipe_tower.temperature_drop_y);
+        std::stringstream bytes;
+        { cereal::BinaryOutputArchive archive(bytes); archive(saved.wipe_tower); }
+        auto loaded = std::make_unique<Model>();
+        { cereal::BinaryInputArchive archive(bytes); archive(loaded->wipe_tower); }
+        return loaded;
+    };
+    DynamicConfig stale = original;
+    stale.set_key_value(tx, new ConfigOptionFloats{ 250. });
+    stale.set_key_value(ty, new ConfigOptionFloats{ 260. });
+    const std::unique_ptr<Model> undo_loaded = snapshot({ &stale, &original });
+
+    DynamicConfig changed = original;
+    if (deleted_plate >= 0)
+        erase_aux_tower_plate(changed, size_t(deleted_plate), 3);
+    else {
+        changed.set_key_value(tx, new ConfigOptionFloats{ 15., 25., 35. });
+        changed.set_key_value(ty, new ConfigOptionFloats{ 45., 55., 65. });
+    }
+    changed.set_key_value("wall_loops", new ConfigOptionInt(9));
+    const DynamicConfig          expected_redo = changed;
+    const std::unique_ptr<Model> redo          = snapshot({ &changed });
+
+    const bool differs = *changed.option(tx) != *original.option(tx) || *changed.option(ty) != *original.option(ty);
+    CHECK(restore_aux_tower_positions(changed, undo_loaded->wipe_tower.temperature_drop_x, undo_loaded->wipe_tower.temperature_drop_y) == differs);
+    CHECK(*changed.option(tx) == *original.option(tx));
+    CHECK(*changed.option(ty) == *original.option(ty));
+    // The positions are all it restores.
+    CHECK(changed.opt_int("wall_loops") == 9);
+    CHECK_FALSE(restore_aux_tower_positions(changed, undo_loaded->wipe_tower.temperature_drop_x, undo_loaded->wipe_tower.temperature_drop_y));
+    CHECK(restore_aux_tower_positions(changed, redo->wipe_tower.temperature_drop_x, redo->wipe_tower.temperature_drop_y) == differs);
+    CHECK(changed == expected_redo);
+    CHECK_FALSE(restore_aux_tower_positions(changed, redo->wipe_tower.temperature_drop_x, redo->wipe_tower.temperature_drop_y));
 }
 
 TEST_CASE("Temperature drop tower placement clamps into the bed and refuses what does not fit", "[LowTemperatureInterface][TemperatureDropTower]")

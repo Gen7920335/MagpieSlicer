@@ -732,6 +732,66 @@ TEST_CASE("The normal support wall count leaves tree support alone", "[SupportMa
     }
 }
 
+// MAGPIE: line 1 (Beta 7). The support flows take the nozzle that prints the support and interface filaments. On a
+// BBL printer filament_map gives it: filaments 1 and 4 print on the 0.2 mm nozzle, 2 and 3 on the 0.6 mm nozzle.
+TEST_CASE("Support flow resolves filaments through the BBL filament to nozzle map", "[SupportMaterial][SupportMapping]")
+{
+    auto config = Slic3r::Test::multifilament_config(4);
+    config.set_num_extruders(2);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.2, 0.6 })); // mm
+    Slic3r::Test::size_flush_to_nozzles(config);
+    config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+    config.set_key_value("filament_map", new ConfigOptionInts({ 1, 2, 2, 1 }));
+    config.set_key_value("enable_support", new ConfigOptionBool(true));
+    config.set_key_value("support_filament", new ConfigOptionInt(3));
+    config.set_key_value("support_interface_filament", new ConfigOptionInt(4));
+    config.set_key_value(per_nozzle_line_width_key("support_line_width"), new ConfigOptionFloats({ 0.25, 0.65 }));       // mm
+    config.set_key_value(per_nozzle_line_width_key("initial_layer_line_width"), new ConfigOptionFloats({ 0.27, 0.67 })); // mm
+    Print print;
+    print.is_BBL_printer() = true;
+    Model model;
+    Slic3r::Test::init_print({ make_cube(10., 10., 10.) }, print, model, config);
+    REQUIRE(print.objects().size() == 1);
+    REQUIRE(print.config().filament_map.values == std::vector<int>{ 1, 2, 2, 1 });
+    const PrintObject *object = print.objects().front();
+    REQUIRE(object->config().support_filament.value == 3);
+    const Flow body    = support_material_flow(object, 0.1f);
+    const Flow contact = support_material_interface_flow(object, 0.1f);
+    const Flow first   = support_material_1st_layer_flow(object, 0.1f);
+    CHECK_THAT(body.nozzle_diameter(), Catch::Matchers::WithinAbs(0.6, 1e-6));
+    CHECK_THAT(body.width(), Catch::Matchers::WithinAbs(0.65, 1e-6));
+    CHECK_THAT(contact.nozzle_diameter(), Catch::Matchers::WithinAbs(0.2, 1e-6));
+    CHECK_THAT(contact.width(), Catch::Matchers::WithinAbs(0.25, 1e-6));
+    CHECK_THAT(first.nozzle_diameter(), Catch::Matchers::WithinAbs(0.6, 1e-6));
+    CHECK_THAT(first.width(), Catch::Matchers::WithinAbs(0.67, 1e-6));
+    CHECK_THAT(support_transition_flow(object).nozzle_diameter(), Catch::Matchers::WithinAbs(0.6, 1e-6));
+    // Tree support builds its geometry with the body's flow, not the interface nozzle's.
+    const SupportParameters parameters(*object);
+    CHECK_THAT(parameters.support_material_flow.nozzle_diameter(), Catch::Matchers::WithinAbs(0.6, 1e-6));
+    CHECK_THAT(parameters.support_extrusion_width, Catch::Matchers::WithinAbs(parameters.support_material_flow.width(), 1e-6));
+}
+
+// MAGPIE: line 1 (Beta 7). Tree support geometry is as wide as the body nozzle's support line, whatever nozzle prints
+// the interface (filament n prints on nozzle n here).
+TEST_CASE("Tree support geometry width follows the body nozzle instead of the interface nozzle", "[SupportMaterial][Tree][SupportMapping]")
+{
+    auto config = Slic3r::Test::multifilament_config(3, {
+        { "enable_support", true }, { "support_type", "tree(auto)" }, { "support_filament", 2 }, { "support_interface_filament", 3 },
+        { "support_line_width", "105%" } });
+    config.set_num_extruders(3);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({ 0.4, 0.6, 0.4 })); // mm
+    Slic3r::Test::size_flush_to_nozzles(config);
+    config.set_key_value(per_nozzle_line_width_key("support_line_width"), new ConfigOptionFloats({ 0.42, 0.63, 0.42 })); // mm
+    Print print;
+    Model model;
+    REQUIRE_NOTHROW(Slic3r::Test::init_print({ make_cube(20., 20., 20.) }, print, model, config));
+    REQUIRE(print.objects().size() == 1);
+    const SupportParameters parameters(*print.objects().front());
+    CHECK_THAT(parameters.support_material_flow.nozzle_diameter(), Catch::Matchers::WithinAbs(0.6, 1e-6));
+    CHECK_THAT(parameters.support_material_flow.width(), Catch::Matchers::WithinAbs(0.63, 1e-6));
+    CHECK_THAT(parameters.support_extrusion_width, Catch::Matchers::WithinAbs(parameters.support_material_flow.width(), 1e-6));
+}
+
 // MAGPIE: line 1 (Beta 7). Whether support base and interface may merge compares the object's filament
 // with the support filaments in one index domain.
 TEST_CASE("Support merge eligibility compares material IDs in the same domain", "[SupportMaterial][SupportMapping]")

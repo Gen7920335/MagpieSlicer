@@ -80,7 +80,7 @@ public:
 
 private:
     friend std::unique_ptr<const WallPlanner> open_wall_planner(const DynamicPrintConfig &, const PrintConfig &,
-                                                                const PrintObjectConfig *, const PrintRegionConfig &);
+                                                                const PrintObjectConfig *, const PrintRegionConfig &, bool);
     WallPlanner() = default;
 
     std::string                          m_name;
@@ -95,10 +95,12 @@ std::string wall_planner_mod_id(const DynamicPrintConfig &full_config, const Pri
 
 // Opens the planner the region uses (wall_planner_name: the active mods' wall.plan declaration whose "when" holds for
 // the region). full_config is the print's full config (it holds the mod parameters); print_config the print's own,
-// object_config the region's object (or null). Nullptr when the region uses none; throws SlicingError when the choice
-// fails, no loaded mod provides the planner or the mod refuses the region.
+// object_config the region's object (or null); is_bbl_printer as Print::is_BBL_printer() (the planner is told the
+// nozzle each filament prints on, printing_nozzle_index). Nullptr when the region uses none; throws SlicingError when
+// the choice fails, no loaded mod provides the planner or the mod refuses the region.
 std::unique_ptr<const WallPlanner> open_wall_planner(const DynamicPrintConfig &full_config, const PrintConfig &print_config,
-                                                     const PrintObjectConfig *object_config, const PrintRegionConfig &region_config);
+                                                     const PrintObjectConfig *object_config, const PrintRegionConfig &region_config,
+                                                     bool is_bbl_printer);
 
 } // namespace ModHost
 } // namespace Slic3r

@@ -1152,7 +1152,7 @@ static void append_planner_wall_filaments(const PrintObject &object, const Print
 {
     const Print &print = *object.print();
     const std::unique_ptr<const ModHost::WallPlanner> planner =
-        ModHost::open_wall_planner(print.full_print_config(), print.config(), &object.config(), region.config());
+        ModHost::open_wall_planner(print.full_print_config(), print.config(), &object.config(), region.config(), print.is_BBL_printer());
     if (!planner)
         return;
     const unsigned int base = unsigned(std::max(1, region.config().outer_wall_filament_id.value));

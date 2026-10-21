@@ -163,15 +163,16 @@ std::vector<const ExtrusionEntity *> walls_of(const LayerRegion &region)
 }
 
 // The multi-nozzle walls planner opened, as the core opens it, for a region of `config` (outer wall filament 1)
-// with the mod's parameters `params`. Needs OfficialMods.
-std::unique_ptr<const ModHost::WallPlanner> open_planner(DynamicPrintConfig config, const nlohmann::json &params)
+// with the mod's parameters `params`, on a BBL printer (filament_map routes filaments to nozzles) when is_bbl_printer.
+// Needs OfficialMods.
+std::unique_ptr<const ModHost::WallPlanner> open_planner(DynamicPrintConfig config, const nlohmann::json &params, bool is_bbl_printer = false)
 {
     multi_nozzle_params(config, params);
     PrintConfig print_config;
     print_config.apply(config, true);
     PrintRegionConfig region;
     region.apply(config, true);
-    return ModHost::open_wall_planner(config, print_config, nullptr, region);
+    return ModHost::open_wall_planner(config, print_config, nullptr, region, is_bbl_printer);
 }
 
 } // namespace
@@ -1794,4 +1795,223 @@ TEST_CASE("Inner walls under a single top wall narrow by the large nozzle", "[Mu
     REQUIRE(! large.empty());
     CHECK(at_small_minimum == 0);
     CHECK(moves_below(large, 76) == 0);
+}
+
+// MAGPIE: line 1 (Beta 7) routed walls through the filament to nozzle map. On a BBL printer filament_map says which
+// nozzle prints a filament (printing_nozzle_index), so the planner must judge nozzle sizes by it, not by the filament
+// number. Here filament 1 prints on the 0.4 mm nozzle (2) and filament 2 on the 0.2 mm nozzle (1).
+TEST_CASE("Detail walls follow the filament to nozzle map of a BBL printer", "[MultiNozzleWalls][FilamentMap]")
+{
+    OfficialMods mods;
+    const char *wall_generator = GENERATE("classic", "arachne");
+    CAPTURE(wall_generator);
+    DynamicPrintConfig config = two_nozzle_config(0.2, 0.4, 1, wall_generator, true); // mm
+    config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+    config.set_key_value("filament_map", new ConfigOptionInts{ 2, 1 });
+    Print print;
+    print.is_BBL_printer() = true;
+    Model model;
+    init_print({ cube(20) }, print, model, config);
+    REQUIRE(print.config().filament_map.values == std::vector<int>{ 2, 1 });
+    print.process();
+    const std::string output = Slic3r::Test::gcode(print);
+    // A BBL printer changes filament with "M1020 S<filament, 0-based> H<nozzle, 0-based>" and names features
+    // "; FEATURE: <role>". Per role: the filaments and the widths (mm) it prints with.
+    std::map<std::string, std::set<int>>    filaments;
+    std::map<std::string, std::set<double>> widths;
+    int         filament = 0;
+    double      width    = 0.;
+    std::string role;
+    GCodeReader reader;
+    reader.parse_buffer(output, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw());
+        float s = 0.f;
+        if (line.cmd_is("M1020") && line.has_value('S', s))
+            filament = int(s);
+        else if (raw.rfind("; FEATURE: ", 0) == 0)
+            role = raw.substr(11);
+        else if (raw.rfind("; LINE_WIDTH: ", 0) == 0)
+            width = std::stod(raw.substr(14));
+        else if (line.extruding(self) && line.dist_XY(self) > 0) {
+            filaments[role].insert(filament);
+            widths[role].insert(width);
+        }
+    });
+    // Filament 1 keeps the inner walls and infill on its 0.4 mm nozzle; filament 2 on the 0.2 mm nozzle prints the
+    // outer (detail) walls at that nozzle's width.
+    CHECK(filaments["Outer wall"] == std::set<int>{ 1 });
+    CHECK(filaments["Inner wall"] == std::set<int>{ 0 });
+    CHECK(filaments["Sparse infill"] == std::set<int>{ 0 });
+    REQUIRE_FALSE(widths["Outer wall"].empty());
+    CHECK(*widths["Outer wall"].rbegin() < 0.3); // mm: a 0.2 mm nozzle's width, not the 0.4 mm nozzle's
+}
+
+namespace {
+// Four nozzles of 0.15, 0.2, 0.4 and 0.8 mm on a BBL printer whose filament_map puts filament n on nozzle map[n - 1],
+// every filament PLA; the walls are filament base_filament's.
+DynamicPrintConfig mapped_four_nozzle_config(const std::vector<int> &map, const std::vector<std::string> &colours, int base_filament)
+{
+    DynamicPrintConfig config = multifilament_config(unsigned(colours.size()),
+                                                     { { "outer_wall_filament_id", base_filament }, { "inner_wall_filament_id", base_filament } });
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.15, 0.2, 0.4, 0.8 }); // mm
+    config.set_key_value("filament_map", new ConfigOptionInts(map));
+    config.set_key_value("filament_colour", new ConfigOptionStrings(colours));
+    config.set_key_value("filament_type", new ConfigOptionStrings(std::vector<std::string>(colours.size(), "PLA")));
+    config.set_key_value("filament_soluble", new ConfigOptionBools(std::vector<unsigned char>(colours.size(), 0)));
+    return config;
+}
+// The filament (1-based) filament_map puts on nozzle `nozzle` (1-based), 0 for none.
+unsigned int filament_on(const std::vector<int> &map, int nozzle)
+{
+    const auto it = std::find(map.begin(), map.end(), nozzle);
+    return it == map.end() ? 0u : unsigned(std::distance(map.begin(), it) + 1);
+}
+} // namespace
+
+// MAGPIE: line 1 (Beta 7) wall tool routing. With every filament the same colour the detail walls go to the smallest
+// nozzle, whichever filament the map puts there; the walls' own filament sits on the 0.4 mm nozzle.
+TEST_CASE("Detail routing remains correct for every four-nozzle permutation of the filament map", "[MultiNozzleWalls][FilamentMap]")
+{
+    OfficialMods     mods;
+    std::vector<int> map{ 1, 2, 3, 4 };
+    size_t           checked = 0;
+    do {
+        CAPTURE(map);
+        const int  base   = int(filament_on(map, 3));
+        const auto detail = open_planner(mapped_four_nozzle_config(map, { "#FF0000", "#FF0000", "#FF0000", "#FF0000" }, base),
+                                         { { "enable", true } }, true)->detail_tool(0);
+        REQUIRE(detail);
+        CHECK(detail.toolhead_1based == 1);
+        CHECK(detail.filament_1based == filament_on(map, 1));
+        CHECK_THAT(detail.nozzle_diameter, Catch::Matchers::WithinAbs(0.15, 1e-9));
+        ++checked;
+    } while (std::next_permutation(map.begin(), map.end()));
+    CHECK(checked == 24);
+}
+
+// MAGPIE: line 1 (Beta 7). With four colours no filament shares the walls' colour, so automatic detail walls keep each
+// filament on its own mapped nozzle (no detail tool), for every permutation.
+TEST_CASE("Automatic detail walls keep distinct colours on their mapped nozzles for every permutation", "[MultiNozzleWalls][FilamentMap]")
+{
+    OfficialMods     mods;
+    std::vector<int> map{ 1, 2, 3, 4 };
+    do {
+        for (int filament = 1; filament <= 4; ++filament) {
+            CAPTURE(map, filament);
+            const auto planner = open_planner(mapped_four_nozzle_config(map, { "#FF0000", "#00FF00", "#0000FF", "#FFFF00" }, filament),
+                                              { { "enable", true } }, true);
+            CHECK_FALSE(planner->detail_tool(0));
+            CHECK(planner->wall_filament(0, ExtrusionToolHint::DetailWall, unsigned(filament)) == unsigned(filament));
+        }
+    } while (std::next_permutation(map.begin(), map.end()));
+}
+
+// MAGPIE: line 1 (Beta 7). The chosen crisp-corner toolhead and the large nozzle override name nozzles; the filament
+// printing there is the one the map puts on that nozzle. Map {3, 1, 4, 2}: filament 1 on the 0.4 mm nozzle, 2 on
+// 0.15, 3 on 0.8, 4 on 0.2.
+TEST_CASE("Chosen toolheads and override ranges resolve to the filaments mapped to them", "[MultiNozzleWalls][FilamentMap]")
+{
+    OfficialMods           mods;
+    const std::vector<int> map{ 3, 1, 4, 2 };
+    SECTION("a smaller nozzle with the walls' colour wins over the chosen toolhead") {
+        const auto detail = open_planner(mapped_four_nozzle_config(map, { "#0000FF", "#FF0000", "#00FF00", "#0000FF" }, 1),
+                                         { { "enable", true }, { "detail_toolhead", 1 } }, true)->detail_tool(0);
+        REQUIRE(detail);
+        CHECK(detail.filament_1based == 4);
+        CHECK(detail.toolhead_1based == 2);
+    }
+    SECTION("the chosen toolhead prints the filament mapped to it when no smaller nozzle has the walls' colour") {
+        const auto detail = open_planner(mapped_four_nozzle_config(map, { "#0000FF", "#FF0000", "#00FF00", "#FFFF00" }, 1),
+                                         { { "enable", true }, { "detail_toolhead", 2 } }, true)->detail_tool(0);
+        REQUIRE(detail);
+        CHECK(detail.filament_1based == 4);
+        CHECK(detail.toolhead_1based == 2);
+        CHECK_THAT(detail.nozzle_diameter, Catch::Matchers::WithinAbs(0.2, 1e-9));
+    }
+    SECTION("off, the region opens no planner: Orca's walls, on the walls' own filament") {
+        CHECK(open_planner(mapped_four_nozzle_config(map, { "#0000FF", "#FF0000", "#00FF00", "#FFFF00" }, 1),
+                           { { "enable", false }, { "detail_toolhead", 2 } }, true) == nullptr);
+    }
+    SECTION("override ranges print their layers with the filament mapped to their toolhead; the last range wins") {
+        const auto planner = open_planner(mapped_four_nozzle_config(map, { "#FF0000", "#00FF00", "#0000FF", "#FFFF00" }, 1),
+                                          { { "enable", true }, { "override_regions", "1:20:4;5:10:3" } }, true);
+        CHECK(planner->layer_wall_toolhead(1) == 4);
+        CHECK(planner->wall_filament(1, ExtrusionToolHint::Auto, 1) == 3);
+        CHECK(planner->layer_wall_toolhead(5) == 3);
+        CHECK(planner->wall_filament(5, ExtrusionToolHint::Auto, 1) == 1);
+        CHECK(planner->layer_wall_toolhead(20) == 0);
+        CHECK(planner->wall_filament(20, ExtrusionToolHint::Auto, 1) == 0);
+    }
+}
+
+// MAGPIE: line 1 (Beta 7). A nozzle no filament is mapped to prints nothing; a filament past a short map prints on
+// the nozzle of its own number, as the core reads it (printing_nozzle_index).
+TEST_CASE("Unmapped nozzles and short filament maps resolve as the core does", "[MultiNozzleWalls][FilamentMap]")
+{
+    OfficialMods mods;
+    SECTION("a chosen toolhead no filament is mapped to falls back to a smaller nozzle that has one") {
+        // Filament 1 on the 0.15 mm nozzle, 2 on 0.4; nothing on the 0.2 mm nozzle 2.
+        const auto detail = open_planner(mapped_four_nozzle_config({ 1, 3 }, { "#FF0000", "#00FF00" }, 2),
+                                         { { "enable", true }, { "detail_toolhead", 2 } }, true)->detail_tool(0);
+        REQUIRE(detail);
+        CHECK(detail.toolhead_1based == 1);
+        CHECK(detail.filament_1based == 1);
+    }
+    SECTION("a one-entry map leaves the other filaments on the nozzles of their numbers") {
+        // Filament 3 prints the walls on the 0.4 mm nozzle; 1 and 2 are on 0.15 and 0.2 mm.
+        const auto detail = open_planner(mapped_four_nozzle_config({ 1 }, { "#FF0000", "#FF0000", "#FF0000", "#FF0000" }, 3),
+                                         { { "enable", true } }, true)->detail_tool(0);
+        REQUIRE(detail);
+        CHECK(detail.toolhead_1based == 1);
+        CHECK(detail.filament_1based == 1);
+    }
+}
+
+// MAGPIE: line 1 (Beta 7). The first layer's tool order measures islands with the width of the nozzle the map puts
+// their filament on: the 0.12 mm plate's filament 2 prints on the 0.15 mm nozzle, so it keeps its island (as in "The
+// first layer tool order measures islands with their own nozzle's width") and starts the print.
+TEST_CASE("The first layer tool order measures islands on the nozzle the filament map gives them", "[MultiNozzleWalls][ToolOrdering][FilamentMap]")
+{
+    DynamicPrintConfig config = multifilament_config(2, {
+        { "layer_height", 0.1 }, { "initial_layer_print_height", 0.1 }, // mm
+        { "initial_layer_line_width", "100%" }, { "line_width", "100%" },
+        { "skirt_loops", 0 }, { "brim_type", "no_brim" }, { "enable_prime_tower", false }, { "slice_closing_radius", 0.001 },
+    });
+    config.set_num_extruders(2);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.15, 0.4 }); // mm
+    size_flush_to_nozzles(config);
+    config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+    config.set_key_value("filament_map", new ConfigOptionInts{ 2, 1 });
+    TriangleMesh plate = make_cube(80., 0.12, 2.); // mm
+    TriangleMesh dot   = make_cube(1., 1., 2.);    // mm
+    Print print;
+    print.is_BBL_printer() = true;
+    Model model;
+    init_print({ plate, dot }, print, model, config);
+    for (const char *key : { "outer_wall_filament_id", "inner_wall_filament_id", "sparse_infill_filament_id", "internal_solid_filament_id",
+                             "top_surface_filament_id", "bottom_surface_filament_id" })
+        model.objects[0]->config.set_key_value(key, new ConfigOptionInt(2));
+    print.apply(model, config);
+    print.process();
+    const std::string gcode = Slic3r::Test::gcode(print);
+    // A BBL printer starts on the first layer's first filament (in the start G-code) and changes filament with
+    // "M1020 S<filament, 0-based>": the first change goes to filament 1 when filament 2 started the print. The first
+    // extrusion is the plate's, at the 0.15 mm nozzle's width (mm).
+    int    first_change = -1;
+    double first_width  = 0.;
+    double width        = 0.;
+    GCodeReader reader;
+    reader.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw());
+        float s = 0.f;
+        if (first_change < 0 && line.cmd_is("M1020") && line.has_value('S', s))
+            first_change = int(s);
+        else if (raw.rfind("; LINE_WIDTH: ", 0) == 0)
+            width = std::stod(raw.substr(14));
+        else if (first_width == 0. && line.extruding(self) && line.dist_XY(self) > 0)
+            first_width = width;
+    });
+    CHECK(first_change == 0);
+    CHECK(first_width > 0.);
+    CHECK(first_width < 0.2);
 }

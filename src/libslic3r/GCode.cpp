@@ -6601,7 +6601,8 @@ void append_half_layer_model_tasks(const PrintObject &object, size_t parent_inde
             // MAGPIE: walls a wall planner (wall.plan slot) routes to other nozzles, as GCode::process_layer routes them.
             const unsigned base_filament = unsigned(std::max(1, region_config.outer_wall_filament_id.value));
             const std::unique_ptr<const ModHost::WallPlanner> planner =
-                ModHost::open_wall_planner(object.print()->full_print_config(), print_config, &object.config(), region_config);
+                ModHost::open_wall_planner(object.print()->full_print_config(), print_config, &object.config(), region_config,
+                                            object.print()->is_BBL_printer());
             const ConfigOptionFloatOrPercent detail_wall_speed = detail_wall_speed_of(*object.print(), &object.config(), region_config);
             auto collect_root = [&](const ExtrusionEntityCollection &root, bool perimeter) {
                 auto collect = [&](auto &&self, const ExtrusionEntity &entity) -> void {
@@ -8379,7 +8380,8 @@ LayerResult GCode::process_layer(
                 // MAGPIE: the region's wall planner (wall.plan slot), which routes walls and the gap fill between detail
                 // walls to its nozzles below.
                 const std::unique_ptr<const ModHost::WallPlanner> wall_planner =
-                    ModHost::open_wall_planner(print.full_print_config(), print.config(), &layer.object()->config(), region.config());
+                    ModHost::open_wall_planner(print.full_print_config(), print.config(), &layer.object()->config(), region.config(),
+                                                print.is_BBL_printer());
 
                 // Now we must process perimeters and infills and create islands of extrusions in by_region std::map.
                 // It is also necessary to save which extrusions are part of MM wiping and which are not.

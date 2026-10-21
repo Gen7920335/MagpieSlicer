@@ -122,3 +122,14 @@ Format: what was wrong, what changed, where, the guard test.
   identity, the variable layer height limits come from the wrong nozzle. Fixing it needs to know whether the
   printer maps filaments to nozzles (Bambu) at every caller, including the GUI layer editor; non-Bambu printers
   use the filament index as the nozzle and are not affected.
+
+## Tree support geometry width on the support body's nozzle
+
+- Wrong: `SupportParameters::support_extrusion_width` (the width Tree support builds its branches, base areas and
+  move distances with, next to the body nozzle's diameter in `TreeSupport.cpp`) was resolved on the nozzle of
+  `support_interface_filament`. With the body and interface on nozzles of different sizes the body was built at the
+  interface nozzle's width (0.42 mm instead of 0.63 mm for a 0.6 mm body nozzle and a 0.4 mm interface nozzle).
+- Change: resolved on the nozzle printing the support body (`feature_printing_nozzle(WidthFeature::Support)`, BBL
+  filament maps included), the nozzle `support_material_flow()` uses. One nozzle or one support filament: unchanged.
+- Tests: "Tree support geometry width follows the body nozzle instead of the interface nozzle", "Support flow
+  resolves filaments through the BBL filament to nozzle map" (test_support_material.cpp).

@@ -2022,7 +2022,7 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
                 std::vector<ModHost::WallToolUse> planner_uses;
                 bool                              planner_inner_walls = false;
                 try {
-                    if (const auto planner = ModHost::open_wall_planner(print.full_print_config(), pc, &config, rc))
+                    if (const auto planner = ModHost::open_wall_planner(print.full_print_config(), pc, &config, rc, print.is_BBL_printer()))
                         planner_uses = planner->tool_uses(planner_inner_walls);
                 } catch (const SlicingError &e) {
                     error = {e.what(), &object, ""};

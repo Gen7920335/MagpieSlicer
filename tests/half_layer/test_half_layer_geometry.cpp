@@ -108,7 +108,7 @@ std::vector<WallSample> generate_walls(bool arachne, bool half_height, int wall_
         DynamicPrintConfig         full;
         Slic3r::Test::multi_nozzle_params(full, {{"enable", true}, {"detail_toolhead", 0}, {"small_wall_count", detail_count},
                                                  {"interlock", interlocking}, {"wall_overlap", 15.}});
-        planner = ModHost::open_wall_planner(full, print_config, &object_config, region_config);
+        planner = ModHost::open_wall_planner(full, print_config, &object_config, region_config, false);
         generator.wall_planner = planner.get();
     }
     const ExPolygons lower{ExPolygon(Polygon{Point(0, 0), Point(width_scaled / 2, 0),

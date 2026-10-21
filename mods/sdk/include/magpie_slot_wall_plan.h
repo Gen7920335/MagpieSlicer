@@ -30,7 +30,9 @@ extern "C" {
 #define MP_SLOT_WALL_PLAN_VERSION 1
 
 /* The printer's nozzles and filaments as its settings list them. Lists can differ in length; an index
- * past a list's end reads its first entry, as the core's own reads do. */
+ * past a list's end reads its first entry, as the core's own reads do. A filament is printed on the
+ * toolhead filament_toolhead gives it (on a BBL printer filament_map routes filaments to nozzles); a
+ * host whose struct ends before filament_toolhead prints filament n on toolhead n. */
 typedef struct mp_wall_printer {
     uint32_t           size;
     uint32_t           nozzle_count;             /* nozzle_diameter: one entry per toolhead */
@@ -42,6 +44,8 @@ typedef struct mp_wall_printer {
     const char *const *filament_colour;           /* "#RRGGBB", or "" for none */
     uint32_t           filament_soluble_count;
     const uint8_t     *filament_soluble;          /* nonzero: soluble */
+    uint32_t           filament_toolhead_count;
+    const uint32_t    *filament_toolhead;         /* the 1-based toolhead printing each filament */
 } mp_wall_printer;
 
 /* A filament and the toolhead that prints it. All zero: none. */

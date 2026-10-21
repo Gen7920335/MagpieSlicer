@@ -213,8 +213,10 @@ struct SupportParameters {
             assert(slicing_params.raft_layers() == 0);
         }
 
-        // MAGPIE: on the support interface nozzle (as Orca), per-nozzle line width fields included.
-        const size_t   width_nozzle    = printing_nozzle_index(print_config, object_config.support_interface_filament.value, false);
+        // MAGPIE (Magpie line 1): on the nozzle printing the support body (Orca took the interface's), the width the
+        // tree geometry is built with next to that nozzle's diameter; per-nozzle line width fields included.
+        const size_t   width_nozzle    = feature_printing_nozzle(WidthFeature::Support, { &print_config, &object_config, nullptr },
+                                                                 object.print()->is_BBL_printer());
 	    const auto     nozzle_diameter = print_config.nozzle_diameter.get_at(width_nozzle);
         const coordf_t extrusion_width = line_width_setting_on_nozzle(object_config, "line_width", width_nozzle).get_abs_value(nozzle_diameter);
         support_extrusion_width        = line_width_setting_on_nozzle(object_config, "support_line_width", width_nozzle).get_abs_value(nozzle_diameter);
