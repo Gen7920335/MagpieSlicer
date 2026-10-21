@@ -174,7 +174,7 @@ Format: what was wrong, what changed, where, the guard test.
 - Change: `PerimeterGenerator::is_bbl_printer` (the Print's flag, set in LayerRegion) goes to both reads.
 - Test: "H/2 shell bridges of a BBL printer take the bridge width of the nozzle filament_map names"
   (test_multi_nozzle_walls.cpp); 4 of 8 assertions fail with both reads back on `false`. The clip read alone
-  changed no output in the BBL corpus (D:\claude\goldenblwall\corpus3.json: pyramid, cube, slab, tee with only
+  changed no output in the BBL corpus (D:\claude\golden\bblwall\corpus3.json: pyramid, cube, slab, tee with only
   one wall on top and 0.4/0.8 mm nozzles); it is changed for the same routing, without a failing test.
 
 ## Known Orca bugs not patched
