@@ -2015,3 +2015,53 @@ TEST_CASE("The first layer tool order measures islands on the nozzle the filamen
     CHECK(first_width > 0.);
     CHECK(first_width < 0.2);
 }
+
+TEST_CASE("The brim is laid out for the nozzle that prints it when H/2 reorders the first layer", "[MultiNozzleWalls][HalfLayer][Brim]")
+{
+    // The planner is the native multi-nozzle walls mod, H/2 the native half-layer mod; their parameters are read
+    // while their manifests are active.
+    OfficialMods mods;
+    // The brim's lines are laid out before G-code export for the tool expected to print it (brim_tool()), and the
+    // G-code prints it on the object's first visit of the first layer. H/2 runs the first layer in its own visit
+    // order, which can start on the detail nozzle while the layer's tool list starts on the large one: the 0.4 mm
+    // nozzle's brim width was then printed by the 0.15 mm nozzle.
+    const bool h2 = GENERATE(false, true);
+    DYNAMIC_SECTION("H/2 " << h2) {
+        // Nozzle 1 0.15 mm (detail), nozzle 2 0.4 mm (the object's filament).
+        const std::vector<double> nozzle_mm { 0.15, 0.4 };
+        DynamicPrintConfig config = two_nozzle_config(nozzle_mm[0], nozzle_mm[1], 2, "classic", true);
+        config.set_deserialize_strict({
+            { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+            { "brim_type", "outer_only" }, { "brim_width", 3 },               // mm
+        });
+        Slic3r::Test::half_layer_params(config, h2);
+        const std::string gcode = slice({ cube(10) }, config);
+
+        int                        tool  = -1;
+        bool                       brim  = false;
+        double                     width = 0.; // mm, the last ;WIDTH (G-code repeats it only when it changes)
+        std::map<int, size_t>      brim_moves;   // tool -> brim moves
+        std::map<int, double>      widest_brim;  // tool -> widest brim line, mm
+        std::istringstream         lines(gcode);
+        for (std::string line; std::getline(lines, line);) {
+            if (line.size() >= 2 && line[0] == 'T' && std::isdigit((unsigned char) line[1]))
+                tool = std::stoi(line.substr(1));
+            else if (line.rfind(";TYPE:", 0) == 0)
+                brim = line == ";TYPE:Brim";
+            else if (line.rfind(";WIDTH:", 0) == 0)
+                width = std::stod(line.substr(7));
+            else if (brim && tool >= 0 && line.rfind("G1 ", 0) == 0 && line.find(" E") != std::string::npos &&
+                     line.find('X') != std::string::npos) {
+                ++brim_moves[tool];
+                widest_brim[tool] = std::max(widest_brim[tool], width);
+            }
+        }
+        REQUIRE(!brim_moves.empty());
+        for (const auto &[t, moves] : brim_moves) {
+            INFO("tool " << t << ": " << moves << " brim moves, widest " << widest_brim[t] << " mm on its " << nozzle_mm[t] << " mm nozzle");
+            // A brim line no wider than twice the nozzle printing it (the 0.4 mm nozzle's brim is 0.5 mm or less, the
+            // 0.15 mm nozzle's 0.3 mm or less).
+            CHECK(widest_brim[t] <= 2. * nozzle_mm[t] + EPSILON);
+        }
+    }
+}

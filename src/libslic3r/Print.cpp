@@ -46,6 +46,8 @@
 #include <optional>
 #include "GCode/GCodeProcessor.hpp"
 #include "GCode/ThumbnailData.hpp"
+#include "GCode/HalfLayerExecution.hpp"
+#include "GCode/ToolOrdering.hpp"
 #include "ExtrusionEntity.hpp"
 #include <math.h>
 #include "CommonDefs.hpp"
@@ -3370,6 +3372,29 @@ Flow brim_flow_on_nozzle(const Print &print, const PrintObject &object, size_t n
     return feature_flow(WidthFeature::Brim, configs, nozzle, float(print.skirt_first_layer_height()), false);
 }
 
+// MAGPIE: the tool of the first visit printing `object` in the first layer's H/2 frame, which G-code export
+// follows instead of the layer's tool list (the object's brim goes down on that visit); -1 when the first layer
+// has no H/2 frame or no task of the object.
+static unsigned int half_layer_first_visit_tool(const ToolOrdering &ordering, const PrintObject &object)
+{
+    if (ordering.layer_tools().empty())
+        return unsigned(-1);
+    const HalfLayerExecutionFrame *frame = ordering.execution_frame(ordering.layer_tools().front());
+    if (frame == nullptr)
+        return unsigned(-1);
+    for (const HalfLayerExecutionVisit &visit : frame->plan.visits)
+        for (size_t idx = visit.begin; idx < visit.end; ++idx)
+            if (frame->plan.tasks[idx].object == &object && frame->plan.tasks[idx].entity != nullptr)
+                return visit.tool.filament;
+    return unsigned(-1);
+}
+
+// The tools of the first layer in the order G-code export visits them: the H/2 frame's visits when it has one.
+static std::vector<unsigned int> first_layer_visit_order(const ToolOrdering &ordering)
+{
+    return ordering.layer_tools().empty() ? std::vector<unsigned int>() : ordering.execution_filaments(ordering.layer_tools().front());
+}
+
 unsigned int brim_tool(const Print &print, const PrintObject &object)
 {
     // The tools printing the object's first layer, from its own tool ordering. A by-object print orders them that
@@ -3378,6 +3403,8 @@ unsigned int brim_tool(const Print &print, const PrintObject &object)
     ToolOrdering ordering(object, (unsigned int) -1);
     if (by_object)
         ordering.sort_and_build_data(object, (unsigned int) -1);
+    if (const unsigned int tool = half_layer_first_visit_tool(by_object ? ordering : print.tool_ordering(), object); tool != unsigned(-1))
+        return tool;
     const std::vector<unsigned int> object_tools = ordering.layer_tools().empty() ? std::vector<unsigned int>() : ordering.layer_tools().front().extruders;
     const std::vector<unsigned int> &order       = by_object ? object_tools : print.tool_ordering().layer_tools().front().extruders;
     for (const unsigned int tool : order)
@@ -4698,8 +4725,7 @@ void Print::_make_skirt()
                 // brim tools in the first layer's tool order, on a printer whose nozzles differ in size.
                 Flow group_flow = brim_flow();
                 if (m_line_width_context.reference_mm > 0.) {
-                    const std::vector<unsigned int> order = m_tool_ordering.layer_tools().empty() ? std::vector<unsigned int>() :
-                                                                                                  m_tool_ordering.layer_tools().front().extruders;
+                    const std::vector<unsigned int> order = first_layer_visit_order(m_tool_ordering);
                     size_t best = size_t(-1);
                     for (const ObjectInstanceID &instance : instances) {
                         const PrintObject *object = this->get_object(instance.object_id);
