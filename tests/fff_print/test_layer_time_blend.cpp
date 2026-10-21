@@ -4,6 +4,7 @@
 #include <catch2/catch_all.hpp>
 
 #include "libslic3r/GCode/GCodeProcessor.hpp"
+#include "libslic3r/GCode/LayerTimeTower.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Print.hpp"
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -627,4 +629,108 @@ TEST_CASE("Under H/2 the tower waits happen over the tower, at the layer's heigh
     // take their sites along (where the cut falls follows the layer times, which H/2 changes).
     CHECK(count_lines_starting(out, site_tag) == blocks);
     CHECK(blocks < 53);
+}
+
+namespace {
+
+// The lowest X and Y the G-code extrudes at inside the first tower block (its brim's outer loop), mm.
+Vec2d tower_brim_min(const std::vector<std::string> &lines)
+{
+    Vec2d min(std::numeric_limits<double>::max(), std::numeric_limits<double>::max());
+    bool  in_block = false;
+    for (const std::string &line : lines) {
+        if (line == ";MAGPIE_WAIT_TOWER_BEGIN")
+            in_block = true;
+        else if (line == ";MAGPIE_WAIT_TOWER_END")
+            break;
+        else if (in_block && axis_value(line, 'E') && *axis_value(line, 'E') > 0.) {
+            if (std::optional<double> x = axis_value(line, 'X'))
+                min.x() = std::min(min.x(), *x);
+            if (std::optional<double> y = axis_value(line, 'Y'))
+                min.y() = std::min(min.y(), *y);
+        }
+    }
+    return min;
+}
+
+} // namespace
+
+// MAGPIE: the 3D scene draws and drags the layer time tower where place_layer_time_tower puts it from the model
+// instances' footprints and the plate's stored position (GLCanvas3D::load_layer_time_tower_previews); the export
+// prints it from the sliced objects through the same function. On a plain plate the two agree: the brim's outer loop
+// starts where the footprint the function gives puts it.
+TEST_CASE("The layer time tower prints where the 3D scene shows it", "[LayerTimeBlend]")
+{
+    const double stored_x = GENERATE(-1., 20.); // mm, -1: automatic
+    CAPTURE(stored_x);
+    DynamicPrintConfig config = wait_at_config("tower", 10.);
+    if (stored_x >= 0.) {
+        config.set_key_value("layer_time_blend_tower_x", new ConfigOptionFloats{ stored_x });
+        config.set_key_value("layer_time_blend_tower_y", new ConfigOptionFloats{ 30. });
+    }
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    Print print;
+    Model model;
+    TriangleMesh mesh = pillar_with_slab();
+    mesh.translate(100.f, 100.f, 0.f);
+    std::vector<TriangleMesh> meshes;
+    meshes.push_back(std::move(mesh));
+    init_print(std::move(meshes), print, model, config, nullptr, /*arrange=*/false);
+    const std::string out = gcode(print);
+
+    // What the 3D scene computes, from the model.
+    const double nozzle = config.option<ConfigOptionFloats>("nozzle_diameter")->get_at(0); // mm
+    std::vector<LayerTimeTowerObject> objects;
+    for (const ModelObject *object : model.objects)
+        for (size_t i = 0; i < object->instances.size(); ++i) {
+            const BoundingBoxf3 box = object->instance_bounding_box(i);
+            objects.push_back({ BoundingBoxf(Vec2d(box.min.x(), box.min.y()), Vec2d(box.max.x(), box.max.y())), config.opt_float("brim_width") });
+        }
+    const std::optional<LayerTimeTowerSpot> spot =
+        place_layer_time_tower(config.option<ConfigOptionPoints>("printable_area")->values, 15., layer_time_tower_brim(nozzle),
+                               layer_time_tower_skirt(config.opt_int("skirt_loops"), config.opt_float("skirt_distance"), nozzle), objects,
+                               std::nullopt, stored_x, stored_x >= 0. ? 30. : -1.);
+    REQUIRE(spot);
+    REQUIRE(spot->fits);
+    if (stored_x >= 0.) {
+        CHECK_THAT(spot->origin.x(), WithinAbs(20., 1e-9));
+        CHECK_THAT(spot->origin.y(), WithinAbs(30., 1e-9));
+    }
+    // The brim's outer loop on the first layer (0.3 mm): its five lines at that layer's spacing out from the tower's
+    // outline, which sits a brim (laid out at half the nozzle's height) inside the footprint; minus half a line, mm.
+    // The G-code has three decimals.
+    const Flow   first(Flow::auto_extrusion_width(frPerimeter, float(nozzle)), 0.3f, float(nozzle));
+    const double inset   = layer_time_tower_brim(nozzle) - (LAYER_TIME_TOWER_BRIM_LINES * double(first.spacing()) - 0.5 * double(first.width()));
+    const Vec2d  printed = tower_brim_min(lines_of(out));
+    CHECK_THAT(printed.x(), WithinAbs(spot->origin.x() + inset, 2e-3));
+    CHECK_THAT(printed.y(), WithinAbs(spot->origin.y() + inset, 2e-3));
+}
+
+TEST_CASE("A stored layer time tower position over an object does not print", "[LayerTimeBlend]")
+{
+    const std::vector<Vec2d> bed = { { 0., 0. }, { 200., 0. }, { 200., 200. }, { 0., 200. } };
+    const std::vector<LayerTimeTowerObject> objects = { { BoundingBoxf(Vec2d(90., 90.), Vec2d(110., 110.)), 0. } };
+    const double side = 15., brim = 2.; // mm
+    // Stored over the object: shown where it was put, not printed.
+    std::optional<LayerTimeTowerSpot> spot = place_layer_time_tower(bed, side, brim, 0., objects, std::nullopt, 95., 95.);
+    REQUIRE(spot);
+    CHECK_THAT(spot->origin.x(), WithinAbs(95., 1e-9));
+    CHECK_THAT(spot->origin.y(), WithinAbs(95., 1e-9));
+    CHECK_FALSE(spot->fits);
+    // Stored past the bed's edge: clamped onto it (AUX_TOWER_BED_MARGIN inside).
+    spot = place_layer_time_tower(bed, side, brim, 0., objects, std::nullopt, 500., 10.);
+    REQUIRE(spot);
+    CHECK_THAT(spot->origin.x(), WithinAbs(200. - AUX_TOWER_BED_MARGIN - (side + 2. * brim), 1e-9));
+    CHECK_THAT(spot->origin.y(), WithinAbs(10., 1e-9));
+    CHECK(spot->fits);
+    // Automatic: right of the objects, 20 mm off their box, centred on it; a prime tower there pushes it left.
+    spot = place_layer_time_tower(bed, side, brim, 0., objects, std::nullopt, -1., -1.);
+    REQUIRE(spot);
+    CHECK_THAT(spot->origin.x(), WithinAbs(130., 1e-9));
+    CHECK_THAT(spot->origin.y(), WithinAbs(100. - 0.5 * (side + 2. * brim), 1e-9));
+    spot = place_layer_time_tower(bed, side, brim, 0., objects, LayerTimeTowerPrimeTower{ Vec2d(135., 95.), 10.f, 10.f, 2.f }, -1., -1.);
+    REQUIRE(spot);
+    CHECK(spot->origin.x() < 90.);
+    CHECK(spot->fits);
 }

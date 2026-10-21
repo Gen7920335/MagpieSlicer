@@ -14,6 +14,7 @@
 #include <cstdio>
 #include "slic3r/GUI/ImGuiWrapper.hpp"
 #include "libslic3r/Utils.hpp"
+#include "libslic3r/format.hpp"
 #include <algorithm>
 #include <vector>
 #include "slic3r/GUI/TickCode.hpp"
@@ -909,6 +910,12 @@ void IMSlider::draw_tick_on_mouse_position(const ImRect& slideable_region) {
     
     // draw layer time
     std::string label = get_label(tick, ltEstimatedTime);
+    // MAGPIE: a layer that waited for layer time blending says how long it took before the wait and how long it waited.
+    if (!m_layer_time_blend.empty() && m_draw_mode != dmSequentialGCodeView)
+        if (auto it = m_layer_time_blend.find(time_layer_index(tick)); it != m_layer_time_blend.end())
+            // TRN Preview, tooltip of the layer slider. %1% and %2% are durations.
+            label += "\n" + format(_u8L("Layer time blending: %1% before the wait, %2% wait"), get_time_dhms(it->second.first),
+                                    get_time_dhms(it->second.second));
     show_tooltip(label);
 }
 
@@ -1734,6 +1741,29 @@ bool IMSlider::is_wipe_tower_layer(int tick) const
     return false;
 }
 
+size_t IMSlider::layer_number_of(int value)
+{
+    double layer_print_z = m_values[is_wipe_tower_layer(value) ? std::max<int>(value - 1, 0) : value];
+    auto   it            = std::lower_bound(m_layers_values.begin(), m_layers_values.end(), layer_print_z - epsilon());
+    if (it == m_layers_values.end()) {
+        it = std::lower_bound(m_values.begin(), m_values.end(), layer_print_z - epsilon());
+        if (it == m_values.end()) return size_t(-1);
+        return size_t(value);
+    }
+    return size_t(it - m_layers_values.begin());
+}
+
+size_t IMSlider::time_layer_index(int tick)
+{
+    if (tick < 0 || size_t(tick) >= m_values.size() || m_layers_times.empty())
+        return size_t(-1);
+    if (m_is_wipe_tower) {
+        const size_t layer_number = layer_number_of(tick);
+        return layer_number == m_layers_times.size() ? size_t(-1) : layer_number;
+    }
+    return size_t(tick) < m_layers_times.size() ? size_t(tick) : size_t(-1);
+}
+
 std::string IMSlider::get_label(int tick, LabelType label_type)
 {
     const size_t value = tick;
@@ -1745,14 +1775,7 @@ std::string IMSlider::get_label(int tick, LabelType label_type)
 
     auto get_layer_number = [this](int value, LabelType label_type) {
         if (label_type == ltEstimatedTime && m_layers_times.empty()) return size_t(-1);
-        double layer_print_z = m_values[is_wipe_tower_layer(value) ? std::max<int>(value - 1, 0) : value];
-        auto   it            = std::lower_bound(m_layers_values.begin(), m_layers_values.end(), layer_print_z - epsilon());
-        if (it == m_layers_values.end()) {
-            it = std::lower_bound(m_values.begin(), m_values.end(), layer_print_z - epsilon());
-            if (it == m_values.end()) return size_t(-1);
-            return size_t(value);
-        }
-        return size_t(it - m_layers_values.begin());
+        return layer_number_of(value);
     };
 
     if (m_draw_mode == dmSequentialGCodeView) {
@@ -1760,11 +1783,8 @@ std::string IMSlider::get_label(int tick, LabelType label_type)
 
     } else {
         if (label_type == ltEstimatedTime) {
-            if (m_is_wipe_tower) {
-                size_t layer_number = get_layer_number(value, label_type);
-                return (layer_number == size_t(-1) || layer_number == m_layers_times.size()) ? "" : short_and_splitted_time(get_time_dhms(m_layers_times[layer_number]));
-            }
-            return value < m_layers_times.size() ? short_and_splitted_time(get_time_dhms(m_layers_times[value])) : "";
+            const size_t layer_number = time_layer_index(int(value));
+            return layer_number < m_layers_times.size() ? short_and_splitted_time(get_time_dhms(m_layers_times[layer_number])) : "";
         }
 
         char layer_height[64];

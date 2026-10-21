@@ -1611,6 +1611,9 @@ public:
     // wipe tower so Undo / Redo restores a dragged tower too.
     std::vector<double>     temperature_drop_x;
     std::vector<double>     temperature_drop_y;
+    // MAGPIE: the same for layer time blending's tower.
+    std::vector<double>     layer_time_x;
+    std::vector<double>     layer_time_y;
 
 private:
 	friend class cereal::access;
@@ -1632,7 +1635,7 @@ private:
     ModelWipeTower& operator=(ModelWipeTower &&rhs) = delete;
 
     // For serialization / deserialization of ModelWipeTower composed into another class into the Undo / Redo stack as a separate object.
-    template<typename Archive> void serialize(Archive &ar) { ar(positions, rotation, temperature_drop_x, temperature_drop_y); }
+    template<typename Archive> void serialize(Archive &ar) { ar(positions, rotation, temperature_drop_x, temperature_drop_y, layer_time_x, layer_time_y); }
 };
 
 // BBS structure stores extruder parameters and speed map of all models

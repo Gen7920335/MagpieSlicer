@@ -22,6 +22,7 @@ add_executable(${_TEST_NAME}_tests
     test_config.cpp
     test_config_variant_expansion.cpp
     test_mod_host.cpp
+    test_official_mod_texts.cpp
     test_native_mods.cpp
     test_layer_time_blend.cpp
     test_batch_accel.cpp

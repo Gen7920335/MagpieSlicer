@@ -38,6 +38,7 @@ struct mp_compose
     mp_handle                                             next = 1;
     bool                                                  merged = false;
     std::exception_ptr                                    error;
+    std::string                                           mod_id; // whose texts host_status and host_warn translate
     explicit mp_compose(Slic3r::PrintObject &o) : object(o) {}
 };
 
@@ -462,7 +463,7 @@ void host_status(mp_compose *c, int32_t percent, const char *text)
     if (c == nullptr || text == nullptr)
         return;
     try {
-        c->object.print()->set_status(int(percent), Slic3r::I18N::translate(text));
+        c->object.print()->set_status(int(percent), Slic3r::ModHost::mod_text(c->mod_id, text));
     } catch (...) {
         if (!c->error)
             c->error = std::current_exception();
@@ -474,7 +475,7 @@ void host_warn(mp_compose *c, int32_t critical, const char *text)
     if (c == nullptr || text == nullptr)
         return;
     c->object.add_module_warning(critical != 0 ? PrintStateBase::WarningLevel::CRITICAL : PrintStateBase::WarningLevel::NON_CRITICAL,
-                                 Slic3r::I18N::translate(text));
+                                 Slic3r::ModHost::mod_text(c->mod_id, text));
 }
 
 } // namespace
@@ -517,6 +518,7 @@ void generate(PrintObject &object, const NativeEntry &entry)
     ctx.cancelled     = [&object]() { return object.print()->canceled(); };
 
     mp_compose  c(object);
+    c.mod_id = entry.mod->id();
     mp_status   st{MP_OK, nullptr};
     std::string message, status_message;
     const int32_t rc = entry.mod->guarded_call([&]() {
@@ -546,16 +548,16 @@ void generate(PrintObject &object, const NativeEntry &entry)
         drop_all();
         throw Slic3r::SlicingError(entry.mod->id() + ": " +
                                    (!message.empty()        ? message :
-                                    !status_message.empty() ? Slic3r::I18N::translate(status_message.c_str()) :
+                                    !status_message.empty() ? mod_text(entry.mod->id(), status_message) :
                                                               "support generation failed (code " + std::to_string(rc) + ")"));
     }
     for (const auto &[level, text] : ctx.warnings) {
         if (level >= MP_LOG_ERROR) {
             drop_all();
-            throw Slic3r::SlicingError(entry.mod->id() + ": " + text);
+            throw Slic3r::SlicingError(entry.mod->id() + ": " + mod_text(entry.mod->id(), text));
         }
         if (level == MP_LOG_WARNING)
-            object.add_module_warning(PrintStateBase::WarningLevel::NON_CRITICAL, text);
+            object.add_module_warning(PrintStateBase::WarningLevel::NON_CRITICAL, mod_text(entry.mod->id(), text));
     }
     if (!c.merged) {
         drop_all();

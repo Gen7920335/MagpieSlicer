@@ -3291,7 +3291,7 @@ bool GUI_App::on_init_inner()
             RichMessageDialog
                 dlg(nullptr,
                     wxString::Format(_L("%s\nDo you want to continue?"), msg),
-                    "OrcaSlicer", wxICON_QUESTION | wxYES_NO);
+                    SLIC3R_APP_NAME, wxICON_QUESTION | wxYES_NO);
             dlg.ShowCheckBox(_L("Remember my choice"));
             if (dlg.ShowModal() != wxID_YES) return false;
 
@@ -8711,6 +8711,8 @@ bool GUI_App::load_language(wxString language, bool initial)
     add_app_translation_catalog(*m_wxLocale);
     m_active_language_code = requested_language_code;
     m_imgui->set_language(into_u8(requested_language_code));
+    // MAGPIE: the mods' warnings and errors follow the application's language (their i18n catalogs).
+    ModHost::set_message_language(into_u8(requested_language_code));
 
     //FIXME This is a temporary workaround, the correct solution is to switch to "C" locale during file import / export only.
     //wxSetlocale(LC_NUMERIC, "C");

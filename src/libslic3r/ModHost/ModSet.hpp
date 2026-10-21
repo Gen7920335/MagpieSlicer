@@ -31,6 +31,19 @@ public:
 const std::string &localized_text(const std::map<std::string, std::string> &translations, const std::string &language,
                                   const std::string &fallback);
 
+struct Mod;
+
+// Reads the package's message catalogs (i18n/<language>.json, each an object of English text -> translation) into
+// mod.messages. Nothing for a single-file mod or a package without i18n/. Throws ModError for a catalog that is not
+// such an object.
+void read_message_catalogs(Mod &mod);
+// The language the mods' texts are shown in, a locale such as "ko_KR"; the application sets its own. Empty: English.
+void        set_message_language(const std::string &language);
+std::string message_language();
+// A text the mod `mod_id` gave the core for the user (English, %1%.. placeholders untouched), in the message
+// language: the mod's own catalog first, then the application's translations (texts the core also uses).
+std::string mod_text(const std::string &mod_id, const std::string &text);
+
 // One choice of a string parameter's dropdown.
 struct ModParamOption
 {
@@ -131,6 +144,8 @@ struct ModGuiItem
     std::map<std::string, std::string> labels; // "label_<language>"
     std::string                        color;  // paint channels: "#RRGGBB"
     std::string                        unit;   // legends
+    std::string                        description;              // calibrations: the menu entry's help text
+    std::map<std::string, std::string> descriptions;             // "description_<language>"
 };
 
 struct ModGui
@@ -171,6 +186,9 @@ struct Mod
     bool                               thread_safe = false;
     std::map<std::string, ModLegacyKey> legacy_keys; // old setting key -> how it loads
     ModGui                             gui;
+    // Translations of the texts its code hands the core for the user (warnings, errors, progress), from the
+    // package's i18n/<language>.json files: language -> English text -> translation.
+    std::map<std::string, std::map<std::string, std::string>> messages;
 
     // Set by the loader, not read from the file.
     ModOrigin   origin = ModOrigin::Installed;

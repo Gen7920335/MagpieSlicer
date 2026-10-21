@@ -62,6 +62,23 @@ namespace GUI {
     static_assert(is_aux_tower_object_id(AUX_TOWER_OBJECT_ID_BASE, 1));
     static_assert(!is_aux_tower_object_id(AUX_TOWER_OBJECT_ID_BASE - 1, 1));
     static_assert(!is_aux_tower_object_id(AUX_TOWER_OBJECT_ID_BASE + 1, 1));
+    // MAGPIE: layer time blending's tower preview of plate n is object LAYER_TIME_TOWER_OBJECT_ID_BASE + n.
+    inline constexpr int LAYER_TIME_TOWER_OBJECT_ID_BASE = 3000;
+    inline constexpr bool is_layer_time_tower_object_id(int object_id, int plate_count)
+    {
+        return plate_count > 0 && object_id >= LAYER_TIME_TOWER_OBJECT_ID_BASE &&
+               object_id < LAYER_TIME_TOWER_OBJECT_ID_BASE + plate_count;
+    }
+    inline constexpr int layer_time_tower_plate_index(int object_id) { return object_id - LAYER_TIME_TOWER_OBJECT_ID_BASE; }
+    // The plate of either tower's preview (an object id from AUX_TOWER_OBJECT_ID_BASE up).
+    inline constexpr int any_aux_tower_plate_index(int object_id)
+    {
+        return object_id >= LAYER_TIME_TOWER_OBJECT_ID_BASE ? layer_time_tower_plate_index(object_id) : aux_tower_plate_index(object_id);
+    }
+    static_assert(LAYER_TIME_TOWER_OBJECT_ID_BASE > AUX_TOWER_OBJECT_ID_BASE);
+    static_assert(is_layer_time_tower_object_id(LAYER_TIME_TOWER_OBJECT_ID_BASE + 2, 3));
+    static_assert(!is_aux_tower_object_id(LAYER_TIME_TOWER_OBJECT_ID_BASE, 999));
+    static_assert(any_aux_tower_plate_index(AUX_TOWER_OBJECT_ID_BASE + 4) == 4 && any_aux_tower_plate_index(LAYER_TIME_TOWER_OBJECT_ID_BASE + 4) == 4);
 }
 
 class SLAPrintObject;
@@ -519,7 +536,10 @@ public:
         int obj_idx, float pos_x, float pos_y, float width, float depth, float height, float rotation_angle, bool size_unknown, float brim_width);
     // MAGPIE: an L-shaped stand-in for the temperature drop tower: arms `size` long and `arm_width` wide
     // on a brim `brim_width` wide, lower left corner of the brim at (pos_x, pos_y); all in mm.
-    int load_aux_tower_preview(int obj_idx, float pos_x, float pos_y, float size, float arm_width, float brim_width, float height);
+    // MAGPIE: an auxiliary tower's footprint: two arms of a square (the temperature drop tower) or, closed, all four
+    // (the layer time tower), drawn in `color`.
+    int load_aux_tower_preview(int obj_idx, float pos_x, float pos_y, float size, float arm_width, float brim_width, float height,
+                               bool closed = false, const ColorRGBA &color = ColorRGBA(0.231f, 0.565f, 0.925f, 0.66f));
     int load_real_wipe_tower_preview(
     int obj_idx, float pos_x, float pos_y,const TriangleMesh& wt_mesh,const TriangleMesh &brim_mesh,bool render_brim, float rotation_angle, bool size_unknown,  bool opengl_initialized);
     GLVolume* new_toolpath_volume(const ColorRGBA& rgba);

@@ -173,6 +173,7 @@ std::vector<Candidate> read_candidates(const fs::path &dir, ModOrigin origin, st
                 c.mod.dir = file.parent_path().string();
                 if (file.parent_path().filename().string() != c.mod.id)
                     throw ModError("the folder is named \"" + file.parent_path().filename().string() + "\" but the mod's id is \"" + c.mod.id + "\"");
+                read_message_catalogs(c.mod);
             } else if (!c.mod.binary.empty()) {
                 throw ModError("a mod with native code must be a package folder <id>/mod.json");
             }
@@ -680,6 +681,7 @@ std::vector<ModListing> list_mods(const std::string &bundled_dir, const std::str
             ModListing l;
             l.id          = c.mod.id;
             l.name        = c.mod.name;
+            l.names       = c.mod.names;
             l.version     = c.mod.version;
             l.origin      = origin;
             l.official    = c.mod.official;

@@ -601,6 +601,12 @@ void Preview::update_layers_slider(const std::vector<double>& layers_z, bool kee
 
     auto print_mode_stat = m_gcode_result->print_statistics.modes.front();
     m_layers_slider->SetLayersTimes(m_canvas->get_gcode_layers_times_cache(), print_mode_stat.time);
+    // MAGPIE: the waits layer time blending added, for the slider's hover tooltip.
+    std::map<size_t, std::pair<float, float>> layer_time_waits;
+    if (m_gcode_result->layer_time_blend.active)
+        for (const GCodeProcessorResult::LayerTimeBlendLayer &layer : m_gcode_result->layer_time_blend.layers)
+            layer_time_waits[layer.layer_id] = { layer.original_s, layer.added_s };
+    m_layers_slider->SetLayerTimeBlend(std::move(layer_time_waits));
 
     // Suggest the auto color change, if model looks like sign
     if (m_layers_slider->IsNewPrint()) {

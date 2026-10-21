@@ -6444,9 +6444,10 @@ int PartPlateList::notify_instance_update(int obj_id, int instance_id, bool is_n
 	{
 		object = m_model->objects[obj_id];
 	}
-	else if ((obj_id >= 1000 && obj_id < 1000 + m_plate_count) || is_aux_tower_object_id(obj_id, m_plate_count)) {
-		//wipe tower updates (MAGPIE: and temperature drop towers, 2000 + plate)
-		PartPlate* plate = m_plate_list[obj_id >= AUX_TOWER_OBJECT_ID_BASE ? aux_tower_plate_index(obj_id) : obj_id - 1000];
+	else if ((obj_id >= 1000 && obj_id < 1000 + m_plate_count) || is_aux_tower_object_id(obj_id, m_plate_count) ||
+	         is_layer_time_tower_object_id(obj_id, m_plate_count)) {
+		//wipe tower updates (MAGPIE: and temperature drop towers, 2000 + plate, and layer time towers, 3000 + plate)
+		PartPlate* plate = m_plate_list[obj_id >= AUX_TOWER_OBJECT_ID_BASE ? any_aux_tower_plate_index(obj_id) : obj_id - 1000];
 		plate->update_slice_result_valid_state( false );
 		plate->thumbnail_data.reset();
         plate->no_light_thumbnail_data.reset();

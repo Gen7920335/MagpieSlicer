@@ -1,0 +1,4 @@
+{
+    "The start G-code lacks the Snapmaker U1 pre-print sequence, so the stock U1 start G-code was used instead. Turn off the Snapmaker U1 start guard on the printer's Mods page to keep your own.": "시작 G-code에 Snapmaker U1 출력 전 순서가 없어서 순정 U1 시작 G-code를 대신 썼습니다. 직접 쓴 시작 G-code를 쓰려면 프린터 설정의 Mods 페이지에서 Snapmaker U1 시작 보호를 끄세요.",
+    "The start G-code moves the Snapmaker U1 before homing, so a G28 was added after PRINT_START.": "시작 G-code가 원점 복귀 전에 Snapmaker U1을 움직여서 PRINT_START 뒤에 G28을 넣었습니다."
+}

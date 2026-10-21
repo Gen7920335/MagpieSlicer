@@ -1047,7 +1047,8 @@ int GLVolumeCollection::load_wipe_tower_preview(
     return int(volumes.size() - 1);
 }
 
-int GLVolumeCollection::load_aux_tower_preview(int obj_idx, float pos_x, float pos_y, float size, float arm_width, float brim_width, float height)
+int GLVolumeCollection::load_aux_tower_preview(int obj_idx, float pos_x, float pos_y, float size, float arm_width, float brim_width, float height,
+                                               bool closed, const ColorRGBA &color)
 {
     if (size <= 0.0f || arm_width <= 0.0f)
         return int(this->volumes.size() - 1);
@@ -1060,14 +1061,27 @@ int GLVolumeCollection::load_aux_tower_preview(int obj_idx, float pos_x, float p
     TriangleMesh horizontal = make_cube(size, arm_width, height);
     horizontal.translate({ brim_width, brim_width + size - arm_width, 0.0f });
     vertical.merge(horizontal);
+    if (closed) {
+        TriangleMesh right = make_cube(arm_width, size, height);
+        right.translate({ brim_width + size - arm_width, brim_width, 0.0f });
+        TriangleMesh bottom = make_cube(size, arm_width, height);
+        bottom.translate({ brim_width, brim_width, 0.0f });
+        vertical.merge(right);
+        vertical.merge(bottom);
+    }
 
     TriangleMesh brim            = make_cube(arm_width + 2.0f * brim_width, size + 2.0f * brim_width, brim_height);
     TriangleMesh brim_horizontal = make_cube(size + 2.0f * brim_width, arm_width + 2.0f * brim_width, brim_height);
     brim_horizontal.translate({ 0.0f, size - arm_width, 0.0f });
     brim.merge(brim_horizontal);
+    if (closed) {
+        TriangleMesh brim_right = make_cube(arm_width + 2.0f * brim_width, size + 2.0f * brim_width, brim_height);
+        brim_right.translate({ size - arm_width, 0.0f, 0.0f });
+        brim.merge(brim_right);
+        brim.merge(make_cube(size + 2.0f * brim_width, arm_width + 2.0f * brim_width, brim_height));
+    }
     brim.merge(vertical);
 
-    const ColorRGBA color(0.231f, 0.565f, 0.925f, 0.66f);
     volumes.emplace_back(new GLWipeTowerVolume({ color }));
     GLWipeTowerVolume &volume = *dynamic_cast<GLWipeTowerVolume *>(volumes.back());
     volume.model_per_colors.resize(1);

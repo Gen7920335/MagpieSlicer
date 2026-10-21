@@ -58,6 +58,7 @@
 
 namespace Slic3r { class ColorRGBA; }
 namespace Slic3r { class DynamicPrintConfig; }
+namespace Slic3r { struct LayerTimeTowerPrimeTower; }
 namespace Slic3r { class GLShaderProgram; }
 namespace Slic3r { struct GCodeProcessorResult; }
 namespace Slic3r::GUI { class ImGuiWrapper; }
@@ -1309,6 +1310,10 @@ public:
     void clear_popup_menu_position() { m_popup_menu_positon.reset(); }
 
     void set_tooltip(const std::string& tooltip);
+
+    // MAGPIE: reload_scene's layer time tower previews, one per plate (GLCanvas3D.cpp).
+    void load_layer_time_tower_previews(const DynamicPrintConfig &resolved, const std::vector<std::optional<LayerTimeTowerPrimeTower>> &prime_towers,
+                                        const std::vector<int> &old_volumes, std::vector<size_t> &map_glvolume_old_to_new);
 
     // the following methods add a snapshot to the undo/redo stack, unless the given string is empty
     void do_move(const std::string& snapshot_type, bool force_volume_move = false);

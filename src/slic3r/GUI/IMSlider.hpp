@@ -6,6 +6,7 @@
 #include <functional>
 #include <array>
 #include <imgui/imgui.h>
+#include <map>
 #include <vector>
 #include "libslic3r/CustomGCode.hpp"
 #include <string>
@@ -92,6 +93,9 @@ public:
     void SetTicksValues(const CustomGCode::Info &custom_gcode_per_print_z);
     void SetLayersTimes(const std::vector<float> &layers_times, float total_time);
     void SetLayersTimes(const std::vector<double> &layers_times);
+    // MAGPIE: layer time blending's waits, by G-code layer (0-based): the layer's time before its wait and the wait, s.
+    // The hover tooltip names them; empty when blending was off.
+    void SetLayerTimeBlend(std::map<size_t, std::pair<float, float>> waits) { m_layer_time_blend = std::move(waits); }
 
     void SetDrawMode(bool is_sequential_print);
     void SetDrawMode(DrawMode mode) { m_draw_mode = mode; }
@@ -168,6 +172,10 @@ protected:
 
 private:
     std::string get_label(int tick, LabelType label_type = ltHeightWithLayer);
+    // The index into m_layers_times of the layer at `tick`, or size_t(-1) (MAGPIE: shared by the estimated time label
+    // and the layer time blending tooltip).
+    size_t      time_layer_index(int tick);
+    size_t      layer_number_of(int value);
     double get_double_value(const SelectedSlider& selection);
     int    get_tick_from_value(double value, bool force_lower_bound = false);
     float get_pos_from_value(int v_min, int v_max, int value, const ImRect& rect);
@@ -226,6 +234,7 @@ private:
     std::vector<double>      m_values;
     TickCodeInfo             m_ticks;
     std::vector<double>      m_layers_times;
+    std::map<size_t, std::pair<float, float>> m_layer_time_blend;
     std::vector<double>      m_layers_values;
     std::vector<std::string> m_extruder_colors;
     bool                     m_can_change_color;

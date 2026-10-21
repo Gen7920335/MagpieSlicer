@@ -127,12 +127,12 @@ WaitPlan call_time_planner(const NativeEntry &entry, const mp_time_plan_v1 &tabl
     if (rc == MP_ERR_CANCELLED)
         throw Slic3r::CanceledException();
     if (rc != MP_OK)
-        throw Slic3r::SlicingError(mod_id + ": " + (!status_message.empty() ? status_message :
+        throw Slic3r::SlicingError(mod_id + ": " + (!status_message.empty() ? mod_text(mod_id, status_message) :
                                                     !guard_message.empty()  ? guard_message : std::string("the time planner failed")));
     for (const auto &[level, text] : ctx.warnings) {
         if (level >= MP_LOG_ERROR)
-            throw Slic3r::SlicingError(mod_id + ": " + text);
-        plan.mod_warnings.push_back(text);
+            throw Slic3r::SlicingError(mod_id + ": " + mod_text(mod_id, text));
+        plan.mod_warnings.push_back(mod_text(mod_id, text));
     }
     // The plan becomes G4 times and moves: every number must be a finite time, waits not negative, and every
     // site index one of these sites.

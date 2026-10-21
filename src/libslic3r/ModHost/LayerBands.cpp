@@ -38,7 +38,7 @@ bool plan_of(const NativeEntry &entry, const DynamicPrintConfig &print_config, c
         return st.code;
     }, &guard_message);
     if (rc != MP_OK) {
-        error = entry.mod->id() + ": " + (!status_message.empty() ? status_message :
+        error = entry.mod->id() + ": " + (!status_message.empty() ? mod_text(entry.mod->id(), status_message) :
                                           !guard_message.empty()  ? guard_message : std::string("the layer bands failed"));
         return false;
     }
@@ -67,7 +67,7 @@ LayerBandScheduler scheduler_of(std::shared_ptr<const NativeModSet> mods, const 
             return st.code;
         }, &guard_message);
         if (rc != MP_OK)
-            throw std::logic_error(entry.mod->id() + ": " + (!status_message.empty() ? status_message :
+            throw std::logic_error(entry.mod->id() + ": " + (!status_message.empty() ? mod_text(entry.mod->id(), status_message) :
                                                              !guard_message.empty()  ? guard_message : std::string("the band schedule failed")));
         HalfLayerInsertion insertion;
         if (choice.boundary != UINT32_MAX) {

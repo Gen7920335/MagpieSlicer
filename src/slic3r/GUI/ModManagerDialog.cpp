@@ -92,9 +92,10 @@ void ModManagerDialog::refresh()
     std::shared_ptr<const ModHost::ModSet> running = ModHost::active_mods();
     m_mods = ModHost::list_mods(bundled_dir(), installed_dir(), running.get());
     m_list->DeleteAllItems();
+    const std::string language = into_u8(wxGetApp().current_language_code_safe());
     for (size_t i = 0; i < m_mods.size(); ++i) {
         const ModHost::ModListing &m = m_mods[i];
-        const wxString name = from_u8(m.name.empty() ? m.id : m.name);
+        const wxString name = from_u8(ModHost::localized_text(m.names, language, m.name.empty() ? m.id : m.name));
         // TRN %s: a mod's name.
         const long row = m_list->InsertItem(long(i), m.native ? wxString::Format(_L("%s (native code)"), name) : name);
         m_list->SetItem(row, COL_VERSION, from_u8(m.version));

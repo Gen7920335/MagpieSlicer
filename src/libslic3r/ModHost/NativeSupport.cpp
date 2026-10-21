@@ -173,13 +173,13 @@ Areas call(const PrintObject &object, const NativeEntry &entry, Function fn, con
     if (rc == MP_ERR_CANCELLED || (rc != MP_OK && object.print()->canceled()))
         throw CanceledException();
     if (rc != MP_OK)
-        throw Slic3r::SlicingError(entry.mod->id() + ": " + (!message.empty() ? message : !status_message.empty() ? status_message :
+        throw Slic3r::SlicingError(entry.mod->id() + ": " + (!message.empty() ? message : !status_message.empty() ? mod_text(entry.mod->id(), status_message) :
                                                              "support generation failed (code " + std::to_string(rc) + ")"));
     for (const auto &[level, text] : ctx.warnings) {
         if (level >= MP_LOG_ERROR)
-            throw Slic3r::SlicingError(entry.mod->id() + ": " + text);
+            throw Slic3r::SlicingError(entry.mod->id() + ": " + mod_text(entry.mod->id(), text));
         if (level == MP_LOG_WARNING)
-            const_cast<PrintObject &>(object).add_module_warning(PrintStateBase::WarningLevel::NON_CRITICAL, text);
+            const_cast<PrintObject &>(object).add_module_warning(PrintStateBase::WarningLevel::NON_CRITICAL, mod_text(entry.mod->id(), text));
     }
     return areas;
 }

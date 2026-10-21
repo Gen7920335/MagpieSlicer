@@ -89,7 +89,7 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
             const std::string language = into_u8(wxGetApp().current_language_code_safe());
             const wxString    label = wxString::FromUTF8(ModHost::localized_text(p.labels, language, p.label.empty() ? key : p.label));
             auto *text = new wxStaticText(this, wxID_ANY, label);
-            text->SetToolTip(wxString::FromUTF8(key + "  (" + (mod.name.empty() ? mod.id : mod.name) + " " + mod.version + ")"));
+            text->SetToolTip(wxString::FromUTF8(key + "  (" + ModHost::localized_text(mod.names, language, mod.name.empty() ? mod.id : mod.name) + " " + mod.version + ")"));
             // Long labels wrap; otherwise the widest one pushed every value off the side of the sidebar.
             text->Wrap(FromDIP(170));
             grid->Add(text, 0, wxALIGN_CENTER_VERTICAL);

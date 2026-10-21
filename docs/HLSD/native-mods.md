@@ -15,7 +15,8 @@ which is why loading it is stricter.
 <mods dir>/<id>/
     mod.json            the manifest: a mod definition plus the fields below
     bin/win-x64/<binary>.dll        (linux-x64/lib<binary>.so, macos-arm64/lib<binary>.dylib)
-    i18n/, tests/       optional
+    i18n/<lang>.json    optional: translations of the texts the mod's code shows (below)
+    tests/              optional
     SIGNATURE           Ed25519 signature over every file of the folder
 ```
 
@@ -124,6 +125,20 @@ parameters) gives the support paint tool its channels: while the first such mod'
 the channels next to plain enforcers, paints them in their colours and stores channel 0 and 1 in
 `ModelVolume::support_channel_facets` (3MF attribute names of line 1, so its projects keep their painting); the
 support.compose host hands them to the mod as `paint_channel` 0 and 1.
+`gui.calibrations` (`id`, `label`/`label_<lang>`, `description`/`description_<lang>`) puts an entry in the Calibration
+menu for each calibration the application has a dialog for (`MainFrame::append_mod_calibrations`; today the lesic
+mod's `lesic`, whose dialog and ring model stay in the application while the mod prints it), so a calibration whose mod
+is off or missing has no entry. An entry the application has no dialog for is logged and left out.
+
+## Texts
+
+Names, parameter labels, dropdown choices and GUI entries carry their translations in the manifest (`name_<lang>`,
+`label_<lang>`). The texts a mod's code hands the core for the user (slicing warnings and errors, progress lines, a
+validation problem with its `%1%` placeholders) are English; the core shows them through `ModHost::mod_text`, which
+looks them up in the mod's own catalog, `i18n/<lang>.json` in the package (an object of English text -> translation,
+by the application's language, `ko_KR` falling back to `ko`), and otherwise in the application's translations. A
+catalog that is not such an object fails the mod's load. The catalogs are part of the signed package, so the
+application's gettext runs neither need nor drop a mod's texts.
 
 ## Native mods in the G-code
 

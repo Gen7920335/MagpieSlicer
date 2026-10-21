@@ -52,7 +52,7 @@ void call(const NativeEntry &entry, const std::function<mp_status()> &fn)
     if (rc == MP_ERR_CANCELLED)
         throw CanceledException();
     if (rc != MP_OK)
-        throw SlicingError(entry.mod->id() + ": " + (!status_message.empty() ? status_message :
+        throw SlicingError(entry.mod->id() + ": " + (!status_message.empty() ? mod_text(entry.mod->id(), status_message) :
                                                      !guard_message.empty()  ? guard_message : std::string("the support style failed")));
 }
 

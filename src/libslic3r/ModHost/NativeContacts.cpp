@@ -169,15 +169,15 @@ void call(const PrintObject &object, const NativeEntry &entry, mp_ctx &ctx, cons
     if (rc == MP_ERR_CANCELLED || (rc != MP_OK && object.print()->canceled()))
         throw CanceledException();
     if (rc != MP_OK)
-        throw SlicingError(entry.mod->id() + ": " + (!status_message.empty() ? status_message :
+        throw SlicingError(entry.mod->id() + ": " + (!status_message.empty() ? mod_text(entry.mod->id(), status_message) :
                                                      !guard_message.empty()  ? guard_message :
                                                                                "support generation failed (code " + std::to_string(rc) + ")"));
     std::lock_guard<std::mutex> lock(ctx.warnings_mutex);
     for (const auto &[level, text] : ctx.warnings) {
         if (level >= MP_LOG_ERROR)
-            throw SlicingError(entry.mod->id() + ": " + text);
+            throw SlicingError(entry.mod->id() + ": " + mod_text(entry.mod->id(), text));
         if (level == MP_LOG_WARNING)
-            const_cast<PrintObject &>(object).add_module_warning(PrintStateBase::WarningLevel::NON_CRITICAL, text);
+            const_cast<PrintObject &>(object).add_module_warning(PrintStateBase::WarningLevel::NON_CRITICAL, mod_text(entry.mod->id(), text));
     }
     ctx.warnings.clear();
 }

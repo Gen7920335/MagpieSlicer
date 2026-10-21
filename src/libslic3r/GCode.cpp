@@ -15,6 +15,7 @@
 #include "GCode/ThumbnailData.hpp"
 #include "GCode/ToolOrdering.hpp"
 #include "GCode/AuxiliaryTower.hpp"
+#include "GCode/LayerTimeTower.hpp"
 #include "GCode/GCodeEventHost.hpp"
 #include "ModHost/GCodeEvents.hpp"
 #include "GCode/SpiralVase.hpp"
@@ -3574,96 +3575,43 @@ std::optional<Vec2d> GCode::layer_time_park_position(const Print &print, coordf_
     return position;
 }
 
-// Brim loops around the layer time tower (as many as the cooling tower of the low temperature interface had).
-static constexpr int LAYER_TIME_TOWER_BRIM_LINES = 5;
-
 bool GCode::place_layer_time_tower(const Print &print)
 {
     m_layer_time_tower_placed = true; // tried once; m_layer_time_tower_side stays 0 when it does not fit
     const std::vector<Vec2d> &area = m_config.printable_area.values;
     if (area.size() < 3 || m_writer.filament() == nullptr)
         return false;
-    BoundingBoxf bed; // mm, plate coordinates
-    Polygon      bed_polygon;
-    for (const Vec2d &p : area) {
-        bed.merge(p);
-        bed_polygon.points.emplace_back(Point::new_scale(p.x(), p.y()));
-    }
-    const double nozzle  = m_config.nozzle_diameter.get_at(this->cur_extruder_index()); // mm
-    const double spacing = Flow(Flow::auto_extrusion_width(frPerimeter, float(nozzle)), float(nozzle * 0.5), float(nozzle)).spacing();
-    const double brim    = LAYER_TIME_TOWER_BRIM_LINES * spacing;           // mm
-    const double side    = m_layer_time_tower_size;                         // mm
-    const double foot    = side + 2. * brim;                                 // mm
+    const double nozzle = m_config.nozzle_diameter.get_at(this->cur_extruder_index()); // mm
+    const double brim   = layer_time_tower_brim(nozzle);                                // mm
+    const double side   = m_layer_time_tower_size;                                      // mm
+    const double skirt  = layer_time_tower_skirt(m_config.skirt_loops.value, m_config.skirt_distance.value, nozzle); // mm
 
-    // What the tower must stay clear of, in plate coordinates (mm): every object instance's footprint grown by
-    // its skirt, brim and a margin, and the prime tower.
-    // Clearance from objects, mm, besides their skirt and brim: room for the nozzle and the part fan's air.
-    constexpr double object_clearance = 5.;
-    const double     skirt = m_config.skirt_loops.value > 0 ? m_config.skirt_distance.value + m_config.skirt_loops.value * spacing : 0.;
-    std::vector<BoundingBoxf> keep_out;
-    BoundingBoxf              objects;
-    for (const PrintObject *object : print.objects()) {
-        const double grow = object_clearance + skirt + std::max(0., object->config().brim_width.value);
+    std::vector<LayerTimeTowerObject> objects;
+    for (const PrintObject *object : print.objects())
         for (const PrintInstance &instance : object->instances()) {
-            BoundingBox  box = object->bounding_box();
+            BoundingBox box = object->bounding_box();
             box.translate(instance.shift);
-            BoundingBoxf boxf(unscale(box.min), unscale(box.max));
-            objects.merge(boxf);
-            boxf.min -= Vec2d(grow, grow);
-            boxf.max += Vec2d(grow, grow);
-            keep_out.push_back(boxf);
+            objects.push_back({ BoundingBoxf(unscale(box.min), unscale(box.max)), object->config().brim_width.value });
         }
-    }
+    std::optional<LayerTimeTowerPrimeTower> prime_tower;
     if (m_wipe_tower && print.has_wipe_tower()) {
         const size_t plate = size_t(std::max(0, print.get_plate_index()));
-        const Vec2d  corner(m_config.wipe_tower_x.get_at(plate), m_config.wipe_tower_y.get_at(plate));
-        // Prime tower clearance, mm: its brim plus room to pass, both ways since it may be rotated.
-        const double reach = std::max(print.wipe_tower_data().width, print.wipe_tower_data().depth) + print.wipe_tower_data().brim_width + object_clearance;
-        keep_out.emplace_back(corner - Vec2d(reach, reach), corner + Vec2d(2. * reach, 2. * reach));
+        prime_tower = LayerTimeTowerPrimeTower{ Vec2d(m_config.wipe_tower_x.get_at(plate), m_config.wipe_tower_y.get_at(plate)),
+                                                print.wipe_tower_data().width, print.wipe_tower_data().depth,
+                                                print.wipe_tower_data().brim_width };
     }
-    auto fits = [&](const Vec2d &origin) {
-        const BoundingBoxf box(origin, origin + Vec2d(foot, foot));
-        for (const Vec2d &corner : { box.min, box.max, Vec2d(box.min.x(), box.max.y()), Vec2d(box.max.x(), box.min.y()) })
-            if (!bed_polygon.contains(Point::new_scale(corner.x(), corner.y())))
-                return false;
-        if (box.min.x() < bed.min.x() + AUX_TOWER_BED_MARGIN || box.min.y() < bed.min.y() + AUX_TOWER_BED_MARGIN ||
-            box.max.x() > bed.max.x() - AUX_TOWER_BED_MARGIN || box.max.y() > bed.max.y() - AUX_TOWER_BED_MARGIN)
-            return false;
-        return std::none_of(keep_out.begin(), keep_out.end(), [&box](const BoundingBoxf &k) {
-            return box.min.x() < k.max.x() && k.min.x() < box.max.x() && box.min.y() < k.max.y() && k.min.y() < box.max.y();
-        });
-    };
-
     const size_t plate        = size_t(std::max(0, print.get_plate_index()));
     const double configured_x = aux_tower_position_at(&m_config.layer_time_blend_tower_x, plate);
     const double configured_y = aux_tower_position_at(&m_config.layer_time_blend_tower_y, plate);
-    std::optional<Vec2d> origin;
-    if (configured_x >= 0. && configured_y >= 0.) {
-        // A position the user chose is kept as given, only clamped onto the bed.
-        if (std::optional<AuxTowerPlacement> placement = Slic3r::place_aux_tower(bed, configured_x, configured_y, side, brim);
-            placement && placement->tower_size >= side - EPSILON)
-            origin = Vec2d(placement->origin_x, placement->origin_y);
-    } else if (objects.defined) {
-        // Next to the objects, where the part fan's air still reaches the parts while the nozzle waits: this far
-        // from their bounding box, mm. Right, left, behind, in front, at the middle of that side first.
-        constexpr double gap = 20.;
-        const Vec2d      mid = objects.center() - Vec2d(0.5 * foot, 0.5 * foot);
-        const std::array<Vec2d, 4> candidates = { Vec2d(objects.max.x() + gap, mid.y()), Vec2d(objects.min.x() - gap - foot, mid.y()),
-                                                  Vec2d(mid.x(), objects.max.y() + gap), Vec2d(mid.x(), objects.min.y() - gap - foot) };
-        for (const Vec2d &candidate : candidates)
-            if (fits(candidate)) {
-                origin = candidate;
-                break;
-            }
-    }
-    if (!origin || !fits(*origin)) {
+    const std::optional<LayerTimeTowerSpot> spot = Slic3r::place_layer_time_tower(area, side, brim, skirt, objects, prime_tower, configured_x, configured_y);
+    if (!spot || !spot->fits) {
         // PERMANENT DIAGNOSTIC: no room for the tower; the waits park instead.
-        BOOST_LOG_TRIVIAL(warning) << "Layer time blending: the tower (" << foot << " mm with its brim) does not fit; bed " << bed.min.transpose()
-                                   << " to " << bed.max.transpose() << ", objects " << objects.min.transpose() << " to " << objects.max.transpose()
-                                   << "; waiting at the park position instead";
+        BOOST_LOG_TRIVIAL(warning) << "Layer time blending: the tower (" << side + 2. * brim << " mm with its brim) does not fit"
+                                   << (spot ? " at its stored position" : " beside the objects") << " (" << objects.size()
+                                   << " object instances); waiting at the park position instead";
         return false;
     }
-    m_layer_time_tower_origin = *origin;
+    m_layer_time_tower_origin = spot->origin;
     m_layer_time_tower_side   = side;
     m_layer_time_tower_brim   = brim;
     return true;

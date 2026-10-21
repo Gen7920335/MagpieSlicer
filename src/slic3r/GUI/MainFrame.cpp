@@ -72,6 +72,7 @@
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Polygon.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/ModHost/ModSet.hpp"
 #include "libslic3r/SLAPrint.hpp"
 #include "libslic3r/PresetBundle.hpp"
 
@@ -486,7 +487,7 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     default:
     case GUI_App::EAppMode::Editor:
         m_taskbar_icon = std::make_unique<OrcaSlicerTaskBarIcon>(wxTBI_DOCK);
-        m_taskbar_icon->SetIcon(wxIcon(Slic3r::var("MagpieSlicer-mac_256px.ico"), wxBITMAP_TYPE_ICO), "OrcaSlicer");
+        m_taskbar_icon->SetIcon(wxIcon(Slic3r::var("MagpieSlicer-mac_256px.ico"), wxBITMAP_TYPE_ICO), SLIC3R_APP_NAME);
         break;
     case GUI_App::EAppMode::GCodeViewer:
         break;
@@ -3619,14 +3620,8 @@ void MainFrame::init_menubar_as_editor()
         [this](wxCommandEvent&) { run_calibration(CalibKind::MaxVolumetric); }, "", nullptr,
         [this]() {return m_plater->is_view3D_shown();; }, this);
 
-    // MAGPIE: LESIC ring (Magpie line 1).
-    append_menu_item(m_topbar->GetCalibMenu(), wxID_ANY, _L("LESIC"), _L("Low-temperature support interface calibration"),
-        [this](wxCommandEvent&) {
-            if (!m_lesic_calib_dlg)
-                m_lesic_calib_dlg = new LESIC_Calibration_Dlg((wxWindow*)this, wxID_ANY, m_plater);
-            m_lesic_calib_dlg->ShowModal();
-        }, "", nullptr,
-        [this]() {return m_plater->is_view3D_shown();; }, this);
+    // MAGPIE: calibrations the loaded mods declare (the LESIC ring of the lesic mod).
+    append_mod_calibrations(m_topbar->GetCalibMenu());
 
     // Pressure Advance
     append_menu_item(m_topbar->GetCalibMenu(), wxID_ANY, _L("Pressure advance"), _L("Pressure advance"),
@@ -3733,14 +3728,8 @@ void MainFrame::init_menubar_as_editor()
         [this](wxCommandEvent&) { run_calibration(CalibKind::MaxVolumetric); }, "", nullptr,
         [this]() {return m_plater->is_view3D_shown();; }, this);
 
-    // MAGPIE: LESIC ring (Magpie line 1).
-    append_menu_item(calib_menu, wxID_ANY, _L("LESIC"), _L("Low-temperature support interface calibration"),
-        [this](wxCommandEvent&) {
-            if (!m_lesic_calib_dlg)
-                m_lesic_calib_dlg = new LESIC_Calibration_Dlg((wxWindow*)this, wxID_ANY, m_plater);
-            m_lesic_calib_dlg->ShowModal();
-        }, "", nullptr,
-        [this]() {return m_plater->is_view3D_shown();; }, this);
+    // MAGPIE: calibrations the loaded mods declare (the LESIC ring of the lesic mod).
+    append_mod_calibrations(calib_menu);
 
     // Pressure Advance
     append_menu_item(calib_menu, wxID_ANY, _L("Pressure advance"), _L("Pressure advance"),
@@ -3826,6 +3815,35 @@ void MainFrame::set_max_recent_count(int max)
         if (WebViewPanel* home = WebViewPanel::if_built())
             home->SendRecentList(-1);
     }
+}
+
+// MAGPIE: a mod declares its calibrations in its manifest ("gui"."calibrations"); the application draws a menu
+// entry for each one it has a dialog for, so a calibration whose mod is off or not installed has no entry. The
+// dialog and the model stay in the application (a mod never runs GUI code); the mod prints the calibration.
+void MainFrame::append_mod_calibrations(wxMenu *menu)
+{
+    const std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
+    if (!mods)
+        return;
+    const std::string language = into_u8(wxGetApp().current_language_code_safe());
+    for (const ModHost::Mod &mod : mods->mods())
+        for (const ModHost::ModGuiItem &item : mod.gui.calibrations) {
+            std::function<void()> open;
+            if (mod.id == "lesic" && item.id == "lesic")
+                open = [this]() {
+                    if (!m_lesic_calib_dlg)
+                        m_lesic_calib_dlg = new LESIC_Calibration_Dlg((wxWindow*)this, wxID_ANY, m_plater);
+                    m_lesic_calib_dlg->ShowModal();
+                };
+            if (!open) {
+                BOOST_LOG_TRIVIAL(warning) << "Mod " << mod.id << " declares the calibration \"" << item.id << "\", which this application has no dialog for";
+                continue;
+            }
+            append_menu_item(menu, wxID_ANY, from_u8(ModHost::localized_text(item.labels, language, item.label.empty() ? item.id : item.label)),
+                from_u8(ModHost::localized_text(item.descriptions, language, item.description)),
+                [open](wxCommandEvent&) { open(); }, "", nullptr,
+                [this]() { return m_plater->is_view3D_shown(); }, this);
+        }
 }
 
 void MainFrame::open_menubar_item(const wxString& menu_name,const wxString& item_name)

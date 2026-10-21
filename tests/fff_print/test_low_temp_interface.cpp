@@ -1033,9 +1033,11 @@ TEST_CASE("Temperature drop tower plate vectors are normalized together", "[LowT
     config.set_key_value("support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ 10.0, 20.0 }));
     config.set_key_value("support_interface_temperature_drop_tower_y",
                          new ConfigOptionFloats({ 30.0, std::numeric_limits<double>::quiet_NaN(), 50.0, 60.0 }));
-    CHECK(normalize_aux_tower_positions(config, 4).size() == 2);
+    // Both drop tower keys, and the layer time tower's two, which the config lacked (every tower follows the plates).
+    CHECK(normalize_aux_tower_positions(config, 4).size() == 4);
     CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ 10.0, 20.0, -1.0, -1.0 });
     CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y")->values == std::vector<double>{ 30.0, -1.0, 50.0, 60.0 });
+    CHECK(config.option<ConfigOptionFloats>("layer_time_blend_tower_x")->values == std::vector<double>(4, -1.0));
     DynamicConfig empty;
     normalize_aux_tower_positions(empty, 0);
     CHECK(empty.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ -1.0 });
@@ -1047,8 +1049,12 @@ TEST_CASE("Temperature drop tower positions survive plate deletion by index", "[
     DynamicConfig config;
     config.set_key_value("support_interface_temperature_drop_tower_x", new ConfigOptionFloats({ 10.0, 20.0, 30.0 }));
     config.set_key_value("support_interface_temperature_drop_tower_y", new ConfigOptionFloats({ 40.0, 50.0, 60.0 }));
+    config.set_key_value("layer_time_blend_tower_x", new ConfigOptionFloats({ 1.0, 2.0, 3.0 }));
+    config.set_key_value("layer_time_blend_tower_y", new ConfigOptionFloats({ 4.0, 5.0, 6.0 }));
     erase_aux_tower_plate(config, 1, 3);
     CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_x")->values == std::vector<double>{ 10.0, 30.0 });
+    CHECK(config.option<ConfigOptionFloats>("layer_time_blend_tower_x")->values == std::vector<double>{ 1.0, 3.0 });
+    CHECK(config.option<ConfigOptionFloats>("layer_time_blend_tower_y")->values == std::vector<double>{ 4.0, 6.0 });
     CHECK(config.option<ConfigOptionFloats>("support_interface_temperature_drop_tower_y")->values == std::vector<double>{ 40.0, 60.0 });
 }
 

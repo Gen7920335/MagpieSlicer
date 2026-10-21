@@ -15272,8 +15272,9 @@ void Plater::priv::take_snapshot(const std::string& snapshot_name, const UndoRed
             tower.positions[plate_idx] = Vec2d(tower_x_opt->get_at(plate_idx), tower_y_opt->get_at(plate_idx));
             tower.rotation = config.opt_float("wipe_tower_rotation_angle");
         }
-        // MAGPIE: the temperature drop tower positions ride along for Undo / Redo.
+        // MAGPIE: the temperature drop tower and layer time tower positions ride along for Undo / Redo.
         capture_aux_tower_positions(proj_cfg, model.wipe_tower.temperature_drop_x, model.wipe_tower.temperature_drop_y);
+        capture_aux_tower_positions(proj_cfg, model.wipe_tower.layer_time_x, model.wipe_tower.layer_time_y, LAYER_TIME_TOWER_POSITION_KEYS);
     }
     const GLGizmosManager& gizmos = get_current_canvas3D()->get_canvas_type() == GLCanvas3D::CanvasAssembleView ? assemble_view->get_canvas3d()->get_gizmos_manager() : view3D->get_canvas3d()->get_gizmos_manager();
 
@@ -15404,8 +15405,9 @@ void Plater::priv::undo_redo_to(std::vector<UndoRedo::Snapshot>::const_iterator 
             tower.positions[plate_idx] = Vec2d(tower_x_opt->get_at(plate_idx), tower_y_opt->get_at(plate_idx));
             tower.rotation = config.opt_float("wipe_tower_rotation_angle");
         }
-        // MAGPIE: the temperature drop tower positions ride along for Undo / Redo.
+        // MAGPIE: the temperature drop tower and layer time tower positions ride along for Undo / Redo.
         capture_aux_tower_positions(proj_cfg, model.wipe_tower.temperature_drop_x, model.wipe_tower.temperature_drop_y);
+        capture_aux_tower_positions(proj_cfg, model.wipe_tower.layer_time_x, model.wipe_tower.layer_time_y, LAYER_TIME_TOWER_POSITION_KEYS);
     }
     const int layer_range_idx = it_snapshot->snapshot_data.layer_range_idx;
     // Flags made of Snapshot::Flags enum values.
@@ -15481,9 +15483,12 @@ void Plater::priv::undo_redo_to(std::vector<UndoRedo::Snapshot>::const_iterator 
                 need_update = true;
             }
 
-            // MAGPIE: restore the temperature drop tower positions saved with the snapshot.
+            // MAGPIE: restore the temperature drop tower and layer time tower positions saved with the snapshot.
             if (restore_aux_tower_positions(const_cast<DynamicPrintConfig &>(proj_cfg), model.wipe_tower.temperature_drop_x,
                                             model.wipe_tower.temperature_drop_y))
+                need_update = true;
+            if (restore_aux_tower_positions(const_cast<DynamicPrintConfig &>(proj_cfg), model.wipe_tower.layer_time_x,
+                                            model.wipe_tower.layer_time_y, LAYER_TIME_TOWER_POSITION_KEYS))
                 need_update = true;
 
             for (int plate_idx = 0; plate_idx < model.wipe_tower.positions.size(); plate_idx++) {

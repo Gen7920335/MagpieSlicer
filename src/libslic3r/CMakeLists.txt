@@ -308,6 +308,7 @@ set(lisbslic3r_sources
     GCode/FanMover.hpp
     GCode/AuxiliaryTower.hpp
     GCode/AuxiliaryTowerUndo.hpp
+    GCode/LayerTimeTower.hpp
     GCode/GCodeEventHost.cpp
     GCode/GCodeEventHost.hpp
     GCode/GCodeProcessor.cpp

@@ -43,7 +43,7 @@ void call(const NativeEntry &entry, const char *what, const std::function<mp_sta
         throw CanceledException();
     if (rc != MP_OK)
         throw SlicingError(entry.mod->id() + ": " +
-                           (!status_message.empty() ? status_message :
+                           (!status_message.empty() ? mod_text(entry.mod->id(), status_message) :
                             !guard_message.empty()  ? guard_message : std::string("the wall planner failed in ") + what));
 }
 
@@ -288,7 +288,7 @@ std::unique_ptr<const WallPlanner> open_wall_planner(const DynamicPrintConfig &f
     planner->m_state = state;
     for (const auto &[level, text] : ctx.warnings) {
         if (level >= MP_LOG_ERROR)
-            throw SlicingError(entry->mod->id() + ": " + text);
+            throw SlicingError(entry->mod->id() + ": " + mod_text(entry->mod->id(), text));
         BOOST_LOG_TRIVIAL(warning) << "Mod " << entry->mod->id() << ": " << text;
     }
     return planner;

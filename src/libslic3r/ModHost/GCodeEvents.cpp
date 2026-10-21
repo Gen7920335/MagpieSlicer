@@ -53,8 +53,8 @@ void flush_warnings(Print &print, const NativeEntry &entry, mp_ctx &ctx)
     }
     for (const auto &[level, text] : warnings) {
         if (level >= MP_LOG_ERROR)
-            throw SlicingError(entry.mod->id() + ": " + I18N::translate(text.c_str()));
-        print.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL, I18N::translate(text.c_str()));
+            throw SlicingError(entry.mod->id() + ": " + mod_text(entry.mod->id(), text));
+        print.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL, mod_text(entry.mod->id(), text));
     }
 }
 
@@ -70,7 +70,7 @@ bool call_without_export(const NativeEntry &entry, const std::function<mp_status
     }, &guard_message);
     if (rc == MP_OK)
         return true;
-    error = entry.mod->id() + ": " + (!status_message.empty() ? I18N::translate(status_message.c_str()) :
+    error = entry.mod->id() + ": " + (!status_message.empty() ? mod_text(entry.mod->id(), status_message) :
                                       !guard_message.empty()  ? guard_message : std::string("the G-code mod failed"));
     return false;
 }
@@ -164,7 +164,7 @@ void GCodeEvents::call(Open &open, const char *what, const std::function<mp_stat
         throw CanceledException();
     if (rc != MP_OK)
         throw SlicingError(open.entry->mod->id() + ": " +
-                           (!status_message.empty() ? I18N::translate(status_message.c_str()) :
+                           (!status_message.empty() ? mod_text(open.entry->mod->id(), status_message) :
                             !guard_message.empty()  ? guard_message : std::string("the G-code mod failed in ") + what));
     flush_warnings(m_print, *open.entry, ctx);
 }
@@ -294,7 +294,7 @@ std::optional<std::pair<std::string, std::string>> validate_gcode_events(const P
             return std::make_pair(error, std::string());
         if (out.message != nullptr) {
             // The translated text with its placeholders filled in, as Slic3r::format() would.
-            boost::format f(I18N::translate(out.message));
+            boost::format f(mod_text(entry->mod->id(), out.message));
             f.exceptions(boost::io::all_error_bits ^ (boost::io::too_many_args_bit | boost::io::too_few_args_bit));
             for (uint32_t i = 0; i < std::min<uint32_t>(out.n_args, 4); ++i)
                 f % out.args[i];

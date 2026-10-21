@@ -113,7 +113,7 @@ ModObjectSettingsDialog::ModObjectSettingsDialog(wxWindow *parent, ModelObject &
             row.store    = p->scope == "object" ? "object_mod_settings" : "region_mod_settings";
             row.set_here = new wxCheckBox(scroll, wxID_ANY, _L("Set here"));
             auto *label  = new wxStaticText(scroll, wxID_ANY, from_u8(ModHost::localized_text(p->labels, language, p->label.empty() ? row.key : p->label)));
-            label->SetToolTip(from_u8(row.key + "  (" + (mod->name.empty() ? mod->id : mod->name) + " " + mod->version + ")"));
+            label->SetToolTip(from_u8(row.key + "  (" + ModHost::localized_text(mod->names, language, mod->name.empty() ? mod->id : mod->name) + " " + mod->version + ")"));
             if (!p->options.empty()) {
                 wxArrayString choices;
                 for (const ModHost::ModParamOption &o : p->options)

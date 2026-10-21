@@ -1,5 +1,6 @@
 #include "ModSet.hpp"
 
+#include "libslic3r/I18N.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Utils.hpp"
 
@@ -120,6 +121,10 @@ std::vector<ModGuiItem> parse_gui_items(const json &gui, const char *list, const
         for (auto &[key, value] : j.items())
             if (key.size() > 6 && key.compare(0, 6, "label_") == 0 && value.is_string())
                 item.labels[key.substr(6)] = value.get<std::string>();
+        item.description = optional_string(j, "description");
+        for (auto &[key, value] : j.items())
+            if (key.size() > 12 && key.compare(0, 12, "description_") == 0 && value.is_string())
+                item.descriptions[key.substr(12)] = value.get<std::string>();
         item.color = optional_string(j, "color");
         item.unit  = optional_string(j, "unit");
         if (!is_identifier(item.id))
@@ -790,6 +795,7 @@ ModSet ModSet::load_dirs(const std::vector<boost::filesystem::path> &dirs, std::
                 mod.official = mod.verified = true;
                 if (file.filename() == "mod.json")
                     mod.dir = file.parent_path().string();
+                read_message_catalogs(mod);
                 // Check each mod against those already accepted, so one bad mod does not drop the rest.
                 std::vector<Mod> trial = mods;
                 trial.push_back(mod);
@@ -1111,6 +1117,70 @@ std::string merge_mod_values(const std::string &base_json, const std::string &ov
     for (auto &[k, v] : overrides.items())
         merged[k] = v;
     return merged.empty() ? std::string() : merged.dump();
+}
+
+void read_message_catalogs(Mod &mod)
+{
+    mod.messages.clear();
+    if (mod.dir.empty())
+        return;
+    const boost::filesystem::path   folder = boost::filesystem::path(mod.dir) / "i18n";
+    boost::system::error_code       ec;
+    if (!boost::filesystem::is_directory(folder, ec))
+        return;
+    for (boost::filesystem::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec)) {
+        const boost::filesystem::path &file = it->path();
+        if (!boost::filesystem::is_regular_file(it->status()) || !boost::iequals(file.extension().string(), ".json"))
+            continue;
+        const std::string language = file.stem().string();
+        boost::nowide::ifstream in(file.string());
+        std::stringstream       ss;
+        ss << in.rdbuf();
+        json j;
+        try {
+            j = json::parse(ss.str(), nullptr, true, /* ignore_comments */ true);
+        } catch (const json::parse_error &e) {
+            mod_fail(mod.id, "i18n/" + file.filename().string() + ": " + e.what());
+        }
+        if (!j.is_object())
+            mod_fail(mod.id, "i18n/" + file.filename().string() + " must be an object of English text -> translation");
+        std::map<std::string, std::string> &catalog = mod.messages[language];
+        for (auto &[text, translation] : j.items()) {
+            if (!translation.is_string())
+                mod_fail(mod.id, "i18n/" + file.filename().string() + ": the translation of \"" + text + "\" is not a string");
+            catalog[text] = translation.get<std::string>();
+        }
+    }
+}
+
+static std::mutex  g_language_mutex;
+static std::string g_message_language;
+
+void set_message_language(const std::string &language)
+{
+    std::lock_guard<std::mutex> lock(g_language_mutex);
+    g_message_language = language;
+}
+
+std::string message_language()
+{
+    std::lock_guard<std::mutex> lock(g_language_mutex);
+    return g_message_language;
+}
+
+std::string mod_text(const std::string &mod_id, const std::string &text)
+{
+    if (const std::string language = message_language(); !language.empty())
+        if (std::shared_ptr<const ModSet> mods = active_mods())
+            if (const Mod *mod = mods->find_mod(mod_id)) {
+                auto catalog = mod->messages.find(language);
+                if (catalog == mod->messages.end() && language.size() > 2)
+                    catalog = mod->messages.find(language.substr(0, 2));
+                if (catalog != mod->messages.end())
+                    if (auto it = catalog->second.find(text); it != catalog->second.end())
+                        return it->second;
+            }
+    return I18N::translate(text);
 }
 
 std::shared_ptr<const ModSet> active_mods()

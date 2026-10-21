@@ -1309,10 +1309,10 @@ void Selection::translate(const Vec3d &displacement, TransformationType transfor
                 transform_instance_relative(v, volume_data, transformation_type, Geometry::translation_transform(displacement), m_cache.dragging_center);
         } else {
             if (v.is_wipe_tower) {//in world cs
-                // MAGPIE: temperature drop towers (2000 + plate) are kept on their plate like wipe towers,
-                // AUX_TOWER_BED_MARGIN inside the bed, as G-code export clamps them.
+                // MAGPIE: temperature drop towers (2000 + plate) and layer time towers (3000 + plate) are kept on
+                // their plate like wipe towers, AUX_TOWER_BED_MARGIN inside the bed, as G-code export clamps them.
                 const bool    temperature_tower   = v.object_idx() >= AUX_TOWER_OBJECT_ID_BASE;
-                int           plate_idx           = temperature_tower ? aux_tower_plate_index(v.object_idx()) : v.object_idx() - 1000;
+                int           plate_idx           = temperature_tower ? any_aux_tower_plate_index(v.object_idx()) : v.object_idx() - 1000;
                 if (plate_idx < 0 || plate_idx >= wxGetApp().plater()->get_partplate_list().get_plate_count())
                     continue;
                 const Polygons bed_polys{wxGetApp().plater()->get_partplate_list().get_plate(plate_idx)->get_shared_printable_polygon()};
@@ -2438,7 +2438,7 @@ void Selection::update_type()
                 unsigned int sels_cntr = 0;
                 for (ObjectIdxsToInstanceIdxsMap::iterator it = m_cache.content.begin(); it != m_cache.content.end(); ++it)
                 {
-                    // MAGPIE: a temperature drop tower has no model object behind it.
+                    // MAGPIE: a temperature drop tower or a layer time tower has no model object behind it.
                     if (it->first >= AUX_TOWER_OBJECT_ID_BASE)
                         continue;
                     bool               is_wipe_tower   = it->first >= 1000;

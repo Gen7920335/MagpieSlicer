@@ -50,7 +50,9 @@ G-code is written:
 4. A second estimate checks every site; each wait is corrected once by its error (a wait is pure
    time, so one correction is exact up to the estimator's float resolution).
 5. The export's own processor runs over the file as written, so statistics, M73 and the preview
-   match it.
+   match it. The result keeps each waiting layer's time before its wait and the wait
+   (`GCodeProcessorResult::layer_time_blend`): the Layer Time legend gives their totals and the layer
+   slider's hover tooltip both numbers for the layer under the mouse.
 
 Orca counts an M109 as no time. While blending runs with a G-code event mod that changes nozzle temperatures within
 layers (the low temperature support interface; gcode.events `MP_GCODE_CHANGES_TEMPERATURE`) the estimate follows each nozzle's temperature (`layer_time_blend_heat_rate` / `_cool_rate`) and counts
@@ -70,6 +72,11 @@ when a wait is next to them.
   writer's own `G92 E0` is replaced by a `G92` to the E it ended at, so the moves after it push no
   extra filament; on the flavors whose writer never resets E (Mach3, MakerWare, Sailfish) the tower
   stays whole. Not in by-object prints; a tower that does not fit parks instead.
+  The tower's spot comes from `place_layer_time_tower` (`GCode/LayerTimeTower.hpp`), which the 3D scene calls too: it
+  draws the tower's footprint on each plate where blending waits at the tower (red where a stored position cannot be
+  printed, over an object, and the waits park) and dragging it stores the plate's `layer_time_blend_tower_x/_y`,
+  which follow the plates and Undo / Redo like the temperature drop tower's. Before slicing the scene places an
+  automatic tower from the model instances' footprints and the plate's first nozzle.
 - `park`: lift, travel to the park position (printer `layer_time_blend_park_x/_y`, rear left by
   default), wait, back to the same XY, down. Waits shorter than `in_place_max` or the trip wait in
   place.

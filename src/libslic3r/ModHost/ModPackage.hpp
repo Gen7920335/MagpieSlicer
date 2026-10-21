@@ -130,6 +130,7 @@ ModLoadResult load_mods(const ModLoadOptions &options);
 struct ModListing
 {
     std::string id, name, version;
+    std::map<std::string, std::string> names; // "name_<language>" translations of the name
     ModOrigin   origin   = ModOrigin::Installed;
     bool        official = false, verified = false;
     bool        native   = false; // carries a library

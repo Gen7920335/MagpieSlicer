@@ -1,5 +1,7 @@
 #include "libslic3r/ModHost/ModSet.hpp"
 #include "libslic3r/GCode/AuxiliaryTower.hpp"
+#include "libslic3r/GCode/LayerTimeTower.hpp"
+#include "libslic3r/ModHost/SlotChoice.hpp"
 #include "libslic3r/ModHost/GCodeEvents.hpp"
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Point.hpp"
@@ -3216,6 +3218,7 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
     int n_plates = ppl.get_plate_count();
     std::vector<int> volume_idxs_wipe_tower_old(n_plates, -1);
     std::vector<int> volume_idxs_aux_tower_old(n_plates, -1);
+    std::vector<int> volume_idxs_layer_time_tower_old(n_plates, -1);
 
     // Release invalidated volumes to conserve GPU memory in case of delayed refresh (see m_reload_delayed).
     // First initialize model_volumes_new_sorted & model_instances_new_sorted.
@@ -3313,6 +3316,8 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                 const int object_id = volume->composite_id.object_id;
                 if (is_aux_tower_object_id(object_id, n_plates))
                     volume_idxs_aux_tower_old[aux_tower_plate_index(object_id)] = int(volume_id);
+                else if (is_layer_time_tower_object_id(object_id, n_plates))
+                    volume_idxs_layer_time_tower_old[layer_time_tower_plate_index(object_id)] = int(volume_id);
                 else {
                     // There is only one wipe tower.
                     //assert(volume_idx_wipe_tower_old == -1);
@@ -3540,6 +3545,8 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
 				volume->set_sla_shift_z(shift_zs[volume->object_idx()]);
     }
 
+    // MAGPIE: each plate's prime tower, which the layer time tower preview below keeps clear of.
+    std::vector<std::optional<LayerTimeTowerPrimeTower>> layer_time_prime_towers(n_plates);
     // BBS
     if (printer_technology == ptFFF && m_config->has("filament_colour") && (m_canvas_type != ECanvasType::CanvasAssembleView)) {
         // Should the wipe tower be visualized ?
@@ -3609,6 +3616,15 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                     }
                 }
 
+                // MAGPIE: layer time blending's tower keeps clear of this tower (place_layer_time_tower), as in the export:
+                // the generated tower's size once there is one, else the estimate.
+                if (current_print->is_step_done(psWipeTower))
+                    layer_time_prime_towers[plate_id] = LayerTimeTowerPrimeTower{ Vec2d(x, y), current_print->wipe_tower_data().width,
+                                                                                  current_print->wipe_tower_data().depth,
+                                                                                  current_print->wipe_tower_data().brim_width };
+                else
+                    layer_time_prime_towers[plate_id] = LayerTimeTowerPrimeTower{ Vec2d(x, y), float(footprint.width), float(footprint.depth),
+                                                                                  float(footprint.brim_width) };
                 if (!current_print->is_step_done(psWipeTower) || !current_print->wipe_tower_data().wipe_tower_mesh_data) {
                     // update for wipe tower position
                     int volume_idx_wipe_tower_new = m_volumes.load_wipe_tower_preview(1000 + plate_id, x + plate_origin(0), y + plate_origin(1),
@@ -3720,6 +3736,7 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                     map_glvolume_old_to_new[old_volume] = new_volume;
             }
         }
+        this->load_layer_time_tower_previews(resolved, layer_time_prime_towers, volume_idxs_layer_time_tower_old, map_glvolume_old_to_new);
     }
 
     update_volumes_colors_by_extruder();
@@ -5652,6 +5669,86 @@ void GLCanvas3D::set_tooltip(const std::string& tooltip)
         m_tooltip.set_text(tooltip);
 }
 
+// MAGPIE: layer time blending's tower (wait position "tower"), one per plate, where G-code export puts it: the same
+// placement (place_layer_time_tower) from the plate's objects, skirt and prime tower and its stored position. The tower
+// shows while blending picks the tower: on, waiting at the tower, not in a by-object, spiral vase or belt print. A spot
+// the export cannot print at (a stored position over an object) is drawn red; the waits park instead. Before slicing
+// the objects' footprints are the model instances' bounding boxes and the nozzle the plate's first filament's, so the
+// automatic spot can differ from the printed one by the difference of those to the sliced objects; a dragged position
+// is exact.
+void GLCanvas3D::load_layer_time_tower_previews(const DynamicPrintConfig &resolved,
+                                                const std::vector<std::optional<LayerTimeTowerPrimeTower>> &prime_towers,
+                                                const std::vector<int> &old_volumes, std::vector<size_t> &map_glvolume_old_to_new)
+{
+    std::string wait_at;
+    double      tower_size = 0.; // mm
+    try {
+        const ModHost::ActiveSlotChoice planner = ModHost::choose_active_slot(ModHost::time_plan_slots(), resolved, nullptr, nullptr);
+        if (!planner.choice.error.empty() || planner.impl().empty())
+            return;
+        if (const std::optional<ModHost::ExprValue> v = planner.setting("wait_at"); v && std::holds_alternative<std::string>(*v))
+            wait_at = std::get<std::string>(*v);
+        if (const std::optional<ModHost::ExprValue> v = planner.setting("tower_size"); v && std::holds_alternative<double>(*v))
+            tower_size = std::get<double>(*v);
+    } catch (const std::exception &) {
+        return;
+    }
+    const ConfigOption *spiral = resolved.option("spiral_mode");
+    const ConfigOption *belt   = resolved.option("belt_printer");
+    const auto *nozzles        = resolved.option<ConfigOptionFloats>("nozzle_diameter");
+    const auto *bed            = resolved.option<ConfigOptionPoints>("printable_area");
+    if (wait_at != "tower" || tower_size <= 0. || (spiral != nullptr && spiral->getBool()) || (belt != nullptr && belt->getBool()) ||
+        nozzles == nullptr || nozzles->values.empty() || bed == nullptr || bed->values.size() < 3)
+        return;
+    const auto  *filament_map   = resolved.option<ConfigOptionInts>("filament_map");
+    const int    skirt_loops    = resolved.has("skirt_loops") ? resolved.opt_int("skirt_loops") : 0;
+    const double skirt_distance = resolved.has("skirt_distance") ? resolved.opt_float("skirt_distance") : 0.; // mm
+    const double global_brim    = resolved.has("brim_width") ? resolved.opt_float("brim_width") : 0.;         // mm
+    const DynamicPrintConfig &project_config = wxGetApp().preset_bundle->project_config;
+    const auto *tower_x = project_config.option<ConfigOptionFloats>(LAYER_TIME_TOWER_POSITION_KEYS[0]);
+    const auto *tower_y = project_config.option<ConfigOptionFloats>(LAYER_TIME_TOWER_POSITION_KEYS[1]);
+    PartPlateList &ppl = wxGetApp().plater()->get_partplate_list();
+    for (int plate_id = 0; plate_id < ppl.get_plate_count() && plate_id < int(old_volumes.size()); ++plate_id) {
+        PartPlate *plate = ppl.get_plate(plate_id);
+        if (plate == nullptr || !plate->has_printable_instances() || plate->get_real_print_seq() == PrintSequence::ByObject)
+            continue;
+        const Vec3d plate_origin = plate->get_origin();
+        std::vector<LayerTimeTowerObject> objects;
+        for (int object_idx = 0; object_idx < int(m_model->objects.size()); ++object_idx) {
+            const ModelObject  *object = m_model->objects[object_idx];
+            const ConfigOption *brim   = object->config.option("brim_width");
+            for (int instance_idx = 0; instance_idx < int(object->instances.size()); ++instance_idx) {
+                if (!object->instances[instance_idx]->printable || !plate->contain_instance(object_idx, instance_idx))
+                    continue;
+                const BoundingBoxf3 box = object->instance_bounding_box(size_t(instance_idx));
+                objects.push_back({ BoundingBoxf(Vec2d(box.min.x() - plate_origin.x(), box.min.y() - plate_origin.y()),
+                                                 Vec2d(box.max.x() - plate_origin.x(), box.max.y() - plate_origin.y())),
+                                    brim != nullptr ? brim->getFloat() : global_brim });
+            }
+        }
+        // The nozzle of the plate's first filament (the export: the one printing when the tower is placed).
+        size_t tool = 0;
+        if (const std::vector<int> filaments = plate->get_extruders(true); !filaments.empty() && filaments.front() > 0) {
+            const int mapped = filament_map != nullptr && !filament_map->values.empty() ? filament_map->get_at(size_t(filaments.front() - 1)) : 1;
+            tool             = mapped > 0 && size_t(mapped) <= nozzles->values.size() ? size_t(mapped - 1) : 0;
+        }
+        const double nozzle = nozzles->get_at(tool);          // mm
+        const double brim   = layer_time_tower_brim(nozzle);  // mm
+        const std::optional<LayerTimeTowerSpot> spot =
+            place_layer_time_tower(bed->values, tower_size, brim, layer_time_tower_skirt(skirt_loops, skirt_distance, nozzle), objects,
+                                   prime_towers[plate_id], aux_tower_position_at(tower_x, size_t(plate_id)),
+                                   aux_tower_position_at(tower_y, size_t(plate_id)));
+        if (!spot)
+            continue;
+        const ColorRGBA color = spot->fits ? ColorRGBA(0.231f, 0.565f, 0.925f, 0.66f) : ColorRGBA(0.925f, 0.231f, 0.231f, 0.66f);
+        const int new_volume = m_volumes.load_aux_tower_preview(LAYER_TIME_TOWER_OBJECT_ID_BASE + plate_id, float(spot->origin.x() + plate_origin.x()),
+                                                                float(spot->origin.y() + plate_origin.y()), float(tower_size),
+                                                                Flow::auto_extrusion_width(frPerimeter, float(nozzle)), float(brim), 0.2f, true, color);
+        if (const int old_volume = old_volumes[plate_id]; old_volume != -1)
+            map_glvolume_old_to_new[old_volume] = new_volume;
+    }
+}
+
 void GLCanvas3D::do_move(const std::string& snapshot_type, bool force_volume_move)
 {
     if (m_model == nullptr)
@@ -5667,6 +5764,7 @@ void GLCanvas3D::do_move(const std::string& snapshot_type, bool force_volume_mov
     int n_plates = wxGetApp().plater()->get_partplate_list().get_plate_count();
     std::vector<Vec3d> wipe_tower_origins(n_plates, Vec3d::Zero());
     std::vector<Vec3d> aux_tower_origins(n_plates, Vec3d::Zero());
+    std::vector<Vec3d> layer_time_tower_origins(n_plates, Vec3d::Zero());
 
     Selection::EMode selection_mode = m_selection.get_mode();
 
@@ -5717,6 +5815,10 @@ void GLCanvas3D::do_move(const std::string& snapshot_type, bool force_volume_mov
         else if (is_aux_tower_object_id(object_idx, n_plates)) {
             // MAGPIE: a temperature drop tower; its offset is the footprint's lower left corner.
             aux_tower_origins[aux_tower_plate_index(object_idx)] = v->get_volume_offset();
+        }
+        else if (is_layer_time_tower_object_id(object_idx, n_plates)) {
+            // MAGPIE: a layer time tower; its offset is the footprint's lower left corner.
+            layer_time_tower_origins[layer_time_tower_plate_index(object_idx)] = v->get_volume_offset();
         }
     }
 
@@ -5804,6 +5906,21 @@ void GLCanvas3D::do_move(const std::string& snapshot_type, bool force_volume_mov
         const Vec3d plate_origin = plate->get_origin();
         project_config.option<ConfigOptionFloats>(AUX_TOWER_POSITION_KEYS[0])->values[plate_id] = tower_origin.x() - plate_origin.x();
         project_config.option<ConfigOptionFloats>(AUX_TOWER_POSITION_KEYS[1])->values[plate_id] = tower_origin.y() - plate_origin.y();
+    }
+    // MAGPIE: and a dragged layer time tower as that plate's layer_time_blend_tower_x/_y.
+    for (int plate_id = 0; plate_id < int(layer_time_tower_origins.size()); ++plate_id) {
+        const Vec3d &tower_origin = layer_time_tower_origins[plate_id];
+        if (tower_origin == Vec3d::Zero())
+            continue;
+        PartPlateList &ppl   = wxGetApp().plater()->get_partplate_list();
+        PartPlate     *plate = plate_id < ppl.get_plate_count() ? ppl.get_plate(plate_id) : nullptr;
+        if (plate == nullptr)
+            continue;
+        DynamicConfig &project_config = wxGetApp().preset_bundle->project_config;
+        normalize_aux_tower_positions(project_config, size_t(ppl.get_plate_count()));
+        const Vec3d plate_origin = plate->get_origin();
+        project_config.option<ConfigOptionFloats>(LAYER_TIME_TOWER_POSITION_KEYS[0])->values[plate_id] = tower_origin.x() - plate_origin.x();
+        project_config.option<ConfigOptionFloats>(LAYER_TIME_TOWER_POSITION_KEYS[1])->values[plate_id] = tower_origin.y() - plate_origin.y();
     }
 
     reset_sequential_print_clearance();
