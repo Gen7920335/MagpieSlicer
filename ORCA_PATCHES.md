@@ -90,8 +90,9 @@ Format: what was wrong, what changed, where, the guard test.
   the large walls' nozzle (taking minimum feature size and transition length too drops a detail wall loop).
   Printers with one nozzle size are unchanged.
 - Counterfactual (1/3 Hilda, figure settings): 0.4 mm nozzle wall moves under 0.2 mm 22,313 -> 1,796 with
-  multi-nozzle walls off (a printer with 0.4 mm nozzles only: 1,693), 5,562 -> 1,150 with them on; the 0.092 /
-  0.109 mm fixed widths go.
+  multi-nozzle walls off (a printer with 0.4 mm nozzles only: 1,693), 5,562 -> 1,114 with them on; the 0.092 /
+  0.109 mm fixed widths go. The 0.15 mm detail walls keep their length at layer and band heights (70,177 ->
+  70,172 mm); only scarf ramps move with the seams (4,025 -> 3,738 mm).
 - Tests: "Arachne narrows a large nozzle's walls by its own nozzle, not the printer's smallest" and "Inner walls
   under a single top wall narrow by the large nozzle" (test_multi_nozzle_walls.cpp; both fail without the change).
 
