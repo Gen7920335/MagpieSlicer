@@ -53,5 +53,12 @@ private:
 bool expr_truthy(const ExprValue &value);
 std::string expr_to_string(const ExprValue &value);
 
+// std::strtod with a decimal point whatever the thread's C locale (mod manifests, stored mod settings and legacy
+// keys always use one): skips leading white space and a sign, and sets *end past the number, or to text when
+// there is none.
+double parse_decimal(const char *text, const char **end);
+// The shortest text with a decimal point that parse_decimal reads back as `value` (6 to 17 significant digits).
+std::string format_decimal(double value);
+
 } // namespace ModHost
 } // namespace Slic3r

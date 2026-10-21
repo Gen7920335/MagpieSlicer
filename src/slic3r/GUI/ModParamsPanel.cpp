@@ -68,10 +68,16 @@ wxString display_value(const json &stored, const ModHost::ModParam &p, const std
             return wxString::FromUTF8(*s);
     if (p.type == "string")
         return wxString::FromUTF8(it != stored.end() && it->is_string() ? it->get<std::string>() : std::get<std::string>(p.default_value));
-    double v = std::get<double>(p.default_value);
+    // A float_or_percent parameter can default to a percentage and hold a number.
+    double v = 0.;
     if (it != stored.end() && it->is_number())
         v = it->get<double>();
-    return p.type == "int" ? wxString::Format("%lld", (long long) std::llround(v)) : wxString::FromCDouble(v);
+    else if (const double *d = std::get_if<double>(&p.default_value))
+        v = *d;
+    else if (const std::string *s = std::get_if<std::string>(&p.default_value))
+        return wxString::FromUTF8(*s);
+    // All the digits the value has: commit() writes every row back from its text.
+    return p.type == "int" ? wxString::Format("%lld", (long long) std::llround(v)) : wxString::FromUTF8(ModHost::format_decimal(v));
 }
 
 } // namespace

@@ -6,6 +6,7 @@
 #include "libslic3r/ExPolygon.hpp"
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/Layer.hpp"
+#include "libslic3r/LineWidths.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Support/SupportCommon.hpp"
 #include "libslic3r/Support/SupportLayer.hpp"
@@ -63,9 +64,17 @@ double adhesion_margin_mm(const PrintObject &object)
         reach = config.brim_object_gap.value + config.brim_width.value;
     if (print.has_skirt() && print.config().skirt_loops.value > 0) {
         // The outermost loop's centreline sits skirt_distance - spacing / 2 + loops * spacing past the brim
-        // (Print::_make_skirt), and its outer edge half a line width further.
-        const Flow flow = print.skirt_flow();
-        reach += print.config().skirt_distance.value + (print.config().skirt_loops.value - 0.5) * flow.spacing() + flow.width() / 2.;
+        // (Print::_make_skirt), and its outer edge half a line width further. On a printer whose nozzles differ in
+        // size the skirt's nozzle comes from the tool ordering, which does not exist yet (or is a previous slice's)
+        // while support is generated, so the widest nozzle's skirt is counted.
+        auto skirt_reach = [&print](const Flow &flow) { return (print.config().skirt_loops.value - 0.5) * flow.spacing() + flow.width() / 2.; };
+        double loops = 0.;
+        if (print.line_width_reference_mm() > 0.)
+            for (size_t nozzle = 0; nozzle < print.config().nozzle_diameter.size(); ++nozzle)
+                loops = std::max(loops, skirt_reach(skirt_flow_on_nozzle(print, nozzle)));
+        else
+            loops = skirt_reach(print.skirt_flow());
+        reach += print.config().skirt_distance.value + loops;
     }
     return reach;
 }
@@ -111,10 +120,11 @@ void gather(const PrintObject &object, const std::vector<Polygons> *mask, Input 
         rings_of(in.mask, in.mask_rings, in.mask_lists);
     }
 
-    // The printable area is in bed coordinates; the object's layers are in object coordinates.
+    // The printable area is in bed coordinates; the object's layers are in object coordinates, which the
+    // first instance's shift moves onto the bed (as PrintObject moves the unprintable areas the other way).
     for (const Vec2d &p : object.print()->config().printable_area.values)
         in.printable_area.points.emplace_back(scale_(p.x()), scale_(p.y()));
-    in.printable_area.translate(-object.center_offset());
+    in.printable_area.translate(-object.instances().front().shift_without_plate_offset());
 
     in.c.size                 = sizeof(mp_support_input_v1);
     in.c.layer_count          = uint32_t(layer_count);
@@ -151,6 +161,9 @@ Polygons polygons_of(const mp_rings &rings)
 struct Areas
 {
     std::vector<Polygons> body, roof, bottom;
+    // Parts of the body and roof printed fractional_drop lower (mp_support_output_v1), scaled.
+    std::vector<Polygons> fractional_body, fractional_roof;
+    coord_t               fractional_drop   = 0;
     bool                  first_layer_dense = false;
 };
 
@@ -192,6 +205,17 @@ Areas call(const PrintObject &object, const NativeEntry &entry, Function fn, con
                 areas.roof[i] = polygons_of(out.roof[i]);
             if (out.bottom)
                 areas.bottom[i] = polygons_of(out.bottom[i]);
+        }
+        if (out.fractional_drop > 0 && (out.fractional_body || out.fractional_roof)) {
+            areas.fractional_drop = coord_t(out.fractional_drop);
+            areas.fractional_body.resize(in.c.layer_count);
+            areas.fractional_roof.resize(in.c.layer_count);
+            for (size_t i = 0; i < n; ++i) {
+                if (out.fractional_body)
+                    areas.fractional_body[i] = polygons_of(out.fractional_body[i]);
+                if (out.fractional_roof)
+                    areas.fractional_roof[i] = polygons_of(out.fractional_roof[i]);
+            }
         }
         areas.first_layer_dense = out.first_layer_dense != 0;
         table->release(entry.user, &out);
@@ -251,6 +275,30 @@ void generate(PrintObject &object, const NativeEntry &entry, const std::vector<P
         layer.polygons = std::move(polygons);
         return &layer;
     };
+    // The fractional parts sit on the layer below and end fractional_drop under the layer's top, so the gap to
+    // the object above is the top Z distance. Thinner than the thinnest printable layer (the slicing parameters'
+    // min_layer_height, mm), they are left out and the gap is a whole layer larger by less than that.
+    const double fractional_drop_mm = unscale<double>(areas.fractional_drop);
+    auto make_fractional_layer = [&](size_t idx, SupporLayerType type, Polygons &&polygons) -> SupportGeneratorLayer * {
+        const Layer &object_layer = *object.get_layer(int(idx));
+        const double print_z      = object_layer.print_z - fractional_drop_mm;
+        if (print_z - object_layer.bottom_z() < object.slicing_parameters().min_layer_height - EPSILON)
+            return nullptr;
+        SupportGeneratorLayer &layer = storage.allocate(type);
+        layer.print_z  = print_z;
+        layer.bottom_z = object_layer.bottom_z();
+        layer.height   = print_z - layer.bottom_z;
+        layer.polygons = std::move(polygons);
+        return &layer;
+    };
+    for (size_t i = 0; i < areas.fractional_body.size(); ++i) {
+        if (!areas.fractional_body[i].empty())
+            if (SupportGeneratorLayer *layer = make_fractional_layer(i, SupporLayerType::Base, std::move(areas.fractional_body[i])))
+                base_layers.push_back(layer);
+        if (!areas.fractional_roof[i].empty())
+            if (SupportGeneratorLayer *layer = make_fractional_layer(i, SupporLayerType::TopInterface, std::move(areas.fractional_roof[i])))
+                interface_layers.push_back(layer);
+    }
     for (size_t i = 0; i < areas.body.size(); ++i) {
         if (!areas.body[i].empty())
             base_layers.push_back(make_layer(i, SupporLayerType::Base, std::move(areas.body[i])));
@@ -260,6 +308,7 @@ void generate(PrintObject &object, const NativeEntry &entry, const std::vector<P
             interface_layers.push_back(make_layer(i, SupporLayerType::BottomInterface, std::move(areas.bottom[i])));
     }
     std::sort(interface_layers.begin(), interface_layers.end(), [](const SupportGeneratorLayer *a, const SupportGeneratorLayer *b) { return *a < *b; });
+    std::stable_sort(base_layers.begin(), base_layers.end(), [](const SupportGeneratorLayer *a, const SupportGeneratorLayer *b) { return a->print_z < b->print_z; });
 
     // As in the classic generator, the raft contact layer carries the first object layer (expanded by
     // raft_expansion) and the feet of the columns; generate_raft_base builds the raft base and

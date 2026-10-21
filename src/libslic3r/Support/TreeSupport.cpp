@@ -1711,6 +1711,18 @@ void TreeSupport::generate_toolpaths()
     BeltFloorContext belt_ctx;
     const bool belt_floor_active = belt_ctx.init(m_slicing_params, *m_print_config);
 
+    // The flow of the first layer's support outlines without a raft (Orca's brim flow). MAGPIE: on a printer whose
+    // nozzles differ in size, on the nozzle of the filament printing the area, as the support's own widths are:
+    // Print::brim_flow() picks the nozzle from a tool ordering of the first object's layers, whose support fills
+    // this loop and the other objects' support steps are writing.
+    const Print &print = *m_object->print();
+    Flow         first_layer_flow_interface = print.brim_flow(), first_layer_flow_base = first_layer_flow_interface;
+    if (print.line_width_reference_mm() > 0.) {
+        const WidthConfigs configs{ &print.config(), &object_config, nullptr };
+        first_layer_flow_interface = brim_flow_on_nozzle(print, *m_object, feature_printing_nozzle(WidthFeature::SupportInterface, configs, print.is_BBL_printer()));
+        first_layer_flow_base      = brim_flow_on_nozzle(print, *m_object, feature_printing_nozzle(WidthFeature::Support, configs, print.is_BBL_printer()));
+    }
+
     // generate tree support tool paths
     tbb::parallel_for(
         tbb::blocked_range<size_t>(m_raft_layers, m_object->support_layer_count()),
@@ -1794,11 +1806,12 @@ void TreeSupport::generate_toolpaths()
                     if (area_group.type != SupportLayer::BaseType) {
                         // interface
                         if (logical_support_id == 0 && !belt_floor_active) {
-                            Flow flow = m_raft_layers == 0 ? m_object->print()->brim_flow() : support_flow;
-                            if (m_object->layer_bands().support && m_raft_layers == 0)
-                                flow = support_material_1st_layer_flow(m_object, float(ts_layer->height));
                             ExtrusionRole brim_role = (area_group.type == SupportLayer::RoofType && !area_group.interface_as_base) ?
                                 erSupportMaterialInterface : erSupportMaterial;
+                            Flow flow = m_raft_layers > 0 ? support_flow :
+                                        brim_role == erSupportMaterialInterface ? first_layer_flow_interface : first_layer_flow_base;
+                            if (m_object->layer_bands().support && m_raft_layers == 0)
+                                flow = support_material_1st_layer_flow(m_object, float(ts_layer->height));
                             make_perimeter_and_inner_brim(ts_layer->support_fills.entities, poly, wall_count, flow,
                                                           brim_role);
                             polys = offset_ex(poly, -flow.scaled_spacing());

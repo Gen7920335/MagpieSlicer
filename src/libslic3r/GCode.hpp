@@ -87,6 +87,9 @@ struct LayerTimeWaitSite
     bool   can_park = false;
     double x = 0., y = 0., park_x = 0., park_y = 0., travel_speed = 0.;
     double park_trip_s = 0.; // estimated time of the trip to the park position and back, s
+    // Z a parked wait lifts to, mm: lift_z, and in a by-object print as far above the highest layer printed so far,
+    // so the trip clears the objects already finished.
+    double park_lift_z = 0.;
     bool   at_tower = false; // inside a layer time tower block: the nozzle waits over the tower, not lifted
     // purge_tower: the wait is written at the tower visit of the layer before the site (its visit tag), where the
     // nozzle is over the tower; it adds to the same interval as a wait at the site would.

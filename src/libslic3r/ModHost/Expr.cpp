@@ -1,5 +1,7 @@
 #include "Expr.hpp"
 
+#include "libslic3r/LocalesUtils.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -48,8 +50,10 @@ std::vector<Token> tokenize(const std::string &s)
             ++i;
         } else if (std::isdigit(static_cast<unsigned char>(c)) || (c == '.' && i + 1 < s.size() && std::isdigit(static_cast<unsigned char>(s[i + 1])))) {
             const char *begin = s.c_str() + i;
-            char       *end   = nullptr;
-            const double v    = std::strtod(begin, &end);
+            const char *end   = nullptr;
+            const double v    = parse_decimal(begin, &end);
+            if (end == begin)
+                fail("bad number", i);
             out.push_back({Token::Kind::Number, std::string(begin, size_t(end - begin)), v, i});
             i += size_t(end - begin);
         } else if (c == '"') {
@@ -380,6 +384,36 @@ std::string expr_to_string(const ExprValue &value)
     ss.precision(17);
     ss << std::get<double>(value);
     return ss.str();
+}
+
+double parse_decimal(const char *text, const char **end)
+{
+    const char *p = text;
+    while (*p != '\0' && std::isspace(static_cast<unsigned char>(*p)))
+        ++p;
+    const bool negative = *p == '-';
+    if (*p == '+' || *p == '-')
+        ++p;
+    size_t       used  = 0;
+    const double value = *p == '+' || *p == '-' ? 0. : string_to_double_decimal_point(std::string_view(p), &used);
+    *end               = used > 0 ? p + used : text;
+    return used > 0 && negative ? -value : value;
+}
+
+std::string format_decimal(double value)
+{
+    std::string text;
+    for (int precision = 6; precision <= 17; ++precision) {
+        std::ostringstream ss;
+        ss.imbue(std::locale::classic());
+        ss.precision(precision);
+        ss << value;
+        text = ss.str();
+        const char *end = nullptr;
+        if (parse_decimal(text.c_str(), &end) == value)
+            break;
+    }
+    return text;
 }
 
 } // namespace ModHost

@@ -48,7 +48,9 @@ LayerTimeBlend::Settings settings_from(mp_ctx *ctx)
     s.warn_total_pct = required_f64(ctx, "warn_total_pct");
     s.warn_single_s  = required_f64(ctx, "warn_single");
     const std::string wait_at = required_str(ctx, "wait_at");
-    s.park           = wait_at == "park" || wait_at == "purge_tower";
+    // The core offers a park trip (park_trip_s > 0) only at sites it parks from: park and purge_tower, and tower
+    // where it parks instead (a by-object print, or a tower that does not fit).
+    s.park           = wait_at != "in_place";
     s.park_min_s     = required_f64(ctx, "in_place_max");
     return s;
 }

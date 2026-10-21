@@ -46,8 +46,8 @@ std::optional<std::pair<double, double>> parse_point(const std::string &value)
     if (sep == std::string::npos)
         return std::nullopt;
     const std::string a = value.substr(0, sep), b = value.substr(sep + 1);
-    char *end_a = nullptr, *end_b = nullptr;
-    const double x = std::strtod(a.c_str(), &end_a), y = std::strtod(b.c_str(), &end_b);
+    const char *end_a = nullptr, *end_b = nullptr;
+    const double x = parse_decimal(a.c_str(), &end_a), y = parse_decimal(b.c_str(), &end_b);
     if (end_a == a.c_str() || end_b == b.c_str())
         return std::nullopt;
     return std::make_pair(x, y);
@@ -84,8 +84,8 @@ std::vector<double> toolhead_widths_mm(const std::string &value, const std::vect
         const size_t      end   = std::min(value.find(',', begin), value.size());
         const std::string entry = value.substr(begin, end - begin);
         begin                   = end + 1;
-        char        *stop = nullptr;
-        const double v    = std::strtod(entry.c_str(), &stop);
+        const char  *stop = nullptr;
+        const double v    = parse_decimal(entry.c_str(), &stop);
         if (stop == entry.c_str() || !(v > 0.))
             continue;
         out[idx] = *stop == '%' ? 0.01 * v * nozzles_mm[idx] : v;
@@ -153,25 +153,26 @@ template<size_t N> bool in(const char *const (&list)[N], const std::string &key)
 
 std::optional<json> convert(const std::string &value, Kind kind)
 {
-    char *end = nullptr;
+    const char *end = nullptr;
     switch (kind) {
     case Kind::Bool:
         if (value == "1" || value == "true") return json(true);
         if (value == "0" || value == "false") return json(false);
         return std::nullopt;
     case Kind::Int: {
-        const long v = std::strtol(value.c_str(), &end, 10);
-        return end != value.c_str() ? std::optional<json>(json(v)) : std::nullopt;
+        char      *int_end = nullptr;
+        const long v       = std::strtol(value.c_str(), &int_end, 10);
+        return int_end != value.c_str() ? std::optional<json>(json(v)) : std::nullopt;
     }
     case Kind::Float:
     case Kind::Percent: {
         // Percentages are stored as "80%" and become 80.
-        const double v = std::strtod(value.c_str(), &end);
+        const double v = parse_decimal(value.c_str(), &end);
         return end != value.c_str() ? std::optional<json>(json(v)) : std::nullopt;
     }
     case Kind::FloatOrPercent: {
         // "50%" (of the wall speed) stays a percentage; a number is mm/s.
-        const double v = std::strtod(value.c_str(), &end);
+        const double v = parse_decimal(value.c_str(), &end);
         if (end == value.c_str())
             return std::nullopt;
         return *end == '%' ? json(value.substr(0, size_t(end - value.c_str())) + "%") : json(v);

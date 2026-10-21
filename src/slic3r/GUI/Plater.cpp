@@ -34,6 +34,7 @@
 #include "libslic3r/TriangleSelector.hpp"
 #include "libslic3r/ModHost/ModIndex.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
+#include "libslic3r/ModHost/NativeMods.hpp"
 #include <cstdio>
 #include "libslic3r/LocalesUtils.hpp"
 #include "libslic3r/FlushVolCalc.hpp"
@@ -14968,6 +14969,8 @@ void Plater::priv::set_bed_shape(const Pointfs       &shape,
         SCALING_FACTOR = SCALING_FACTOR_INTERNAL;
     else
         SCALING_FACTOR = SCALING_FACTOR_INTERNAL_LARGE_PRINTER;
+    // MAGPIE: native mods read the scaling factor from the host table, which keeps the value it was given.
+    ModHost::native_host_api();
 
     //BBS: add shape position
     Vec2d shape_position = partplate_list.get_current_shape_position();

@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <type_traits>
 #include <memory>
@@ -568,6 +569,11 @@ struct Areas
     std::vector<Polygons> support; // body, with roofs and bottoms taken out
     std::vector<Polygons> roofs;
     std::vector<Polygons> bottoms;
+    // Parts of support and roofs printed fractional_drop lower (support_fractional_roof and the fractional
+    // support infill parts of CuraEngine), taken out of support and roofs; empty when the drop is 0.
+    std::vector<Polygons> fractional_support;
+    std::vector<Polygons> fractional_roofs;
+    coord_t               fractional_drop = 0;
 };
 
 std::vector<Polygons> overhang_demand(mp_ctx *ctx, const Inputs &in)
@@ -755,6 +761,29 @@ Areas compute_areas(mp_ctx *ctx, const Inputs &in, const ModSettings &s)
         }
     }
 
+    // The top Z distance left over past whole layers (PathConfigStorage leftover_support_distance). CuraEngine
+    // prints the parts right under the model that much lower: the roof a layer has and the next layer up has not
+    // (generateSupportRoof's support_fractional_roof), and the support under the overhang the main loop
+    // supported from this layer (SupportLayer::fillInfillParts).
+    const coord_t leftover = in.z_distance_top % in.layer_thickness;
+    if (leftover > 0) {
+        out.fractional_drop = leftover;
+        out.fractional_support.assign(layer_count, Polygons{});
+        out.fractional_roofs.assign(layer_count, Polygons{});
+        for (size_t idx = 1; idx + 1 < layer_count; ++idx) {
+            if (!out.roofs[idx].empty())
+                out.fractional_roofs[idx] = diff(out.roofs[idx], out.roofs[idx + 1]);
+            if (!support[idx].empty() && idx + layer_z_distance_top < layer_count)
+                out.fractional_support[idx] = intersection(support[idx], overhang[idx + layer_z_distance_top]);
+        }
+        for (size_t idx = 1; idx + 1 < layer_count; ++idx) {
+            if (!out.fractional_roofs[idx].empty())
+                out.roofs[idx] = diff(out.roofs[idx], out.fractional_roofs[idx]);
+            if (!out.fractional_support[idx].empty())
+                support[idx] = diff(support[idx], out.fractional_support[idx]);
+        }
+    }
+
     out.support = std::move(support);
     return out;
 }
@@ -765,14 +794,14 @@ Areas compute_areas(mp_ctx *ctx, const Inputs &in, const ModSettings &s)
 // What one call hands back: the areas in the C layout, owned here until release.
 struct Output
 {
-    std::vector<Polygons>             layers[3]; // body, roof, bottom
-    std::vector<std::vector<mp_ring>> rings[3];
-    std::vector<mp_rings>             lists[3];
+    std::vector<Polygons>             layers[5]; // body, roof, bottom, fractional body, fractional roof
+    std::vector<std::vector<mp_ring>> rings[5];
+    std::vector<mp_rings>             lists[5];
 };
 
-void fill_output(std::unique_ptr<Output> data, mp_support_output_v1 *out)
+void fill_output(std::unique_ptr<Output> data, mp_support_output_v1 *out, coord_t fractional_drop = 0)
 {
-    for (int k = 0; k < 3; ++k) {
+    for (int k = 0; k < 5; ++k) {
         const size_t n = data->layers[k].size();
         data->rings[k].resize(n);
         data->lists[k].resize(n);
@@ -786,6 +815,16 @@ void fill_output(std::unique_ptr<Output> data, mp_support_output_v1 *out)
     out->body        = data->lists[0].data();
     out->roof        = data->lists[1].empty() ? nullptr : data->lists[1].data();
     out->bottom      = data->lists[2].empty() ? nullptr : data->lists[2].data();
+    // A host older than the fractional fields gets the whole layers (the gap rounds down to whole layers).
+    if (out->size >= offsetof(mp_support_output_v1, fractional_drop) + sizeof(out->fractional_drop) && fractional_drop > 0) {
+        out->fractional_body = data->lists[3].data();
+        out->fractional_roof = data->lists[4].data();
+        out->fractional_drop = fractional_drop;
+    } else {
+        for (int k = 3; k < 5; ++k)
+            for (size_t i = 0; i < data->layers[k].size() && i < data->layers[k - 3].size(); ++i)
+                append(data->layers[k - 3][i], data->layers[k][i]);
+    }
     out->mod_data    = data.release();
 }
 
@@ -823,10 +862,12 @@ mp_status compute(void *, mp_ctx *ctx, const mp_support_input_v1 *in, mp_support
         data->layers[0] = std::move(areas.support);
         data->layers[1] = std::move(areas.roofs);
         data->layers[2] = std::move(areas.bottoms);
+        data->layers[3] = std::move(areas.fractional_support);
+        data->layers[4] = std::move(areas.fractional_roofs);
         // Cura prints the first support layer with the same lines as the rest (support_initial_layer_line_distance
         // defaults to the support line distance) and without widening it, unless asked for a solid first layer.
         out->first_layer_dense = s.solid_first_layer ? 1 : 0;
-        fill_output(std::move(data), out);
+        fill_output(std::move(data), out, areas.fractional_drop);
     });
 }
 
@@ -850,6 +891,10 @@ void release(void *, mp_support_output_v1 *out)
     out->mod_data    = nullptr;
     out->layer_count = 0;
     out->body = out->roof = out->bottom = nullptr;
+    if (out->size >= offsetof(mp_support_output_v1, fractional_drop) + sizeof(out->fractional_drop)) {
+        out->fractional_body = out->fractional_roof = nullptr;
+        out->fractional_drop = 0;
+    }
 }
 
 const mp_support_areas_v1 table = {sizeof(mp_support_areas_v1), compute, demand, release};

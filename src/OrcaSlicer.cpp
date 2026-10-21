@@ -8168,8 +8168,13 @@ bool CLI::setup(int argc, char **argv)
         boost::nowide::cerr << "Could not create data directory: " << data_dir() << std::endl;
         return false;
     }
-    // MAGPIE: mods under <datadir>/mods take part in CLI slicing the same way as in the GUI.
-    ModHost::load_active_mods_from_data_dir();
+    // MAGPIE: mods under <datadir>/mods take part in CLI slicing the same way as in the GUI. Without --datadir and
+    // without an action the GUI starts and loads them once it has set its data directory: the native code loads
+    // only at the first load, which here would see no data directory and skip the installed mods.
+    const bool mod_option_given = std::any_of(m_given_option_keys.begin(), m_given_option_keys.end(),
+                                              [](const std::string &key) { return boost::starts_with(key, "mod_"); });
+    if (!data_dir().empty() || !m_actions.empty() || mod_option_given)
+        ModHost::load_active_mods_from_data_dir();
 
     //FIXME Validating at this stage most likely does not make sense, as the config is not fully initialized yet.
     if (!validity.empty()) {

@@ -281,16 +281,26 @@ std::string cached_library(const Mod &mod, const fs::path &cache_root)
         throw ModError("the signature does not cover " + rel);
     const fs::path target = cache_root / (mod.id + "-" + mod.version + "-" + signed_hash->second.substr(0, 16));
     fs::create_directories(target);
+    // Every file of the library folder (the library and the libraries it loads) is loaded from the cache, so each
+    // cached file must be the signed one; a missing, cut short or changed copy is copied again.
     for (fs::directory_iterator it(bin_dir), end; it != end; ++it)
         if (fs::is_regular_file(it->status())) {
+            const std::string file_rel = it->path().lexically_relative(mod.dir).generic_string();
+            const auto        hash     = sig.hashes.find(file_rel);
+            if (hash == sig.hashes.end())
+                throw ModError("the signature does not cover " + file_rel);
             const fs::path dst = target / it->path().filename();
-            if (!fs::exists(dst))
-                fs::copy_file(it->path(), dst);
+            if (fs::exists(dst) && sha256_hex(read_file(dst)) == hash->second)
+                continue;
+            const fs::path tmp = dst.string() + ".tmp";
+            fs::copy_file(it->path(), tmp, fs::copy_options::overwrite_existing);
+            if (sha256_hex(read_file(tmp)) != hash->second) {
+                fs::remove(tmp);
+                throw ModError("the cached copy " + dst.string() + " differs from the signed file");
+            }
+            fs::rename(tmp, dst);
         }
-    const fs::path copy = target / library.filename();
-    if (sha256_hex(read_file(copy)) != signed_hash->second)
-        throw ModError("the cached copy " + copy.string() + " differs from the signed library");
-    return copy.string();
+    return (target / library.filename()).string();
 }
 
 } // namespace

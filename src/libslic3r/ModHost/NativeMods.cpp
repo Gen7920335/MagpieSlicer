@@ -466,8 +466,8 @@ MagpieHostApi g_host_api = make_host_api();
 
 const MagpieHostApi &native_host_api()
 {
-    // The application switches SCALING_FACTOR for very large beds, outside slicing; mods read the
-    // field in each call.
+    // The application switches SCALING_FACTOR for very large beds, outside slicing, and calls this to
+    // refresh the table; mods read the field in each call.
     g_host_api.scaling_factor_mm = SCALING_FACTOR;
     return g_host_api;
 }

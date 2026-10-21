@@ -51,6 +51,12 @@ typedef struct mp_support_output_v1 {
     /* 1: the first support layer is printed solid; 0: with the lines of the layers above. */
     int32_t   first_layer_dense;
     void     *mod_data;    /* the generator's own, for release */
+    /* Appended; written only when size covers them. Parts of a layer's body and roof (taken out of body
+     * and roof) printed fractional_drop lower, so the gap to the object above is the top Z distance when
+     * that is not a whole number of layers (CuraEngine's fractional roof). Null or a drop of 0: none. */
+    mp_rings *fractional_body; /* [layer_count] */
+    mp_rings *fractional_roof; /* [layer_count] */
+    int64_t   fractional_drop; /* integer units, less than the layer height */
 } mp_support_output_v1;
 
 typedef struct mp_support_areas_v1 {

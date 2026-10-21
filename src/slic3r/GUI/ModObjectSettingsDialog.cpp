@@ -198,7 +198,7 @@ void ModObjectSettingsDialog::show_value(const Row &row, const ModHost::ExprValu
         cb->SetValue(ModHost::expr_truthy(value));
     } else if (auto *tc = dynamic_cast<wxTextCtrl *>(row.control)) {
         if (const double *d = std::get_if<double>(&value))
-            tc->ChangeValue(row.param->type == "int" ? wxString::Format("%lld", (long long) std::llround(*d)) : wxString::FromCDouble(*d));
+            tc->ChangeValue(row.param->type == "int" ? wxString::Format("%lld", (long long) std::llround(*d)) : wxString::FromUTF8(ModHost::format_decimal(*d)));
         else
             tc->ChangeValue(from_u8(ModHost::expr_to_string(value)));
     }

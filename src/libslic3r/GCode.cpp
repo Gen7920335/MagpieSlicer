@@ -3501,10 +3501,12 @@ static void write_waits(const std::string &src, const std::string &dst, const st
         } else if (line == tag && k < sites.size()) {
             const LayerTimeWaitSite &site = sites[k];
             const WaitForm           f    = form[k];
-            if (f == WaitForm::Lifted || f == WaitForm::Parked)
+            if (f == WaitForm::Lifted)
                 z_move(site.lift_z, site.z_speed);
-            if (f == WaitForm::Parked)
+            if (f == WaitForm::Parked) {
+                z_move(site.park_lift_z, site.z_speed);
                 xy_move(site.park_x, site.park_y, site.travel_speed);
+            }
             if (f != WaitForm::None && dwell_ms[k] > 0)
                 out << "G4 P" << dwell_ms[k] << "\n";
             if (f == WaitForm::Parked)
@@ -3735,6 +3737,14 @@ std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
                 if (accel <= 0.)
                     accel = m_config.default_acceleration.get_at(this->cur_extruder_index());
                 site.park_trip_s = 2. * LayerTimeBlendExport::rest_to_rest_time((there - here).norm(), site.travel_speed, accel);
+                site.park_lift_z = site.lift_z;
+                if (print.config().print_sequence.value == PrintSequence::ByObject && m_max_layer_z > print_z) {
+                    site.park_lift_z = std::max(site.lift_z, std::min(site.lift_z + (m_max_layer_z - print_z),
+                                                                      print.config().printable_height.value));
+                    // The extra lift and the way back down, at the lift's feed rate (mm/s).
+                    if (site.z_speed > 0.)
+                        site.park_trip_s += 2. * (site.park_lift_z - site.lift_z) / site.z_speed;
+                }
             }
         }
         gcode += ";" + GCodeProcessor::wait_site_tag() + "\n";
@@ -5367,9 +5377,12 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             size_t finished_objects = 0;
             print_object_instance_sequential_active = first_has_extrude_print_object;
             const PrintObject *prev_object = (*print_object_instance_sequential_active)->print_object;
+            const PrintInstance *prev_instance = *print_object_instance_sequential_active;
             for (; print_object_instance_sequential_active != print_object_instances_ordering.end(); ++ print_object_instance_sequential_active) {
                 const PrintObject &object = *(*print_object_instance_sequential_active)->print_object;
-                if (&object != prev_object || tool_ordering.first_extruder() != final_extruder_id) {
+                // MAGPIE: another copy of an object with H/2 bands needs its own timing frame (below).
+                const bool new_h2_copy = *print_object_instance_sequential_active != prev_instance && object.layer_bands().active();
+                if (&object != prev_object || tool_ordering.first_extruder() != final_extruder_id || new_h2_copy) {
                     auto cached_ordering = use_seq_dynamic_cache ? seq_dynamic_orderings.find(&object) : seq_dynamic_orderings.end();
                     if (cached_ordering != seq_dynamic_orderings.end()) {
                         // Never re-plan a selector object mid-export: the cached plan is what the
@@ -5465,7 +5478,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                 // Flag indicating whether the nozzle temperature changes from 1st to 2nd layer were performed.
                 // Reset it when starting another object from 1st layer.
                 m_second_layer_things_done = false;
-                prev_object = &object;
+                prev_object   = &object;
+                prev_instance = *print_object_instance_sequential_active;
             }
         } else {
             // Sort layers by Z.

@@ -56,8 +56,8 @@ bool is_percent_text(const std::string &s)
     if (s.size() < 2 || s.back() != '%')
         return false;
     const std::string number = s.substr(0, s.size() - 1);
-    char             *end    = nullptr;
-    std::strtod(number.c_str(), &end);
+    const char       *end    = nullptr;
+    parse_decimal(number.c_str(), &end);
     return end != number.c_str() && *end == '\0' && number.find_first_of(" \t") == std::string::npos;
 }
 
