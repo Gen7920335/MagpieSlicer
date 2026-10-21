@@ -5,7 +5,7 @@
     // threshold angle) still apply; the parameters below are the CuraEngine settings Orca has no setting for.
     "id": "cura_support",
     "name": "Cura support", "name_ko": "Cura 서포트",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "api": { "major": 1, "min_minor": 0 },
     "binary": "cura_support",
     // Picked for an object's support while enable holds; mixed_support (priority 2) and resin_support (1) go first.

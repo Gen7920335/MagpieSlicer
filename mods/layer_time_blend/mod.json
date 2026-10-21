@@ -6,7 +6,7 @@
     // marked, written and re-estimated by the core.
     "id": "layer_time_blend",
     "name": "Layer time blending", "name_ko": "레이어 타임 블렌딩",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "api": { "major": 1, "min_minor": 0 },
     "binary": "layer_time_blend",
     // Picked while blending is on. The settings are what the core's export reads: where it waits, the tower, the park
