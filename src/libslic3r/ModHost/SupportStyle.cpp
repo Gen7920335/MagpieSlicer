@@ -106,6 +106,14 @@ SupportStyle support_style(const PrintObject &object, const std::vector<int> &to
         out.size = sizeof(out);
         void *state = nullptr;
         call(*entry, [&]() { return t.open(entry->user, &ctx, &out, &state); });
+        // What the mod warned about (host->warn): an error stops the slice, a warning reaches the object (review
+        // 2026-10-22: they were dropped).
+        for (const auto &[level, text] : ctx.warnings) {
+            if (level >= MP_LOG_ERROR)
+                throw SlicingError(entry->mod->id() + ": " + mod_text(entry->mod->id(), text));
+            if (level == MP_LOG_WARNING)
+                const_cast<PrintObject &>(object).add_module_warning(PrintStateBase::WarningLevel::NON_CRITICAL, mod_text(entry->mod->id(), text));
+        }
         if (state == nullptr)
             continue;
         // Closes the state however this leaves.

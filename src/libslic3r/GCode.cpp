@@ -11049,7 +11049,10 @@ std::string GCode::finish_tagged_temperature()
         return {};
     const unsigned int      filament_id = m_writer.filament()->id();
     const ConfigOptionInts &normal      = this->on_first_layer() ? m_config.nozzle_temperature_initial_layer : m_config.nozzle_temperature;
-    return normal.values.empty() ? std::string() : m_writer.set_temperature(normal.get_at(filament_id), false, filament_id);
+    // The filament settings are indexed by the filament's config index, which differs from its id once a per-layer
+    // nozzle grouping expanded the filament arrays (get_filament_config_index, as every other temperature read).
+    const size_t config_index = this->get_filament_config_index(int(filament_id));
+    return normal.values.empty() ? std::string() : m_writer.set_temperature(normal.get_at(config_index), false, filament_id);
 }
 
 void GCode::place_aux_tower(const mp_tower_request_v1 &request, mp_tower_place_v1 &out) const

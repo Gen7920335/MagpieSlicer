@@ -6,6 +6,8 @@
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/format.hpp"
 
+#include <boost/log/trivial.hpp>
+
 #include "../../../mods/sdk/include/magpie_slot_layer_bands.h"
 
 #include <algorithm>
@@ -41,6 +43,15 @@ bool plan_of(const NativeEntry &entry, const DynamicPrintConfig &print_config, c
         error = entry.mod->id() + ": " + (!status_message.empty() ? mod_text(entry.mod->id(), status_message) :
                                           !guard_message.empty()  ? guard_message : std::string("the layer bands failed"));
         return false;
+    }
+    // What the mod warned about (host->warn): an error stops the plan, the rest goes to the log (review 2026-10-22:
+    // they were dropped).
+    for (const auto &[level, text] : ctx.warnings) {
+        if (level >= MP_LOG_ERROR) {
+            error = entry.mod->id() + ": " + mod_text(entry.mod->id(), text);
+            return false;
+        }
+        BOOST_LOG_TRIVIAL(warning) << entry.mod->id() << ": " << mod_text(entry.mod->id(), text);
     }
     return true;
 }

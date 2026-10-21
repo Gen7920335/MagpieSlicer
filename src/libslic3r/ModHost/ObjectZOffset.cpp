@@ -7,6 +7,8 @@
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/format.hpp"
 
+#include <boost/log/trivial.hpp>
+
 #include "../../../mods/sdk/include/magpie_slot_object_z_offset.h"
 
 #include <cmath>
@@ -39,6 +41,15 @@ bool lift_of(const NativeEntry &entry, const DynamicPrintConfig &print_config, c
         error = entry.mod->id() + ": " + (!status_message.empty() ? mod_text(entry.mod->id(), status_message) :
                                           !guard_message.empty()  ? guard_message : std::string("the object lift failed"));
         return false;
+    }
+    // What the mod warned about (host->warn): an error stops the lift, the rest goes to the log (this call has no
+    // print to attach a warning to; review 2026-10-22: they were dropped).
+    for (const auto &[level, text] : ctx.warnings) {
+        if (level >= MP_LOG_ERROR) {
+            error = entry.mod->id() + ": " + mod_text(entry.mod->id(), text);
+            return false;
+        }
+        BOOST_LOG_TRIVIAL(warning) << entry.mod->id() << ": " << mod_text(entry.mod->id(), text);
     }
     if (!std::isfinite(lift)) {
         error = entry.mod->id() + ": the object lift is not a number";

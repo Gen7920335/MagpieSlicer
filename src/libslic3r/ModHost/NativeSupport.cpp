@@ -254,6 +254,15 @@ void generate(PrintObject &object, const NativeEntry &entry, const std::vector<P
 {
     if (object.layer_count() == 0)
         return;
+    // The generator gets one layer thickness (mp_support_input_v1 layer_thickness) and counts its Z distances in
+    // layers of it: with variable layer heights (adaptive or painted) the gaps to the object would come out wrong,
+    // so the slice stops and says so instead (review 2026-10-22). The first layer has its own height by design.
+    for (size_t idx = 1; idx < object.layers().size(); ++idx)
+        if (std::abs(object.layers()[idx]->height - object.config().layer_height.value) > EPSILON)
+            throw Slic3r::SlicingError(entry.mod->id() + ": the support generator needs one layer height, and object \"" +
+                                       object.model_object()->name + "\" has variable layer heights (layer " + std::to_string(idx + 1) +
+                                       " is " + std::to_string(object.layers()[idx]->height) + " mm, the layer height " +
+                                       std::to_string(object.config().layer_height.value) + " mm).");
     const auto *table = static_cast<const mp_support_areas_v1 *>(entry.table);
     Areas       areas = call(object, entry, table->compute, mask);
 

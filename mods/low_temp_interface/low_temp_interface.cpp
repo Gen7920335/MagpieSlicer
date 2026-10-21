@@ -531,8 +531,14 @@ void start(State &s, mp_ctx *ctx, int target_temperature)
             s.w->set_temperature(s.w->w, interface_temperature, 1, filament_id,
                                  normal_temperature > interface_temperature ? MP_TEMP_WAIT_COOLING : 0);
         }
-        if (auxiliary_fan_started)
-            s.w->aux_fan(s.w->w, int(config_at(ctx, "additional_cooling_fan_speed", filament_id).value_or(0.)));
+        if (auxiliary_fan_started) {
+            // Back to the filament's auxiliary fan speed, which the core keeps at 0 on the first
+            // close_fan_the_first_x_layers layers (review 2026-10-22: the resume turned it on there).
+            int resume = int(config_at(ctx, "additional_cooling_fan_speed", filament_id).value_or(0.));
+            if (s.w->layer_index(s.w->w) < int(config_at(ctx, "close_fan_the_first_x_layers", filament_id).value_or(0.)))
+                resume = 0;
+            s.w->aux_fan(s.w->w, resume);
+        }
 
         if (has_configured_wiper(s.p) && s.w->position_known(s.w->w) != 0) {
             text(s, "; low-temperature support interface nozzle brushing\n");

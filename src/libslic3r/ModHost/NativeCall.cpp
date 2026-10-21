@@ -23,7 +23,11 @@ int32_t magpie_native_guarded_call(magpie_guarded_fn fn, void *context, uint32_t
 #ifdef _WIN32
     __try {
         return fn(context);
-    } __except (*code_out = static_cast<uint32_t>(GetExceptionCode()), EXCEPTION_EXECUTE_HANDLER) {
+    } __except (*code_out = static_cast<uint32_t>(GetExceptionCode()),
+                // A C++ exception (MSVC raises it as this SEH code) is the core's own, thrown by the call's host side
+                // (a cancel, a slicing error): it keeps unwinding to its handler instead of counting as a crash that
+                // disables the mod (review 2026-10-22).
+                *code_out == 0xE06D7363u ? EXCEPTION_CONTINUE_SEARCH : EXCEPTION_EXECUTE_HANDLER) {
         return INT32_MIN;
     }
 #else

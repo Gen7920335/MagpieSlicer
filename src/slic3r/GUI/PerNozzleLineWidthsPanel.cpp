@@ -25,10 +25,11 @@ const char *const row_keys[] = {
     "skin_infill_line_width", "skeleton_infill_line_width",
 };
 
-// A width in mm for a cell, without trailing zeros (0.1575 -> "0.158").
+// A width in mm for a cell, with every digit the value has (0.1575 -> "0.1575"; every cell is written back from its
+// text when one changes, so three decimals rounded the others; review 2026-10-22) and without trailing zeros.
 wxString format_mm(double mm)
 {
-    wxString text = wxString::Format("%.3f", mm);
+    wxString text = wxString::FromCDouble(mm, 6);
     while (text.EndsWith("0"))
         text.RemoveLast();
     if (text.EndsWith("."))
