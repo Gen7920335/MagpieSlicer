@@ -1,5 +1,5 @@
 {
     "args": ["in_place.3mf"],
-    "contains": ["; mods: layer_time_blend 1.2.0", ";MAGPIE_WAIT_SITE", "G4 P"],
+    "contains": ["; mods: layer_time_blend 1.3.0", ";MAGPIE_WAIT_SITE", "G4 P"],
     "not_contains": [";MAGPIE_WAIT_TOWER_BEGIN"]
 }
