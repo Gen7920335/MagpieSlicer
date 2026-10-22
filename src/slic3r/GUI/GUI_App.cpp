@@ -237,6 +237,7 @@
 #include "HintNotification.hpp"
 
 #include "slic3r/Utils/NetworkAgentFactory.hpp"
+#include "slic3r/Utils/ModNetService.hpp"
 #include "slic3r/Utils/BBLNetworkPlugin.hpp"
 #include "slic3r/Utils/bambu_networking.hpp"
 
@@ -2952,7 +2953,8 @@ int GUI_App::OnExit()
         BOOST_LOG_TRIVIAL(error) << "Failed to clean up encrypt bbl network log file";
     }
 
-    // MAGPIE: native mods shut down while their libraries are still attached.
+    // MAGPIE: native mods shut down while their libraries are still attached, after core.net stopped their threads.
+    ModNet::shutdown();
     ModHost::shutdown_native_mods();
     return wxApp::OnExit();
 }
@@ -3669,6 +3671,8 @@ bool GUI_App::on_init_inner()
             if (scrn) { scrn->SetText(_L("Loading printer & filament profiles") + dots, 30); wxYield(); }
             // MAGPIE: the mods in <data_dir>/mods join slicing from here on. Loaded before the presets, so
             // line 1 settings in them migrate to the mods' parameters (LegacySettings needs the mods).
+            // core.net first: printer mods import it in magpie_mod_init.
+            ModNet::register_service();
             ModHost::load_active_mods_from_data_dir();
             init_params->preset_substitutions = preset_bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSystemSilent);
         }
