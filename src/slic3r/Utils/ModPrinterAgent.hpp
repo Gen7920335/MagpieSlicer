@@ -36,8 +36,8 @@ public:
     ModPrinterAgent(std::string agent_id, std::string display_name, const ModHost::NativeEntry *entry);
     ~ModPrinterAgent() override;
 
-    // Registers every loaded printer.agent implementation. Called by NetworkAgentFactory::register_all_agents, after
-    // the mods loaded; a second call registers nothing new.
+    // Registers every loaded printer.agent implementation. Called by NetworkAgentFactory::register_all_agents and again
+    // by the GUI once the mods loaded (the network starts before them); a second call registers nothing new.
     static void register_all();
     // The registry id of an implementation: "mod:<mod id>", or "mod:<mod id>.<impl>".
     static std::string agent_id_for(const ModHost::NativeEntry &entry);

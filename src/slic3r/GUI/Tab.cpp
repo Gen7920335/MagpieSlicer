@@ -5332,6 +5332,8 @@ void TabPrinter::build_fff()
                                                    [](const PrinterAgentInfo& info) { return boost::starts_with(info.id, "mod:"); });
             if (any_mod_agent) {
                 Line line{ "", "" };
+                // A widget line without options: full width, or OG_CustomCtrl reads the first of no options.
+                line.full_width = 1;
                 line.widget = [this](wxWindow* parent) -> wxSizer* {
                     auto* button = new Button(parent, _L("Printer connection..."));
                     button->SetStyle(ButtonStyle::Regular, ButtonType::Parameter);

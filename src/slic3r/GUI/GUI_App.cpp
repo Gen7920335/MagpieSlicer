@@ -238,6 +238,7 @@
 
 #include "slic3r/Utils/NetworkAgentFactory.hpp"
 #include "slic3r/Utils/ModNetService.hpp"
+#include "slic3r/Utils/ModPrinterAgent.hpp"
 #include "ModPrinterDialog.hpp"
 #include "slic3r/Utils/BBLNetworkPlugin.hpp"
 #include "slic3r/Utils/bambu_networking.hpp"
@@ -3704,6 +3705,9 @@ bool GUI_App::on_init_inner()
             // core.net first: printer mods import it in magpie_mod_init.
             ModNet::register_service();
             ModHost::load_active_mods_from_data_dir();
+            // The printer agents registered in on_init_network(), before the mods loaded; add the mods' ones now, so
+            // the Printer Agent list and the presets that name one see them.
+            ModPrinterAgent::register_all();
             init_params->preset_substitutions = preset_bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSystemSilent);
         }
         catch (const std::exception& ex) {
