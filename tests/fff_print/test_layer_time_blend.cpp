@@ -878,3 +878,13 @@ TEST_CASE("A temperature set for another tool leaves the printing nozzle's model
     const std::string own_tool = "G90\nM83\nG1 X0 Y0 F600\nM109 S200\n" + layer_change + "M104 S150\nG1 X100 F600\nM109 S200\nG1 X0 F600\n";
     CHECK(estimated_time(own_tool, false) > estimated_time(none, false) + 4.);
 }
+
+TEST_CASE("The reheat of a tool after its idle cool-down counts as no time", "[LayerTimeBlend][GCodeProcessor]")
+{
+    // Gen, 2026-10-22: as in Orca, a tool-change wait counts as none; only a printing tool's own temperature change
+    // (the low temperature interface) is a wait. Cool tool 1 while tool 0 prints, then wait for tool 1 at 220 degC.
+    const std::string layer_change = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Layer_Change) + "\n";
+    const std::string idle_reheat = "G90\nM83\nG1 X0 Y0 F600\nM109 S220\n" + layer_change + "M104 T1 S70\nG1 X100 F600\nM104 T1 S220\nM109 T1 S220\nG1 X0 F600\n";
+    const std::string none        = "G90\nM83\nG1 X0 Y0 F600\nM109 S220\n" + layer_change + "G1 X100 F600\nG1 X0 F600\n";
+    CHECK_THAT(estimated_time(idle_reheat, false), WithinAbs(estimated_time(none, false), 0.5));
+}

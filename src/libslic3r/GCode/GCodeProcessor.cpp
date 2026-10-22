@@ -6523,7 +6523,10 @@ void GCodeProcessor::process_M104(const GCodeReader::GCodeLine& line)
     if (line.has_value('S', new_temp)) {
         m_extruder_temps[filament_id] = new_temp;
         // Orca: the temperature model behind the M109 wait estimate follows every target.
-        nozzle_temperature_at(temperature_model_filament(line, filament_id), estimated_now()).target = new_temp;
+        const size_t       id = temperature_model_filament(line, filament_id);
+        NozzleTemperature &t  = nozzle_temperature_at(id, estimated_now());
+        t.target              = new_temp;
+        t.set_while_idle      = filament_id < 0 || id != size_t(filament_id);
     }
 }
 
@@ -6628,8 +6631,13 @@ void GCodeProcessor::process_M109(const GCodeReader::GCodeLine& line)
         const double       now  = estimated_now();
         NozzleTemperature &t    = nozzle_temperature_at(id, now);
         const bool         wait = both_ways || target > t.current;
-        t.target                = target;
-        if (! estimate) {
+        // A tool-change wait (for a tool other than the printing one, or for a target set while the tool was idle:
+        // the reheat after its cool-down) counts as none, as in Orca; a printing tool's own temperature change (the
+        // low temperature interface's drop and its return) counts (Gen, 2026-10-22).
+        const bool tool_change_wait = filament_id < 0 || id != size_t(filament_id) || t.set_while_idle;
+        t.target                    = target;
+        t.set_while_idle            = false;
+        if (! estimate || tool_change_wait) {
             if (wait)
                 t.current = target;
         } else if (wait && std::abs(target - t.current) > 0.f) {

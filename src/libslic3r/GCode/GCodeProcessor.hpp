@@ -1343,6 +1343,9 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
             float  target  = 0.f; // degC
             float  current = 0.f; // degC, at time_s
             double time_s  = 0.;
+            // The last target was set while another tool printed (a cool-down or preheat of an idle tool, around a
+            // tool change): the wait for it counts as none, as in Orca (Gen, 2026-10-22).
+            bool   set_while_idle = false;
         };
         bool                           m_estimate_temperature_waits { false };
         // Orca: set while a BBL VM109 (a virtual wait the firmware does not perform) goes through process_M109.
