@@ -1655,6 +1655,7 @@ void Tab::reload_config()
         m_active_page->reload_config();
     if (m_mod_params_panel && m_config)
         m_mod_params_panel->load_from_config(*m_config);
+    load_support_menu();
     if (m_type == Preset::TYPE_PRINT && m_config != nullptr)
         m_last_sparse_infill_rotate_template_value = m_config->opt_string("sparse_infill_rotate_template");
 }
@@ -3116,7 +3117,7 @@ void TabPrint::build()
     page = add_options_page(L("Support"), "custom-gcode_support"); // ORCA: icon only visible on placeholders
         optgroup = page->new_optgroup(L("Support"), L"param_support");
         optgroup->append_single_option_line("enable_support", "support_settings_support");
-        optgroup->append_single_option_line("support_type", "support_settings_support#type");
+        add_support_type_line(optgroup);
         optgroup->append_single_option_line("support_style", "support_settings_support#style");
         optgroup->append_single_option_line("support_threshold_angle", "support_settings_support#threshold-angle");
         optgroup->append_single_option_line("support_threshold_overlap", "support_settings_support#threshold-overlap");
@@ -3392,6 +3393,8 @@ void TabPrint::update_description_lines()
 void TabPrint::toggle_options()
 {
     if (!m_active_page) return;
+    // MAGPIE: the support type dropdown follows enable_support / raft_layers like Orca's field.
+    load_support_menu();
     // BBS: whether the preset is Bambu Lab printer
     if (m_preset_bundle) {
         bool is_BBL_printer = wxGetApp().preset_bundle->is_bbl_vendor();
@@ -7737,6 +7740,73 @@ void Tab::add_mods_page(const std::string& scope)
         return sizer;
     };
     optgroup->append_line(line);
+}
+
+void Tab::add_support_type_line(ConfigOptionsGroupShp optgroup)
+{
+    std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
+    std::vector<ModHost::SupportMenuItem> items = ModHost::support_menu(mods.get());
+    // Orca's own field where no loaded mod adds an entry, and on the per-object tabs: the mods' parameters are the
+    // preset's (mod_settings), which an object's settings do not hold.
+    const bool mod_entries = std::any_of(items.begin(), items.end(), [](const ModHost::SupportMenuItem &i) { return !i.mod_id.empty(); });
+    if (!mod_entries || dynamic_cast<TabPrintModel*>(this) != nullptr) {
+        optgroup->append_single_option_line("support_type", "support_settings_support#type");
+        return;
+    }
+    m_support_menu_items = std::move(items);
+    const ConfigOptionDef *def = print_config_def.get("support_type");
+    Line line{ def->label, def->tooltip };
+    line.label_path = "support_settings_support#type";
+    line.widget = [this](wxWindow* parent) -> wxSizer* {
+        const std::string language = into_u8(wxGetApp().current_language_code_safe());
+        m_support_menu = new ::ComboBox(parent, wxID_ANY, wxEmptyString, wxDefaultPosition,
+                                        wxSize(Field::def_width_wider() * wxGetApp().em_unit(), -1), 0, nullptr, wxCB_READONLY);
+        for (const ModHost::SupportMenuItem &item : m_support_menu_items)
+            m_support_menu->Append(item.mod_id.empty() ? _(item.label) :
+                                   wxString::FromUTF8(ModHost::localized_text(item.labels, language, item.label)));
+        m_support_menu->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent& e) { on_support_menu_selected(e.GetSelection()); });
+        // The page can be cleared and rebuilt; forget a destroyed dropdown so reload_config() never reaches it.
+        m_support_menu->Bind(wxEVT_DESTROY, [this](wxWindowDestroyEvent& event) {
+            if (event.GetEventObject() == m_support_menu)
+                m_support_menu = nullptr;
+            event.Skip();
+        });
+        load_support_menu();
+        auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+        sizer->Add(m_support_menu, 0, wxALIGN_CENTER_VERTICAL);
+        return sizer;
+    };
+    optgroup->append_line(line);
+}
+
+void Tab::load_support_menu()
+{
+    if (m_support_menu == nullptr || m_config == nullptr || m_support_menu_items.empty())
+        return;
+    std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
+    m_support_menu->SetSelection(int(ModHost::support_menu_selection(mods.get(), m_support_menu_items, *m_config)));
+    // As Orca's support_type field: editable while the print has support (ConfigManipulation::toggle_print_fff_options).
+    m_support_menu->Enable(m_config->opt_bool("enable_support") || m_config->opt_int("raft_layers") > 0);
+}
+
+void Tab::on_support_menu_selected(int selection)
+{
+    if (m_config == nullptr || selection < 0 || size_t(selection) >= m_support_menu_items.size())
+        return;
+    std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
+    const std::vector<std::string> changed = ModHost::apply_support_menu_item(mods.get(), m_support_menu_items, size_t(selection), *m_config);
+    if (changed.empty())
+        return;
+    update_dirty();
+    // As the fields and the Mods page report their edits (the plater, the simple mode's support style, other tabs).
+    for (const std::string& key : changed) {
+        if (key == "support_type")
+            on_value_change(key, int(m_config->opt_enum<SupportType>("support_type")));
+        else
+            on_value_change(key, m_config->opt_string(key));
+    }
+    reload_config();
+    update();
 }
 
 //BBS: GUI refactor: unselect current item

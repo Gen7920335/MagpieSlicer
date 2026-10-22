@@ -5,6 +5,7 @@
 #include "I18N.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/ModHost/SupportMenu.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -89,7 +90,7 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
     grid->AddGrowableCol(1);
     for (const ModHost::Mod &mod : m_mods->mods())
         for (const ModHost::ModParam &p : mod.params) {
-            if (tab_scope(p) != m_scope)
+            if (tab_scope(p) != m_scope || ModHost::is_support_menu_param(mod, p.name))
                 continue;
             const std::string key   = mod.id + "." + p.name;
             const std::string language = into_u8(wxGetApp().current_language_code_safe());
@@ -101,10 +102,22 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
             grid->Add(text, 0, wxALIGN_CENTER_VERTICAL);
 
             wxWindow *control = nullptr;
-            if (!p.options.empty()) {
+            std::vector<std::string> choice_values;
+            if (!p.options.empty() || !p.choices_from.empty()) {
                 wxArrayString choices;
-                for (const ModHost::ModParamOption &o : p.options)
+                for (const ModHost::ModParamOption &o : p.options) {
                     choices.Add(wxString::FromUTF8(ModHost::localized_text(o.labels, language, o.label)));
+                    choice_values.push_back(o.value);
+                }
+                // MAGPIE: the implementations the loaded mods register for the slot, shown by their mods' names, so a
+                // generator a mod installed later adds is listed (Mixed support's normal support generator).
+                if (!p.choices_from.empty())
+                    for (const std::string &value : ModHost::support_choices(m_mods.get(), p.choices_from)) {
+                        const ModHost::Mod *provider = ModHost::slot_provider(m_mods.get(), p.choices_from, value);
+                        choices.Add(provider == nullptr ? _L("Orca") :
+                                    wxString::FromUTF8(ModHost::localized_text(provider->names, language, provider->name.empty() ? provider->id : provider->name)));
+                        choice_values.push_back(value);
+                    }
                 auto *choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(100), -1), choices);
                 choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { commit(); });
                 control = choice;
@@ -121,7 +134,7 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
             grid->Add(control, 0, wxALIGN_CENTER_VERTICAL);
             auto *unit = new wxStaticText(this, wxID_ANY, wxString::FromUTF8(p.unit));
             grid->Add(unit, 0, wxALIGN_CENTER_VERTICAL);
-            m_rows.push_back({key, &p, control, {text, control, unit}});
+            m_rows.push_back({key, &p, control, {text, control, unit}, std::move(choice_values)});
         }
     auto *outer = new wxBoxSizer(wxVERTICAL);
     outer->Add(grid, 0, wxEXPAND | wxALL, FromDIP(4));
@@ -134,7 +147,7 @@ bool ModParamsPanel::has_params(const ModHost::ModSet *mods, const std::string &
         return false;
     for (const ModHost::Mod &mod : mods->mods())
         for (const ModHost::ModParam &p : mod.params)
-            if (tab_scope(p) == scope)
+            if (tab_scope(p) == scope && !ModHost::is_support_menu_param(mod, p.name))
                 return true;
     return false;
 }
@@ -157,8 +170,8 @@ void ModParamsPanel::load_from_config(const DynamicPrintConfig &config)
         if (auto *choice = dynamic_cast<wxChoice *>(row.control)) {
             auto        it    = stored.find(row.key);
             std::string value = it != stored.end() && it->is_string() ? it->get<std::string>() : std::get<std::string>(row.param->default_value);
-            const auto &opts  = row.param->options;
-            auto        found = std::find_if(opts.begin(), opts.end(), [&value](const ModHost::ModParamOption &o) { return o.value == value; });
+            const auto &opts  = row.choice_values;
+            auto        found = std::find(opts.begin(), opts.end(), value);
             // A stored value outside the options (slicing reports it) shows as no selection.
             choice->SetSelection(found == opts.end() ? wxNOT_FOUND : int(found - opts.begin()));
         } else if (auto *cb = dynamic_cast<wxCheckBox *>(row.control)) {
@@ -184,7 +197,7 @@ void ModParamsPanel::commit()
             const int sel = choice->GetSelection();
             if (sel == wxNOT_FOUND)
                 continue; // nothing chosen: keep what is stored
-            value = p.options[size_t(sel)].value;
+            value = row.choice_values[size_t(sel)];
         } else if (auto *cb = dynamic_cast<wxCheckBox *>(row.control)) {
             value = cb->GetValue();
         } else if (auto *tc = dynamic_cast<wxTextCtrl *>(row.control)) {
@@ -226,7 +239,7 @@ std::optional<ModHost::ExprValue> ModParamsPanel::row_value(const Row &row) cons
 {
     if (auto *choice = dynamic_cast<wxChoice *>(row.control)) {
         const int sel = choice->GetSelection();
-        return sel == wxNOT_FOUND ? std::nullopt : std::optional<ModHost::ExprValue>(row.param->options[size_t(sel)].value);
+        return sel == wxNOT_FOUND ? std::nullopt : std::optional<ModHost::ExprValue>(row.choice_values[size_t(sel)]);
     }
     if (auto *cb = dynamic_cast<wxCheckBox *>(row.control))
         return ModHost::ExprValue(cb->GetValue());

@@ -92,6 +92,19 @@ core reads for the picked implementation. No setting of the print config carries
 | walls | `wall.plan` | region | `multi_nozzle` (native mod `multi_nozzle_walls`); setting `detail_wall_speed` | splits a region's walls between two nozzles; a C slot ([native-mods.md](native-mods.md)) |
 | layer time | `gcode.time_plan` | print | `blend` (native mod `layer_time_blend`); settings `wait_at`, `tower_size`, `park_x`, `park_y`, `heat_rate`, `cool_rate` | the wait sites of a print (estimated interval since the previous site, park trip, tower block times, chain breaks, guessed intervals) in, per-site waits, park choice, tower cut and warnings out |
 
+A support declaration may add entries to the support type dropdown (`ModHost/SupportMenu.*`):
+`"menu": {"param": "enable", "entries": [{"label", "label_<lang>", "support_type"}]}`. The dropdown lists
+Orca's support types, then every menu entry of the loaded mods in load order, so a support mod installed
+later shows up without a new build. Picking an entry writes `support_type` (the Orca value the entry
+stands on, which the generator may read: Cura reads auto or manual) and switches the declaring mod's
+bool parameter `param` on and every other menu mod's off; picking an Orca type switches them all off.
+The dropdown shows the entry of the mod the slot choice picks, so a file or command line that turns two
+on still shows, and slices, the one with the highest priority, and `Print::validate` warns. The menu's
+parameter is not shown on the Mods page. A string parameter with `"choices_from": "<slot>"` is a dropdown
+of `orca` and the implementations the loaded mods register for that slot (Mixed support's normal support
+generator lists every `support.areas` generator); the mod checks the value it reads. Line 1's support
+types (`normal_cura(auto)`, `mixed(auto)`, ...) load as the matching entries (`LegacySettings`).
+
 `support.style` (`extras`, native mod `support_extras`), `layer.bands` and `gcode.events` ask every
 loaded implementation instead; each answers whether it applies. A parameter a `"when"` or a setting
 reads must name the steps it changes (`"invalidates"`), since no setting written from it invalidates

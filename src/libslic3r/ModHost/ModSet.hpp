@@ -79,6 +79,10 @@ struct ModParam
     // A string parameter with options is a dropdown and takes only these values; a stored value
     // outside them is an error, like a value of the wrong type.
     std::vector<ModParamOption> options;
+    // A string parameter whose dropdown lists the implementations the loaded mods register for this slot
+    // ("choices_from": "support.areas"), after "orca" for Orca's own; the mod checks the value it reads. Lets a mod
+    // offer generators that later mods add (support_choices, SupportMenu.hpp).
+    std::string                 choices_from;
     // The settings tab shows the row only while this holds. Display only: rules read the value
     // whether or not the row is shown, and a hidden row keeps its stored value.
     std::optional<Expr>      visible;
@@ -102,6 +106,14 @@ struct ModRule
     std::string           mod_id;
 };
 
+// One entry a support implementation adds to the support type dropdown ("menu" of a support slot declaration).
+struct ModSupportMenuEntry
+{
+    std::string                        label;
+    std::map<std::string, std::string> labels;       // "label_<language>"
+    std::string                        support_type; // the Orca support_type value it stands on ("normal(auto)", ...)
+};
+
 // A slot implementation a native mod registers ("slots" in the manifest).
 struct ModSlotDecl
 {
@@ -115,6 +127,11 @@ struct ModSlotDecl
     int                         priority = 0;
     // Values the core reads for the picked implementation, by the names its slot gives ("settings").
     std::map<std::string, Expr> settings;
+    // Support slots: the entries the implementation adds to the support type dropdown and the mod's bool parameter
+    // that picking one switches on ("menu": {"param", "entries"}; SupportMenu.hpp). Without a menu it is picked
+    // through its parameters only.
+    std::string                      menu_param;
+    std::vector<ModSupportMenuEntry> menu;
 };
 
 // "legacy_keys": a setting of an earlier build (Magpie line 1, or this line before the feature was a mod) that loads

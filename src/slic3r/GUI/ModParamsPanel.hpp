@@ -48,6 +48,9 @@ private:
         const ModHost::ModParam *param;
         wxWindow               *control;
         std::vector<wxWindow *> windows; // label, control and unit, shown and hidden together
+        // A dropdown's values, in its order: the parameter's options, or the implementations its choices_from
+        // slot lists (ModHost::support_choices).
+        std::vector<std::string> choice_values;
     };
 
     void commit();

@@ -51,6 +51,7 @@
 #include "Widgets/TextInput.hpp"
 #include "Widgets/CheckBox.hpp" // ORCA
 #include "Widgets/ComboBox.hpp"
+#include "libslic3r/ModHost/SupportMenu.hpp"
 
 class TabCtrl;
 class ModeSwitchButton;
@@ -510,6 +511,13 @@ protected:
 	// when no mod has one. `scope` is "process", "printer" or "filament".
 	void			add_mods_page(const std::string& scope);
 	ModParamsPanel* m_mod_params_panel { nullptr };
+	// MAGPIE: the support type dropdown with the loaded support mods' entries (ModHost/SupportMenu.hpp), in place
+	// of the support_type field when a mod adds one; null otherwise.
+	void			add_support_type_line(ConfigOptionsGroupShp optgroup);
+	void			load_support_menu();
+	void			on_support_menu_selected(int selection);
+	::ComboBox*		m_support_menu { nullptr };
+	std::vector<ModHost::SupportMenuItem> m_support_menu_items;
 
 	void			create_line_with_widget(ConfigOptionsGroup* optgroup, const std::string& opt_key, const std::string& path, widget_t widget);
 	wxSizer*		compatible_widget_create(wxWindow* parent, PresetDependencies &deps);

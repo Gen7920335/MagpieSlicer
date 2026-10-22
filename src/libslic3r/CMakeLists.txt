@@ -145,6 +145,8 @@ set(lisbslic3r_sources
     ModHost/ObjectZOffset.hpp
     ModHost/ParamGraph.cpp
     ModHost/SlotChoice.cpp
+    ModHost/SupportMenu.cpp
+    ModHost/SupportMenu.hpp
     ModHost/SlotChoice.hpp
     ModHost/SlotRegistry.cpp
     ModHost/SlotRegistry.hpp

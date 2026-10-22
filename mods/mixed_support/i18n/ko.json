@@ -1,6 +1,6 @@
 {
     "Mixed support does not support belt printers yet.": "혼합 서포트는 아직 벨트 프린터를 지원하지 않습니다.",
-    "Mixed support uses Cura support for its normal support, but the Cura support mod is not installed.": "혼합 서포트는 일반 서포트에 Cura 서포트를 쓰는데, Cura 서포트 모드가 설치되어 있지 않습니다.",
+    "Mixed support's normal support generator is not installed.": "혼합 서포트의 일반 서포트 생성기가 설치되어 있지 않습니다.",
     "Mixed support: analyzing overhangs": "혼합 서포트: 오버행 분석 중",
     "Mixed support: classifying normal and tree regions": "혼합 서포트: 일반·트리 영역 나누는 중",
     "Some areas painted for normal support are not reachable from the build plate and were assigned to tree support.": "일반 서포트로 칠한 영역 중 일부는 베드에서 닿을 수 없어 트리 서포트로 지정했습니다.",

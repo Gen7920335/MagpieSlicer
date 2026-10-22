@@ -12,7 +12,9 @@
     "api": { "major": 1, "min_minor": 0 },
     "binary": "resin_support",
     // Priority 1 puts it above cura_support's: with both mods on, resin support is used.
-    "slots": [ { "slot": "support.contacts", "version": 1, "impl": "resin", "when": "resin_support.enable", "priority": 1 },
+    "slots": [ { "slot": "support.contacts", "version": 1, "impl": "resin", "when": "resin_support.enable", "priority": 1,
+                 "menu": { "param": "enable", "entries": [
+                     { "label": "Resin (auto)", "label_ko": "레진 (자동)", "support_type": "normal(auto)" } ] } },
                { "slot": "object.z_offset", "version": 1, "impl": "resin" } ],
     "thread_safe": true,
     // enable, tree_type and the two elevations decide the object's lift (object.z_offset), which moves

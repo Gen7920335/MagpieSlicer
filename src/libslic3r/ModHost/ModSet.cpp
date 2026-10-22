@@ -466,6 +466,11 @@ Mod ModSet::parse_mod(const std::string &json_text)
                 if (!param_allows(p, p.default_value))
                     throw ModError(where + ": \"default\" is not one of the options");
             }
+            if (std::string from = optional_string(def, "choices_from"); !from.empty()) {
+                if (p.type != "string" || !p.options.empty())
+                    throw ModError(where + ": \"choices_from\" is only for a string parameter without \"options\"");
+                p.choices_from = from;
+            }
             if (std::string visible = optional_string(def, "visible"); !visible.empty())
                 p.visible = parse_expr(visible, where + " visible");
             mod.params.push_back(std::move(p));
@@ -542,6 +547,29 @@ Mod ModSet::parse_mod(const std::string &json_text)
                     if (!text.is_string())
                         mod_fail(mod.id, "slot " + decl.slot + ": setting \"" + name + "\" must be an expression");
                     decl.settings.emplace(name, parse_expr(text.get<std::string>(), where_slot + " setting " + name));
+                }
+            }
+            if (auto m = s.find("menu"); m != s.end()) {
+                // {"param": "<bool parameter of this mod>", "entries": [{"label", "label_<lang>", "support_type"}]}
+                if (!boost::starts_with(decl.slot, "support."))
+                    mod_fail(mod.id, "slot " + decl.slot + ": a \"menu\" is for the support slots");
+                if (!m->is_object() || !m->contains("entries") || !(*m)["entries"].is_array() || (*m)["entries"].empty())
+                    mod_fail(mod.id, "slot " + decl.slot + ": \"menu\" must be {\"param\", \"entries\": [...]}");
+                decl.menu_param = required_string(*m, "param", mod.id);
+                const auto param = std::find_if(mod.params.begin(), mod.params.end(), [&decl](const ModParam &p) { return p.name == decl.menu_param; });
+                if (param == mod.params.end() || param->type != "bool" || param->scope != "process")
+                    mod_fail(mod.id, "slot " + decl.slot + ": \"menu\" param \"" + decl.menu_param + "\" must be a process-scope bool parameter of the mod");
+                const auto &types = ConfigOptionEnum<SupportType>::get_enum_values();
+                for (const json &e : (*m)["entries"]) {
+                    ModSupportMenuEntry entry;
+                    if (!e.is_object())
+                        mod_fail(mod.id, "slot " + decl.slot + ": each menu entry must be {\"label\", \"support_type\"}");
+                    entry.label        = required_string(e, "label", mod.id);
+                    entry.labels       = translations(e, "label_");
+                    entry.support_type = required_string(e, "support_type", mod.id);
+                    if (types.find(entry.support_type) == types.end())
+                        mod_fail(mod.id, "slot " + decl.slot + ": menu entry \"" + entry.label + "\": unknown support_type \"" + entry.support_type + "\"");
+                    decl.menu.push_back(std::move(entry));
                 }
             }
             mod.slots.push_back(std::move(decl));

@@ -96,11 +96,13 @@ void compose(mp_ctx *ctx, const mp_compose_host_v1 &h, mp_compose *c)
         throw std::runtime_error("Mixed support does not support belt printers yet.");
 
     const Settings s = read_settings(ctx);
-    // Any other value is Orca's normal support.
-    if (s.normal_generator == "cura" && !h.has_generator(c, "cura"))
-        throw std::runtime_error("Mixed support uses Cura support for its normal support, but the Cura support mod is not installed.");
+    // "orca" (or empty) is Orca's normal support; any other value names a support.areas implementation a loaded mod
+    // registers (the parameter's dropdown lists them, choices_from), so a generator installed later can be picked.
+    const std::string normal_name = s.normal_generator.empty() ? std::string("orca") : s.normal_generator;
+    if (normal_name != "orca" && !h.has_generator(c, normal_name.c_str()))
+        throw std::runtime_error("Mixed support's normal support generator is not installed.");
     const uint32_t layer_count = h.layer_count;
-    const char    *normal_generator = s.normal_generator == "cura" ? "cura" : "orca";
+    const char    *normal_generator = normal_name.c_str();
     auto cancel_check = [ctx]() {
         if (magpie::host()->cancelled(ctx))
             throw Cancelled{};

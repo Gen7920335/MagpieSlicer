@@ -9,7 +9,12 @@
     "api": { "major": 1, "min_minor": 0 },
     "binary": "cura_support",
     // Picked for an object's support while enable holds; mixed_support (priority 2) and resin_support (1) go first.
-    "slots": [ { "slot": "support.areas", "version": 1, "impl": "cura", "when": "cura_support.enable" } ],
+    // The menu adds its entries to the support type dropdown; picking one turns enable on and the other support
+    // mods off (ModHost/SupportMenu.hpp).
+    "slots": [ { "slot": "support.areas", "version": 1, "impl": "cura", "when": "cura_support.enable",
+                 "menu": { "param": "enable", "entries": [
+                     { "label": "Cura (auto)", "label_ko": "Cura (자동)", "support_type": "normal(auto)" },
+                     { "label": "Cura (manual)", "label_ko": "Cura (수동)", "support_type": "normal(manual)" } ] } } ],
     "thread_safe": true,
     "params": {
         "enable":                       { "invalidates": ["posSupportMaterial"], "type": "bool",  "default": false, "label": "Use Cura support", "label_ko": "Cura 서포트 사용" },
