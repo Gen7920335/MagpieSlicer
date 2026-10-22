@@ -1234,7 +1234,9 @@ TEST_CASE("The temperature drop tower prints at the same place on a later plate"
         Print print;
         Model model;
         std::vector<TriangleMesh> meshes;
-        meshes.push_back(mesh(TestMesh::overhang, Vec3d(100. + plate_origin.x(), 100. + plate_origin.y(), 0.), Vec3d(1., 1., 1.)));
+        TriangleMesh overhang = mesh(TestMesh::overhang);
+        overhang.translate(float(100. + plate_origin.x()), float(100. + plate_origin.y()), 0.f);
+        meshes.push_back(std::move(overhang));
         init_print(std::move(meshes), print, model, config, nullptr, /*arrange=*/false);
         print.set_plate_origin(plate_origin);
         const std::string  output = Slic3r::Test::gcode(print);
