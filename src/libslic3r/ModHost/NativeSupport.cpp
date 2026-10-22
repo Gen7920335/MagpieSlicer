@@ -257,7 +257,9 @@ void generate(PrintObject &object, const NativeEntry &entry, const std::vector<P
     // The generator gets one layer thickness (mp_support_input_v1 layer_thickness) and counts its Z distances in
     // layers of it: with variable layer heights (adaptive or painted) the gaps to the object would come out wrong,
     // so the slice stops and says so instead (review 2026-10-22). The first layer has its own height by design.
-    for (size_t idx = 1; idx < object.layers().size(); ++idx)
+    // The last five layers are left out: precise_z_height spreads the object's remainder over them
+    // (adjust_layer_series_to_align_object_height), and no support reaches an object's top.
+    for (size_t idx = 1; idx + 5 < object.layers().size(); ++idx)
         if (std::abs(object.layers()[idx]->height - object.config().layer_height.value) > EPSILON)
             throw Slic3r::SlicingError(entry.mod->id() + ": the support generator needs one layer height, and object \"" +
                                        object.model_object()->name + "\" has variable layer heights (layer " + std::to_string(idx + 1) +
@@ -298,6 +300,9 @@ void generate(PrintObject &object, const NativeEntry &entry, const std::vector<P
         layer.bottom_z = object_layer.bottom_z();
         layer.height   = print_z - layer.bottom_z;
         layer.polygons = std::move(polygons);
+        // A lowered roof touches the model: the top of its interface stack, whatever lies above it in XY
+        // (generate_support_toolpaths numbers the sublayers from it).
+        layer.fractional_top = type == SupporLayerType::TopInterface;
         return &layer;
     };
     for (size_t i = 0; i < areas.fractional_body.size(); ++i) {

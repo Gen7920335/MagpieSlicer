@@ -1792,11 +1792,14 @@ void generate_support_toolpaths(
                                        [](const SupportLayer *layer, coordf_t z) { return layer->print_z < z; });
             return it != support_layers.end() && std::abs((*it)->print_z - print_z) < EPSILON ? size_t(it - support_layers.begin()) : size_t(-1);
         };
+        // A roof lowered under the model (a native generator's fractional roof, SupportGeneratorLayer::fractional_top)
+        // is the top of its stack although a whole roof of the same object layer lies above it in the layer order.
+        std::vector<char> fractional_top(support_layers.size(), 0);
         for (const SupportGeneratorLayersPtr *layers : { &top_contacts, &bottom_contacts, &interface_layers })
             for (const SupportGeneratorLayer *layer : *layers)
                 if (const size_t idx = layer_at(layer->print_z); idx != size_t(-1)) {
                     if (layer->layer_type == SupporLayerType::TopContact)          top_contact[idx] = 1;
-                    else if (layer->layer_type == SupporLayerType::TopInterface)   { top_interface[idx] = 1; top_source[idx] = layer->half_layer_source_id; }
+                    else if (layer->layer_type == SupporLayerType::TopInterface)   { top_interface[idx] = 1; top_source[idx] = layer->half_layer_source_id; fractional_top[idx] |= layer->fractional_top; }
                     else if (layer->layer_type == SupporLayerType::BottomContact)  bottom_contact[idx] = 1;
                     else if (layer->layer_type == SupporLayerType::BottomInterface) { bottom_interface[idx] = 1; bottom_source[idx] = layer->half_layer_source_id; }
                 }
@@ -1812,7 +1815,7 @@ void generate_support_toolpaths(
         for (int idx = int(support_layers.size()) - 1, n = 0; idx >= 0; --idx) {
             const bool same_source = top_interface[idx] && idx + 1 < int(support_layers.size()) && top_interface[idx + 1] &&
                                      top_source[idx] != size_t(-1) && top_source[idx] == top_source[idx + 1];
-            n = top_contact[idx] ? 1 : top_interface[idx] && n > 0 ? (same_source ? n : n + 1) :
+            n = top_contact[idx] || fractional_top[idx] ? 1 : top_interface[idx] && n > 0 ? (same_source ? n : n + 1) :
                 top_interface[idx] && !any_top_contact ? 1 : 0;
             top_interface_numbers[idx] = top_interface[idx] ? n : 0;
         }

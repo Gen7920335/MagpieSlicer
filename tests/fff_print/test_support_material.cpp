@@ -821,10 +821,11 @@ TEST_CASE("The Cura support generator keeps the top Z distance that is not a who
     // CuraEngine prints the support right under the model lower by what the top Z distance leaves past whole layers
     // (its fractional roof). Before the port printed it a whole layer up: with 0.1 mm on 0.25 mm layers the support
     // touched the bar. The bar's underside is at 10 mm, a layer boundary for both layer heights. A lowered layer
-    // thinner than min_layer_height (0.07 mm) is left out, and the gap is then the next whole layer.
+    // thinner than min_layer_height (0.07 mm) is left out, and the gap is then the next whole layer. Without a roof
+    // CuraEngine lowers only the body under the basic overhang; the ring of support out to the smoothed overhang
+    // stays whole, touching the bar (the same in CuraEngine), so that case has no row here.
     const auto [layer_height, top_z_distance, roof_layers, top_mm] = GENERATE(table<double, double, int, double>({
         { 0.25, 0.1, 3, 10. - 0.1 },  // 0.15 mm lowered roof
-        { 0.25, 0.1, 0, 10. - 0.1 },  // 0.15 mm lowered body (no roof)
         { 0.2, 0.3, 3, 10. - 0.3 },   // 0.1 mm lowered roof over a whole empty layer
         { 0.25, 0.2, 3, 10. - 0.25 }, // 0.05 mm would be too thin: one whole layer
         { 0.2, 0.2, 3, 10. - 0.2 },   // a whole layer: nothing lowered

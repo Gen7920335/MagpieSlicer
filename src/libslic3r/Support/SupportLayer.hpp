@@ -112,6 +112,9 @@ public:
     // to the number of generated physical slices.
     size_t half_layer_source_id { size_t(-1) };
     size_t half_layer_interface_id { size_t(-1) };
+    // MAGPIE: a roof a native generator lowered under the model (NativeSupport fractional layers): the top of its
+    // interface stack, numbered as such even though a whole roof of the same object layer sits above it.
+    bool   fractional_top { false };
     double half_layer_parent_print_z_mm { 0. };
     double half_layer_parent_height_mm { 0. };
 

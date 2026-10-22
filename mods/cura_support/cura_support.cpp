@@ -801,6 +801,13 @@ struct Output
 
 void fill_output(std::unique_ptr<Output> data, mp_support_output_v1 *out, coord_t fractional_drop = 0)
 {
+    // A host older than the fractional fields gets the whole layers (the gap rounds down to whole layers): the
+    // lowered parts go back into their layers before the rings are built from them (review 2026-10-22).
+    const bool host_takes_fractional = out->size >= offsetof(mp_support_output_v1, fractional_drop) + sizeof(out->fractional_drop) && fractional_drop > 0;
+    if (!host_takes_fractional)
+        for (int k = 3; k < 5; ++k)
+            for (size_t i = 0; i < data->layers[k].size() && i < data->layers[k - 3].size(); ++i)
+                append(data->layers[k - 3][i], data->layers[k][i]);
     for (int k = 0; k < 5; ++k) {
         const size_t n = data->layers[k].size();
         data->rings[k].resize(n);
@@ -815,15 +822,10 @@ void fill_output(std::unique_ptr<Output> data, mp_support_output_v1 *out, coord_
     out->body        = data->lists[0].data();
     out->roof        = data->lists[1].empty() ? nullptr : data->lists[1].data();
     out->bottom      = data->lists[2].empty() ? nullptr : data->lists[2].data();
-    // A host older than the fractional fields gets the whole layers (the gap rounds down to whole layers).
-    if (out->size >= offsetof(mp_support_output_v1, fractional_drop) + sizeof(out->fractional_drop) && fractional_drop > 0) {
+    if (host_takes_fractional) {
         out->fractional_body = data->lists[3].data();
         out->fractional_roof = data->lists[4].data();
         out->fractional_drop = fractional_drop;
-    } else {
-        for (int k = 3; k < 5; ++k)
-            for (size_t i = 0; i < data->layers[k].size() && i < data->layers[k - 3].size(); ++i)
-                append(data->layers[k - 3][i], data->layers[k][i]);
     }
     out->mod_data    = data.release();
 }
