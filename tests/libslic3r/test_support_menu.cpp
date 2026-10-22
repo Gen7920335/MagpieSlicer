@@ -6,6 +6,8 @@
 #include "libslic3r/ModHost/SupportMenu.hpp"
 #include "libslic3r/PrintConfig.hpp"
 
+#include <boost/filesystem/path.hpp>
+
 #include <nlohmann/json.hpp>
 
 #include <string>
@@ -169,7 +171,7 @@ TEST_CASE("A parameter's choices can be the implementations the loaded mods regi
 TEST_CASE("The official support mods add Cura, Mixed and Resin to the support dropdown", "[ModHost][SupportMenu][OfficialMods]")
 {
     std::vector<std::string> errors;
-    const ModSet             mods = ModSet::load_dir(MAGPIE_OFFICIAL_MODS_DIR, errors);
+    const ModSet             mods = ModSet::load_dir(boost::filesystem::path(MAGPIE_OFFICIAL_MODS_DIR), errors);
     CAPTURE(errors);
     REQUIRE(errors.empty());
     std::vector<std::string> labels;
