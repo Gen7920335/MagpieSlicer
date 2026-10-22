@@ -290,6 +290,8 @@ std::unique_ptr<const WallPlanner> open_wall_planner(const DynamicPrintConfig &f
         if (level >= MP_LOG_ERROR)
             throw SlicingError(entry->mod->id() + ": " + mod_text(entry->mod->id(), text));
         BOOST_LOG_TRIVIAL(warning) << "Mod " << entry->mod->id() << ": " << text;
+        if (level == MP_LOG_WARNING)
+            planner->m_warnings.push_back(mod_text(entry->mod->id(), text));
     }
     return planner;
 }

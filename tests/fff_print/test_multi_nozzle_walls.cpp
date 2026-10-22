@@ -679,15 +679,48 @@ TEST_CASE("Automatic detail walls do not substitute a different material", "[Mul
     config.option<ConfigOptionBools>("filament_soluble")->values[2] = true;
     // A soluble filament is not a stand-in for the wall filament even with the same type name.
     CHECK(detail_filament(config, 0) == 1);
+    // Chosen, it prints the detail walls all the same (Gen, 2026-10-22: the designated tool always wins; validate warns).
+    CHECK(detail_filament(config, 3) == 3);
 }
 
-TEST_CASE("Detail routing applies colour priority then the chosen toolhead", "[MultiNozzleWalls]")
+TEST_CASE("A chosen crisp corner toolhead of another material prints with a warning", "[MultiNozzleWalls]")
+{
+    // Gen, 2026-10-22: the designated tool always prints the detail walls; a material that differs from the walls'
+    // is a warning, not a refusal. Filament 1 (PLA, 0.4 mm) prints the walls, filament 2 (PETG, 0.15 mm) is chosen.
+    OfficialMods       mods;
+    DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, "classic", true);
+    config.set_key_value("filament_type", new ConfigOptionStrings{ "PLA", "PETG" });
+    auto warnings_with = [&config](int detail_toolhead) {
+        DynamicPrintConfig c = config;
+        multi_nozzle_params(c, { { "detail_toolhead", detail_toolhead } });
+        Print print;
+        Model model;
+        init_print({ cube(20) }, print, model, c);
+        std::vector<StringObjectException> warnings;
+        CHECK(print.validate(&warnings).string.empty());
+        size_t found = 0;
+        for (const StringObjectException &w : warnings)
+            found += w.string.find("crisp corner toolhead") != std::string::npos;
+        return std::make_pair(found, tools_for_role(slice({ cube(20) }, c), "perimeter"));
+    };
+    const auto [chosen_warnings, chosen_tools] = warnings_with(2);
+    CHECK(chosen_warnings == 1);
+    CHECK(chosen_tools == std::set<int>{ 0, 1 });
+    // Automatic: no PLA on the small nozzle, so no detail tool and no warning.
+    const auto [auto_warnings, auto_tools] = warnings_with(0);
+    CHECK(auto_warnings == 0);
+    CHECK(auto_tools == std::set<int>{ 0 });
+}
+
+TEST_CASE("Detail routing applies the chosen toolhead, then colour priority", "[MultiNozzleWalls]")
 {
     // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
     OfficialMods mods;
-    SECTION("a smaller nozzle with the wall colour wins over the chosen toolhead") {
+    SECTION("the chosen toolhead wins over a smaller nozzle with the wall colour") {
+        // Gen, 2026-10-22: always the designated tool. Before, filament 4 (wall colour, 0.15 mm) won over the chosen 2.
         const DynamicPrintConfig config = four_nozzle_print_config({ "#0000FF", "#FF0000", "#00FF00", "#0000FF" }, { "PLA", "PLA", "PLA", "PLA" });
-        CHECK(detail_filament(config, 2) == 4);
+        CHECK(detail_filament(config, 2) == 2);
+        CHECK(detail_filament(config, 0) == 4);
     }
     SECTION("the chosen toolhead is used when no smaller nozzle has the wall colour") {
         const DynamicPrintConfig config = four_nozzle_print_config({ "#0000FF", "#FF0000", "#00FF00", "#FFFF00" }, { "PLA", "PLA", "PLA", "PLA" });

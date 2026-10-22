@@ -2135,6 +2135,22 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         warn(Slic3r::format(_u8L("Mods %1% and %2% both set \"%3%\"; the value \"%4%\" of %2% is used. Turn off the mods you do not want."),
                             c.other_mods, c.used_mod, c.setting, c.used_value), c.setting);
 
+    // MAGPIE: what a region's wall planner warns about when it opens (the crisp corner toolhead chosen with a filament
+    // of another material, multi_nozzle_walls), once per object and text. A planner that fails to open stops the
+    // slice in the line width check below.
+    for (const PrintObject *object : m_objects) {
+        std::set<std::string> said;
+        for (const PrintRegion &region : object->all_regions()) {
+            try {
+                if (const auto planner = ModHost::open_wall_planner(this->full_print_config(), m_config, &object->config(), region.config(), this->is_BBL_printer()))
+                    for (const std::string &text : planner->warnings())
+                        if (said.insert(text).second)
+                            warn(text, "", object);
+            } catch (const SlicingError &) {
+            }
+        }
+    }
+
     // MAGPIE: the jobs the active mods pick one implementation of (support per object, walls per region, the layer time
     // plan per print; SlotChoice.hpp). A choice that cannot be made stops the slice; several mods turned on for one job
     // are reported, naming the one used, as when their rules set one setting differently.

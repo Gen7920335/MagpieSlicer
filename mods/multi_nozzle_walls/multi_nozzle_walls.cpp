@@ -181,8 +181,11 @@ WallTool detail_tool_for(const State &s, unsigned int base_filament)
     // The chosen toolhead prints the detail walls with the filament mapped to it, whatever colour the others hold
     // (Gen, 2026-10-22: the designated tool always wins); before, a smaller nozzle in the walls' colour came first,
     // and with every filament in one colour a chosen T4 printed with T1.
+    // Whatever its size and material (Gen, 2026-10-22: always the designated tool; a material that differs from the
+    // walls' is warned about, material_differs). One no larger than the walls' nozzle prints no detail walls: the
+    // planner finds no island that needs them (island_needs_detail).
     const int manual = s.detail_toolhead;
-    if (manual > 0 && smaller(unsigned(manual)))
+    if (manual > 0 && std::size_t(manual) <= s.nozzle_mm.size() && unsigned(manual) != base.toolhead)
         if (const WallTool t = tool_for_toolhead(s, unsigned(manual), base.filament))
             return t;
     if (const WallTool same = best(true))
@@ -192,6 +195,21 @@ WallTool detail_tool_for(const State &s, unsigned int base_filament)
         if (const WallTool any = best(false))
             return any;
     return base;
+}
+
+// Whether the chosen crisp corner toolhead prints the detail walls with a filament of another material (type or
+// solubility) than the walls' own: printed as chosen, warned about.
+bool material_differs(const State &s)
+{
+    if (!s.enable || s.detail_toolhead <= 0)
+        return false;
+    const WallTool base   = tool_for_filament(s, s.base_filament);
+    const WallTool detail = detail_tool_for(s, s.base_filament);
+    if (!base || !detail || detail.toolhead != unsigned(s.detail_toolhead) || detail.filament == base.filament)
+        return false;
+    const std::size_t a = base.filament - 1, b = detail.filament - 1;
+    return (!s.type.empty() && State::at(s.type, a) != State::at(s.type, b)) ||
+           (!s.soluble.empty() && State::at(s.soluble, a) != State::at(s.soluble, b));
 }
 
 // The toolhead that prints every wall of layer layer_id (0-based), or 0. Where ranges overlap the last one wins.
@@ -359,6 +377,9 @@ mp_status open(void *, mp_ctx *ctx, const mp_wall_printer *printer, void **state
         s->interlock            = magpie::param_i64(ctx, "interlock").value_or(0) != 0;
         s->detail_toolhead      = int(magpie::param_i64(ctx, "detail_toolhead").value_or(0));
         s->override_regions     = read_string(ctx, "override_regions", "");
+        if (material_differs(*s))
+            magpie::host()->warn(ctx, MP_LOG_WARNING,
+                                 "The crisp corner toolhead you chose holds a filament of another material than the walls; their outer walls print with it as chosen.");
         *state = s.release();
     });
 }

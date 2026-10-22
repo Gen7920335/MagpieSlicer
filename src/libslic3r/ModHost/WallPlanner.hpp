@@ -77,6 +77,8 @@ public:
     // The filaments it may print the region's walls with, and whether the region's own inner wall filament prints
     // inner walls even where the region asks for few walls.
     std::vector<WallToolUse> tool_uses(bool &base_inner_walls) const;
+    // What the mod warned about when it opened for the region, translated (Print::validate shows them).
+    const std::vector<std::string> &warnings() const { return m_warnings; }
 
 private:
     friend std::unique_ptr<const WallPlanner> open_wall_planner(const DynamicPrintConfig &, const PrintConfig &,
@@ -87,6 +89,7 @@ private:
     std::shared_ptr<const NativeModSet>  m_mods; // keeps the library and its table loaded
     const NativeEntry                   *m_entry { nullptr };
     void                                *m_state { nullptr };
+    std::vector<std::string>             m_warnings;
 };
 
 // The id of the loaded mod whose planner the region uses, or "" for none (wall_planner_name, SlotChoice.hpp).
