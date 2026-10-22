@@ -183,6 +183,16 @@ static std::vector<std::pair<TreeSupportSettings, std::vector<size_t>>> group_me
 
         bool found_existing_group = false;
         TreeSupportSettings next_settings{ TreeSupportMeshGroupSettings{ print_object }, print_object.slicing_parameters() };
+        // MAGPIE: the layers under the first object layer (raft_layers) are filled only for a raft. An object a mod
+        // lifts off the bed without a raft (object.z_offset) would get a first tree layer reaching from the bed to the
+        // lifted first object layer, as thick as the lift plus that layer: past about 1.96 mm on 0.42 mm lines
+        // Flow::spacing() went negative, below that the slice stopped on its layers. Measured on the line-1 move
+        // build with Resin and Mixed both on (the lift then applied to Mixed's trees): the error starts between a
+        // 1.70 and 1.72 mm lift on 0.42 mm support lines and between 2.50 and 2.60 mm on 0.6 mm lines, as
+        // width / (1 - pi/4) predicts, and goes away when Mixed sends no demand to its tree channel.
+        if (print_object.slicing_parameters().object_z_offset > 0. && next_settings.raft_layers.empty())
+            throw Slic3r::SlicingError(_u8L("Tree support cannot support an object lifted off the build plate "
+                                            "without a raft. Use the support generator that lifted it."));
         //FIXME for now only a single object per group is enabled.
 #if 0
         for (size_t idx = 0; idx < grouped_meshes.size(); ++ idx)

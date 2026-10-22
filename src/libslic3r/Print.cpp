@@ -4053,6 +4053,8 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
         std::vector<const PrintInstance*>::const_iterator 	print_object_instance_sequential_active;
         std::vector<std::pair<coordf_t, std::vector<GCode::LayerToPrint>>> layers_to_print = GCode::collect_layers_to_print(*this);
         std::vector<unsigned int> printExtruders;
+        // MAGPIE: by object, each printed copy's first-layer first tool, for the skirt layout (_make_skirt).
+        std::vector<std::pair<ObjectInstanceID, unsigned int>> sequential_first_tools;
         // Per-object first-layer mixed-slot resolutions for the by-object remap below
         // (BBS reads them from m_sequential_print_data->object_tool_ordering_map).
         std::map<ObjectID, std::map<unsigned int, unsigned int>> seq_mixed_resolution;
@@ -4167,6 +4169,12 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                     if (!tool_ordering.layer_tools().empty())
                         seq_mixed_resolution[print_object->id()] = tool_ordering.layer_tools().front().mixed_filament_resolution;
                 }
+                // MAGPIE: the tool that starts this copy's first layer prints its skirt (GCode::generate_skirt).
+                if (!tool_ordering.layer_tools().empty() && !tool_ordering.layer_tools().front().extruders.empty()) {
+                    const PrintInstance *instance = *print_object_instance_sequential_active;
+                    sequential_first_tools.push_back({ ObjectInstanceID{ print_object->id(), size_t(instance - print_object->instances().data()) },
+                                                       tool_ordering.layer_tools().front().extruders.front() });
+                }
                 // Only sorted orderings have run resolve_mixed_filaments, so only they know which
                 // mixed slots actually print.
                 append(used_mixed_filaments, tool_ordering.used_mixed_filaments());
@@ -4277,7 +4285,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             // Generate skirt/brim groups after brim so per-object and draft-shield footprints
             // include brims when grouping and offsetting skirt loops.
             assert(m_skirt.empty());
-            _make_skirt();
+            _make_skirt(sequential_first_tools);
             if (m_config.print_sequence == PrintSequence::ByObject &&
                 m_config.skirt_type == stPerObject &&
                 this->has_shared_per_object_skirt()) {
@@ -4408,7 +4416,7 @@ std::string Print::export_gcode(const std::string& path_template, GCodeProcessor
     return path.c_str();
 }
 
-void Print::_make_skirt()
+void Print::_make_skirt(const std::vector<std::pair<ObjectInstanceID, unsigned int>> &sequential_first_tools)
 {
     // Belt printer: skirt is not compatible.
     if (m_config.belt_printer.value)
@@ -4493,7 +4501,10 @@ void Print::_make_skirt()
     // The skirt will touch the occupied outline if skirt_distance is zero.
     // Generate loops inward to outward; callers reverse them before G-code export.
     // Loop while we have less skirts than required or any extruder hasn't reached the min length if any.
-    auto append_skirt_loops_for_hull = [&](const Polygon& hull, ExtrusionEntityCollection& dst, bool collect_skirt_hull) {
+    auto append_skirt_loops_for_hull = [&](const Polygon& hull, ExtrusionEntityCollection& dst, bool collect_skirt_hull, const Flow &loop_flow) {
+        // MAGPIE: the loops are laid out in the width of the nozzle printing them (loop_flow).
+        const float  spacing    = loop_flow.spacing();
+        const double mm3_per_mm = loop_flow.mm3_per_mm();
         float distance = float(scale_(m_config.skirt_distance.value - spacing/2.));
         std::vector<coordf_t> extruded_length(extruders.size(), 0.);
         for (size_t i = m_config.skirt_loops, extruder_idx = 0; i > 0; -- i) {
@@ -4516,14 +4527,14 @@ void Print::_make_skirt()
                 ExtrusionPath(
                     erSkirt,
                     (float)mm3_per_mm,         // this will be overridden at G-code export time
-                    flow.width(),
+                    loop_flow.width(),
 				    (float)initial_layer_print_height  // this will be overridden at G-code export time
                 )));
             eloop.paths.back().polyline = Polyline3(loop.split_at_first_point());
             dst.append(eloop);
             if (m_config.min_skirt_length.value > 0) {
                 // The skirt length is limited. Sum the total amount of filament length extruded, in mm.
-                extruded_length[extruder_idx] += unscale<double>(loop.length()) * extruders_e_per_mm[extruder_idx];
+                extruded_length[extruder_idx] += unscale<double>(loop.length()) * extruders_e_per_mm[extruder_idx] * mm3_per_mm / flow.mm3_per_mm();
                 if (extruded_length[extruder_idx] < m_config.min_skirt_length.value) {
                     // Not extruded enough yet with the current extruder. Add another loop.
                     if (i == 1)
@@ -4765,8 +4776,18 @@ void Print::_make_skirt()
             // Orca: Group points already include the occupied outline, so don't
             // add skirt distance here again.
             ExtrusionEntityCollection group_skirt;
-            if (generate_skirt)
-                append_skirt_loops_for_hull(Geometry::convex_hull(group.points), group_skirt, true);
+            if (generate_skirt) {
+                // MAGPIE: by object, on a printer whose nozzles differ in size, the group's skirt is printed by the
+                // first-layer first tool of its earliest printed copy, so its loops are spaced for that nozzle.
+                Flow group_flow = flow;
+                if (m_line_width_context.reference_mm > 0.)
+                    for (const auto &[instance, tool] : sequential_first_tools)
+                        if (std::find(group.instances.begin(), group.instances.end(), instance) != group.instances.end()) {
+                            group_flow = skirt_flow_on_nozzle(*this, printing_nozzle_index(m_config, int(tool) + 1, this->is_BBL_printer()));
+                            break;
+                        }
+                append_skirt_loops_for_hull(Geometry::convex_hull(group.points), group_skirt, true, group_flow);
+            }
             std::vector<SkirtBrimGroup::Brim> group_brims = make_brims_for_skirt_brim_group(group.instances);
             if (!group_skirt.empty()) {
                 group_skirt.reverse();

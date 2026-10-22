@@ -31,10 +31,12 @@ inline int number_of_support_interface_bottom_layers(const PrintObjectConfig& ob
 
 struct SupportParameters {
     SupportParameters() = delete;
-    SupportParameters(const PrintObject& object)
+    // MAGPIE: object_config_override stands for the object's settings, for a generator that sees another support
+    // type than the object's (PrintObjectSupportMaterial run by a support mod on a tree type).
+    SupportParameters(const PrintObject& object, const PrintObjectConfig *object_config_override = nullptr)
     {
         const PrintConfig& print_config = object.print()->config();
-        const PrintObjectConfig& object_config = object.config();
+        const PrintObjectConfig& object_config = object_config_override != nullptr ? *object_config_override : object.config();
         const SlicingParameters& slicing_params = object.slicing_parameters();
         // MAGPIE: support printed in layer bands (layer.bands slot, H/2).
         this->banded_support = object.layer_bands().support;

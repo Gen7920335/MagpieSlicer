@@ -258,6 +258,36 @@ TEST_CASE("Mixed support prints normal and tree support in one object", "[MixedS
     CHECK_FALSE(gcode(print).empty());
 }
 
+TEST_CASE("Mixed support on a tree support type detects overhangs like the matching normal type", "[MixedSupport]")
+{
+    // The tree type's auto/manual choice decides whether overhangs are detected automatically; normal(auto)
+    // was the only type the detection took as automatic, so Mixed on tree(auto) found no demand at all.
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    const bool automatic = GENERATE(true, false);
+    CAPTURE(automatic);
+    auto support_layers = [](SupportType type) {
+        // Coverage threshold 0 %: every island goes to normal support.
+        DynamicPrintConfig config = mixed_config({{"mixed_support.coverage_threshold", 0.}});
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(type));
+        config.set_key_value("support_on_build_plate_only", new ConfigOptionBool(false));
+        config.set_key_value("layer_height", new ConfigOptionFloat(0.4));
+        Print print;
+        init_and_process_print({pillar_under_ceiling()}, print, config);
+        const auto layers = print.objects().front()->support_layers();
+        return size_t(std::count_if(layers.begin(), layers.end(), [](const SupportLayer *l) { return ! l->support_fills.entities.empty(); }));
+    };
+    const size_t normal = support_layers(automatic ? stNormalAuto : stNormal);
+    const size_t tree   = support_layers(automatic ? stTreeAuto : stTree);
+    UNSCOPED_INFO(normal << " support layers on the normal type, " << tree << " on the tree type");
+    CHECK(tree == normal);
+    // The ceiling at Z = 20 mm needs support with automatic detection, and none without enforcers.
+    if (automatic)
+        CHECK(tree > 0);
+    else
+        CHECK(tree == 0);
+}
+
 TEST_CASE("Mixed support prints one raft", "[MixedSupport]")
 {
     BundledMods mods;

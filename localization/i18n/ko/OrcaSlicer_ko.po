@@ -571,6 +571,10 @@ msgid "The support channels contain an extrusion that cannot be merged."
 msgstr "서포트 채널에 병합할 수 없는 압출이 있습니다."
 
 # AI Translated
+msgid "Tree support cannot support an object lifted off the build plate without a raft. Use the support generator that lifted it."
+msgstr "트리 서포트는 래프트 없이 빌드 플레이트에서 띄운 객체를 받칠 수 없습니다. 객체를 띄운 서포트 생성기를 사용하세요."
+
+# AI Translated
 #, boost-format
 msgid "The mods %1% and %2% both change how the support of object \"%3%\" is printed. Turn one of them off."
 msgstr "모드 %1%과(와) %2%이(가) 모두 오브젝트 \"%3%\"의 서포트 출력 방식을 바꿉니다. 하나를 끄세요."
