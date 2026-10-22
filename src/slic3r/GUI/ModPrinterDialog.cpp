@@ -1,8 +1,13 @@
 #include "ModPrinterDialog.hpp"
 
+#include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "I18N.hpp"
 #include "MsgDialog.hpp"
+#include "Widgets/Button.hpp"
+#include "Widgets/ComboBox.hpp"
+#include "Widgets/DialogButtons.hpp"
+#include "Widgets/TextInput.hpp"
 #include "Widgets/WebView.hpp"
 #include "format.hpp"
 
@@ -18,8 +23,6 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/filesystem.hpp>
 
-#include <wx/button.h>
-#include <wx/choice.h>
 #include <wx/filename.h>
 #include <wx/filepicker.h>
 #include <wx/msgdlg.h>
@@ -80,27 +83,27 @@ struct ModPrinterDialog::FieldCtrl
 
     std::string value() const
     {
-        if (auto *text = dynamic_cast<wxTextCtrl *>(ctrl))
-            return text->GetValue().ToUTF8().data();
-        if (auto *choice = dynamic_cast<wxChoice *>(ctrl)) {
+        if (auto *text = dynamic_cast<::TextInput *>(ctrl))
+            return into_u8(text->GetTextCtrl()->GetValue());
+        if (auto *choice = dynamic_cast<::ComboBox *>(ctrl)) {
             const int i = choice->GetSelection();
             return i >= 0 && size_t(i) < def->options.size() ? def->options[size_t(i)].value : std::string();
         }
         if (auto *picker = dynamic_cast<wxDirPickerCtrl *>(ctrl))
-            return picker->GetPath().ToUTF8().data();
+            return into_u8(picker->GetPath());
         return {};
     }
 
     void set_value(const std::string &v)
     {
-        if (auto *text = dynamic_cast<wxTextCtrl *>(ctrl))
-            text->SetValue(wxString::FromUTF8(v.c_str()));
-        else if (auto *choice = dynamic_cast<wxChoice *>(ctrl)) {
+        if (auto *text = dynamic_cast<::TextInput *>(ctrl))
+            text->GetTextCtrl()->SetValue(from_u8(v));
+        else if (auto *choice = dynamic_cast<::ComboBox *>(ctrl)) {
             for (size_t i = 0; i < def->options.size(); ++i)
                 if (def->options[i].value == v)
                     choice->SetSelection(int(i));
         } else if (auto *picker = dynamic_cast<wxDirPickerCtrl *>(ctrl))
-            picker->SetPath(wxString::FromUTF8(v.c_str()));
+            picker->SetPath(from_u8(v));
     }
 
     void show(bool on)
@@ -121,6 +124,7 @@ ModPrinterDialog::ModPrinterDialog(wxWindow *parent, std::shared_ptr<ModPrinterA
     , m_host(ModPrinterAgent::store_host(host))
     , m_language(ModHost::message_language())
 {
+    SetBackgroundColour(*wxWHITE); // the light palette colour; UpdateDlgDarkUI maps it in dark mode
     build();
     load_fields();
     update_visibility();
@@ -145,7 +149,8 @@ void ModPrinterDialog::build()
     // The network list and the agreement.
     if (!mod.network.empty()) {
         m_consent_text = new wxStaticText(this, wxID_ANY, wxEmptyString);
-        m_consent_button = new wxButton(this, wxID_ANY, wxEmptyString);
+        m_consent_button = new ::Button(this, wxEmptyString);
+        m_consent_button->SetStyle(ButtonStyle::Regular, ButtonType::Window);
         m_consent_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
             const Mod &mod = m_agent->mod();
             if (ModNet::has_consent(mod))
@@ -177,17 +182,20 @@ void ModPrinterDialog::build()
         field->def   = &f;
         field->label = new wxStaticText(this, wxID_ANY, mod_label(f.labels, f.label.empty() ? f.id : f.label));
         if (f.kind == "choice") {
-            auto *choice = new wxChoice(this, wxID_ANY);
+            auto *choice = new ::ComboBox(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(320), -1), 0, nullptr, wxCB_READONLY);
             for (const ModHost::ModParamOption &o : f.options)
                 choice->Append(mod_label(o.labels, o.label));
-            choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { update_visibility(); });
+            choice->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent &e) {
+                update_visibility();
+                e.Skip();
+            });
             field->ctrl = choice;
         } else if (f.kind == "path") {
             field->ctrl = new wxDirPickerCtrl(this, wxID_ANY);
         } else {
-            auto *text = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(320), -1),
-                                        f.kind == "secret" ? wxTE_PASSWORD : 0);
-            text->Bind(wxEVT_TEXT, [this](wxCommandEvent &e) {
+            auto *text = new ::TextInput(this, wxEmptyString, "", "", wxDefaultPosition, wxSize(FromDIP(320), -1),
+                                         f.kind == "secret" ? wxTE_PASSWORD : 0);
+            text->GetTextCtrl()->Bind(wxEVT_TEXT, [this](wxCommandEvent &e) {
                 update_visibility();
                 e.Skip();
             });
@@ -216,7 +224,8 @@ void ModPrinterDialog::build()
             rows.push_back(a.row);
             row_sizers[a.row] = new wxBoxSizer(wxHORIZONTAL);
         }
-        auto *button = new wxButton(this, wxID_ANY, mod_label(a.labels, a.label.empty() ? a.id : a.label));
+        auto *button = new ::Button(this, mod_label(a.labels, a.label.empty() ? a.id : a.label));
+        button->SetStyle(ButtonStyle::Regular, ButtonType::Window);
         button->Bind(wxEVT_BUTTON, [this, i](wxCommandEvent &) { on_action(i); });
         row_sizers[a.row]->Add(button, 0, wxRIGHT, FromDIP(4));
         m_actions.emplace_back(i, button);
@@ -228,7 +237,8 @@ void ModPrinterDialog::build()
     if (!printer.panels.empty()) {
         auto *row = new wxBoxSizer(wxHORIZONTAL);
         for (size_t i = 0; i < printer.panels.size(); ++i) {
-            auto *button = new wxButton(this, wxID_ANY, mod_label(printer.panels[i].labels, printer.panels[i].label.empty() ? printer.panels[i].id : printer.panels[i].label));
+            auto *button = new ::Button(this, mod_label(printer.panels[i].labels, printer.panels[i].label.empty() ? printer.panels[i].id : printer.panels[i].label));
+            button->SetStyle(ButtonStyle::Regular, ButtonType::Window);
             button->Bind(wxEVT_BUTTON, [this, i](wxCommandEvent &) { open_web_panel(i); });
             row->Add(button, 0, wxRIGHT, FromDIP(4));
             m_panels.emplace_back(i, button);
@@ -237,19 +247,16 @@ void ModPrinterDialog::build()
     }
 
     // Save keeps the form; the connection uses it the next time the printer connects.
-    auto *buttons = new wxBoxSizer(wxHORIZONTAL);
-    auto *save    = new wxButton(this, wxID_OK, _L("Save"));
-    auto *close   = new wxButton(this, wxID_CANCEL, _L("Close"));
-    save->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+    auto *buttons = new DialogButtons(this, {"Save", "Close"}, _L("Save"));
+    buttons->GetButtonFromIndex(0)->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
         if (save_fields())
             EndModal(wxID_OK);
     });
-    buttons->AddStretchSpacer();
-    buttons->Add(save, 0, wxRIGHT, FromDIP(4));
-    buttons->Add(close);
-    m_main_sizer->Add(buttons, 0, wxEXPAND | wxALL, gap);
+    buttons->GetButtonFromIndex(1)->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_CANCEL); });
+    m_main_sizer->Add(buttons, 0, wxEXPAND);
 
     SetSizerAndFit(m_main_sizer);
+    CenterOnParent();
 }
 
 void ModPrinterDialog::load_fields()
@@ -261,8 +268,8 @@ void ModPrinterDialog::load_fields()
         if (field->def->kind == "secret") {
             // Never read back into the window: an empty box keeps the stored secret, a hint says one is stored.
             if (ModNet::has_secret(mod.id, field->def->id + "." + m_host))
-                if (auto *text = dynamic_cast<wxTextCtrl *>(field->ctrl))
-                    text->SetHint(_L("(stored; type to replace)"));
+                if (auto *text = dynamic_cast<::TextInput *>(field->ctrl))
+                    text->GetTextCtrl()->SetHint(_L("(stored; type to replace)"));
             continue;
         }
         std::string value = field->def->default_value;
@@ -327,7 +334,7 @@ void ModPrinterDialog::update_visibility()
     for (auto &[i, b] : m_panels)
         b->Show(visible(printer.panels[i].visible));
     Layout();
-    Fit();
+    GetSizer()->SetSizeHints(this);
 }
 
 void ModPrinterDialog::update_state()
@@ -409,12 +416,20 @@ void ModPrinterDialog::open_web_panel(size_t index)
     dlg->SetSizer(sizer);
     // The page's window.wx.postMessage(text) reaches the session as {"cmd": "panel_message", "panel", "data"}.
     const std::string panel_id = panel.id;
-    view->Bind(wxEVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED, [this, panel_id](wxWebViewEvent &e) {
-        json data = json::parse(e.GetString().ToUTF8().data(), nullptr, false);
-        if (data.is_discarded())
-            data = e.GetString().ToUTF8().data();
-        std::string result, error;
-        m_agent->panel_command({{"cmd", "panel_message"}, {"panel", panel_id}, {"data", std::move(data)}}, false, result, error);
+    // Not on the script-message callback's stack: the session may answer with an event that runs script in this view.
+    std::weak_ptr<ModPrinterAgent> weak_agent = m_agent;
+    view->Bind(wxEVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED, [weak_agent, panel_id](wxWebViewEvent &e) {
+        const std::string text = into_u8(e.GetString());
+        wxGetApp().CallAfter([weak_agent, panel_id, text]() {
+            std::shared_ptr<ModPrinterAgent> agent = weak_agent.lock();
+            if (!agent)
+                return;
+            json data = json::parse(text, nullptr, false);
+            if (data.is_discarded())
+                data = text;
+            std::string result, error;
+            agent->panel_command({{"cmd", "panel_message"}, {"panel", panel_id}, {"data", std::move(data)}}, false, result, error);
+        });
     });
     dlg->Bind(wxEVT_CLOSE_WINDOW, [this, index, dlg](wxCloseEvent &) {
         m_open_panels.erase(index);
@@ -451,8 +466,13 @@ void ModPrinterDialog::on_agent_event(const json &event)
 
 void ModPrinterDialog::on_dpi_changed(const wxRect &)
 {
-    Layout();
-    Fit();
+    for (auto &[i, b] : m_actions)
+        b->Rescale();
+    for (auto &[i, b] : m_panels)
+        b->Rescale();
+    if (m_consent_button)
+        m_consent_button->Rescale();
+    GetSizer()->SetSizeHints(this);
     Refresh();
 }
 

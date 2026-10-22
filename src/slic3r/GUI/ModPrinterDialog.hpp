@@ -18,7 +18,7 @@
 #include <vector>
 
 class wxBoxSizer;
-class wxButton;
+class Button;
 class wxStaticText;
 class wxWindow;
 
@@ -67,10 +67,10 @@ private:
 
     std::vector<std::unique_ptr<FieldCtrl>> m_fields;
     std::vector<std::pair<size_t, wxWindow *>> m_notices;  // manifest index -> its text
-    std::vector<std::pair<size_t, wxButton *>> m_actions;  // manifest index -> its button
-    std::vector<std::pair<size_t, wxButton *>> m_panels;   // manifest index -> its button
+    std::vector<std::pair<size_t, ::Button *>> m_actions;  // manifest index -> its button
+    std::vector<std::pair<size_t, ::Button *>> m_panels;   // manifest index -> its button
     wxStaticText *m_consent_text = nullptr;
-    wxButton     *m_consent_button = nullptr;
+    ::Button     *m_consent_button = nullptr;
     wxStaticText *m_state_text = nullptr;
     wxBoxSizer   *m_main_sizer = nullptr;
 

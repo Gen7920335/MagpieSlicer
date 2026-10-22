@@ -5333,7 +5333,8 @@ void TabPrinter::build_fff()
             if (any_mod_agent) {
                 Line line{ "", "" };
                 line.widget = [this](wxWindow* parent) -> wxSizer* {
-                    auto* button = new wxButton(parent, wxID_ANY, _L("Printer connection..."));
+                    auto* button = new Button(parent, _L("Printer connection..."));
+                    button->SetStyle(ButtonStyle::Regular, ButtonType::Parameter);
                     button->SetToolTip(_L("Connection settings, network access and controls of the printer agent a mod provides."));
                     button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { ModPrinterDialog::show_for_edited_printer(this); });
                     auto* sizer = new wxBoxSizer(wxHORIZONTAL);
