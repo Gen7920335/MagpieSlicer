@@ -1,13 +1,34 @@
 # Native mods
 
 A native mod is a mod package that carries a shared library. The library fills slots the core
-offers (a support generator, a wall planner, a batch accelerator) and talks to the core through one C
+offers (a support generator, a wall planner, G-code events) and talks to the core through one C
 header, `mods/sdk/include/magpie_mod_api.h`. The core and a mod exchange numbers, polygons, strings
 and opaque handles only, never C++ objects, so a mod built against API major 1 keeps loading in every
 core of major 1: an Orca merge does not force every mod to be rebuilt.
 
 JSON mods ([mods.md](mods.md)) only set settings. A native mod runs code with the user's rights,
-which is why loading it is stricter.
+which is why loading it asks the user unless Magpie vouches for it.
+
+## Trust tiers
+
+| Tier | What makes it | Installed Mods shows | Loads |
+|---|---|---|---|
+| official | bundled, or signed with `magpie-official-2026` | gold badge, "Official" / "Bundled" | at once |
+| verified | signed with `magpie-verified-2026`, which Gen signs third-party mods with after reviewing them | gold badge, "Verified" | at once |
+| unverified | no `SIGNATURE`, a key the application does not trust, or files changed after signing | red badge, "Not verified" | native code: after the user accepts the unverified mod warning |
+
+The tiers differ in what the user is shown and asked, not in what a mod may do: every mod may write
+G-code settings and filter the start G-code (Gen, 2026-10-22). A verified signature says Gen read
+that version's files; it is not a proof that the code is safe.
+
+The warning (`GUI_App::on_init_inner`, before the presets load) names the mod, its version and its
+manifest's `author`, says that it runs as code, can change the slicing result and the G-code the printer
+runs, and that Magpie cannot stop malicious code in it. "Don't load" is the default; it skips the mod for
+this run and the next start asks again. "I understand the risk, load it" is remembered in
+`<data dir>/mods/mods_state.json` (`accepted_unverified`) for the mod's id, version and the fingerprint
+of its library folder (`library_fingerprint`: the SHA-256 of every file of `bin/<platform>/`), so a new
+version or a changed or added library file asks again. The command line has no one to ask and loads only
+mods accepted before.
 
 ## Package
 
@@ -39,11 +60,12 @@ At start-up, before presets load, the application applies what was scheduled (re
 packages), then reads `<resources>/mods` (bundled, official) and `<data dir>/mods` (installed), orders
 the mods so each comes after what it depends on, checks them together, and loads each library:
 
-1. An installed package must carry a valid signature by a key the application trusts
-   (`ModPackage.cpp`, `trusted_keys()`); unsigned or community libraries are not loaded. Its
-   `bin/<platform>/` folder is copied to `<data dir>/cache/mods/<id>-<version>-<hash>/` and the copy is
-   loaded, after checking it is exactly the signed file, so the installed files stay free to be
-   replaced while the application runs. Bundled libraries load from where they are. A bundled package
+1. An installed package is verified when it carries a valid signature by a key the application trusts
+   (`ModPackage.cpp`, `trusted_keys()`); otherwise its library loads only once the user accepted it
+   (Trust tiers). Its `bin/<platform>/` folder is copied to `<data dir>/cache/mods/<id>-<version>-<hash>/`
+   and the copy is loaded, after checking it is exactly the signed files, or for an unverified mod the
+   files the user accepted, so the installed files stay free to be replaced while the application runs
+   and a file swapped after the check never loads. Bundled libraries load from where they are. A bundled package
    needs no signature; one that carries a `SIGNATURE` (the installer signs the official mods with the
    official key, `MAGPIE_MOD_SIGN_KEY` at install time) must verify, or the mod is not loaded.
 2. `LoadLibraryExW` with `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`: a library's
@@ -141,8 +163,8 @@ application's gettext runs neither need nor drop a mod's texts.
 
 ## Native mods in the G-code
 
-When a print uses a native mod (its time planner or support generator made part of the print, or it
-accelerated the slicing session), the G-code header names it
+When a print uses a native mod (its time planner, support generator, wall planner, layer bands or G-code
+events made part of the print), the G-code header names it
 (`; mods: id version, ...`) so the print can be reproduced. A mod that is loaded but not used, such
 as a bundled one whose feature is off, is not named, so output without native code stays
 byte-identical to Orca's.

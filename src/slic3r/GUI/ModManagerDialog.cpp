@@ -8,7 +8,11 @@
 
 #include <boost/filesystem.hpp>
 
+#include <algorithm>
+
 #include <wx/button.h>
+#include <wx/dcmemory.h>
+#include <wx/imaglist.h>
 #include <wx/listctrl.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
@@ -23,6 +27,9 @@ namespace {
 std::string bundled_dir() { return resources_dir().empty() ? std::string() : (boost::filesystem::path(resources_dir()) / "mods").string(); }
 std::string installed_dir() { return data_dir().empty() ? std::string() : (boost::filesystem::path(data_dir()) / "mods").string(); }
 
+// A bundled mod is official; any other mod is verified only with a valid signature by a key the application trusts.
+bool trusted(const ModHost::ModListing &m) { return m.origin == ModHost::ModOrigin::Bundled || m.official || m.verified; }
+
 wxString origin_text(const ModHost::ModListing &m)
 {
     if (m.origin == ModHost::ModOrigin::Bundled)
@@ -31,7 +38,46 @@ wxString origin_text(const ModHost::ModListing &m)
         return _L("Official");
     if (m.verified)
         return _L("Verified");
-    return _L("Community");
+    return _L("Not verified");
+}
+
+enum { TAG_VERIFIED, TAG_UNVERIFIED };
+
+// The trust tags of the Source column: a gold badge with a check mark for verified mods, a red one with an
+// exclamation mark for unverified ones. Drawn here so they follow the font size without new image files.
+wxImageList *make_tag_images(int size)
+{
+    auto badge = [size](const wxColour &fill, bool check) {
+        wxBitmap   bmp(size, size);
+        wxMemoryDC dc(bmp);
+        dc.SetBackground(*wxTRANSPARENT_BRUSH);
+        dc.SetBrush(wxBrush(fill));
+        dc.SetPen(wxPen(fill));
+        dc.Clear();
+        dc.DrawCircle(size / 2, size / 2, size / 2 - 1);
+        dc.SetPen(wxPen(*wxWHITE, std::max(2, size / 8)));
+        if (check) {
+            dc.DrawLine(size * 3 / 12, size * 6 / 12, size * 5 / 12, size * 8 / 12);
+            dc.DrawLine(size * 5 / 12, size * 8 / 12, size * 9 / 12, size * 4 / 12);
+        } else {
+            dc.DrawLine(size / 2, size * 3 / 12, size / 2, size * 7 / 12);
+            dc.DrawLine(size / 2, size * 9 / 12, size / 2, size * 9 / 12 + 1);
+        }
+        dc.SelectObject(wxNullBitmap);
+        wxImage image = bmp.ConvertToImage();
+        // Outside the circle stays transparent in light and dark mode.
+        image.InitAlpha();
+        const double r = size / 2. - 0.5;
+        for (int y = 0; y < size; ++y)
+            for (int x = 0; x < size; ++x)
+                if ((x + 0.5 - size / 2.) * (x + 0.5 - size / 2.) + (y + 0.5 - size / 2.) * (y + 0.5 - size / 2.) > r * r)
+                    image.SetAlpha(x, y, 0);
+        return wxBitmap(image);
+    };
+    auto *images = new wxImageList(size, size, true, 2);
+    images->Add(badge(wxColour(0xD4, 0xA0, 0x17), true));  // TAG_VERIFIED: gold
+    images->Add(badge(wxColour(0xD9, 0x30, 0x25), false)); // TAG_UNVERIFIED: red
+    return images;
 }
 
 wxString state_text(const ModHost::ModListing &m)
@@ -58,7 +104,8 @@ ModManagerDialog::ModManagerDialog(wxWindow *parent)
     m_list        = new wxListCtrl(this, wxID_ANY, wxDefaultPosition, wxSize(90 * em, 30 * em), wxLC_REPORT | wxLC_SINGLE_SEL);
     m_list->AppendColumn(_L("Name"), wxLIST_FORMAT_LEFT, 28 * em);
     m_list->AppendColumn(_L("Version"), wxLIST_FORMAT_LEFT, 8 * em);
-    m_list->AppendColumn(_L("Source"), wxLIST_FORMAT_LEFT, 10 * em);
+    m_list->AppendColumn(_L("Source"), wxLIST_FORMAT_LEFT, 12 * em);
+    m_list->AssignImageList(make_tag_images(std::max(12, em * 3 / 2)), wxIMAGE_LIST_SMALL);
     m_list->AppendColumn(_L("State"), wxLIST_FORMAT_LEFT, 40 * em);
     top->Add(m_list, 1, wxEXPAND | wxALL, em);
     top->Add(new wxStaticText(this, wxID_ANY, _L("Turning a mod off or on and removing it apply when you restart the application.")), 0,
@@ -97,9 +144,11 @@ void ModManagerDialog::refresh()
         const ModHost::ModListing &m = m_mods[i];
         const wxString name = from_u8(ModHost::localized_text(m.names, language, m.name.empty() ? m.id : m.name));
         // TRN %s: a mod's name.
-        const long row = m_list->InsertItem(long(i), m.native ? wxString::Format(_L("%s (native code)"), name) : name);
+        const long row = m_list->InsertItem(long(i), m.native ? wxString::Format(_L("%s (native code)"), name) : name, -1);
         m_list->SetItem(row, COL_VERSION, from_u8(m.version));
-        m_list->SetItem(row, COL_ORIGIN, origin_text(m));
+        if (m.problem.empty()) {
+            m_list->SetItem(row, COL_ORIGIN, origin_text(m), trusted(m) ? TAG_VERIFIED : TAG_UNVERIFIED);
+        }
         m_list->SetItem(row, COL_STATE, state_text(m));
     }
     if (keep >= 0 && keep < long(m_mods.size()))

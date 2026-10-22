@@ -390,6 +390,7 @@ Mod ModSet::parse_mod(const std::string &json_text)
     mod.name    = optional_string(j, "name");
     mod.names   = translations(j, "name_");
     mod.version = required_string(j, "version", mod.id);
+    mod.author  = optional_string(j, "author");
 
     if (auto it = j.find("params"); it != j.end()) {
         if (!it->is_object())
@@ -697,9 +698,8 @@ ModSet ModSet::build(std::vector<Mod> mods)
                 throw ModError(where + ": \"" + rule.target + "\" is not a setting");
             if (!is_supported_type(def->type, true))
                 throw ModError(where + ": \"" + rule.target + "\" has a type rules cannot write");
-            // Audit decision B: G-code a printer runs comes only from the user and from official mods.
-            if (is_gcode_setting(rule.target) && !set.m_mods[m].official)
-                throw ModError(where + ": only official mods may change \"" + rule.target + "\" (printer G-code)");
+            // G-code settings are open to every mod (Gen, 2026-10-22, replacing audit decision B): an unverified
+            // native mod warns that it can change the G-code before it loads (ModPackage.hpp).
             auto check_names = [&](const Expr &e) {
                 for (const std::string &name : e.names())
                     if (set.m_params.count(name) == 0 && print_config_def.get(name) == nullptr)

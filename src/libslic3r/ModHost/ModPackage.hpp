@@ -7,8 +7,11 @@
 // <mods dir>/<id>.json is a mod without a package. Bundled mods (<resources>/mods) ship with the
 // application and are official. An installed mod (<data dir>/mods) is official or verified only when
 // SIGNATURE holds a valid Ed25519 signature by one of the application's trusted keys over the SHA-256
-// of every file in its folder; native code is loaded only from bundled and signed mods, and G-code
-// settings are written only by official ones (audit decision B).
+// of every file in its folder ("magpie-verified-2026" signs the third-party mods Gen reviewed). Any other
+// installed mod is unverified: its native code loads only once the user accepted the unverified mod
+// warning for that id, version and library folder (one question per start-up until accepted). The tiers
+// differ in what the user is shown, not in what a mod may do: every mod may write G-code settings and
+// filter the start G-code (Gen, 2026-10-22).
 //
 // Turning a mod off or on, removing it and installing or updating a package take effect at the next
 // start: the loader applies what was scheduled before it loads anything.
@@ -16,6 +19,7 @@
 #include "ModSet.hpp"
 #include "NativeMods.hpp"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -76,9 +80,33 @@ std::string public_key_of(const std::string &private_pem);
 // ---------------------------------------------------------------------------------------------------
 // What applies at the next start
 
-// <mods dir>/mods_state.json: {"disabled": [ids]}.
+// <mods dir>/mods_state.json: {"disabled": [ids], "accepted_unverified": ["<id> <version> <fingerprint>"]}.
 std::set<std::string> disabled_mod_ids(const std::string &mods_dir);
 void set_mod_enabled(const std::string &mods_dir, const std::string &id, bool enabled);
+
+// ---------------------------------------------------------------------------------------------------
+// Unverified native mods
+
+// An installed mod with native code and no valid signature by a trusted key, before its library loads.
+struct UnverifiedNativeMod
+{
+    std::string                        id, name, version, author;
+    std::map<std::string, std::string> names;       // "name_<language>" translations
+    std::string                        fingerprint; // library_fingerprint() of its bin/<platform>/ folder
+    std::string                        reason;      // why it is not verified (no SIGNATURE, unknown key, files changed)
+};
+// Asked once per start-up for each unverified native mod not accepted before; true loads it and remembers the
+// acceptance for its id, version and fingerprint. The GUI shows the unverified mod warning; without a consent
+// function (the command line) only mods accepted earlier load.
+using UnverifiedModConsent = std::function<bool(const UnverifiedNativeMod &)>;
+// The consent load_active_mods_from_data_dir() asks; empty clears it.
+void set_unverified_mod_consent(UnverifiedModConsent consent);
+bool unverified_mod_accepted(const std::string &mods_dir, const UnverifiedNativeMod &mod);
+void accept_unverified_mod(const std::string &mods_dir, const UnverifiedNativeMod &mod);
+// Relative path ('/'-separated) -> SHA-256 of every file in the mod's library folder bin/<platform>/.
+std::map<std::string, std::string> library_folder_hashes(const Mod &mod);
+// One SHA-256 naming those files and their contents: what an acceptance is for.
+std::string library_fingerprint(const std::map<std::string, std::string> &hashes);
 // Marks an installed mod (folder or single file) for removal at the next start.
 void schedule_mod_removal(const std::string &mods_dir, const std::string &id);
 void cancel_mod_removal(const std::string &mods_dir, const std::string &id);
@@ -111,6 +139,8 @@ struct ModLoadOptions
     // When native code is not loaded (a reload after a JSON mod was installed), the native mods of
     // the start-up load: their manifests stay in the set, and native mods not among them wait.
     std::shared_ptr<const NativeModSet> loaded_native;
+    // Asked for an unverified native mod not accepted before (see UnverifiedModConsent); empty: not loaded.
+    UnverifiedModConsent consent;
 };
 
 struct ModLoadResult
@@ -129,10 +159,10 @@ ModLoadResult load_mods(const ModLoadOptions &options);
 // next start.
 struct ModListing
 {
-    std::string id, name, version;
+    std::string id, name, version, author;
     std::map<std::string, std::string> names; // "name_<language>" translations of the name
     ModOrigin   origin   = ModOrigin::Installed;
-    bool        official = false, verified = false;
+    bool        official = false, verified = false; // neither: an unverified mod (the red tag)
     bool        native   = false; // carries a library
     bool        loaded   = false; // part of the mods running now
     bool        off_next = false; // turned off from the next start

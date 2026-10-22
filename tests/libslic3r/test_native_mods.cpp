@@ -263,7 +263,7 @@ TEST_CASE("A mod converts millimetres with the coordinate unit the host gives at
     native_host_api();
 }
 
-TEST_CASE("Installed native code loads only with a trusted signature, from a cached copy", "[NativeMods]")
+TEST_CASE("Installed native code loads with a trusted signature, or unverified once the user accepted it, from a cached copy", "[NativeMods]")
 {
     TempDir        dir;
     const fs::path installed = dir.path / "mods";
@@ -272,17 +272,74 @@ TEST_CASE("Installed native code loads only with a trusted signature, from a cac
     ModLoadOptions options;
     options.installed_dir = installed.string();
     options.cache_dir     = (dir.path / "cache").string();
+    // The questions asked, and the answer given.
+    std::vector<UnverifiedNativeMod> asked;
+    bool                             answer = false;
+    auto ask = [&](const UnverifiedNativeMod &mod) {
+        asked.push_back(mod);
+        return answer;
+    };
 
-    SECTION("unsigned") {
+    SECTION("unsigned, without anyone to ask (the command line)") {
         const ModLoadResult result = load_mods(options);
         CHECK(result.native->find("magpie_test_mod") == nullptr);
-        CHECK(any_contains(result.errors, "magpie_test_mod: has native code but is not signed"));
+        CHECK(any_contains(result.errors, "magpie_test_mod: unverified native code not accepted yet"));
     }
-    SECTION("signed by a key this application does not trust") {
-        sign_package(package.string(), generate_signing_key().private_pem, "unknown-key");
+    SECTION("unsigned, declined") {
+        options.consent = ask;
         const ModLoadResult result = load_mods(options);
         CHECK(result.native->find("magpie_test_mod") == nullptr);
-        CHECK(any_contains(result.errors, "does not trust"));
+        CHECK(any_contains(result.notes, "magpie_test_mod: unverified, not loaded this time"));
+        REQUIRE(asked.size() == 1);
+        CHECK(asked[0].id == "magpie_test_mod");
+        CHECK(asked[0].version == "1.0.0");
+        CHECK(asked[0].fingerprint.size() == 64);
+        CHECK(any_contains({asked[0].reason}, "no SIGNATURE"));
+        // Declining is not remembered: the next start asks again.
+        load_mods(options);
+        CHECK(asked.size() == 2);
+        CHECK_FALSE(unverified_mod_accepted(options.installed_dir, asked[0]));
+    }
+    SECTION("unsigned, accepted once, then loaded without asking until its library changes") {
+        options.consent = ask;
+        answer          = true;
+        {
+            const ModLoadResult result = load_mods(options);
+            INFO(joined(result.errors));
+            const NativeMod *mod = result.native->find("magpie_test_mod");
+            REQUIRE(mod != nullptr);
+            const Mod *manifest = result.mods->find_mod("magpie_test_mod");
+            REQUIRE(manifest != nullptr);
+            CHECK_FALSE(manifest->verified);
+            CHECK_FALSE(manifest->official);
+            // From the cache, as a signed mod.
+            CHECK(fs::path(mod->loaded_path()).lexically_relative(options.cache_dir).string().rfind("..", 0) != 0);
+        }
+        REQUIRE(asked.size() == 1);
+        CHECK(unverified_mod_accepted(options.installed_dir, asked[0]));
+        // Accepted: the command line loads it too.
+        options.consent = nullptr;
+        {
+            const ModLoadResult result = load_mods(options);
+            INFO(joined(result.errors));
+            CHECK(result.native->find("magpie_test_mod") != nullptr);
+        }
+        // A file added to the library folder is code the user did not accept: asked again.
+        write_text(package / "bin" / native_platform() / "extra.dll", "x");
+        options.consent = ask;
+        answer          = false;
+        const ModLoadResult result = load_mods(options);
+        CHECK(result.native->find("magpie_test_mod") == nullptr);
+        CHECK(asked.size() == 2);
+        CHECK(asked[1].fingerprint != asked[0].fingerprint);
+    }
+    SECTION("signed by a key this application does not trust: unverified") {
+        sign_package(package.string(), generate_signing_key().private_pem, "unknown-key");
+        options.consent = ask;
+        const ModLoadResult result = load_mods(options);
+        CHECK(result.native->find("magpie_test_mod") == nullptr);
+        REQUIRE(asked.size() == 1);
+        CHECK(any_contains({asked[0].reason}, "does not trust"));
     }
     SECTION("signed by a trusted key") {
         TestKey key("test-verified", KeyRole::Verified);
@@ -363,6 +420,24 @@ TEST_CASE("A bundled package loads unsigned, and with a signature only when it v
         CHECK(result.mods->find_mod("magpie_test_mod") == nullptr);
         CHECK(any_contains(result.errors, "its signature does not verify"));
     }
+}
+
+TEST_CASE("The application trusts Magpie's official key and the verified key Gen signs reviewed mods with", "[NativeMods]")
+{
+    const std::vector<TrustedKey> keys = trusted_keys();
+    auto key = [&keys](const std::string &id) {
+        auto it = std::find_if(keys.begin(), keys.end(), [&id](const TrustedKey &k) { return k.id == id; });
+        return it == keys.end() ? nullptr : &*it;
+    };
+    const TrustedKey *official = key("magpie-official-2026");
+    const TrustedKey *verified = key("magpie-verified-2026");
+    REQUIRE(official != nullptr);
+    REQUIRE(verified != nullptr);
+    CHECK(official->role == KeyRole::Official);
+    // A verified signature gives the verified tag, not an official mod.
+    CHECK(verified->role == KeyRole::Verified);
+    CHECK(verified->public_key_hex.size() == 64);
+    CHECK(verified->public_key_hex != official->public_key_hex);
 }
 
 TEST_CASE("A signature covers every file of the package", "[NativeMods]")
@@ -449,7 +524,7 @@ TEST_CASE("Mods load after the mods they depend on, and not without them", "[Nat
     CHECK(any_contains(result.errors, "needs_api: needs core 9.0"));
 }
 
-TEST_CASE("Installed JSON mods may not write printer G-code unless officially signed", "[NativeMods]")
+TEST_CASE("Installed JSON mods may write printer G-code in every tier", "[NativeMods]")
 {
     TempDir        dir;
     const fs::path installed = dir.path / "mods";
@@ -459,17 +534,19 @@ TEST_CASE("Installed JSON mods may not write printer G-code unless officially si
     options.installed_dir = installed.string();
     options.load_native   = false;
 
-    SECTION("a single file") {
+    SECTION("a single file (unverified)") {
         write_text(installed / "start_tweak.json", mod_json);
         const ModLoadResult result = load_mods(options);
-        CHECK(result.mods->find_mod("start_tweak") == nullptr);
-        CHECK(any_contains(result.errors, "only official mods may change \"machine_start_gcode\""));
+        INFO(joined(result.errors));
+        const Mod *mod = result.mods->find_mod("start_tweak");
+        REQUIRE(mod != nullptr);
+        CHECK_FALSE(mod->verified);
     }
     SECTION("a package signed by a verified key") {
         write_text(installed / "start_tweak" / "mod.json", mod_json);
         TestKey key("test-verified-gcode", KeyRole::Verified);
         sign_package((installed / "start_tweak").string(), key.key.private_pem, key.id);
-        CHECK(load_mods(options).mods->find_mod("start_tweak") == nullptr);
+        CHECK(load_mods(options).mods->find_mod("start_tweak") != nullptr);
     }
     SECTION("a package signed by an official key") {
         write_text(installed / "start_tweak" / "mod.json", mod_json);

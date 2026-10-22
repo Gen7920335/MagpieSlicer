@@ -24,11 +24,16 @@ using json   = nlohmann::json;
 
 namespace {
 
-// The application's own keys. The private half of "magpie-official-2026" is kept off the repository
-// (D:\claude\magpie-mod-keys on the maintainer's machine); `--mod-sign` signs a package with it.
+// The application's own keys. Their private halves are kept off the repository (D:\claude\magpie-mod-keys on the
+// maintainer's machine); `--mod-sign` signs a package with one. "magpie-official-2026" signs Magpie's own mods,
+// "magpie-verified-2026" the third-party mods Gen reviewed (the verified tag).
 const TrustedKey builtin_keys[] = {
     {"magpie-official-2026", KeyRole::Official, "2b7bb01a93e079a6e2c4d6d7a41fd71dc7fb2eb24e57900a9e96a0767426f1f0"},
+    {"magpie-verified-2026", KeyRole::Verified, "3a129f7dfe5475ae2e1092d1e3487d2dbe9f8a7be988274e4323464fdffe27c8"},
 };
+
+std::mutex           g_consent_mutex;
+UnverifiedModConsent g_consent;
 
 std::mutex              g_keys_mutex;
 std::vector<TrustedKey> g_extra_keys;
@@ -143,7 +148,8 @@ json read_state(const fs::path &mods_dir)
 struct Candidate
 {
     Mod         mod;
-    std::string file; // mod.json or <id>.json
+    std::string file;              // mod.json or <id>.json
+    std::string unverified_reason; // an installed package's signature problem
 };
 
 // Reads the mods of one directory: <id>.json files and <id>/mod.json packages, in name order.
@@ -185,11 +191,12 @@ std::vector<Candidate> read_candidates(const fs::path &dir, ModOrigin origin, st
                         throw ModError("its signature does not verify: " + sig.error);
                 c.mod.official = c.mod.verified = true;
             } else if (package) {
+                // A signature that does not verify (an unknown key, files changed after signing) leaves the mod
+                // unverified, as one without a signature: its native code waits for the user's consent.
                 const SignatureCheck sig = check_package_signature(c.mod.dir);
                 c.mod.verified = sig.valid;
                 c.mod.official = sig.valid && sig.role == KeyRole::Official;
-                if (sig.present && !sig.valid)
-                    throw ModError("its signature does not verify: " + sig.error);
+                c.unverified_reason = sig.valid ? std::string() : sig.error;
             }
             out.push_back(std::move(c));
         } catch (const std::exception &e) {
@@ -266,19 +273,17 @@ std::vector<Mod> order_by_dependencies(std::vector<Mod> mods, std::vector<std::s
     return ordered;
 }
 
-// Copies an installed mod's library folder into the cache and returns the copy of the library, after
-// checking that the copy is exactly what the signature covers.
-std::string cached_library(const Mod &mod, const fs::path &cache_root)
+// Copies an installed mod's library folder into the cache and returns the copy of the library, after checking
+// that the copy is exactly the files `hashes` names: the signed ones, or for an unverified mod the ones the user
+// accepted (library_folder_hashes when it was asked), so a file swapped after the check is never loaded.
+std::string cached_library(const Mod &mod, const fs::path &cache_root, const std::map<std::string, std::string> &hashes)
 {
     const fs::path library = native_library_path(mod);
     const fs::path bin_dir = library.parent_path();
-    const SignatureCheck sig = check_package_signature(mod.dir);
-    if (!sig.valid)
-        throw ModError("the package is not signed with a trusted key: " + sig.error);
     const std::string rel = fs::path(library).lexically_relative(mod.dir).generic_string();
-    auto signed_hash = sig.hashes.find(rel);
-    if (signed_hash == sig.hashes.end())
-        throw ModError("the signature does not cover " + rel);
+    auto signed_hash = hashes.find(rel);
+    if (signed_hash == hashes.end())
+        throw ModError(rel + " is not among the checked files (the signature or the accepted unverified files)");
     const fs::path target = cache_root / (mod.id + "-" + mod.version + "-" + signed_hash->second.substr(0, 16));
     fs::create_directories(target);
     // Every file of the library folder (the library and the libraries it loads) is loaded from the cache, so each
@@ -286,9 +291,9 @@ std::string cached_library(const Mod &mod, const fs::path &cache_root)
     for (fs::directory_iterator it(bin_dir), end; it != end; ++it)
         if (fs::is_regular_file(it->status())) {
             const std::string file_rel = it->path().lexically_relative(mod.dir).generic_string();
-            const auto        hash     = sig.hashes.find(file_rel);
-            if (hash == sig.hashes.end())
-                throw ModError("the signature does not cover " + file_rel);
+            const auto        hash     = hashes.find(file_rel);
+            if (hash == hashes.end())
+                throw ModError(file_rel + " is not among the checked files (the signature or the accepted unverified files)");
             const fs::path dst = target / it->path().filename();
             if (fs::exists(dst) && sha256_hex(read_file(dst)) == hash->second)
                 continue;
@@ -296,7 +301,7 @@ std::string cached_library(const Mod &mod, const fs::path &cache_root)
             fs::copy_file(it->path(), tmp, fs::copy_options::overwrite_existing);
             if (sha256_hex(read_file(tmp)) != hash->second) {
                 fs::remove(tmp);
-                throw ModError("the cached copy " + dst.string() + " differs from the signed file");
+                throw ModError("the cached copy " + dst.string() + " differs from the checked file");
             }
             fs::rename(tmp, dst);
         }
@@ -457,6 +462,64 @@ void set_mod_enabled(const std::string &mods_dir, const std::string &id, bool en
     state["disabled"] = std::vector<std::string>(ids.begin(), ids.end());
     fs::create_directories(mods_dir);
     write_file(fs::path(mods_dir) / STATE_FILE, state.dump(1) + "\n");
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Unverified native mods
+
+namespace {
+
+// What an acceptance is stored as: the mod, its version and the exact library files.
+std::string acceptance_key(const UnverifiedNativeMod &mod) { return mod.id + " " + mod.version + " " + mod.fingerprint; }
+
+} // namespace
+
+void set_unverified_mod_consent(UnverifiedModConsent consent)
+{
+    std::lock_guard<std::mutex> lock(g_consent_mutex);
+    g_consent = std::move(consent);
+}
+
+bool unverified_mod_accepted(const std::string &mods_dir, const UnverifiedNativeMod &mod)
+{
+    const json state = read_state(mods_dir);
+    if (auto it = state.find("accepted_unverified"); it != state.end() && it->is_array())
+        for (const json &key : *it)
+            if (key.is_string() && key.get<std::string>() == acceptance_key(mod))
+                return true;
+    return false;
+}
+
+void accept_unverified_mod(const std::string &mods_dir, const UnverifiedNativeMod &mod)
+{
+    json state = read_state(mods_dir);
+    // One acceptance per mod: a new version or changed files replace the old one, which no longer matches.
+    json accepted = json::array();
+    if (auto it = state.find("accepted_unverified"); it != state.end() && it->is_array())
+        for (const json &key : *it)
+            if (key.is_string() && key.get<std::string>().rfind(mod.id + " ", 0) != 0)
+                accepted.push_back(key);
+    accepted.push_back(acceptance_key(mod));
+    state["accepted_unverified"] = accepted;
+    fs::create_directories(mods_dir);
+    write_file(fs::path(mods_dir) / STATE_FILE, state.dump(1) + "\n");
+}
+
+std::map<std::string, std::string> library_folder_hashes(const Mod &mod)
+{
+    std::map<std::string, std::string> hashes;
+    const fs::path bin_dir = fs::path(native_library_path(mod)).parent_path();
+    boost::system::error_code ec;
+    for (fs::directory_iterator it(bin_dir, ec), end; !ec && it != end; it.increment(ec))
+        if (fs::is_regular_file(it->status()))
+            hashes[it->path().lexically_relative(mod.dir).generic_string()] = sha256_hex(read_file(it->path()));
+    return hashes;
+}
+
+std::string library_fingerprint(const std::map<std::string, std::string> &hashes)
+{
+    // The lines a signature would sign, so a file renamed, added or changed gives another fingerprint.
+    return sha256_hex(signature_message(hashes));
 }
 
 void schedule_mod_removal(const std::string &mods_dir, const std::string &id)
@@ -623,11 +686,8 @@ ModLoadResult load_mods(const ModLoadOptions &options)
             return;
         }
         if (!mod.binary.empty()) {
-            // Native code runs with the user's rights, so only bundled and signed mods may bring it (decision 6).
-            if (!mod.verified) {
-                result.errors.push_back(mod.id + ": has native code but is not signed with an official or verified key; it is not loaded");
-                return;
-            }
+            // Native code runs with the user's rights. A mod without a trusted signature still loads, but only after
+            // the user accepted its warning (below, where the libraries load; Gen 2026-10-22, replacing decision 6).
             if (!fs::is_regular_file(native_library_path(mod))) {
                 result.errors.push_back(mod.id + ": has no library for this platform (" + native_platform() + ")");
                 return;
@@ -648,6 +708,10 @@ ModLoadResult load_mods(const ModLoadOptions &options)
         for (const Candidate &c : *list)
             if (std::none_of(result.known.begin(), result.known.end(), [&c](const Mod &m) { return m.id == c.mod.id; }))
                 result.known.push_back(c.mod);
+    std::map<std::string, std::string> unverified_reasons; // installed mod id -> why it is not verified
+    for (const Candidate &c : installed)
+        if (!c.mod.verified)
+            unverified_reasons.emplace(c.mod.id, c.unverified_reason);
     for (Candidate &c : bundled)
         take(c);
     for (Candidate &c : installed)
@@ -670,7 +734,42 @@ ModLoadResult load_mods(const ModLoadOptions &options)
             if (!mod.binary.empty()) {
                 std::string error;
                 try {
-                    const std::string library = mod.origin == ModOrigin::Bundled ? native_library_path(mod) : cached_library(mod, cache_root);
+                    std::string library;
+                    if (mod.origin == ModOrigin::Bundled) {
+                        library = native_library_path(mod);
+                    } else if (mod.verified) {
+                        const SignatureCheck sig = check_package_signature(mod.dir);
+                        if (!sig.valid)
+                            throw ModError("the package is not signed with a trusted key: " + sig.error);
+                        library = cached_library(mod, cache_root, sig.hashes);
+                    } else {
+                        // Unverified: the user accepts these exact library files once (per id, version and files), and
+                        // the cached copy that loads is checked against them.
+                        const std::map<std::string, std::string> hashes = library_folder_hashes(mod);
+                        UnverifiedNativeMod info;
+                        info.id          = mod.id;
+                        info.name        = mod.name;
+                        info.names       = mod.names;
+                        info.version     = mod.version;
+                        info.author      = mod.author;
+                        info.fingerprint = library_fingerprint(hashes);
+                        if (auto r = unverified_reasons.find(mod.id); r != unverified_reasons.end())
+                            info.reason = r->second;
+                        if (!unverified_mod_accepted(options.installed_dir, info)) {
+                            if (!options.consent) {
+                                result.errors.push_back(mod.id + ": unverified native code not accepted yet (" + info.reason +
+                                                        "); start the application and accept its warning to load it");
+                                continue;
+                            }
+                            if (!options.consent(info)) {
+                                result.notes.push_back(mod.id + ": unverified, not loaded this time (the user declined its warning)");
+                                continue;
+                            }
+                            accept_unverified_mod(options.installed_dir, info);
+                        }
+                        result.notes.push_back(mod.id + ": unverified native code, loaded as the user accepted");
+                        library = cached_library(mod, cache_root, hashes);
+                    }
                     error = native->load(mod, library);
                 } catch (const std::exception &e) {
                     error = e.what();
@@ -703,6 +802,7 @@ std::vector<ModListing> list_mods(const std::string &bundled_dir, const std::str
             l.name        = c.mod.name;
             l.names       = c.mod.names;
             l.version     = c.mod.version;
+            l.author      = c.mod.author;
             l.origin      = origin;
             l.official    = c.mod.official;
             l.verified    = c.mod.verified;
@@ -740,6 +840,10 @@ void load_active_mods_from_data_dir()
     // next start, and later reloads (after a JSON mod was installed) keep the native mods as they are.
     options.load_native   = !started;
     options.loaded_native = startup_native;
+    {
+        std::lock_guard<std::mutex> consent_lock(g_consent_mutex);
+        options.consent = g_consent;
+    }
     if (!started && !options.installed_dir.empty())
         for (const std::string &line : apply_pending_mod_operations(options.installed_dir))
             BOOST_LOG_TRIVIAL(info) << "Mods: " << line;

@@ -319,7 +319,7 @@ ModTestReport run_mod_test(const std::string &id, const ModTestSlice &slice)
         fail("mod '" + id + "' is not loaded; the application log says why (\"Mod not loaded\")");
         return report;
     }
-    pass("loaded " + id + " " + mod->version + (mod->official ? " (official)" : mod->verified ? " (verified)" : ""));
+    pass("loaded " + id + " " + mod->version + (mod->official ? " (official)" : mod->verified ? " (verified)" : " (unverified)"));
     if (!mod->binary.empty()) {
         std::shared_ptr<const NativeModSet> native = active_native_mods();
         const NativeMod *lib = native ? native->find(id) : nullptr;

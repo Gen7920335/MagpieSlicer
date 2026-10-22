@@ -245,6 +245,7 @@
 #include "TerminalDialog.hpp"
 #include "libslic3r/Format/STEP.hpp"
 #include "libslic3r/Semver.hpp"
+#include "libslic3r/ModHost/ModPackage.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
 #include "libslic3r/ModHost/NativeMods.hpp"
 #include "slic3r/GUI/ActionRegistry.hpp"
@@ -3669,6 +3670,34 @@ bool GUI_App::on_init_inner()
             if (scrn) { scrn->SetText(_L("Loading printer & filament profiles") + dots, 30); wxYield(); }
             // MAGPIE: the mods in <data_dir>/mods join slicing from here on. Loaded before the presets, so
             // line 1 settings in them migrate to the mods' parameters (LegacySettings needs the mods).
+            // An installed native mod without Gen's verified signature asks once before its code loads
+            // (ModPackage.hpp); "Don't load" is the default and skips it until the next start.
+            ModHost::set_unverified_mod_consent([&scrn, this](const ModHost::UnverifiedNativeMod &mod) {
+                const std::string language = into_u8(current_language_code_safe());
+                const wxString    name     = from_u8(ModHost::localized_text(mod.names, language, mod.name.empty() ? mod.id : mod.name));
+                const wxString    author   = mod.author.empty() ? _L("unknown author") : from_u8(mod.author);
+                // TRN %1%: a mod's name, %2%: its version, %3%: its author.
+                const wxString text = format_wxstr(
+                    _L("%1% %2% (%3%) has not been reviewed or verified by Magpie.\n"
+                       "It runs as code inside the application and can change the slicing result and the G-code your printer runs. "
+                       "Magpie cannot stop malicious code or viruses in it; your files and data could be at risk, and wrong G-code "
+                       "could damage your printer.\n"
+                       "Only use mods from sources you trust. You are responsible for any problem this mod causes."),
+                    name, from_u8(mod.version), author);
+                // The splash screen stays on top; the question must not hide behind it.
+                if (scrn)
+                    scrn->Hide();
+                MessageDialog dialog(nullptr, text, _L("Unverified mod"), wxYES_NO | wxICON_WARNING);
+                dialog.SetButtonLabel(wxID_YES, _L("I understand the risk, load it"));
+                dialog.SetButtonLabel(wxID_NO, _L("Don't load"), true);
+                // Closing the dialog counts as "Don't load".
+                const bool load = dialog.ShowModal() == wxID_YES;
+                if (scrn)
+                    scrn->Show();
+                return load;
+            });
+            // The question refers to the splash screen of this scope: cleared however the load ends.
+            struct ClearConsent { ~ClearConsent() { ModHost::set_unverified_mod_consent({}); } } clear_consent;
             ModHost::load_active_mods_from_data_dir();
             init_params->preset_substitutions = preset_bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSystemSilent);
         }

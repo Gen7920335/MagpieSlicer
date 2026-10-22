@@ -13,9 +13,10 @@ and keeps the set for GUI and CLI slicing. A file that fails to load is logged a
 others still load. A package may carry native code ([native-mods.md](native-mods.md)).
 
 Bundled mods are official. An installed package is official or verified when its `SIGNATURE` verifies
-with a key the application trusts; a single installed `.json` file is a community mod. Only official
-mods may write G-code a printer runs (`machine_start_gcode` and every other `*_gcode` setting, and
-`post_process`): a rule of any other mod on one of them does not load.
+with a key the application trusts; any other installed mod, a single `.json` file included, is
+unverified (Installed Mods shows a red badge; native code asks the user first, [native-mods.md](native-mods.md),
+Trust tiers). Every mod may write G-code a printer runs (`machine_start_gcode` and every other
+`*_gcode` setting, and `post_process`).
 
 Installed Mods (main menu) turns mods off or on and removes installed ones; those changes, and
 packages from Get Mods, apply at the next start.
@@ -83,7 +84,7 @@ For some jobs the core runs one implementation a native mod provides, picked fro
 declarations (`ModHost/SlotChoice.*`, `ModSet::choose_slot`): the declaration whose `"when"` holds,
 read with the parameter values of the object or region the job is for, and of several that hold, the
 one with the highest `"priority"`; two that hold at one priority stop the slice, a lower one that also
-holds is reported. None picked keeps Orca's own behaviour. A declaration's `"settings"` are values the
+holds is reported. A declaration without `"when"` is never picked. None picked keeps Orca's own behaviour. A declaration's `"settings"` are values the
 core reads for the picked implementation. No setting of the print config carries the choice.
 
 | Job | Slots | Picked per | Implementations | What it gets and gives |

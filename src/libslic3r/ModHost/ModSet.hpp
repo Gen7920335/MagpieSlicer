@@ -190,6 +190,7 @@ struct Mod
     // Translations of the name: "name_<language>" keys.
     std::map<std::string, std::string> names;
     std::string           version;
+    std::string           author; // "author": shown with the warning an unverified native mod raises
     std::vector<ModParam> params;
     std::vector<ModRule>  rules;
 
@@ -209,10 +210,12 @@ struct Mod
 
     // Set by the loader, not read from the file.
     ModOrigin   origin = ModOrigin::Installed;
-    // Bundled, or signed with an official key. Only official mods may write G-code settings
-    // (machine_start_gcode and the other *_gcode keys) and run native code without a verified key.
+    // Bundled, or signed with an official key.
     bool        official = false;
-    bool        verified = false; // signed with an official or a verified key
+    // Signed with an official or a verified key: shown with the verified tag. An installed mod without it
+    // runs native code only after the user accepted the unverified mod warning (ModPackage.hpp). Rights are
+    // the same in every tier (Gen, 2026-10-22).
+    bool        verified = false;
     std::string dir;              // the package folder; empty for a single JSON file
 };
 

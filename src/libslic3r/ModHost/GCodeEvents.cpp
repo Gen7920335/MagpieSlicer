@@ -131,11 +131,6 @@ GCodeEvents::GCodeEvents(Print &print, const ConfigBase &settings, const mp_gcod
         m_opening = false;
         if (state == nullptr)
             continue;
-        // Only official mods may change the start G-code (audit decision B, as for rules on G-code settings).
-        if ((flags & MP_GCODE_WANTS_START_GCODE) && !entry->mod->manifest().official) {
-            BOOST_LOG_TRIVIAL(warning) << entry->mod->id() << ": not an official mod, its start G-code filter is not run";
-            flags &= ~uint32_t(MP_GCODE_WANTS_START_GCODE);
-        }
         open->state = state;
         open->flags = flags;
         m_wants |= flags;

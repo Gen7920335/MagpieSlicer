@@ -4984,8 +4984,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     std::string thumbnails_value = print.config().option<ConfigOptionString>("thumbnails")->value;
     // search string for the BTT_TFT label
     bool has_BTT_thumbnail = (thumbnails_value.find("BTT_TFT") != std::string::npos);
-    // MAGPIE: the native mods this G-code was made with, so it can be reproduced: the export's own slots, the
-    // objects' support and the accelerator of the slicing session. Nothing when it uses none, which keeps
+    // MAGPIE: the native mods this G-code was made with, so it can be reproduced: the export's own slots and the
+    // objects' support, bands and wall planners. Nothing when it uses none, which keeps
     // the output of a print without them byte-identical.
     for (const PrintObject *object : print.objects()) {
         for (const std::string &id : object->native_mods_used())

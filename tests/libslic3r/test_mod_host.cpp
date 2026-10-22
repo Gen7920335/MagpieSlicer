@@ -540,11 +540,14 @@ TEST_CASE("Region mod values join per parameter, the more specific level winning
     CHECK(merge_mod_values(R"({"a.x": 1})", "") == R"({"a.x": 1})");
 }
 
-TEST_CASE("Only official mods write printer G-code settings", "[ModHost]")
+TEST_CASE("Every mod may write printer G-code settings, verified or not", "[ModHost]")
 {
-    const char *json = R"({"id": "demo", "version": "1", "rules": [ {"target": "machine_start_gcode", "value": "\"G28\""} ]})";
+    const char *json = R"({"id": "demo", "version": "1", "author": "Someone", "rules": [ {"target": "machine_start_gcode", "value": "\"G28\""} ]})";
     Mod mod = ModSet::parse_mod(json);
-    CHECK_THROWS_WITH(ModSet::build({mod}), ContainsSubstring("only official mods may change \"machine_start_gcode\""));
+    CHECK(mod.author == "Someone");
+    REQUIRE_FALSE(mod.official);
+    REQUIRE_FALSE(mod.verified);
+    CHECK_NOTHROW(ModSet::build({mod}));
     mod.official = true;
     CHECK_NOTHROW(ModSet::build({mod}));
     CHECK(is_gcode_setting("layer_change_gcode"));

@@ -37457,7 +37457,7 @@ msgstr "공식"
 
 # AI Translated
 msgid "Verified"
-msgstr "검증됨"
+msgstr "인증됨"
 
 # AI Translated
 msgid "Community"
@@ -43241,6 +43241,31 @@ msgstr "%s %s을(를) 받았습니다. 앱을 다시 시작하면 설치됩니�
 # AI Translated
 msgid "Installed Mods"
 msgstr "설치된 모드"
+
+msgid "Not verified"
+msgstr "인증 안 됨"
+
+msgid "Unverified mod"
+msgstr "인증되지 않은 모드"
+
+msgid "unknown author"
+msgstr "제작자 정보 없음"
+
+msgid "I understand the risk, load it"
+msgstr "위험을 이해하고 로드"
+
+msgid "Don't load"
+msgstr "로드하지 않음"
+
+#. TRN %1%: a mod's name, %2%: its version, %3%: its author.
+msgid ""
+"%1% %2% (%3%) has not been reviewed or verified by Magpie.\n"
+"It runs as code inside the application and can change the slicing result and the G-code your printer runs. Magpie cannot stop malicious code or viruses in it; your files and data could be at risk, and wrong G-code could damage your printer.\n"
+"Only use mods from sources you trust. You are responsible for any problem this mod causes."
+msgstr ""
+"%1% %2%(%3%)은 Magpie가 검토하거나 인증하지 않은 모드입니다.\n"
+"이 모드는 프로그램 안에서 코드로 실행되며, 슬라이싱 결과와 프린터가 실행할 G-code를 바꿀 수 있습니다. 악성 코드나 바이러스가 들어 있어도 Magpie가 막아 주지 못합니다. 이 경우 PC의 파일과 정보가 위험해지거나, 잘못된 G-code로 프린터가 손상될 수 있습니다.\n"
+"믿을 수 있는 곳에서 받은 모드만 사용하세요. 이 모드를 사용해서 생기는 문제의 책임은 사용자에게 있습니다."
 
 # AI Translated
 msgid "Mod settings"
