@@ -835,7 +835,7 @@ TEST_CASE("The Cura support generator keeps the top Z distance that is not a who
     Slic3r::Print print;
     Slic3r::Test::init_and_process_print({ support_tee() }, print, {
         { "enable_support", 1 }, { "support_type", "normal(auto)" }, { "mod_settings", R"({"cura_support.enable": true})" },
-        { "layer_height", layer_height }, { "first_layer_height", layer_height }, { "min_layer_height", "0.07" },
+        { "layer_height", layer_height }, { "initial_layer_print_height", layer_height }, { "min_layer_height", "0.07" },
         { "support_top_z_distance", top_z_distance }, { "support_interface_top_layers", roof_layers },
         { "support_interface_bottom_layers", 0 } });
     const PrintObject &object = *print.objects().front();
@@ -851,15 +851,25 @@ TEST_CASE("Cura conical support covers every overhang of an object placed off th
 {
     // The printable area the generator clips conical support with was moved into object coordinates by the
     // object's centre only, not by where the instance sits on the bed: only the part beyond the adhesion margin in
-    // +X and +Y kept its support. The tee is placed by its instance (arranged), so its stem is at x = -5..5 mm in
-    // object coordinates and its two 10 mm overhangs lie on either side.
+    // +X and +Y kept its support. The tee sits in the middle of the 200 x 200 mm bed (not arranged: arranging
+    // centres it on the origin, half off the bed, where clipping is right), its two 10 mm overhangs on either side
+    // of the stem. Measured on the CLI (golden/fixes/conical, the same tee on a U1): at z 8 mm the support spans
+    // x 126.3..150.3 mm before (the -X overhang clipped) and 121.7..149.3 mm after.
     Slic3r::Test::OfficialMods mods;
     Slic3r::Print print;
-    Slic3r::Test::init_and_process_print({ support_tee() }, print, {
+    Slic3r::Model model;
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
         { "enable_support", 1 }, { "support_type", "normal(auto)" },
         { "mod_settings", R"({"cura_support.enable": true, "cura_support.conical_enabled": true})" },
-        { "layer_height", 0.2 }, { "first_layer_height", 0.2 }, { "support_top_z_distance", 0.2 },
+        { "layer_height", 0.2 }, { "initial_layer_print_height", 0.2 }, { "support_top_z_distance", 0.2 },
         { "support_interface_top_layers", 0 }, { "support_interface_bottom_layers", 0 } });
+    TriangleMesh tee = support_tee();
+    tee.translate(85.f, 95.f, 0.f);
+    std::vector<TriangleMesh> meshes;
+    meshes.push_back(std::move(tee));
+    Slic3r::Test::init_print(std::move(meshes), print, model, config, nullptr, /*arrange=*/false);
+    print.process();
     const PrintObject &object = *print.objects().front();
     const double       mm2    = SCALING_FACTOR * SCALING_FACTOR;
     const BoundingBox  box    = get_extents(object.layers().back()->lslices);
@@ -875,9 +885,11 @@ TEST_CASE("Cura conical support covers every overhang of an object placed off th
         CAPTURE(layer->print_z);
         const double left_mm2  = area(intersection_ex(layer->support_islands, ExPolygons{ ExPolygon(left) })) * mm2;
         const double right_mm2 = area(intersection_ex(layer->support_islands, ExPolygons{ ExPolygon(right) })) * mm2;
-        // Measured after the fix: equal sides. Before, the -X overhang had none.
-        CHECK(left_mm2 > 50.);
-        CHECK(right_mm2 > 50.);
+        // The two overhangs are mirror images: the same support on both sides. Before, the -X side lost its part
+        // within the adhesion margin of the edge the frame error put there.
+        CHECK(right_mm2 > 10.);
+        CHECK(left_mm2 > 0.8 * right_mm2);
+        CHECK(right_mm2 > 0.8 * left_mm2);
         ++checked;
     }
     CHECK(checked > 5);

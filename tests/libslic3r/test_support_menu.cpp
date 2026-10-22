@@ -146,9 +146,9 @@ TEST_CASE("A support menu is checked when its manifest loads", "[ModHost][Suppor
     CHECK_THROWS_WITH(ModSet::parse_mod(with({ { "slot", "wall.plan" } }, nullptr)), ContainsSubstring("support slots"));
     CHECK_THROWS_WITH(ModSet::parse_mod(with({ { "menu", { { "param", "enable" }, { "entries", { { { "label", "A" }, { "support_type", "sideways" } } } } } } }, nullptr)),
                       ContainsSubstring("unknown support_type"));
-    CHECK_THROWS_WITH(ModSet::parse_mod(with({}, { { "type", "float" }, { "default", 0. }, { "invalidates", { "posSupportMaterial" } } })),
+    CHECK_THROWS_WITH(ModSet::parse_mod(with(nlohmann::json::object(), { { "type", "float" }, { "default", 0. }, { "invalidates", { "posSupportMaterial" } } })),
                       ContainsSubstring("bool parameter"));
-    CHECK_NOTHROW(ModSet::parse_mod(with({}, nullptr)));
+    CHECK_NOTHROW(ModSet::parse_mod(with(nlohmann::json::object(), nullptr)));
 }
 
 TEST_CASE("A parameter's choices can be the implementations the loaded mods register for a slot", "[ModHost][SupportMenu]")

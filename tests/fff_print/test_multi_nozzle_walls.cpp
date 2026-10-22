@@ -690,6 +690,8 @@ TEST_CASE("A chosen crisp corner toolhead of another material prints with a warn
     OfficialMods       mods;
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.15, 1, "classic", true);
     config.set_key_value("filament_type", new ConfigOptionStrings{ "PLA", "PETG" });
+    // validate() asks for the E reset relative extrusion needs at each layer.
+    config.set_deserialize_strict({ { "layer_change_gcode", "G92 E0\n" } });
     auto warnings_with = [&config](int detail_toolhead) {
         DynamicPrintConfig c = config;
         multi_nozzle_params(c, { { "detail_toolhead", detail_toolhead } });
@@ -697,7 +699,9 @@ TEST_CASE("A chosen crisp corner toolhead of another material prints with a warn
         Model model;
         init_print({ cube(20) }, print, model, c);
         std::vector<StringObjectException> warnings;
-        CHECK(print.validate(&warnings).string.empty());
+        const StringObjectException        error = print.validate(&warnings);
+        INFO(error.string);
+        CHECK(error.string.empty());
         size_t found = 0;
         for (const StringObjectException &w : warnings)
             found += w.string.find("crisp corner toolhead") != std::string::npos;
@@ -1741,8 +1745,16 @@ TEST_CASE("A by-object skirt is spaced for the nozzle that prints it", "[MultiNo
     Print print;
     print.is_BBL_printer() = true;
     Model model;
-    init_print({ TestMesh::_40x10 }, print, model, config);
-    const std::string output = Slic3r::Test::gcode(print);
+    init_print({ cube(20) }, print, model, config); // solid: the 0.8 mm nozzle prints its first layer
+    const StringObjectException error = print.validate();
+    INFO(error.string);
+    REQUIRE(error.string.empty());
+    std::string output;
+    try {
+        output = Slic3r::Test::gcode(print);
+    } catch (const SlicingErrors &e) {
+        FAIL(print.slicing_errors_message(e));
+    }
     // The printed skirt width, mm (a BBL printer writes "; FEATURE: <role>" and "; LINE_WIDTH: <mm>").
     double printed_width = 0., width = 0.;
     bool   skirt = false;
