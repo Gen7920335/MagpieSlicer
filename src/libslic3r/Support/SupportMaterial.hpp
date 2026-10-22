@@ -7,6 +7,7 @@
 #include "libslic3r/Support/SupportLayer.hpp"
 #include "libslic3r/Support/SupportParameters.hpp"
 #include <functional>
+#include <memory>
 #include <vector>
 #include "libslic3r/ExPolygon.hpp"
 #include "libslic3r/libslic3r.h"
@@ -119,6 +120,10 @@ private:
 	void clip_with_shape();
 */
 
+	// MAGPIE: a support mod runs this generator on an object of a tree support type (ignore_support_type): the
+	// object's settings with the matching normal type (tree(auto) -> normal(auto), tree(manual) -> normal(manual)),
+	// which m_object_config and m_support_params then read; null otherwise.
+	std::unique_ptr<PrintObjectConfig> m_object_config_as_normal;
 	// Following objects are not owned by SupportMaterial class.
 	const PrintConfig 		*m_print_config;
 	const PrintObjectConfig *m_object_config;

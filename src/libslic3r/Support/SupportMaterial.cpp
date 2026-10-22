@@ -363,12 +363,28 @@ static Polygons contours_simplified(const Vec2i32 &grid_size, const double pixel
 }
 #endif // SUPPORT_USE_AGG_RASTERIZER
 
+// MAGPIE: the object's settings with the normal support type matching its tree type, when a support mod runs this
+// generator on a tree type; null otherwise. Overhang detection is automatic only for normal(auto), so a tree(auto)
+// object found no overhang at all: Mixed on tree(auto) printed no support (overhang.obj: 14 support blocks with
+// tree(auto) alone, none with Mixed added; normal(manual) + Mixed none either; tree(auto) + Mixed with
+// enforce_support_layers 40, which skips the automatic check, 14 again; main 987bb6eb70).
+static std::unique_ptr<PrintObjectConfig> object_config_as_normal(const PrintObject &object, const SupportMaterialOverrides &overrides)
+{
+    const SupportType type = object.config().support_type.value;
+    if (! overrides.ignore_support_type || ! is_tree(type))
+        return nullptr;
+    auto config = std::make_unique<PrintObjectConfig>(object.config());
+    config->support_type.value = is_auto(type) ? stNormalAuto : stNormal;
+    return config;
+}
+
 PrintObjectSupportMaterial::PrintObjectSupportMaterial(const PrintObject *object, const SlicingParameters &slicing_params,
                                                        SupportMaterialOverrides overrides) :
+    m_object_config_as_normal(object_config_as_normal(*object, overrides)),
     m_print_config          (&object->print()->config()),
-    m_object_config         (&object->config()),
+    m_object_config         (m_object_config_as_normal ? m_object_config_as_normal.get() : &object->config()),
     m_slicing_params        (slicing_params),
-    m_support_params        (*object),
+    m_support_params        (*object, m_object_config_as_normal.get()),
     m_overrides             (std::move(overrides))
 {
     m_support_params.keep_narrow_islands = m_overrides.keep_narrow_islands;
