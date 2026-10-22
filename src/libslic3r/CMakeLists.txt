@@ -135,6 +135,8 @@ set(lisbslic3r_sources
     ModHost/NativeCompose.hpp
     ModHost/NativeContacts.cpp
     ModHost/NativeContacts.hpp
+    ModHost/NetPermission.cpp
+    ModHost/NetPermission.hpp
     ModHost/NativeSupport.cpp
     ModHost/NativeSupport.hpp
     ModHost/GCodeEvents.cpp

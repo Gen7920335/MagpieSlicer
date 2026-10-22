@@ -651,6 +651,13 @@ Http& Http::ca_file(const std::string &name)
 	return *this;
 }
 
+Http& Http::follow_redirects(bool enable)
+{
+	if (p)
+		::curl_easy_setopt(p->curl, CURLOPT_FOLLOWLOCATION, enable ? 1L : 0L);
+	return *this;
+}
+
 Http& Http::tls_verify(bool enable)
 {
 	if (p) {

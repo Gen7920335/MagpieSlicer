@@ -116,6 +116,95 @@ core has no module of its own there. It exchanges numbers only, never G-code or 
 marks the sites, estimates their times, fills in the waits and re-estimates the result. Its design
 is in [layer-time-blending.md](layer-time-blending.md).
 
+## Printer connections
+
+A native mod can connect a printer the slicer has no agent for, through the slot `printer.agent` v1
+(`mods/sdk/include/magpie_slot_printer_agent.h`). It touches nothing of slicing or G-code. Each loaded
+implementation becomes one of Orca's printer agents, `mod:<mod id>` (`.<impl>` appended when the implementation
+is not named after its mod), in the printer preset's **Printer Agent** dropdown (`ModPrinterAgent`,
+`NetworkAgentFactory::register_all_agents`). Orca's Device tab, AMS view and send dialog then drive the printer
+unchanged. The mod's manifest must say `"thread_safe": true`; the slot is not registered otherwise.
+
+The core and the mod exchange vendor-neutral JSON, so a mod does not change when Orca's device format does, and the
+core knows no printer brand:
+
+- **Status** (`events->status`), version `"v": 1`. A partial object updates the fields it has; objects merge key by
+  key, anything else replaces; unknown fields are ignored; fields are only ever added.
+  `state` (`idle`, `preparing`, `printing`, `paused`, `finished`, `failed`, `offline`), `stage` (the firmware's own
+  word), `progress` 0-100, `layer`, `total_layers`, `remaining_s`, `elapsed_s`, `file`,
+  `temps` `{nozzle, bed, chamber: [current, target]}` in °C, `fans` `{part, aux: percent, box: level}`,
+  `speed_mode` 1-3, `light` `{camera, chamber: bool}`, `units` (material units: `id`, `model`, `temp`,
+  `humidity`, `drying`, `trays` of `slot`, `material`, `color` `#RRGGBB`, `brand`, `remain_pct`,
+  `state` `loaded`/`empty`/`feeding`), `errors` (`code`, `text`), `caps` (`nozzle_max`, `bed_max`, and what the
+  printer can do). `ModPrinterStatus` turns it into the `push_status` message MachineObject parses; units of more
+  than four trays show their first four.
+- **Commands** (`send_command`), `{"cmd": ...}`. From the Device tab: `pause`, `resume`, `stop`,
+  `set_temp {heater: nozzle|bed, target}`, `set_fan {fan: part|aux|box, pct}`, `set_speed_mode {mode}`,
+  `set_light {light, on}`, `home {axes}`, `move {axis, distance_mm, speed_mm_min}`, `extrude {...}`,
+  `auto_level`. From the printer panel: an action's `command` with its `args`, and `panel_message` /
+  `panel_closed` for web panels. Raw G-code never crosses: of Orca's `gcode_line` only the single fan,
+  temperature and home lines its own controls send are recognised. A mod answers an unknown command with
+  `MP_ERR_NOT_FOUND` and one its printer cannot do now with `MP_ERR_FAILED` and a reason the user reads.
+  `send_command` returns quickly: it publishes and leaves waiting to the mod's own thread.
+- **Printing**: `upload` (`{file_name, md5, size}`, progress and cancel from the send dialog) and then
+  `start_print` (`file_name`, `remote_path`, `md5`, `size`, `printer_model` of the preset, `use_ams`,
+  `ams_mapping` `[{tool, unit, slot, slot_index, color, material}]` from the send dialog's mapping with the
+  project's filament colour and type per tool, `options` `{auto_leveling, vibration_compensation,
+  flow_calibration, timelapse}`). The mod refuses a start it judges unsafe (another printer model, a tray of
+  another material) with a reason; the send dialog shows it.
+- **Events** (`events->event`): `{"type": "probe", "info": {model_id, model_name, name, firmware}}` names the
+  printer for the device list, `notice` (`text`) becomes a notification, `panel_message` (`panel`, `data`) goes to
+  that web panel, anything else reaches the printer panel.
+
+**connect** gets `{dev_id, host, port, fields, profile, secret_keys}`: `host` is the preset's print host,
+`fields` the printer panel's form values for that host, `profile` the preset's `printer_model`, name and nozzle
+diameter, `secret_keys` the credential-store key of each secret field. A first failed attempt is reported in the
+printer panel and as a notification, not to the device code (which would drop the selected machine); a connection
+lost after it worked is.
+
+### Network access
+
+A native mod reaches the network only through the core's service `core.net` v1 (`mods/sdk/include/magpie_net.h`,
+`ModNetService`), which exists in the GUI application only; the command line tool gives a null import, and a mod
+must still load there. The manifest lists every host and port:
+
+```json
+"network": { "reason": "Talks to your printer on the local network.", "reason_ko": "...",
+             "endpoints": [ { "host": "lan", "ports": [18910, 9883], "purpose": "control" } ] }
+```
+
+`host` is `lan` (a private, link-local or `.local` address), a host name, or `*.<domain>` (names below it). Before
+the mod's first connection the user sees the list and the reason and allows it; the answer is kept per mod version and
+list (`network_consent_key`), so an update that changes either asks again, and the printer panel withdraws it. Every
+request is checked against the list and the agreement:
+
+- HTTP through the core's libcurl: GET, POST (bytes or multipart with files), PUT (a file), DELETE; redirects are
+  not followed; an internet address is always checked against the system's certificates, and only a LAN address
+  may present a self-signed one.
+- TLS sockets through the core's OpenSSL, the same rule for certificates; client certificates are files the mod
+  names. A `.local` name must resolve to a LAN address.
+- Secrets in the operating system's credential store under the mod's own name. The printer panel writes secret
+  form fields there and never shows them again; nothing puts them in a project, a preset, an export or the log.
+- `queue_on_main` and `thread_start` run the mod's function under its crash guard: a crash disables the mod for the
+  run instead of ending the application. Before the mods shut down the core drops queued calls, closes connections
+  and joins the threads a mod left.
+
+The core never logs a URL, header or body it carries; its own log lines about mod traffic go through
+`ModNet::redact`. A mod's web panel is a page of its signed folder in a web view, whose own requests the core does
+not check.
+
+### The printer panel
+
+`"gui": {"printer": {...}}` describes the panel the printer settings' **Printer connection...** button opens
+(`ModPrinterDialog`): `fields` (`text`, `secret`, `choice` with `options`, `path`; a secret has no default),
+`actions` (a button sending `command` with `args`, grouped by `row`, with an optional `confirm` question, and
+`idle_only` refused while the printer prints or pauses), `panels` (`page`, an HTML file inside the mod folder; the
+page's `window.wx.postMessage(text)` reaches the session as `panel_message`, and the session's `panel_message`
+events call the page's `window.magpiePanelMessage(object)`) and `notices`. Each item may have `visible`, an
+expression over the form's field values and `printer_state`. Labels and texts take `_<language>` translations.
+The form is kept per printer address: values in the application config section `mod_printer:<mod id>`, secrets in
+the credential store as `<field>.<host>`.
+
 ## Mod index
 
 The app finds mods to install in an index: `{"version": 1, "mods": [entry, ...]}`. Each entry

@@ -804,6 +804,14 @@ set(SLIC3R_GUI_SOURCES
     Utils/QidiPrinterAgent.hpp
     Utils/SnapmakerPrinterAgent.cpp
     Utils/SnapmakerPrinterAgent.hpp
+    GUI/ModPrinterDialog.cpp
+    GUI/ModPrinterDialog.hpp
+    Utils/ModNetService.cpp
+    Utils/ModNetService.hpp
+    Utils/ModPrinterAgent.cpp
+    Utils/ModPrinterAgent.hpp
+    Utils/ModPrinterStatus.cpp
+    Utils/ModPrinterStatus.hpp
     Utils/MoonrakerPrinterAgent.cpp
     Utils/MoonrakerPrinterAgent.hpp
     Utils/Moonraker.cpp

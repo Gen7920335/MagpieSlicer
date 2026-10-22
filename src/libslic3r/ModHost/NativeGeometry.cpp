@@ -15,7 +15,10 @@
 #include <cstdlib>
 #include <exception>
 #include <limits>
+#include <mutex>
+#include <string>
 #include <tuple>
+#include <vector>
 
 namespace Slic3r {
 namespace ModHost {
@@ -196,6 +199,32 @@ const mp_geometry_v1 g_geometry = {sizeof(mp_geometry_v1), geo_offset, geo_boole
 
 } // namespace
 
+namespace {
+
+struct RegisteredService
+{
+    std::string name;
+    uint32_t    version    = 0;
+    const void *table      = nullptr;
+    uint32_t    table_size = 0;
+};
+
+std::mutex                      g_services_mutex;
+std::vector<RegisteredService> &g_services = *new std::vector<RegisteredService>(); // never destroyed, as the mod set
+
+} // namespace
+
+void register_core_service(const std::string &name, uint32_t version, const void *table, uint32_t table_size)
+{
+    std::lock_guard<std::mutex> lock(g_services_mutex);
+    for (RegisteredService &s : g_services)
+        if (s.name == name) {
+            s = {name, version, table, table_size};
+            return;
+        }
+    g_services.push_back({name, version, table, table_size});
+}
+
 const void *core_service(const std::string &name, uint32_t min_version, uint32_t *table_size)
 {
     if (name == MP_GEOMETRY_SERVICE && min_version <= MP_GEOMETRY_VERSION) {
@@ -203,6 +232,13 @@ const void *core_service(const std::string &name, uint32_t min_version, uint32_t
             *table_size = sizeof(g_geometry);
         return &g_geometry;
     }
+    std::lock_guard<std::mutex> lock(g_services_mutex);
+    for (const RegisteredService &s : g_services)
+        if (s.name == name && s.version >= min_version) {
+            if (table_size)
+                *table_size = s.table_size;
+            return s.table;
+        }
     return nullptr;
 }
 

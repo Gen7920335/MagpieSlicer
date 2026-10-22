@@ -127,6 +127,9 @@ public:
 	// shared client for compatibility with self-signed print hosts; opt in for any
 	// request carrying authentication credentials or sensitive user data.
 	Http& tls_verify(bool enable);
+	// MAGPIE: redirects are followed by default; a caller that checks the address it sends to (the mods' core.net
+	// service) turns this off so a redirect cannot take the request to an address it did not check.
+	Http& follow_redirects(bool enable);
 
 	Http& form_clear();
 	// Add a HTTP multipart form field

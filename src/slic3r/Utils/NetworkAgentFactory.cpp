@@ -10,6 +10,7 @@
 #include "slic3r/plugin/PluginManager.hpp"
 #include "slic3r/plugin/pluginTypes/printerAgent/PrinterAgentPluginCapability.hpp"
 #include "CrealityPrintAgent.hpp"
+#include "ModPrinterAgent.hpp"
 #include <algorithm>
 #include <boost/log/trivial.hpp>
 #include <chrono>
@@ -199,6 +200,9 @@ void NetworkAgentFactory::register_all_agents()
                                    return agent;
                                });
     }
+
+    // MAGPIE: printer connections the loaded native mods provide (slot printer.agent), as "mod:<mod id>".
+    ModPrinterAgent::register_all();
 }
 
 std::unique_ptr<NetworkAgent> create_agent_from_config(const std::string& log_dir, AppConfig* app_config)

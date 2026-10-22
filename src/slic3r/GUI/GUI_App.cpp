@@ -237,6 +237,8 @@
 #include "HintNotification.hpp"
 
 #include "slic3r/Utils/NetworkAgentFactory.hpp"
+#include "slic3r/Utils/ModNetService.hpp"
+#include "ModPrinterDialog.hpp"
 #include "slic3r/Utils/BBLNetworkPlugin.hpp"
 #include "slic3r/Utils/bambu_networking.hpp"
 
@@ -2953,7 +2955,8 @@ int GUI_App::OnExit()
         BOOST_LOG_TRIVIAL(error) << "Failed to clean up encrypt bbl network log file";
     }
 
-    // MAGPIE: native mods shut down while their libraries are still attached.
+    // MAGPIE: native mods shut down while their libraries are still attached, after core.net stopped their threads.
+    ModNet::shutdown();
     ModHost::shutdown_native_mods();
     return wxApp::OnExit();
 }
@@ -3698,6 +3701,8 @@ bool GUI_App::on_init_inner()
             });
             // The question refers to the splash screen of this scope: cleared however the load ends.
             struct ClearConsent { ~ClearConsent() { ModHost::set_unverified_mod_consent({}); } } clear_consent;
+            // core.net first: printer mods import it in magpie_mod_init.
+            ModNet::register_service();
             ModHost::load_active_mods_from_data_dir();
             init_params->preset_substitutions = preset_bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSystemSilent);
         }
@@ -4140,6 +4145,8 @@ bool GUI_App::on_init_network(bool try_backup)
 
     // Register all printer agents before creating the network agent
     Slic3r::NetworkAgentFactory::register_all_agents();
+    // MAGPIE: a mod's printer asks for the user's agreement to its network list on first connection.
+    ModPrinterDialog::install_hooks();
 
     // m_agent = new Slic3r::NetworkAgent(data_directory);
     std::unique_ptr<Slic3r::NetworkAgent> agent_ptr = Slic3r::create_agent_from_config(data_directory, app_config);

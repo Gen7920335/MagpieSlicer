@@ -161,7 +161,12 @@ namespace Slic3r {
 namespace ModHost {
 // The host table handed to every mod.
 const MagpieHostApi &native_host_api();
-// A service the core itself offers to mods ("core.geometry", NativeGeometry.cpp), or nullptr.
+// A service the core itself offers to mods ("core.geometry", NativeGeometry.cpp, or one registered below), or nullptr.
 const void *core_service(const std::string &name, uint32_t min_version, uint32_t *table_size);
+// Adds a core service the application provides from outside libslic3r: the GUI's "core.net" (ModNetService). Called
+// before the mods load, since mods import services in magpie_mod_init; a later call under the same name replaces
+// the table for mods loaded afterwards. A mod importing a core service gets its own NativeMod as the `user`
+// pointer, so a service can tell which mod calls it (and read that mod's manifest).
+void register_core_service(const std::string &name, uint32_t version, const void *table, uint32_t table_size);
 } // namespace ModHost
 } // namespace Slic3r
