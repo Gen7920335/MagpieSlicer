@@ -165,6 +165,81 @@ struct ModGuiItem
     std::map<std::string, std::string> descriptions;             // "description_<language>"
 };
 
+// The printer panel ("gui"."printer") of a mod that fills the printer.agent slot. ModPrinterDialog draws it; the
+// conditions read the form's own field values by field id (as strings), nothing of the print.
+struct ModGuiFormField
+{
+    std::string                        id;
+    std::string                        kind = "text"; // "text", "secret" (credential store only), "choice", "path"
+    std::string                        label;
+    std::map<std::string, std::string> labels;
+    std::string                        help;
+    std::map<std::string, std::string> helps;   // "help_<language>"
+    std::vector<ModParamOption>        options; // "choice"
+    std::string                        default_value;
+    std::optional<Expr>                visible;
+};
+
+struct ModGuiAction
+{
+    std::string                        id;
+    std::string                        label;
+    std::map<std::string, std::string> labels;
+    std::string                        row;      // actions with one row share a line
+    std::string                        command;  // "cmd" of the neutral command sent to the session
+    std::string                        args_json; // object merged into the command; "" = none
+    std::string                        confirm;  // asked first (Yes/No) when not empty
+    std::map<std::string, std::string> confirms; // "confirm_<language>"
+    bool                               idle_only = false; // refused while the printer prints or pauses
+    std::optional<Expr>                visible;
+};
+
+// A web view of an HTML page in the mod's folder (a camera view). The page and the session exchange JSON messages:
+// the page's window.wx.postMessage(text) reaches the session as the "panel_message" command, and the session's
+// {"type": "panel_message"} events reach the page's window.magpiePanelMessage(object).
+struct ModGuiWebPanel
+{
+    std::string                        id;
+    std::string                        label;
+    std::map<std::string, std::string> labels;
+    std::string                        page; // path inside the mod folder
+    std::optional<Expr>                visible;
+};
+
+struct ModGuiNotice
+{
+    std::string                        id;
+    std::string                        text;
+    std::map<std::string, std::string> texts; // "text_<language>"
+    std::optional<Expr>                visible;
+};
+
+struct ModGuiPrinter
+{
+    std::vector<ModGuiFormField> fields;
+    std::vector<ModGuiAction>    actions;
+    std::vector<ModGuiWebPanel>  panels;
+    std::vector<ModGuiNotice>    notices;
+    bool empty() const { return fields.empty() && actions.empty() && panels.empty() && notices.empty(); }
+};
+
+// "network": every host and port the mod's native code may reach through the core.net service (NetPermission.hpp).
+// The user sees the list and agrees once per mod version before the first connection.
+struct ModNetworkEndpoint
+{
+    std::string           host;  // "lan" (a private, link-local or .local address), "name.example", or "*.example"
+    std::vector<uint16_t> ports;
+    std::string           purpose;
+};
+
+struct ModNetwork
+{
+    std::string                        reason;
+    std::map<std::string, std::string> reasons; // "reason_<language>"
+    std::vector<ModNetworkEndpoint>    endpoints;
+    bool empty() const { return endpoints.empty(); }
+};
+
 struct ModGui
 {
     // Support painting channels (at most two: the paint tool stores channel 0 and 1 besides plain
@@ -177,6 +252,8 @@ struct ModGui
     // Parameters of object or region scope shown in an object's settings, in this order. Empty
     // shows every object and region parameter.
     std::vector<std::string> object_params;
+    // The printer panel of a printer.agent mod.
+    ModGuiPrinter            printer;
 };
 
 // Where a mod was found. Bundled mods ship with the application in <resources>/mods; installed
@@ -203,6 +280,7 @@ struct Mod
     bool                               thread_safe = false;
     std::map<std::string, ModLegacyKey> legacy_keys; // old setting key -> how it loads
     ModGui                             gui;
+    ModNetwork                         network;
     // Translations of the texts its code hands the core for the user (warnings, errors, progress), from the
     // package's i18n/<language>.json files: language -> English text -> translation.
     std::map<std::string, std::map<std::string, std::string>> messages;

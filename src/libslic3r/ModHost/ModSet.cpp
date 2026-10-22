@@ -361,6 +361,170 @@ static std::map<std::string, std::string> translations(const nlohmann::json &j, 
     return out;
 }
 
+namespace {
+
+// An optional "visible" condition of a printer panel item.
+std::optional<Expr> printer_item_condition(const json &j, const std::string &where)
+{
+    if (std::string text = optional_string(j, "visible"); !text.empty())
+        return parse_expr(text, where + " visible");
+    return std::nullopt;
+}
+
+// Each entry of the list `key` of the printer panel `printer`, with a unique identifier "id".
+template<class Fn> void for_each_printer_item(const json &printer, const char *key, const std::string &where, Fn &&fn)
+{
+    auto it = printer.find(key);
+    if (it == printer.end())
+        return;
+    if (!it->is_array())
+        throw ModError(where + ": \"gui\".printer." + key + " must be a list");
+    std::set<std::string> ids;
+    for (const json &j : *it) {
+        if (!j.is_object())
+            throw ModError(where + ": each \"gui\".printer." + key + " entry must be an object");
+        const std::string id = optional_string(j, "id");
+        if (!is_identifier(id))
+            throw ModError(where + ": \"gui\".printer." + key + " entry needs an \"id\" of a-z, 0-9 and _");
+        if (!ids.insert(id).second)
+            throw ModError(where + ": \"gui\".printer." + key + " lists \"" + id + "\" twice");
+        fn(j, id, where + " printer " + key + " \"" + id + "\"");
+    }
+}
+
+// A path inside the mod's folder: relative, forward slashes, no "..".
+bool is_package_relative_path(const std::string &path)
+{
+    if (path.empty() || path.front() == '/' || path.find('\\') != std::string::npos || path.find(':') != std::string::npos)
+        return false;
+    std::vector<std::string> parts;
+    boost::split(parts, path, [](char c) { return c == '/'; });
+    return std::none_of(parts.begin(), parts.end(), [](const std::string &p) { return p.empty() || p == "." || p == ".."; });
+}
+
+ModGuiPrinter parse_gui_printer(const json &printer, const std::string &where)
+{
+    if (!printer.is_object())
+        throw ModError(where + ": \"gui\".printer must be an object");
+    ModGuiPrinter out;
+    for_each_printer_item(printer, "fields", where, [&](const json &j, const std::string &id, const std::string &w) {
+        ModGuiFormField f;
+        f.id     = id;
+        f.kind   = j.contains("type") ? optional_string(j, "type") : std::string("text");
+        f.label  = optional_string(j, "label");
+        f.labels = translations(j, "label_");
+        f.help   = optional_string(j, "help");
+        f.helps  = translations(j, "help_");
+        f.default_value = optional_string(j, "default");
+        f.visible       = printer_item_condition(j, w);
+        if (f.kind != "text" && f.kind != "secret" && f.kind != "choice" && f.kind != "path")
+            throw ModError(w + ": \"type\" must be text, secret, choice or path");
+        if (auto opts = j.find("options"); opts != j.end()) {
+            if (f.kind != "choice" || !opts->is_array())
+                throw ModError(w + ": \"options\" is a list, for a choice field only");
+            for (const json &o : *opts) {
+                ModParamOption option;
+                option.value  = o.is_string() ? o.get<std::string>() : o.is_object() ? optional_string(o, "value") : std::string();
+                option.label  = o.is_object() ? optional_string(o, "label") : std::string();
+                option.labels = o.is_object() ? translations(o, "label_") : std::map<std::string, std::string>();
+                if (option.value.empty())
+                    throw ModError(w + ": each option must be a non-empty string or an object with a \"value\"");
+                if (option.label.empty())
+                    option.label = option.value;
+                f.options.push_back(std::move(option));
+            }
+        }
+        if (f.kind == "choice" && f.options.empty())
+            throw ModError(w + ": a choice field needs \"options\"");
+        // A secret never has a default: it would be a secret written into the manifest.
+        if (f.kind == "secret" && !f.default_value.empty())
+            throw ModError(w + ": a secret field cannot have a \"default\"");
+        out.fields.push_back(std::move(f));
+    });
+    for_each_printer_item(printer, "actions", where, [&](const json &j, const std::string &id, const std::string &w) {
+        ModGuiAction a;
+        a.id       = id;
+        a.label    = optional_string(j, "label");
+        a.labels   = translations(j, "label_");
+        a.row      = optional_string(j, "row");
+        a.command  = optional_string(j, "command");
+        a.confirm  = optional_string(j, "confirm");
+        a.confirms = translations(j, "confirm_");
+        a.visible  = printer_item_condition(j, w);
+        if (!is_identifier(a.command))
+            throw ModError(w + ": \"command\" must be a command name of a-z, 0-9 and _");
+        if (auto args = j.find("args"); args != j.end()) {
+            if (!args->is_object())
+                throw ModError(w + ": \"args\" must be an object");
+            a.args_json = args->dump();
+        }
+        if (auto idle = j.find("idle_only"); idle != j.end()) {
+            if (!idle->is_boolean())
+                throw ModError(w + ": \"idle_only\" must be true or false");
+            a.idle_only = idle->get<bool>();
+        }
+        out.actions.push_back(std::move(a));
+    });
+    for_each_printer_item(printer, "panels", where, [&](const json &j, const std::string &id, const std::string &w) {
+        ModGuiWebPanel p;
+        p.id      = id;
+        p.label   = optional_string(j, "label");
+        p.labels  = translations(j, "label_");
+        p.page    = optional_string(j, "page");
+        p.visible = printer_item_condition(j, w);
+        if (!is_package_relative_path(p.page))
+            throw ModError(w + ": \"page\" must be a relative path inside the mod folder");
+        out.panels.push_back(std::move(p));
+    });
+    for_each_printer_item(printer, "notices", where, [&](const json &j, const std::string &id, const std::string &w) {
+        ModGuiNotice n;
+        n.id      = id;
+        n.text    = optional_string(j, "text");
+        n.texts   = translations(j, "text_");
+        n.visible = printer_item_condition(j, w);
+        if (n.text.empty())
+            throw ModError(w + ": a notice needs a \"text\"");
+        out.notices.push_back(std::move(n));
+    });
+    return out;
+}
+
+ModNetwork parse_network(const json &network, const std::string &where)
+{
+    if (!network.is_object())
+        throw ModError(where + ": \"network\" must be an object");
+    ModNetwork out;
+    out.reason  = optional_string(network, "reason");
+    out.reasons = translations(network, "reason_");
+    if (out.reason.empty())
+        throw ModError(where + ": \"network\" needs a \"reason\" the user reads before agreeing");
+    auto it = network.find("endpoints");
+    if (it == network.end() || !it->is_array() || it->empty())
+        throw ModError(where + ": \"network\".endpoints must be a non-empty list");
+    for (const json &e : *it) {
+        if (!e.is_object())
+            throw ModError(where + ": each \"network\" endpoint must be {\"host\", \"ports\"}");
+        ModNetworkEndpoint ep;
+        ep.host    = optional_string(e, "host");
+        ep.purpose = optional_string(e, "purpose");
+        // "lan", a host name, or "*." and a domain of at least two labels: never a bare "*".
+        if (ep.host != "lan" && !std::regex_match(ep.host, std::regex("(\\*\\.)?[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+")))
+            throw ModError(where + ": network host \"" + ep.host + "\" must be \"lan\", a host name or \"*.<domain>\"");
+        auto ports = e.find("ports");
+        if (ports == e.end() || !ports->is_array() || ports->empty())
+            throw ModError(where + ": network host \"" + ep.host + "\" needs a non-empty \"ports\" list");
+        for (const json &p : *ports) {
+            if (!p.is_number_unsigned() || p.get<uint64_t>() == 0 || p.get<uint64_t>() > 65535)
+                throw ModError(where + ": network host \"" + ep.host + "\": ports are 1 to 65535");
+            ep.ports.push_back(uint16_t(p.get<uint64_t>()));
+        }
+        out.endpoints.push_back(std::move(ep));
+    }
+    return out;
+}
+
+} // namespace
+
 const std::string &localized_text(const std::map<std::string, std::string> &translations, const std::string &language,
                                   const std::string &fallback)
 {
@@ -656,6 +820,18 @@ Mod ModSet::parse_mod(const std::string &json_text)
                 mod.gui.object_params.push_back(name.get<std::string>());
             }
         }
+        if (auto printer = it->find("printer"); printer != it->end()) {
+            mod.gui.printer = parse_gui_printer(*printer, where);
+            const bool fills_printer_agent = std::any_of(mod.slots.begin(), mod.slots.end(),
+                                                         [](const ModSlotDecl &d) { return d.slot == "printer.agent"; });
+            if (!fills_printer_agent)
+                mod_fail(mod.id, "\"gui\".printer is the panel of a printer.agent slot, which the mod does not declare");
+        }
+    }
+    if (auto it = j.find("network"); it != j.end()) {
+        mod.network = parse_network(*it, where);
+        if (mod.binary.empty())
+            mod_fail(mod.id, "\"network\" is reached by native code; the mod needs a \"binary\"");
     }
     return mod;
 }

@@ -600,8 +600,9 @@ struct NativeLoader
             return nullptr;
         // The core's own services first: no mod can stand in for them.
         if (const void *table = core_service(name, min_version, table_size)) {
+            // The importing mod itself, so a service knows its caller (core.net checks the caller's "network").
             if (user)
-                *user = nullptr;
+                *user = static_cast<void *>(state_of(self).mod);
             return table;
         }
         const NativeEntry *e = state_of(self).set->find_service(name, min_version);
