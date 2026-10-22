@@ -7848,6 +7848,9 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
         // MAGPIE: the auxiliary tower preview (GLCanvas3D::reload_scene): the mod parameters that decide it.
         "mod_settings", "printer_mod_settings", "filament_mod_settings", "different_settings_to_system",
         "support_interface_top_layers",
+        // MAGPIE: and the rest the tower previews read (aux tower: support on a plate, the tools' nozzles; layer time
+        // tower: spiral and belt turn it off). Absent, they read as off / filament 1 on nozzle 1 (review 2026-10-22).
+        "enforce_support_layers", "filament_map", "spiral_mode", "belt_printer",
         "nozzle_temperature", "nozzle_temperature_initial_layer",
         "extruder_colour", "filament_colour", "filament_type", "filament_is_support", "material_colour", "printable_height", "extruder_printable_height", "printer_model", "printer_technology",
         // These values are necessary to construct SlicingParameters by the Canvas3D variable layer height editor.
@@ -21713,6 +21716,16 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
         // Defer until after the loop so bed_shape_changed / set_bed_shape() run first if needed.
         else if (opt_key == "is_imex") {
             imex_changed = true;
+            update_scheduled = true;
+        }
+        // MAGPIE: what the tower previews (GLCanvas3D: the auxiliary and the layer time tower) depend on: the mods'
+        // parameters, support on a plate, the skirt and brim the tower keeps away from, the tools' nozzles. Without an
+        // update the preview kept the old tower until something else rebuilt the scene (review 2026-10-22).
+        else if (opt_key == "mod_settings" || opt_key == "printer_mod_settings" || opt_key == "filament_mod_settings" ||
+                 opt_key == "enable_support" || opt_key == "raft_layers" || opt_key == "enforce_support_layers" ||
+                 opt_key == "support_interface_top_layers" || opt_key == "skirt_loops" || opt_key == "skirt_distance" ||
+                 opt_key == "brim_width" || opt_key == "nozzle_diameter" || opt_key == "filament_map" ||
+                 opt_key == "spiral_mode" || opt_key == "belt_printer") {
             update_scheduled = true;
         }
         // Orca: the center of mass markers weigh the parts by it.

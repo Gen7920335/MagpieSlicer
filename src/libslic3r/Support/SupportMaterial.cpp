@@ -1873,11 +1873,6 @@ static inline std::pair<SupportGeneratorLayer*, SupportGeneratorLayer*> new_cont
             height = print_config.independent_support_layer_height && !slicing_params.zero_gap_interface_top ?
                 0. : std::min(layer.height, slicing_params.max_suport_layer_height);
         }
-        else if (layer.lower_layer == nullptr) {
-            // MAGPIE: a lifted first layer has no object layer below to synchronize with.
-            print_z = layer.bottom_z() - slicing_params.gap_support_object;
-            height  = std::min(layer.height, slicing_params.max_suport_layer_height);
-        }
         else {
             Layer* synced_layer = sync_gap_with_object_layer(layer, slicing_params.gap_support_object, true);
             print_z = synced_layer->print_z;

@@ -113,7 +113,21 @@ GCodeEvents::GCodeEvents(Print &print, const ConfigBase &settings, const mp_gcod
         uint32_t flags = 0;
         // Opened before the export applies its settings: the mod reads the print's own.
         m_opening = true;
-        this->call(*open, "open", [&](mp_ctx &ctx) { return table_of(*entry).open(entry->user, &ctx, &info, &open->writer, &state, &flags); });
+        try {
+            this->call(*open, "open", [&](mp_ctx &ctx) { return table_of(*entry).open(entry->user, &ctx, &info, &open->writer, &state, &flags); });
+        } catch (...) {
+            // A failed open throws out of the constructor, where the destructor does not run: the state this mod
+            // returned with its failure and the mods opened before it are closed here (review 2026-10-22: they
+            // leaked).
+            m_opening = false;
+            if (state != nullptr)
+                entry->mod->guarded_call([&]() {
+                    table_of(*entry).close(entry->user, state);
+                    return int32_t(MP_OK);
+                });
+            this->close_all();
+            throw;
+        }
         m_opening = false;
         if (state == nullptr)
             continue;
@@ -131,7 +145,9 @@ GCodeEvents::GCodeEvents(Print &print, const ConfigBase &settings, const mp_gcod
     }
 }
 
-GCodeEvents::~GCodeEvents()
+GCodeEvents::~GCodeEvents() { this->close_all(); }
+
+void GCodeEvents::close_all()
 {
     for (auto it = m_open.rbegin(); it != m_open.rend(); ++it) {
         const NativeEntry *entry = (*it)->entry;
@@ -141,6 +157,7 @@ GCodeEvents::~GCodeEvents()
             return int32_t(MP_OK);
         });
     }
+    m_open.clear();
 }
 
 void GCodeEvents::call(Open &open, const char *what, const std::function<mp_status(mp_ctx &)> &fn)

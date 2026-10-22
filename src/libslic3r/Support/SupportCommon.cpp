@@ -2174,23 +2174,6 @@ void generate_support_toolpaths(
                     }
                     done = true;
                 }
-                if (!done && support_params.keep_narrow_islands) {
-                    // MAGPIE: Resin keeps narrow base islands (Magpie line 1 Beta 6 fix).
-                    for (const ExPolygon &island : union_safety_offset_ex(base_layer.polygons_to_extrude())) {
-                        const size_t before = base_layer.extrusions.size();
-                        if (sheath)
-                            fill_expolygons_with_sheath_generate_paths(base_layer.extrusions,
-                                to_polygons(island), filler, density, ExtrusionRole::erSupportMaterial,
-                                flow, support_params, true, no_sort);
-                        // A configured wall may also erase a taper when its
-                        // nominal-width inset is empty. Keep printable walls;
-                        // use the same contained-island fill only if none fit.
-                        if (!sheath || base_layer.extrusions.size() == before)
-                            fill_expolygons_generate_paths(base_layer.extrusions,
-                                ExPolygons{island}, filler, density, ExtrusionRole::erSupportMaterial, flow, true);
-                    }
-                    done = true;
-                }
                 if (! done)
                     fill_expolygons_with_sheath_generate_paths(
                         // Destination

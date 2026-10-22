@@ -69,6 +69,8 @@ public:
 
 private:
     void call(Open &open, const char *what, const std::function<mp_status(mp_ctx &)> &fn);
+    // Closes every opened mod's state, the last opened first.
+    void close_all();
 
     Print                             &m_print;
     const ConfigBase                  &m_settings;
