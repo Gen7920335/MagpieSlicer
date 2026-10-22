@@ -5613,14 +5613,18 @@ const WipeTowerData &Print::wipe_tower_data(size_t filaments_cnt) const
 
     double max_height   = 0.;
     double layer_height = std::numeric_limits<double>::max();
+    // MAGPIE: a banded object's layers revisit filaments (layer.bands slot, H/2).
+    int    visits       = 1;
     for (const PrintObject *object : m_objects) {
         max_height   = std::max(max_height, unscale_(double(object->size().z())));
         layer_height = std::min(layer_height, object->config().layer_height.value);
+        if (object->layer_bands().active())
+            visits = BANDED_LAYER_VISITS_PER_FILAMENT;
     }
     if (max_height < EPSILON)
         return m_wipe_tower_data;
 
-    const WipeTowerFootprint footprint = estimate_wipe_tower_footprint(m_config, this->wipe_tower_type(), this->extruders(true), layer_height, max_height);
+    const WipeTowerFootprint footprint = estimate_wipe_tower_footprint(m_config, this->wipe_tower_type(), this->extruders(true), layer_height, max_height, visits);
     WipeTowerData &data = const_cast<Print *>(this)->m_wipe_tower_data;
     data.depth      = float(footprint.depth);
     data.width      = float(footprint.width);

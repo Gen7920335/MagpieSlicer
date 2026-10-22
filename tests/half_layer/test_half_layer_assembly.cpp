@@ -2670,10 +2670,10 @@ TEST_CASE("Half-height frames print upper-plane support after the lower outer-wa
     CHECK(frames_with_both > 0);
 }
 
-// The pre-slice tower estimate purges once per filament and layer; H/2 frames visit tools more often (A-B-A), so the
-// generated Type1 tower is deeper than the box the placement reserved. Placed by the estimate near the bed edge, the
-// real tower then leaves the bed: the check has to report it with the generated tower kept (so a caller can see it),
-// and Print::generated_wipe_tower_refit() has to give a position where that same tower fits.
+// A generated tower can still differ from the box the placement reserved for it (the estimate is a bound, built
+// before slicing). Placed so that the real tower leaves the bed, the check has to report it with the generated tower
+// kept (so a caller can see it), and Print::generated_wipe_tower_refit() has to give a position where that same
+// tower fits.
 TEST_CASE("A half-layer tower placed by the estimate is refitted onto the bed once generated", "[HalfLayer][ExecutionTower][TowerPlacement]")
 {
     auto config = multifilament_config(2);
@@ -2704,25 +2704,18 @@ TEST_CASE("A half-layer tower placed by the estimate is refitted onto the bed on
     init_print(std::vector<TriangleMesh>{cube(10.), cube(10.)}, print, model, config, &overrides);
     REQUIRE(print.wipe_tower_type() == WipeTowerType::Type1);
 
-    const WipeTowerData &estimate = print.wipe_tower_data(2);
-    const double estimated_side_mm = std::max(estimate.width, estimate.depth) + 2. * estimate.brim_width;
-    REQUIRE(estimated_side_mm > 0.);
     REQUIRE(print.has_wipe_tower());
     REQUIRE_NOTHROW(print.process());
     REQUIRE(print.wipe_tower_data().tool_changes.size() > 0);
     const std::optional<Polygon> generated_at_50 = print.generated_wipe_tower_footprint();
     REQUIRE(generated_at_50);
     const BoundingBox generated_box = get_extents(*generated_at_50);
-    const double generated_depth_mm = unscaled(generated_box.size().y());
-    CAPTURE(estimated_side_mm, generated_depth_mm);
-    // The precondition of the bug: the generated tower is larger than the box the estimate reserved.
-    REQUIRE(generated_depth_mm > estimated_side_mm + 1.);
 
-    // Where the placement would put the estimated box: flush with the far bed edge (200 mm test bed), 1 mm in.
+    // The tower moved so that half of it hangs over the far bed corner (200 mm test bed).
     const Polygons bed = print.get_extruder_shared_printable_polygon();
     const BoundingBox bed_box = get_extents(bed);
-    const double edge_x_mm = unscaled(bed_box.max.x()) - estimated_side_mm - 1. + estimate.brim_width;
-    const double edge_y_mm = unscaled(bed_box.max.y()) - estimated_side_mm - 1. + estimate.brim_width;
+    const double edge_x_mm = 50. + unscaled(bed_box.max.x() - generated_box.max.x()) + 0.5 * unscaled(generated_box.size().x());
+    const double edge_y_mm = 50. + unscaled(bed_box.max.y() - generated_box.max.y()) + 0.5 * unscaled(generated_box.size().y());
     config.set_deserialize_strict({{"wipe_tower_x", std::to_string(edge_x_mm)}, {"wipe_tower_y", std::to_string(edge_y_mm)}});
     print.apply(model, config);
     REQUIRE_THROWS_AS(print.process(), Slic3r::SlicingError);
@@ -2745,4 +2738,57 @@ TEST_CASE("A half-layer tower placed by the estimate is refitted onto the bed on
     CHECK(get_extents(*refitted).size() == generated_box.size());
     // A tower that fits needs no refit.
     CHECK_FALSE(print.generated_wipe_tower_refit());
+}
+
+// The pre-slice tower estimate places the tower and reserves its room on the plate. A banded layer (H/2) is printed
+// as a lower band, a core and an upper band, and the tower takes a tool change for each visit (A-B-A rather than
+// A-B), so the estimate has to reserve room for those visits: without them the generated tower was deeper than the
+// box reserved for it (Type1, this setup) and, on a U1 frog and cube with multi-nozzle walls, 129 x 126 mm against a
+// 32.5 mm box, with no free spot on the plate left to move it to.
+TEST_CASE("The tower estimate of a banded print reserves the tool changes its frames make", "[HalfLayer][ExecutionTower][TowerPlacement]")
+{
+    const bool type1 = GENERATE(true, false);
+    auto config = multifilament_config(2);
+    config.set_num_extruders(2);
+    set_toolhead_nozzle_diameter(config, 0, 0.4);
+    set_toolhead_nozzle_diameter(config, 1, 0.4);
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false},
+        {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"},
+        {"prime_tower_brim_width", 3}, {"wipe_tower_rotation_angle", 0},
+        {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"wall_loops", 2},
+        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
+    size_flush_to_nozzles(config);
+    config.set_key_value("grab_length", new ConfigOptionFloats{0., 0.});
+    // The outer wall on filament 1 and everything else on filament 2: each layer prints the lower outer pass, the
+    // core and the upper outer pass, so filament 1 is visited twice. Two objects of different filaments, as the
+    // plate's tower needs.
+    std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides;
+    for (int extruder : {1, 2})
+        overrides.push_back({{"extruder", extruder}, {"outer_wall_filament_id", 1}, {"inner_wall_filament_id", 2},
+            {"sparse_infill_filament_id", 2}, {"internal_solid_filament_id", 2}, {"top_surface_filament_id", 2},
+            {"bottom_surface_filament_id", 2}});
+    Print print;
+    print.is_BBL_printer() = type1;
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(10.), cube(10.)}, print, model, config, &overrides);
+    CAPTURE(type1);
+    REQUIRE(print.get_object(0)->layer_bands().active());
+
+    // The box the placement reserves, brim included (mm).
+    const WipeTowerData &estimate = print.wipe_tower_data(2);
+    const double estimated_side_mm = std::max(estimate.width, estimate.depth) + 2. * estimate.brim_width;
+    REQUIRE(estimated_side_mm > 0.);
+    REQUIRE(print.has_wipe_tower());
+    REQUIRE_NOTHROW(print.process());
+    REQUIRE(print.wipe_tower_data().tool_changes.size() > 0);
+    const std::optional<Polygon> generated = print.generated_wipe_tower_footprint();
+    REQUIRE(generated);
+    const BoundingBox generated_box = get_extents(*generated);
+    const double generated_side_mm = unscaled(std::max(generated_box.size().x(), generated_box.size().y()));
+    CAPTURE(estimated_side_mm, generated_side_mm);
+    // The reserved box holds the generated tower: 1 mm of slack for the brim's whole loops and rounding.
+    CHECK(generated_side_mm <= estimated_side_mm + 1.);
 }

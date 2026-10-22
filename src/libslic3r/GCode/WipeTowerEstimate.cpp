@@ -75,8 +75,10 @@ Polygon estimate_wipe_tower_first_layer_outline(const ConfigBase &config, WipeTo
     return WipeTower2::cone_base_polygon(width, depth, height, cone ? cone_angle->getFloat() : 0.);
 }
 
-WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeTowerType tower_type, const std::vector<unsigned int> &filament_slots, double layer_height, double max_object_height)
+WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeTowerType tower_type, const std::vector<unsigned int> &filament_slots, double layer_height, double max_object_height, int visits_per_filament)
 {
+    // MAGPIE: tool visits a layer can make per filament (banded layers revisit them, see the header).
+    const size_t visits = size_t(std::max(1, visits_per_filament));
     WipeTowerFootprint footprint;
     footprint.height = max_object_height;
     // A mixed slot is virtual: the tool ordering resolves it to one of its physical components
@@ -151,7 +153,8 @@ WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeT
 
     // A tower printed for one of the reasons above has no tool change to purge for; both
     // planners give it the idle depth below and nothing more.
-    const size_t purge_count = filaments_cnt > 1 ? (dual_nozzle ? filaments_cnt : filaments_cnt - 1) : 0;
+    // MAGPIE: a layer visiting each filament `visits` times changes tools that much more often.
+    const size_t purge_count = filaments_cnt > 1 ? (dual_nozzle ? filaments_cnt * visits : filaments_cnt * visits - 1) : 0;
 
     // Type2 purges one volume per tool change. Type1 plans per filament below; here the volume
     // only decides whether a tower exists.
@@ -160,12 +163,12 @@ WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeT
         // Dual-nozzle printers also purge the filament change length on the tower.
         const double length   = max_of("filament_change_length", 0.);
         const double diameter = max_of("filament_diameter", 1.75);
-        volume += length * PI * diameter * diameter / 4. * double(filaments_cnt / 2);
+        volume += length * PI * diameter * diameter / 4. * double(filaments_cnt / 2) * double(visits);
     }
     // Single-extruder multi-material purges the flush matrix instead of the prime volume.
     const bool semm_flush = opt_bool("purge_in_prime_tower") && opt_bool("single_extruder_multi_material");
     if (semm_flush)
-        volume = WipeTower2::estimate_semm_flush_volume(config, filaments_cnt);
+        volume = WipeTower2::estimate_semm_flush_volume(config, filaments_cnt) * double(visits);
 
     // The Type1 planner wipes each filament's own prime volume after changing to it, in a block
     // per adhesiveness category. On a two-nozzle printer the leaving filament is also rammed at
@@ -182,15 +185,17 @@ WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeT
             purge.prime_volume      = saving_mode ? 15.f : float(float_at("filament_prime_volume", id, prime_volume));
             purge.category          = int_at("filament_adhesiveness_category", id, 0);
             purge.filament_diameter = float(float_at("filament_diameter", id, 1.75));
-            purges.push_back(purge);
+            // MAGPIE: every visit of the filament wipes its prime volume again.
+            purges.insert(purges.end(), visits, purge);
             if (dual_nozzle) {
                 nozzles.insert(int_at("filament_map", id, 1));
                 if (float_at("filament_change_length", id, 0.) > float_at("filament_change_length", filament_ids[longest_ramming], 0.))
                     longest_ramming = i;
             }
         }
+        // MAGPIE: a banded layer crosses between the nozzles in each of its visits, (nozzles used x visits - 1) times.
         if (nozzles.size() > 1)
-            purges[longest_ramming].filament_change_length = float(float_at("filament_change_length", filament_ids[longest_ramming], 0.) * double(nozzles.size() - 1));
+            purges[longest_ramming * visits].filament_change_length = float(float_at("filament_change_length", filament_ids[longest_ramming], 0.) * double(nozzles.size() * visits - 1));
     }
 
     const double min_depth      = WipeTower::get_limit_depth_by_height(float(max_object_height));

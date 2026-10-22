@@ -15,6 +15,13 @@
 
 ## History
 
+### 2026-10-22 Tower estimate of banded (H/2) prints (branch h2-tower-estimate, worktree D:\claude\magpie-next-h2tower, UNBUILT)
+
+- KNOWN cause (measured with the dec69a4e67 build, `D:\claude\golden\islands	owerlayers.py`): U1 u1mn 0.4/0.6, two 20 mm cubes, Type2 rib tower. H/2 off: 1-2 tool changes a layer, tower body 32 mm; H/2 on: 4 (H/2 only) and 6-8 (H/2 + multi-nozzle walls) a layer, body 44.5 and 64.5 mm; the pre-slice estimate stayed 32.5 mm in every case. With the frog instead of one cube the generated tower is 129 x 126 mm and the refit finds no free spot, so the CLI fails "prime tower partially outside the printable area".
+- Change: `estimate_wipe_tower_footprint` takes `visits_per_filament`; callers pass `BANDED_LAYER_VISITS_PER_FILAMENT` (3: lower band, core, upper band) when an object on the plate prints in layer bands (Print: `layer_bands().active()`; PartPlate/CLI: `ModHost::layer_band_plan` on the print config plus the object's overrides). Purges become n x 3 - 1 (Type2), each filament's Type1 purge three times, nozzle crossings n x 3 - 1. Without bands nothing changes. It is an upper bound: h2_off measured 4 changes against the bound 5.
+- Tests (not run): "The tower estimate of a banded print reserves the tool changes its frames make" (Type1 and Type2, generated side <= estimated side + 1 mm); the refit test now places the tower half over the bed corner from the generated size, since its old precondition (generated deeper than the estimate) is what this change removes.
+- To check after the build: the frog + cube u1mn case (`D:\claude\golden\islands\corpus_b.json` h2_mn), whether the reserved box now fits the 129 mm tower or arrange still cannot place it.
+
 ### 2026-10-22 Code review fixes (branch review-fixes, worktree D:\claude\magpie-next-bblwall) - UNBUILT
 
 - Review of Magpie's code against fd28f6c189 in six areas (D:\claude\golden\review, lead tracker lead/findings.md). CUDA removed first (ea687e38c9, built, ctest 2737/2737). Fixes in two WIP commits, not built yet (Gen: no build until asked); gate scripts D:\claude\golden\fixes\{prep,gates}.sh and cmp.py (baseline golden/bblwall).

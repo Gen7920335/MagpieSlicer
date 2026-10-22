@@ -31,12 +31,20 @@ WipeTowerType resolve_wipe_tower_type(const ConfigBase &config);
 // about whether a cone exists.
 Polygon estimate_wipe_tower_first_layer_outline(const ConfigBase &config, WipeTowerType tower_type, double width, double depth, double height);
 
+// MAGPIE: how often one layer can visit each filament. A layer of a banded object (layer.bands slot, H/2) is printed
+// as an execution frame of three task runs, its lower band, its core and its upper band
+// (ToolOrdering::finalize_half_layer_frame), and the tower takes a tool change for every visit, so a filament can
+// be purged up to three times a layer instead of once.
+constexpr int BANDED_LAYER_VISITS_PER_FILAMENT = 3;
+
 // filament_ids:  0-based filaments purged on the plate. The config cannot see custom G-code tool
 //                changes, so ids derived from the model must include them
 //                (Print::extruders(true)) or a real tower is sized as if it were never built.
 //                A mixed slot may be passed as itself or already expanded: it is sized as its
 //                physical components either way, since those are all the tower ever purges.
 // layer_height:  thinnest layer the objects are sliced at. The first layer is folded in here.
+// visits_per_filament: how many times a layer can visit each filament: 1, or BANDED_LAYER_VISITS_PER_FILAMENT when
+//                an object on the plate prints in layer bands. The estimate is the bound for that many visits.
 //
 // A raft is deliberately not a reason: normalize_fdm_2 clears enable_prime_tower for a plate
 // purging one filament unless smooth timelapse or wrapping detection is on.
@@ -44,7 +52,8 @@ WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase               
                                                  WipeTowerType                    tower_type,
                                                  const std::vector<unsigned int> &filament_ids,
                                                  double                           layer_height,
-                                                 double                           max_object_height);
+                                                 double                           max_object_height,
+                                                 int                              visits_per_filament = 1);
 
 // Whether a prime tower is PRINTED for a plate. The footprint estimate above answers how big a
 // tower is and never reads enable_prime_tower or print_sequence, so it reports a size for a plate

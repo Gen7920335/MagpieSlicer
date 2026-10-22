@@ -75,6 +75,8 @@
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Polygon.hpp"
 #include "libslic3r/GCode/WipeTowerEstimate.hpp"
+#include "libslic3r/LayerBands.hpp"
+#include "libslic3r/ModHost/LayerBands.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/Geometry.hpp"
@@ -3348,6 +3350,7 @@ WipeTowerFootprint PartPlate::estimate_wipe_tower_footprint(const DynamicPrintCo
     const double        global_layer_height = layer_height_opt != nullptr ? layer_height_opt->getFloat() : 0.08;
     double              max_height          = 0.;
     double              layer_height        = std::numeric_limits<double>::max();
+    int                 visits              = 1;
     for (int obj_idx = 0; obj_idx < int(m_model->objects.size()); ++obj_idx) {
         const ModelObject *object = m_model->objects[obj_idx];
         if (!use_global_objects && !contain_any_instance_totally(obj_idx))
@@ -3362,6 +3365,15 @@ WipeTowerFootprint PartPlate::estimate_wipe_tower_footprint(const DynamicPrintCo
         }
         const ConfigOption *object_layer_height = object->config.option("layer_height");
         layer_height = std::min(layer_height, object_layer_height != nullptr ? object_layer_height->getFloat() : global_layer_height);
+        // MAGPIE: a banded object's layers revisit filaments (layer.bands slot, H/2), planned from the settings
+        // PrintObject::update_layer_bands() gives the mods: the print's, with the object's overrides.
+        if (visits == 1) {
+            PrintObjectConfig object_config;
+            object_config.apply(config, true);
+            object_config.apply(object->config.get(), true);
+            if (ModHost::layer_band_plan(config, object_config, object->name).active())
+                visits = BANDED_LAYER_VISITS_PER_FILAMENT;
+        }
     }
     if (layer_height == std::numeric_limits<double>::max())
         layer_height = global_layer_height;
@@ -3370,7 +3382,7 @@ WipeTowerFootprint PartPlate::estimate_wipe_tower_footprint(const DynamicPrintCo
     for (int id : plate_extruders)
         if (id > 0)
             filament_ids.push_back(static_cast<unsigned int>(id - 1));
-    return Slic3r::estimate_wipe_tower_footprint(config, resolve_wipe_tower_type(config), filament_ids, layer_height, max_height);
+    return Slic3r::estimate_wipe_tower_footprint(config, resolve_wipe_tower_type(config), filament_ids, layer_height, max_height, visits);
 }
 
 arrangement::ArrangePolygon PartPlate::estimate_wipe_tower_polygon(const DynamicPrintConfig& config, int plate_index, Vec3d& wt_pos, Vec3d& wt_size, int plate_extruder_size, bool use_global_objects) const
