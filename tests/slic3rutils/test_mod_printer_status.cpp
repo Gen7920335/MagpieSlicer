@@ -67,6 +67,9 @@ TEST_CASE("Neutral states map to Orca's print states", "[ModPrinterStatus]")
                                                           {"unknown_word", "IDLE"}};
     for (const auto &[in, out] : cases)
         CHECK(neutral_status_to_device_push(json{{"v", 1}, {"state", in}}, nullptr)["print"]["gcode_state"] == out);
+    // Storage: present unless the printer is offline.
+    CHECK(neutral_status_to_device_push(json{{"v", 1}, {"state", "idle"}}, nullptr)["print"]["sdcard"] == true);
+    CHECK(neutral_status_to_device_push(json{{"v", 1}, {"state", "offline"}}, nullptr)["print"]["sdcard"] == false);
 }
 
 TEST_CASE("Material units become Orca's AMS units", "[ModPrinterStatus]")

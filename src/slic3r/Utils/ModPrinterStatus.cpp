@@ -137,6 +137,9 @@ json neutral_status_to_device_push(const json &status, const FilamentIdForType &
     p["mc_print_stage"]      = state != states.end() ? state->second.second : 0;
     p["mc_print_error_code"] = 0;
     p["print_error"]         = 0;
+    // The send dialog refuses a printer without storage (DevStorage reads "sdcard"; a missing key means none). A
+    // connected printer.agent printer always takes uploads; an offline one does not.
+    p["sdcard"] = status.value("state", std::string("idle")) != "offline";
 
     if (auto it = status.find("progress"); it != status.end() && it->is_number())
         p["mc_percent"] = int(std::lround(std::clamp(it->get<double>(), 0., 100.)));

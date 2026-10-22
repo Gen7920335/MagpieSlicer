@@ -70,6 +70,10 @@ public:
     FilamentSyncMode get_filament_sync_mode() const override { return FilamentSyncMode::pull; }
     bool fetch_filament_info(std::string dev_id, FilamentSyncMode sync_mode = FilamentSyncMode::pull) override;
 
+    // Map filament type to OrcaFilamentLibrary preset ID for AMS sync compatibility
+    // MAGPIE: public, so the mod printer agent (ModPrinterAgent) resolves materials with the same table.
+    static std::string map_filament_type_to_generic_id(const std::string& filament_type);
+
 protected:
     struct MoonrakerDeviceInfo
     {
@@ -114,9 +118,6 @@ protected:
 
     // Trim whitespace and convert to uppercase
     static std::string trim_and_upper(const std::string& input);
-
-    // Map filament type to OrcaFilamentLibrary preset ID for AMS sync compatibility
-    static std::string map_filament_type_to_generic_id(const std::string& filament_type);
 
 private:
     int handle_request(const std::string& dev_id, const std::string& json_str);
