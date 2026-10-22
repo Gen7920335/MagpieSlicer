@@ -121,6 +121,20 @@ static size_t outer_wall_path_nozzle(const PerimeterGenerator &generator, Extrus
     return printing_nozzle_index(*generator.print_config, int(filament), generator.is_bbl_printer);
 }
 
+// MAGPIE: the diameter of the nozzle the region's outer wall filament prints on, a BBL filament_map included.
+// Orca read nozzle_diameter[outer_wall_filament_id - 1], the slot numbered like the filament: on an H2D with
+// 0.4/0.8 mm nozzles and filament 1 mapped to the 0.8 mm nozzle the overhang and bridge checks took the unused
+// 0.4 mm nozzle. Measured on overhang.obj (classic walls, main 987bb6eb70): the swapped-nozzle print's overhang
+// walls were 0.8 mm longer on the 3.2 mm layer; with the filament numbered like its nozzle (filament 2 on nozzle 2)
+// the two prints matched move for move, and with the read slot left unused, changing only that unused nozzle's
+// diameter (0.8 -> 0.6 mm) moved the overhang walls 0.4 mm, while it changed nothing once the read slot was the
+// printing nozzle. Same value as before on other printers and wherever the nozzles share one diameter.
+static double outer_wall_nozzle_diameter(const PerimeterGenerator &generator)
+{
+    return generator.print_config->nozzle_diameter.get_at(
+        printing_nozzle_index(*generator.print_config, generator.config->outer_wall_filament_id.value, generator.is_bbl_printer));
+}
+
 // MAGPIE: H/2 outer walls. A round, nozzle-diameter bridge cannot fit a half-height shell band. Only those shell
 // paths use a thin bridge cross section; ordinary/core bridges retain their original Flow. The width resolves on the
 // nozzle that prints the path (`hint` routes it, path_flow carries its diameter).
@@ -1037,7 +1051,7 @@ void PerimeterGenerator::split_top_surfaces(const ExPolygons &orig_polygons, ExP
     // get the real top surface
     ExPolygons grown_lower_slices;
     ExPolygons bridge_checker;
-    auto nozzle_diameter = this->print_config->nozzle_diameter.get_at(this->config->outer_wall_filament_id - 1);
+    auto nozzle_diameter = outer_wall_nozzle_diameter(*this);
     // Check whether surface be bridge or not
     if (this->lower_slices != NULL) {
         // BBS: get the Polygons below the polygon this layer
@@ -1665,7 +1679,7 @@ void PerimeterGenerator::process_classic()
         // We consider overhang any part where the entire nozzle diameter is not supported by the
         // lower layer, so we take lower slices and offset them by half the nozzle diameter used
         // in the current layer
-        double nozzle_diameter = this->print_config->nozzle_diameter.get_at(this->config->outer_wall_filament_id - 1);
+        double nozzle_diameter = outer_wall_nozzle_diameter(*this);
         m_lower_slices_polygons = offset(*this->lower_slices, float(scale_(+nozzle_diameter / 2)));
     }
 
@@ -2814,7 +2828,7 @@ void PerimeterGenerator::process_arachne()
         // We consider overhang any part where the entire nozzle diameter is not supported by the
         // lower layer, so we take lower slices and offset them by half the nozzle diameter used
         // in the current layer
-        double nozzle_diameter = this->print_config->nozzle_diameter.get_at(this->config->outer_wall_filament_id - 1);
+        double nozzle_diameter = outer_wall_nozzle_diameter(*this);
         m_lower_slices_polygons = offset(*this->lower_slices, float(scale_(+nozzle_diameter / 2)));
     }
 
@@ -3420,7 +3434,7 @@ bool brim_puts_outer_walls_first(BrimType brim_type, double brim_width)
 
 std::vector<Polygons> PerimeterGenerator::generate_lower_polygons_series(float width)
 {
-    float nozzle_diameter = print_config->nozzle_diameter.get_at(config->outer_wall_filament_id - 1);
+    float nozzle_diameter = float(outer_wall_nozzle_diameter(*this));
     float start_offset = -0.5 * width;
     float end_offset = 0.5 * nozzle_diameter;
 

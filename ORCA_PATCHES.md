@@ -177,13 +177,24 @@ Format: what was wrong, what changed, where, the guard test.
   changed no output in the BBL corpus (D:\claude\golden\bblwall\corpus3.json: pyramid, cube, slab, tee with only
   one wall on top and 0.4/0.8 mm nozzles); it is changed for the same routing, without a failing test.
 
+## Outer wall overhang and bridge checks on the BBL-mapped nozzle
+
+- Wrong: PerimeterGenerator read `nozzle_diameter.get_at(outer_wall_filament_id - 1)` (bridge margin of the top
+  surface split, overhang detection in Classic and Arachne, the overhang offsets), the slot numbered like the
+  filament. On an H2D with 0.4/0.8 mm nozzles and filament 1 mapped to the 0.8 mm nozzle it took the unused 0.4 mm
+  nozzle: overhang.obj (classic walls) printed 0.8 mm longer overhang walls on its 3.2 mm layer than the same print
+  with the nozzles swapped.
+- Attribution (main 987bb6eb70 CLI, D:/claude/golden/unk/h2d): filament 2 on nozzle 2, so the read slot is the
+  printing nozzle, matched the swapped print move for move; with the read slot left unused, changing only that
+  unused nozzle (0.8 -> 0.6 mm) moved the overhang walls 0.4 mm, and changed nothing once the read slot printed.
+  The four reads were not separated.
+- Change: `outer_wall_nozzle_diameter()` maps the filament with `printing_nozzle_index` (the BBL flag). Same value
+  on other printers and when the nozzles share one size.
+- Test: "Overhang walls of a BBL printer do not depend on which slot holds the nozzle filament_map names"
+  (test_multi_nozzle_walls.cpp). Written unbuilt: its failure without the change is not yet shown.
+
 ## Known Orca bugs not patched
 
-- PerimeterGenerator reads `nozzle_diameter.get_at(outer_wall_filament_id - 1)` (bridge margin, gap fill, fuzzy
-  skin, overhang detection), so a BBL filament_map is not applied there. Not changed (vanilla Orca's reads). On an
-  H2D with 0.4/0.8 mm nozzles and filament 1 mapped to the 0.8 mm nozzle, the outer wall overhang segments start
-  and end about 1.2 mm apart from the same print with the nozzles swapped (overhang.obj, tee.stl); cause ASSUMED
-  to be these reads (not toggled).
 - The Type-1 tower (`WipeTower::set_extruder`) takes one line width for every tool from the nozzle of the last
   configured filament: on a U1 0.4/0.4/0.6/0.6 printing with the 0.4 mm nozzles only, the tower prints 0.75 mm
   lines; making the unused fourth nozzle 0.4 mm gives 0.5 mm. Per-tool widths are separate work (about 200 sites).

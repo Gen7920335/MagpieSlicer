@@ -1726,6 +1726,44 @@ TEST_CASE("H/2 shell bridges of a BBL printer take the bridge width of the nozzl
     CHECK(overhang_widths.count(300) == 0);
 }
 
+TEST_CASE("Overhang walls of a BBL printer do not depend on which slot holds the nozzle filament_map names",
+          "[MultiNozzleWalls][Widths][FilamentMap]")
+{
+    // Filament 1 prints on the 0.8 mm nozzle, once in slot 2 (filament_map 2) and once in slot 1 (the slots
+    // swapped). The outer wall's overhang check offsets the lower layer by half the printing nozzle; read by the
+    // filament's number it took the unused 0.4 mm nozzle in the first print.
+    const char *engine = GENERATE("classic", "arachne");
+    CAPTURE(engine);
+    auto overhang_length_mm = [engine](double first_nozzle, double second_nozzle, int filament_1_nozzle) {
+        DynamicPrintConfig config = two_nozzle_config(first_nozzle, second_nozzle, 1, engine, false); // mm
+        config.set_key_value("enable_support", new ConfigOptionBool(false));
+        config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+        config.set_key_value("filament_map", new ConfigOptionInts{ filament_1_nozzle, filament_1_nozzle });
+        Print print;
+        print.is_BBL_printer() = true;
+        Model model;
+        init_print({ TestMesh::overhang }, print, model, config);
+        const std::string output = Slic3r::Test::gcode(print);
+        double length = 0.; // mm
+        bool   overhang = false;
+        GCodeReader reader;
+        reader.parse_buffer(output, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+            const std::string raw(line.raw());
+            if (raw.rfind("; FEATURE: ", 0) == 0)
+                overhang = raw == "; FEATURE: Overhang wall";
+            else if (overhang && line.extruding(self))
+                length += line.dist_XY(self);
+        });
+        return length;
+    };
+    const double in_slot_2 = overhang_length_mm(0.4, 0.8, 2);
+    const double in_slot_1 = overhang_length_mm(0.8, 0.4, 1);
+    UNSCOPED_INFO("overhang walls " << in_slot_2 << " mm with the 0.8 mm nozzle in slot 2, " << in_slot_1 << " mm in slot 1");
+    REQUIRE(in_slot_1 > 0.);
+    // Path length, mm: equal up to G-code coordinate rounding (3 decimals per move).
+    CHECK_THAT(in_slot_2, Catch::Matchers::WithinAbs(in_slot_1, 0.05));
+}
+
 namespace {
 
 // A wedge standing on the bed: a triangle 3 mm wide at y = 0 tapering to a point at y = -20 mm, height_mm tall. Its
