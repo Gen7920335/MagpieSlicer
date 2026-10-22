@@ -1567,7 +1567,9 @@ private:
     bool                has_tpu_filament() const;
     bool                invalidate_state_by_config_options(const ConfigOptionResolver &new_config, const std::vector<t_config_option_key> &opt_keys);
 
-    void                _make_skirt();
+    // MAGPIE: sequential_first_tools: by object, each printed copy's first-layer first tool (0-based), in print
+    // order; empty by layer.
+    void                _make_skirt(const std::vector<std::pair<ObjectInstanceID, unsigned int>> &sequential_first_tools = {});
     void                _make_wipe_tower();
     // Belt mode: route filament-change purging into the belt purge prism
     // (flush-into-objects) without generating a classic wipe tower.
