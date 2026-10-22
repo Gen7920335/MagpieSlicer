@@ -73,17 +73,6 @@ bool usable(const NativeEntry &entry)
 std::mutex                                             g_agents_mutex;
 std::map<std::string, std::weak_ptr<ModPrinterAgent>> &g_agents = *new std::map<std::string, std::weak_ptr<ModPrinterAgent>>();
 
-std::string field_section(const Mod &mod) { return "mod_printer:" + mod.id; }
-
-// A printer address as a credential-store key part: IPv6 brackets dropped, lower case.
-std::string host_key(std::string host)
-{
-    if (host.size() > 2 && host.front() == '[' && host.back() == ']')
-        host = host.substr(1, host.size() - 2);
-    std::transform(host.begin(), host.end(), host.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-    return host;
-}
-
 std::string json_text(const char *text) { return text != nullptr ? std::string(text) : std::string(); }
 
 // The upload name: the file's own name without directories, characters printers choke on replaced, ".gcode" kept.
@@ -136,6 +125,18 @@ void ModPrinterAgent::register_all()
                 return agent;
             });
     }
+}
+
+std::string ModPrinterAgent::fields_section(const Mod &mod) { return "mod_printer:" + mod.id; }
+
+std::string ModPrinterAgent::store_host(const std::string &host_in)
+{
+    // IPv6 brackets dropped, lower case: the same printer gives the same key however its address was typed.
+    std::string host = host_in;
+    if (host.size() > 2 && host.front() == '[' && host.back() == ']')
+        host = host.substr(1, host.size() - 2);
+    std::transform(host.begin(), host.end(), host.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return host;
 }
 
 std::function<bool(const Mod &)> &ModPrinterAgent::consent_prompt()
@@ -353,8 +354,8 @@ int ModPrinterAgent::connect_printer(const PrinterConnectionParams &params)
     json conn = {{"dev_id", params.dev_id}, {"host", params.host}, {"port", params.port}};
     json fields = json::object();
     if (AppConfig *config = GUI::wxGetApp().app_config; config != nullptr) {
-        const std::string section = field_section(mod());
-        const std::string prefix  = host_key(params.host) + "/";
+        const std::string section = fields_section(mod());
+        const std::string prefix  = store_host(params.host) + "/";
         if (config->has_section(section))
             for (const auto &[key, value] : config->get_section(section))
                 if (boost::starts_with(key, prefix))
@@ -375,7 +376,7 @@ int ModPrinterAgent::connect_printer(const PrinterConnectionParams &params)
     json secret_keys = json::object();
     for (const ModHost::ModGuiFormField &f : mod().gui.printer.fields)
         if (f.kind == "secret")
-            secret_keys[f.id] = f.id + "." + host_key(params.host);
+            secret_keys[f.id] = f.id + "." + store_host(params.host);
     conn["secret_keys"] = std::move(secret_keys);
 
     {

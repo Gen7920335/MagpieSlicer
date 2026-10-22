@@ -534,48 +534,68 @@ bool valid_secret_key(const char *key)
            std::all_of(k.begin(), k.end(), [](unsigned char c) { return std::isalnum(c) || c == '_' || c == '-' || c == '.' || c == ':'; });
 }
 
-wxString secret_service(const NativeMod *mod, const char *key)
+wxString secret_service(const std::string &mod_id, const char *key)
 {
-    return wxString::FromUTF8(("MagpieSlicerNext/mod/" + mod->id() + "/" + key).c_str());
+    return wxString::FromUTF8(("MagpieSlicerNext/mod/" + mod_id + "/" + key).c_str());
 }
 
-int32_t net_secret_put(void *svc, const char *key, const char *value)
+// The store operations by mod id, shared by the service (the calling mod) and the printer panel (put_secret).
+int32_t store_put(const std::string &mod_id, const char *key, const char *value)
 {
-    const NativeMod *mod = caller(svc);
-    if (mod == nullptr || !valid_secret_key(key) || value == nullptr)
+    if (!valid_secret_key(key) || value == nullptr)
         return MP_ERR_ARGUMENT;
     wxSecretStore store = wxSecretStore::GetDefault();
     if (!store.IsOk())
         return MP_ERR_FAILED;
-    return store.Save(secret_service(mod, key), wxString::FromUTF8(key), wxSecretValue(std::strlen(value), value)) ? MP_OK : MP_ERR_FAILED;
+    return store.Save(secret_service(mod_id, key), wxString::FromUTF8(key), wxSecretValue(std::strlen(value), value)) ? MP_OK : MP_ERR_FAILED;
 }
 
-int32_t net_secret_get(void *svc, const char *key, char *buf, uint32_t cap)
+int32_t store_get(const std::string &mod_id, const char *key, std::string &value)
 {
-    const NativeMod *mod = caller(svc);
-    if (mod == nullptr || !valid_secret_key(key) || buf == nullptr || cap == 0)
+    if (!valid_secret_key(key))
         return MP_ERR_ARGUMENT;
     wxSecretStore store = wxSecretStore::GetDefault();
     if (!store.IsOk())
         return MP_ERR_FAILED;
     wxString      user;
     wxSecretValue secret;
-    if (!store.Load(secret_service(mod, key), user, secret) || !secret.IsOk())
+    if (!store.Load(secret_service(mod_id, key), user, secret) || !secret.IsOk())
         return MP_ERR_NOT_FOUND;
-    const std::string value(static_cast<const char *>(secret.GetData()), secret.GetSize());
-    return copy_out(value, buf, cap);
+    value.assign(static_cast<const char *>(secret.GetData()), secret.GetSize());
+    return MP_OK;
+}
+
+int32_t store_delete(const std::string &mod_id, const char *key)
+{
+    if (!valid_secret_key(key))
+        return MP_ERR_ARGUMENT;
+    wxSecretStore store = wxSecretStore::GetDefault();
+    if (!store.IsOk())
+        return MP_ERR_FAILED;
+    store.Delete(secret_service(mod_id, key));
+    return MP_OK;
+}
+
+int32_t net_secret_put(void *svc, const char *key, const char *value)
+{
+    const NativeMod *mod = caller(svc);
+    return mod == nullptr ? int32_t(MP_ERR_ARGUMENT) : store_put(mod->id(), key, value);
+}
+
+int32_t net_secret_get(void *svc, const char *key, char *buf, uint32_t cap)
+{
+    const NativeMod *mod = caller(svc);
+    if (mod == nullptr || buf == nullptr || cap == 0)
+        return MP_ERR_ARGUMENT;
+    std::string   value;
+    const int32_t rc = store_get(mod->id(), key, value);
+    return rc == MP_OK ? copy_out(value, buf, cap) : rc;
 }
 
 int32_t net_secret_delete(void *svc, const char *key)
 {
     const NativeMod *mod = caller(svc);
-    if (mod == nullptr || !valid_secret_key(key))
-        return MP_ERR_ARGUMENT;
-    wxSecretStore store = wxSecretStore::GetDefault();
-    if (!store.IsOk())
-        return MP_ERR_FAILED;
-    store.Delete(secret_service(mod, key));
-    return MP_OK;
+    return mod == nullptr ? int32_t(MP_ERR_ARGUMENT) : store_delete(mod->id(), key);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -708,6 +728,19 @@ void set_consent(const Mod &mod, bool agreed)
             config->erase(k_consent_section, mod.id);
     }
 }
+
+bool put_secret(const std::string &mod_id, const std::string &key, const std::string &value)
+{
+    return store_put(mod_id, key.c_str(), value.c_str()) == MP_OK;
+}
+
+bool has_secret(const std::string &mod_id, const std::string &key)
+{
+    std::string value;
+    return store_get(mod_id, key.c_str(), value) == MP_OK;
+}
+
+void delete_secret(const std::string &mod_id, const std::string &key) { store_delete(mod_id, key.c_str()); }
 
 std::string redact(const std::string &text)
 {

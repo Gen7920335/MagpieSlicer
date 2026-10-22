@@ -29,6 +29,12 @@ bool has_consent(const ModHost::Mod &mod);
 // Stores the user's answer in the application config. GUI thread.
 void set_consent(const ModHost::Mod &mod, bool agreed);
 
+// The credential store entry `key` of the mod `mod_id`, the one the mod reads with core.net secret_get: the printer
+// panel writes a secret form field here. False when the store is unavailable or the key is not one secret_get takes.
+bool put_secret(const std::string &mod_id, const std::string &key, const std::string &value);
+bool has_secret(const std::string &mod_id, const std::string &key);
+void delete_secret(const std::string &mod_id, const std::string &key);
+
 // `text` with what may be a secret replaced by "***": query values of keys that carry tokens or signatures (s, token,
 // sign, password, ...), "Bearer ..." and the values of JSON members with such names. Every log line the core writes
 // about mod network traffic goes through it, and the core never logs a URL, header or body otherwise.

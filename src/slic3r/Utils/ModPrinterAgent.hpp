@@ -49,6 +49,12 @@ public:
     // The mod and its manifest.
     const ModHost::Mod &mod() const;
 
+    // Where the printer panel keeps a printer's connection form: non-secret values in the application config section
+    // fields_section(mod), key "<store_host(host)>/<field id>"; secret ones in the credential store under
+    // "<field id>.<store_host(host)>". `host` as MachineObject::connect passes it (no scheme or port).
+    static std::string fields_section(const ModHost::Mod &mod);
+    static std::string store_host(const std::string &host);
+
     // ---- The printer panel's side (ModPrinterDialog) ----
     // A neutral command from the panel's actions, refused while printing when idle_only. Blocking; worker or GUI thread.
     // Returns the mod's answer text, or an error for the user in `error`.

@@ -238,6 +238,7 @@
 
 #include "slic3r/Utils/NetworkAgentFactory.hpp"
 #include "slic3r/Utils/ModNetService.hpp"
+#include "ModPrinterDialog.hpp"
 #include "slic3r/Utils/BBLNetworkPlugin.hpp"
 #include "slic3r/Utils/bambu_networking.hpp"
 
@@ -4115,6 +4116,8 @@ bool GUI_App::on_init_network(bool try_backup)
 
     // Register all printer agents before creating the network agent
     Slic3r::NetworkAgentFactory::register_all_agents();
+    // MAGPIE: a mod's printer asks for the user's agreement to its network list on first connection.
+    ModPrinterDialog::install_hooks();
 
     // m_agent = new Slic3r::NetworkAgent(data_directory);
     std::unique_ptr<Slic3r::NetworkAgent> agent_ptr = Slic3r::create_agent_from_config(data_directory, app_config);

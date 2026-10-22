@@ -88,6 +88,7 @@
 #include "GUI_App.hpp"
 #include "GUI_ObjectList.hpp"
 #include "slic3r/Utils/NetworkAgentFactory.hpp"
+#include "ModPrinterDialog.hpp"
 #include "slic3r/Utils/PresetUpdater.hpp"
 #include "slic3r/plugin/PluginConfig.hpp"
 #include "slic3r/plugin/PluginManager.hpp"
@@ -5325,6 +5326,21 @@ void TabPrinter::build_fff()
                 option.opt.tooltip = L("Select the network agent implementation for printer communication. "
                     "Available agents are registered at startup.");
                 optgroup->append_single_option_line(option);
+            }
+            // MAGPIE: the connection panel of a printer agent a mod provides ("mod:<id>"), shown while any is loaded.
+            const bool any_mod_agent = std::any_of(registered_printer_agents.begin(), registered_printer_agents.end(),
+                                                   [](const PrinterAgentInfo& info) { return boost::starts_with(info.id, "mod:"); });
+            if (any_mod_agent) {
+                Line line{ "", "" };
+                line.widget = [this](wxWindow* parent) -> wxSizer* {
+                    auto* button = new wxButton(parent, wxID_ANY, _L("Printer connection..."));
+                    button->SetToolTip(_L("Connection settings, network access and controls of the printer agent a mod provides."));
+                    button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { ModPrinterDialog::show_for_edited_printer(this); });
+                    auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+                    sizer->Add(button);
+                    return sizer;
+                };
+                optgroup->append_line(line);
             }
         }
 
