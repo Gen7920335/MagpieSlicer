@@ -92,6 +92,8 @@ Params read_params(mp_ctx *ctx)
     f("heating_time", p.heating_time);
     b("aux_fan", p.aux_fan);
     i("aux_fan_speed", p.aux_fan_speed);
+    // A percentage: the writer scales it to the fan's range without a clamp of its own (review 2026-10-22).
+    p.aux_fan_speed = std::clamp(p.aux_fan_speed, 0, 100);
     b("brush", p.brush);
     b("tower", p.tower);
     f("cooling_position_x", p.cooling_x);

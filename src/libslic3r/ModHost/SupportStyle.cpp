@@ -106,6 +106,13 @@ SupportStyle support_style(const PrintObject &object, const std::vector<int> &to
         out.size = sizeof(out);
         void *state = nullptr;
         call(*entry, [&]() { return t.open(entry->user, &ctx, &out, &state); });
+        // Closes the state however this leaves (nothing to close when the mod opened none).
+        std::unique_ptr<void, std::function<void(void *)>> closer(state, [entry, &t](void *s) {
+            entry->mod->guarded_call([&]() {
+                t.close(entry->user, s);
+                return int32_t(MP_OK);
+            });
+        });
         // What the mod warned about (host->warn): an error stops the slice, a warning reaches the object (review
         // 2026-10-22: they were dropped).
         for (const auto &[level, text] : ctx.warnings) {
@@ -116,13 +123,6 @@ SupportStyle support_style(const PrintObject &object, const std::vector<int> &to
         }
         if (state == nullptr)
             continue;
-        // Closes the state however this leaves.
-        std::unique_ptr<void, std::function<void(void *)>> closer(state, [entry, &t](void *s) {
-            entry->mod->guarded_call([&]() {
-                t.close(entry->user, s);
-                return int32_t(MP_OK);
-            });
-        });
         if (styling != nullptr)
             throw SlicingError(Slic3r::format(_u8L("The mods %1% and %2% both change how the support of object \"%3%\" is printed. "
                                                    "Turn one of them off."),

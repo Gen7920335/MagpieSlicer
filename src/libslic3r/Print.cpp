@@ -3961,25 +3961,27 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
 
     // MAGPIE: objects sliced with a filament map the automatic mode then changed are sliced again with the derived
     // one (printing_nozzle_index gives the widths from it): once, from the top, where their slices are kept.
+    // The filaments no nozzle can print where an object sits, from the slices: the map derivations below (the
+    // reslice hook's and the tool ordering's) group with them, so they come first.
+    {
+        std::vector<std::set<int>> geometric_unprintables(m_config.nozzle_diameter.size());
+        for (PrintObject* obj : m_objects) {
+            std::vector<std::set<int>> obj_geometric_unprintables = obj->detect_extruder_geometric_unprintables();
+            for (size_t idx = 0; idx < obj_geometric_unprintables.size(); ++idx) {
+                if (idx < geometric_unprintables.size()) {
+                    geometric_unprintables[idx].insert(obj_geometric_unprintables[idx].begin(), obj_geometric_unprintables[idx].end());
+                }
+            }
+        }
+        this->set_geometric_unprintable_filaments(geometric_unprintables);
+    }
+
     if (m_filament_map_reslice_depth == 1 && this->reslice_for_derived_filament_map()) {
         this->process(time_cost_with_cache, use_cache);
         return;
     }
 
     if (this->set_started(psWipeTower)) {
-        {
-            std::vector<std::set<int>> geometric_unprintables(m_config.nozzle_diameter.size());
-            for (PrintObject* obj : m_objects) {
-                std::vector<std::set<int>> obj_geometric_unprintables = obj->detect_extruder_geometric_unprintables();
-                for (size_t idx = 0; idx < obj_geometric_unprintables.size(); ++idx) {
-                    if (idx < geometric_unprintables.size()) {
-                        geometric_unprintables[idx].insert(obj_geometric_unprintables[idx].begin(), obj_geometric_unprintables[idx].end());
-                    }
-                }
-            }
-            this->set_geometric_unprintable_filaments(geometric_unprintables);
-        }
-
         m_wipe_tower_data.clear();
         m_tool_ordering.clear();
         // MAGPIE: the H/2 execution plan is rebuilt with the tool ordering.
@@ -5039,8 +5041,10 @@ bool Print::reslice_for_derived_filament_map()
         return false;
     // PERMANENT DIAGNOSTIC: the objects were sliced with a map the automatic mode then changed.
     BOOST_LOG_TRIVIAL(info) << "filament_map derived from the sliced objects differs from the map they were sliced with; slicing them again with it";
+    // From the slice: the slicing parameters (raft heights read the support nozzle) and the support flows follow
+    // the map too, and only posSlice renews them.
     for (PrintObject *object : m_objects)
-        object->invalidate_step(posPerimeters);
+        object->invalidate_step(posSlice);
     return true;
 }
 

@@ -135,6 +135,11 @@ void PerNozzleLineWidthsPanel::commit(const Cell &cell)
     if (m_loading)
         return;
     std::vector<double> values = stored_values(cell.key);
+    // A preset saved on a printer with more nozzles keeps its entries past this printer's nozzles (review 2026-10-22:
+    // the commit cut them off).
+    if (const auto *opt = m_config->option<ConfigOptionFloats>(cell.key); opt != nullptr && opt->values.size() > values.size())
+        for (size_t idx = values.size(); idx < opt->values.size(); ++idx)
+            values.push_back(std::max(0., opt->values[idx]));
     const wxString      text   = cell.control->GetTextCtrl()->GetValue().Strip(wxString::both);
     double              mm     = 0.;
     // Empty is 0 (the setting); a number that is not a width shows the stored value again.

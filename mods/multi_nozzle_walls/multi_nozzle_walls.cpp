@@ -21,7 +21,7 @@
 
 #define MNW_MOD_ID "multi_nozzle_walls"
 
-MAGPIE_MOD_DEFINE(MNW_MOD_ID, "2.1.0")
+MAGPIE_MOD_DEFINE(MNW_MOD_ID, "2.2.0")
 
 namespace mnw {
 

@@ -39,6 +39,14 @@ struct GCodeEventWriter
         const Vec3d plate_origin = g.m_print != nullptr ? g.m_print->get_plate_origin() : Vec3d::Zero();
         return Point(scaled<coord_t>(Vec2d(Vec2d(x, y) + Vec2d(plate_origin.x(), plate_origin.y()) - g.m_origin)));
     }
+    // A point in machine coordinates (mm): what the printer sees, so what the writer emits. The writer takes its
+    // offset (the plate's origin, and the IMEX shift) off every move, so the offset goes on first (review 2026-10-22:
+    // the cooling position, the brush and LESIC's marks came out left of the bed on plate 2 and up).
+    static Vec2d machine(const GCode &g, double x, double y)
+    {
+        const Vec2f offset = const_cast<GCodeWriter &>(g.m_writer).get_xy_offset();
+        return Vec2d(x + offset.x(), y + offset.y());
+    }
 
     // Runs a writer function's body; an exception is kept for the core to rethrow after the mod returns, so none
     // crosses into the mod. `fallback` is what the mod gets then.
@@ -192,7 +200,7 @@ struct GCodeEventWriter
             std::string *o = out(g);
             if (o == nullptr)
                 return;
-            const Point point = frame == MP_FRAME_PLATE ? plate(g, x, y) : g.gcode_to_point(Vec2d(x, y));
+            const Point point = frame == MP_FRAME_PLATE ? plate(g, x, y) : g.gcode_to_point(machine(g, x, y));
             *o += g.travel_to(point, GCodeEventHost::role_from_mod(role), comment != nullptr ? comment : "");
         });
     }
@@ -202,8 +210,8 @@ struct GCodeEventWriter
             std::string *o = out(g);
             if (o == nullptr)
                 return;
-            *o += g.m_writer.travel_to_xy(Vec2d(x, y), comment != nullptr ? comment : "");
-            g.set_last_pos(g.gcode_to_point(Vec2d(x, y)));
+            *o += g.m_writer.travel_to_xy(machine(g, x, y), comment != nullptr ? comment : "");
+            g.set_last_pos(g.gcode_to_point(machine(g, x, y)));
             g.m_gcode_event_moved = true;
         });
     }

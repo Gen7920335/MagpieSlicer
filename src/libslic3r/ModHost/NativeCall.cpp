@@ -36,4 +36,16 @@ int32_t magpie_native_guarded_call(magpie_guarded_fn fn, void *context, uint32_t
 #endif
 }
 
+// Raises a structured exception with `code` on the calling thread: host_parallel_for reports a fault one of its
+// worker threads caught, so the mod's call fails the same way as a fault on the calling thread (review 2026-10-22:
+// a worker's fault killed the process). No-op elsewhere than Windows.
+void magpie_native_raise(uint32_t code)
+{
+#ifdef _WIN32
+    RaiseException(code, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+#else
+    (void) code;
+#endif
+}
+
 } // extern "C"

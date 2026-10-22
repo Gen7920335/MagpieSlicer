@@ -3662,8 +3662,12 @@ std::string GCode::extrude_layer_time_tower(coordf_t print_z)
     for (int loop = 1; loop <= loops; ++loop) {
         if (loops > 1) {
             // Down to this loop's top: the tower ends at the previous loop and the nozzle is over its hollow, away
-            // from the objects; the last loop ends at the layer's Z, where the block ends.
+            // from the objects; the last loop ends at the layer's Z, where the block ends. The loop's Z is also the
+            // nominal Z the extrusion's travels keep (travel_to_xyz, the H/2 clearance), else they went back up to
+            // the layer's Z before each loop (review 2026-10-22).
             const double z = loop == loops ? print_z : m_layer_time_tower_last_z + loop * loop_height;
+            m_nominal_z                = z;
+            m_need_change_layer_lift_z = false;
             gcode += m_writer.travel_to_z(z, "layer time tower: loop height", true);
         }
         if (!m_layer_time_tower_brim_done) {
@@ -3675,6 +3679,7 @@ std::string GCode::extrude_layer_time_tower(coordf_t print_z)
         }
         gcode += this->_extrude(square(left + half, bottom + half, m_layer_time_tower_side - 2. * half), "layer time tower", tower_speed);
     }
+    m_nominal_z               = print_z;
     m_layer_time_tower_last_z = print_z;
     return gcode;
 }
@@ -4292,7 +4297,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     std::string wait_at = "in_place";
     if (const std::optional<ModHost::ExprValue> v = time_planner.setting("wait_at"); v && std::holds_alternative<std::string>(*v))
         wait_at = std::get<std::string>(*v);
-    m_layer_time_tower_size = layer_time_setting(time_planner, "tower_size", 15.);
+    // At least 5 mm: a side at or below the brim's width would turn the loops inside out (review 2026-10-22).
+    m_layer_time_tower_size = std::max(5., layer_time_setting(time_planner, "tower_size", 15.));
     m_layer_time_park       = Vec2d(layer_time_setting(time_planner, "park_x", -1.), layer_time_setting(time_planner, "park_y", -1.));
     m_layer_time_wait_at = wait_at == "tower" ? LayerTimeWaitAt::Tower : wait_at == "park" ? LayerTimeWaitAt::Park :
                            wait_at == "purge_tower" ? LayerTimeWaitAt::PurgeTower : LayerTimeWaitAt::InPlace;

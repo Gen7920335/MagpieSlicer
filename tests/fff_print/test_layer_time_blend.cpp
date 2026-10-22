@@ -789,6 +789,7 @@ TEST_CASE("The tower catches up on a raft in loops no taller than the nozzle's t
     const std::string begin_tag = ";MAGPIE_WAIT_TOWER_BEGIN", end_tag = ";MAGPIE_WAIT_TOWER_END";
     std::vector<size_t> loops_per_block; // tower loops (the "layer time tower" extrusions) of each block
     std::vector<double> z_per_block;     // the Z the block's last loop is printed at
+    std::vector<double> z_first_loop;    // the Z the block's first loop is printed at
     bool   in_block = false;
     double z        = 0.;
     for (const std::string &line : lines) {
@@ -796,21 +797,33 @@ TEST_CASE("The tower catches up on a raft in loops no taller than the nozzle's t
             in_block = true;
             loops_per_block.push_back(0);
             z_per_block.push_back(0.);
+            z_first_loop.push_back(-1.);
         } else if (line == end_tag) {
             in_block = false;
         } else if (in_block) {
             if (const std::optional<double> value = axis_value(line, 'Z'))
                 z = *value;
-            if (line.find("; layer time tower") != std::string::npos && line.find("brim") == std::string::npos) {
+            // Every extrusion segment of a loop carries the comment (gcode_comments is on in the tests): a loop is
+            // a square of four segments; the Z moves between loops say "loop height" and are not counted.
+            if (line.find("; layer time tower") != std::string::npos && line.find("brim") == std::string::npos &&
+                line.find("loop height") == std::string::npos && line.rfind("G1 ", 0) == 0) {
                 ++loops_per_block.back();
                 z_per_block.back() = z;
+                if (z_first_loop.back() < 0.)
+                    z_first_loop.back() = z;
             }
         }
     }
     REQUIRE(loops_per_block.size() > 2);
+    for (size_t &segments : loops_per_block)
+        segments /= 4;
     // The first block spans the raft: at least 3.6 mm / 0.3 mm loops; the next ones one loop each.
     CHECK(loops_per_block.front() >= 12);
     CHECK(loops_per_block[1] == 1);
+    // The loops of the first block climb from the first loop's height to the layer's Z, each at its own Z (not all
+    // at the layer's Z in the air): at least 11 loops of 0.3 mm between the first and the last.
+    CHECK(z_per_block.front() - z_first_loop.front() >= 11 * 0.3 - 1e-3);
+    CHECK(z_first_loop.front() <= 0.3 + 1e-3);
     // Each block ends at its layer's Z: the blocks' Z values rise by one layer (0.3 mm) from the first.
     CHECK_THAT(z_per_block[1] - z_per_block[0], WithinAbs(0.3, 1e-3));
 }

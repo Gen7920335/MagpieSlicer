@@ -44,8 +44,9 @@ std::string fetch_mod_url(const std::string &url, size_t size_limit)
 {
     if (boost::starts_with(url, "file://"))
         return read_local_url(url, size_limit);
-    if (!boost::starts_with(url, "https://") && !boost::starts_with(url, "http://"))
-        throw std::runtime_error("unsupported address: " + url);
+    // Only TLS (ModIndex refuses plain http entries too; review 2026-10-22).
+    if (!boost::starts_with(url, "https://"))
+        throw std::runtime_error("unsupported address (https only): " + url);
     std::string body, error;
     bool        ok = false;
     Http::get(url)

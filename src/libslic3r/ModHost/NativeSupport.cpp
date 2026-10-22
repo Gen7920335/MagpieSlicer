@@ -330,8 +330,11 @@ void generate(PrintObject &object, const NativeEntry &entry, const std::vector<P
         Polygons     raft_contact = to_polygons(first_layer.lslices);
         if (object.config().raft_expansion.value > 0)
             raft_contact = expand(raft_contact, scaled<float>(object.config().raft_expansion.value));
-        if (!base_layers.empty() && is_approx(base_layers.front()->print_z, first_layer.print_z))
-            raft_contact = union_(raft_contact, base_layers.front()->polygons);
+        // Every base layer up to the first object layer's Z: a fractional body of layer 0 sits below it (review
+        // 2026-10-22: only the front entry was taken, so that body was left out of the raft contact).
+        for (const SupportGeneratorLayer *layer : base_layers)
+            if (layer->print_z <= first_layer.print_z + EPSILON)
+                raft_contact = union_(raft_contact, layer->polygons);
         if (!raft_contact.empty()) {
             SupportGeneratorLayer &contact = storage.allocate(SupporLayerType::TopContact);
             contact.print_z                = slicing_params.raft_contact_top_z;

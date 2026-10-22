@@ -1715,12 +1715,17 @@ void TreeSupport::generate_toolpaths()
     // nozzles differ in size, on the nozzle of the filament printing the area, as the support's own widths are:
     // Print::brim_flow() picks the nozzle from a tool ordering of the first object's layers, whose support fills
     // this loop and the other objects' support steps are writing.
+    // On such a printer print.brim_flow() itself builds that ordering, so it is not called there at all; with one
+    // nozzle size it takes Orca's path, which reads no ordering.
     const Print &print = *m_object->print();
-    Flow         first_layer_flow_interface = print.brim_flow(), first_layer_flow_base = first_layer_flow_interface;
+    Flow         first_layer_flow_interface(float(support_extrusion_width), float(m_slicing_params.first_print_layer_height), float(nozzle_diameter));
+    Flow         first_layer_flow_base = first_layer_flow_interface;
     if (print.line_width_reference_mm() > 0.) {
         const WidthConfigs configs{ &print.config(), &object_config, nullptr };
         first_layer_flow_interface = brim_flow_on_nozzle(print, *m_object, feature_printing_nozzle(WidthFeature::SupportInterface, configs, print.is_BBL_printer()));
         first_layer_flow_base      = brim_flow_on_nozzle(print, *m_object, feature_printing_nozzle(WidthFeature::Support, configs, print.is_BBL_printer()));
+    } else if (m_raft_layers == 0) {
+        first_layer_flow_interface = first_layer_flow_base = print.brim_flow();
     }
 
     // generate tree support tool paths

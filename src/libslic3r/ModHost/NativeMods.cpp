@@ -13,6 +13,8 @@
 #include <boost/nowide/convert.hpp>
 #include <tbb/parallel_for.h>
 
+#include <atomic>
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -30,6 +32,7 @@
 #endif
 
 extern "C" int32_t magpie_native_guarded_call(int32_t (*fn)(void *), void *context, uint32_t *code_out);
+extern "C" void    magpie_native_raise(uint32_t code);
 
 namespace Slic3r {
 namespace ModHost {
@@ -428,11 +431,36 @@ void host_warn(mp_ctx *ctx, int32_t level, const char *text)
 
 int host_cancelled(mp_ctx *ctx) { return ctx != nullptr && ctx->cancelled && ctx->cancelled() ? 1 : 0; }
 
+struct ParallelForCall
+{
+    void (*fn)(void *user, uint32_t i);
+    void    *user;
+    uint32_t i;
+};
+int32_t run_parallel_for_call(void *context)
+{
+    const ParallelForCall &c = *static_cast<ParallelForCall *>(context);
+    c.fn(c.user, c.i);
+    return 0;
+}
+
 void host_parallel_for(mp_ctx * /* ctx */, uint32_t n, void (*fn)(void *user, uint32_t i), void *user)
 {
     if (fn == nullptr)
         return;
-    tbb::parallel_for(uint32_t(0), n, [fn, user](uint32_t i) { fn(user, i); });
+    // Each worker runs under the same guard as the calling thread; a fault there is raised again on the calling
+    // thread once the loop is over, where the mod's guard turns it into a failure of the call.
+    std::atomic<uint32_t> fault{0};
+    tbb::parallel_for(uint32_t(0), n, [fn, user, &fault](uint32_t i) {
+        if (fault.load() != 0)
+            return;
+        ParallelForCall call{fn, user, i};
+        uint32_t        code = 0;
+        if (magpie_native_guarded_call(run_parallel_for_call, &call, &code) == INT32_MIN)
+            fault.store(code != 0 ? code : 1u);
+    });
+    if (const uint32_t code = fault.load(); code != 0)
+        magpie_native_raise(code);
 }
 
 MagpieHostApi make_host_api()

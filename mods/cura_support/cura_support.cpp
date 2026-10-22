@@ -24,7 +24,7 @@
 #include <vector>
 
 #define CURA_MOD_ID "cura_support"
-#define CURA_MOD_VERSION "1.2.0"
+#define CURA_MOD_VERSION "1.3.0"
 
 MAGPIE_MOD_DEFINE(CURA_MOD_ID, CURA_MOD_VERSION)
 

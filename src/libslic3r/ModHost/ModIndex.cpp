@@ -101,9 +101,10 @@ std::vector<ModIndexEntry> parse_mod_index(const std::string &json_text)
                            "\" must use only a-z, 0-9 and _ and not start with a digit");
         if (!ids.insert(entry.id).second)
             throw ModError("mod index lists \"" + entry.id + "\" twice");
-        if (!(boost::starts_with(entry.url, "https://") || boost::starts_with(entry.url, "http://") ||
-              boost::starts_with(entry.url, "file://")))
-            throw ModError("mod index entry " + entry.id + ": url must be http(s) or file");
+        // Only TLS or a local file: a JSON mod's rules rewrite settings, and over plain http an attacker on the path
+        // could substitute the index (with its own hashes) and the mod (review 2026-10-22).
+        if (!(boost::starts_with(entry.url, "https://") || boost::starts_with(entry.url, "file://")))
+            throw ModError("mod index entry " + entry.id + ": url must be https or file");
         if (entry.sha256.size() != 64 ||
             !std::all_of(entry.sha256.begin(), entry.sha256.end(), [](char c) { return std::isxdigit(static_cast<unsigned char>(c)); }))
             throw ModError("mod index entry " + entry.id + ": sha256 must be 64 hex digits");

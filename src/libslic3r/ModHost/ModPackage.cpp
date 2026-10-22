@@ -604,6 +604,12 @@ ModLoadResult load_mods(const ModLoadOptions &options)
     std::vector<Mod> mods;
     auto take = [&](Candidate &c) {
         Mod &mod = c.mod;
+        // A second mod with this id (an installed copy of a bundled one) is refused before anything else, turned off
+        // or not: the reload branch below must not push its manifest twice.
+        if (std::any_of(mods.begin(), mods.end(), [&mod](const Mod &m) { return m.id == mod.id; })) {
+            result.errors.push_back(mod.id + ": " + (mod.origin == ModOrigin::Installed ? "a bundled mod has this id and cannot be replaced" : "two mods have this id"));
+            return;
+        }
         if (disabled.count(mod.id)) {
             // A reload (after a JSON mod was installed) keeps the native code the start loaded, and with it the
             // manifest of a mod turned off meanwhile: without the manifest its code ran on with its parameters
@@ -614,10 +620,6 @@ ModLoadResult load_mods(const ModLoadOptions &options)
                 return;
             }
             result.notes.push_back(mod.id + ": turned off");
-            return;
-        }
-        if (std::any_of(mods.begin(), mods.end(), [&mod](const Mod &m) { return m.id == mod.id; })) {
-            result.errors.push_back(mod.id + ": " + (mod.origin == ModOrigin::Installed ? "a bundled mod has this id and cannot be replaced" : "two mods have this id"));
             return;
         }
         if (!mod.binary.empty()) {
