@@ -12,12 +12,13 @@
  *
  * Text crossing the slot is UTF-8 JSON. Every string a mod returns through a char ** is allocated by
  * the mod and freed by the core with the table's release. The status a mod posts is the Magpie
- * neutral status (MP_PRINTER_STATUS_VERSION, docs/HLSD/printer-agent-mods.md): the core converts it to
+ * neutral status (MP_PRINTER_STATUS_VERSION, docs/HLSD/mods.md "Printer connections"): the core converts it to
  * whatever Orca's device code reads, so a mod does not change when Orca's device format does. Fields are
  * only ever added to it; a reader ignores fields it does not know.
  *
  * Commands (send_command) are neutral JSON objects {"cmd": "<name>", ...}; the names the core sends
- * are listed in docs/HLSD/printer-agent-mods.md. A mod answers a command it does not implement with
+ * are listed in docs/HLSD/mods.md. send_command returns quickly (it publishes; waiting is the mod's own
+ * thread's business). A mod answers a command it does not implement with
  * MP_ERR_NOT_FOUND, and one its printer cannot do now (a move while printing) with MP_ERR_FAILED and a
  * message the user can read.
  */
@@ -52,7 +53,9 @@ typedef struct mp_printer_events_v1 {
     void (*status)(void *host, const char *status_json);
     /* The connection changed; reason is a short text for the user (may be empty). */
     void (*connection)(void *host, int32_t state, const char *reason);
-    /* Anything else for the GUI: {"type": "notice"|"command_result"|"files"|"webview"|..., ...}. */
+    /* Anything else for the GUI: {"type": "probe", "info": {"model_id", "model_name", "name", "firmware"}} names
+     * the printer for the device list; "notice" ({"text"}) becomes a notification; "panel_message" ({"panel",
+     * "data"}) goes to that web panel; other types reach the printer panel. */
     void (*event)(void *host, const char *event_json);
 } mp_printer_events_v1;
 
@@ -70,8 +73,9 @@ typedef struct mp_printer_agent_v1 {
     mp_status (*probe)(void *user, void *session, const char *conn_json, char **info_json);
     /* Connects; returns once the attempt has started. The outcome arrives through events->connection.
      * conn_json: {"dev_id", "host", "port", "fields": {<the manifest's connection form values>},
-     * "profile": {"printer_model", ...}}. Secret form fields are not in it: the mod reads them from the
-     * secret store (core.net secret_get) under the field id. */
+     * "profile": {"printer_model", "printer_name", "nozzle_diameter"}, "secret_keys": {<field id>: <store key>}}.
+     * Secret form fields are not in it: the mod reads them from the secret store (core.net secret_get) under
+     * the key secret_keys gives (the printer panel stores them per printer). */
     mp_status (*connect)(void *user, void *session, const char *conn_json);
     mp_status (*disconnect)(void *user, void *session);
     /* A neutral command; *result_json (may stay null) is the immediate answer. */
@@ -81,7 +85,7 @@ typedef struct mp_printer_agent_v1 {
     mp_status (*upload)(void *user, void *session, const char *local_path, const char *params_json,
                         mp_printer_progress_fn progress, void *progress_user, char **result_json);
     /* Starts a print of an uploaded file. params_json: {"file_name", "remote_path", "md5", "size",
-     * "printer_model", "use_ams", "ams_mapping": [{"tool", "slot_index", "color", "material"}],
+     * "printer_model", "use_ams", "ams_mapping": [{"tool", "unit", "slot", "slot_index", "color", "material"}],
      * "options": {"auto_leveling", "vibration_compensation", "flow_calibration", "timelapse"}}. */
     mp_status (*start_print)(void *user, void *session, const char *params_json, char **result_json);
     /* query_json: {"source": "local"|"udisk"|"cloud"}. *result_json: {"files": [...]}. */
