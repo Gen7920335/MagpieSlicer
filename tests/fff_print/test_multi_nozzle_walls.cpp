@@ -1874,6 +1874,51 @@ TEST_CASE("H/2 shell bridges take the bridge width of the nozzle that prints the
     CHECK(widths.count(1) == 0);
 }
 
+// MAGPIE: with H/2 holding every wall of an Arachne island, the bead between the shells of a narrow part is a shell
+// wall printed by the outer wall's tool, so it takes the shell spacing as its width basis. It took the inner wall's,
+// resolved on the 0.8 mm inner wall nozzle, and the 0.2 mm outer wall nozzle printed 0.85 mm beads (seed 508).
+TEST_CASE("H/2 Arachne beads of a narrow part keep the outer wall nozzle's width basis", "[MultiNozzleWalls][HalfLayer][Widths]")
+{
+    OfficialMods mods;
+    DynamicPrintConfig config = multifilament_config(2, {
+        { "wall_generator", "arachne" }, { "wall_loops", 2 }, { "layer_height", 0.16 }, { "initial_layer_print_height", 0.16 }, // mm
+        { "skirt_loops", 0 }, { "brim_type", "no_brim" }, { "enable_prime_tower", false }, { "enable_support", false },
+        { "outer_wall_filament_id", 2 }, { "inner_wall_filament_id", 1 },
+        { "outer_wall_line_width", "136%" }, { "inner_wall_line_width", "150%" },
+    });
+    config.set_num_extruders(2);
+    config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(false));
+    const double outer_nozzle = 0.2; // mm
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.8, outer_nozzle }); // mm
+    size_flush_to_nozzles(config);
+    half_layer_params(config, true);
+    // The small-nozzle geometry probe's thin features: narrower than two shells a side, so Arachne lays a bead between
+    // them. (A plain 0.9 mm fin does not reproduce it.)
+    TriangleMesh mesh;
+    mesh.ReadSTLFile((std::string(TEST_DATA_DIR) + "/small_nozzle_geometry_probe.stl").c_str());
+    REQUIRE_FALSE(mesh.empty());
+    std::string gcode;
+    REQUIRE_NOTHROW(gcode = slice({ mesh }, config));
+
+    int    tool = -1;
+    bool   wall = false;
+    double width = 0.; // mm, the last ;WIDTH
+    double widest = 0.; // mm, the widest wall line of T1, the outer wall tool
+    std::istringstream lines(gcode);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.size() >= 2 && line[0] == 'T' && std::isdigit((unsigned char) line[1]))
+            tool = std::stoi(line.substr(1));
+        else if (line.rfind(";TYPE:", 0) == 0)
+            wall = line == ";TYPE:Outer wall" || line == ";TYPE:Inner wall";
+        else if (line.rfind(";WIDTH:", 0) == 0)
+            width = std::stod(line.substr(7));
+        else if (wall && tool == 1 && line.rfind("G1 ", 0) == 0 && line.find(" E") != std::string::npos && line.find('X') != std::string::npos)
+            widest = std::max(widest, width);
+    }
+    REQUIRE(widest > 0.);
+    CHECK(widest < 2. * outer_nozzle);
+}
+
 // MAGPIE: without a wall planner an outer wall's overhang lines print on the outer wall filament, so their width is
 // resolved on that filament's nozzle. They took the region's overhang flow, which is resolved on the inner wall's
 // nozzle: a 0.2 mm outer wall nozzle printed the 0.8 mm inner wall nozzle's overhang width (vanilla Orca does too)

@@ -3019,8 +3019,16 @@ for (size_t surface_idx = range.begin(); surface_idx < range.end(); ++surface_id
                 }
             }
 
+            // MAGPIE: when the H/2 profile holds every wall of a pass, the beads Arachne lays between its shells (the
+            // centre bead of a narrow part) are shell walls too, printed by the outer wall's tool, so their width basis
+            // is the innermost shell's spacing. The inner wall's spacing made 0.85 mm beads of a 0.8 mm inner wall nozzle
+            // that the 0.2 mm outer wall nozzle printed (seed 508 of the U1 random test).
+            const auto bead_spacing_inner = [&](const Arachne::WallToolPathsParams &params, int walls) {
+                return half_layer_outer_walls && !params.fixed_outer_wall_spacings.empty() &&
+                       int(params.fixed_outer_wall_spacings.size()) >= walls ? params.fixed_outer_wall_spacings.back() : perimeter_spacing;
+            };
             Polygons   last_p = to_polygons(last);
-            Arachne::WallToolPaths wallToolPaths(last_p, arachne_outer_spacing, perimeter_spacing, coord_t(loop_number + 1),
+            Arachne::WallToolPaths wallToolPaths(last_p, arachne_outer_spacing, bead_spacing_inner(input_params_tmp, loop_number + 1), coord_t(loop_number + 1),
 wall_0_inset, layer_height, input_params_tmp);
             std::vector<Arachne::VariableWidthLines>   perimeters = wallToolPaths.getToolPaths();
             ExPolygons  infill_contour = union_ex(wallToolPaths.getInnerContour());
@@ -3081,7 +3089,7 @@ wall_0_inset, layer_height, input_params_tmp);
                 auto generate_full_perimeters = [&]() {
                     if (full_perimeters_generated)
                         return;
-                    Arachne::WallToolPaths full_tool_paths(last_p, arachne_outer_spacing, perimeter_spacing, coord_t(full_pass_walls), wall_0_inset, layer_height, full_pass_params);
+                    Arachne::WallToolPaths full_tool_paths(last_p, arachne_outer_spacing, bead_spacing_inner(full_pass_params, full_pass_walls), coord_t(full_pass_walls), wall_0_inset, layer_height, full_pass_params);
                     full_perimeters           = full_tool_paths.getToolPaths();
                     full_inner_contour        = full_tool_paths.getInnerContour();
                     full_perimeters_generated = true;
