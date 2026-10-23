@@ -9,6 +9,7 @@
 #include "Widgets/StaticLine.hpp"
 #include "Widgets/LabeledStaticBox.hpp"
 
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/any.hpp>
 #include <boost/log/trivial.hpp>
 #include <functional>
@@ -297,7 +298,8 @@ bool OptionsGroup::insert_line_after(const t_config_option_key& opt_key, const L
     assert(line.get_options().empty());
     for (size_t index = 0; index < m_lines.size(); ++index)
         for (const Option& opt : m_lines[index].get_options())
-            if (opt.opt_id == opt_key) {
+            // A per-extruder line holds the option as "key#<extruder>".
+            if (opt.opt_id == opt_key || boost::starts_with(opt.opt_id, opt_key + "#")) {
                 m_lines.insert(m_lines.begin() + std::min(m_lines.size(), index + 1 + skip), line);
                 return true;
             }
