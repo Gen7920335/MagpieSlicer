@@ -1973,6 +1973,7 @@ void Sidebar::priv::set_row_nozzle_diameter(size_t extruder, double diameter_mm)
         std::fill(nozzles->values.begin(), nozzles->values.end(), diameter_mm);
     } else
         nozzles->values[extruder] = diameter_mm;
+    BOOST_LOG_TRIVIAL(info) << "Sidebar: nozzle diameter of T" << extruder + 1 << " set to " << diameter_mm << " mm";
     // Dirties the preset and updates the printer tab, the plater and this card (Tab::load_config).
     printer_tab->load_config(new_conf);
     // The per-nozzle line width table and the toolhead lists of the process settings follow the nozzles.

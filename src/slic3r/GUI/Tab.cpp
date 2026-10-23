@@ -3421,8 +3421,16 @@ void TabPrint::reload_config()
 
 void TabPrint::load_per_nozzle_line_widths()
 {
-    if (m_per_nozzle_line_widths != nullptr)
-        m_per_nozzle_line_widths->load(*m_config, m_preset_bundle->printers.get_edited_preset().config);
+    if (m_per_nozzle_line_widths == nullptr)
+        return;
+    const bool was_shown = m_per_nozzle_line_widths->IsShown();
+    m_per_nozzle_line_widths->load(*m_config, m_preset_bundle->printers.get_edited_preset().config);
+    // MAGPIE: the table appears or goes when the printer's nozzles start or stop differing in size (a nozzle picked in
+    // the sidebar): the page lays out again, or the shown table keeps no room.
+    if (was_shown != m_per_nozzle_line_widths->IsShown()) {
+        m_page_view->Layout();
+        m_page_view->GetParent()->Layout();
+    }
 }
 
 void TabPrint::update_description_lines()
