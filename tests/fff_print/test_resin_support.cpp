@@ -51,6 +51,9 @@ DynamicPrintConfig resin_config(nlohmann::json mod_values)
 TEST_CASE("The bundled mods load without errors", "[ResinSupport]")
 {
     BundledMods mods;
+    // PERMANENT DIAGNOSTIC: which mod failed to load and why.
+    for (const std::string &error : mods.errors)
+        UNSCOPED_INFO(error);
     CHECK(mods.errors.empty());
     CHECK(ModHost::active_mods()->mods().size() >= 2);
 }

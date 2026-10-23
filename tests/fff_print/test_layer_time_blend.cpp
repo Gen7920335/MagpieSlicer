@@ -233,21 +233,36 @@ TEST_CASE("An in-place wait lifts the nozzle and returns it to the same height",
         }
     }
     auto z_of = [](const std::string &line) { return std::stod(line.substr(line.find(" Z") + 2)); };
+    // The moves around a wait; the time estimator's M73 progress lines (Orca places them by the estimated time)
+    // can fall between a move and the wait and say nothing about the nozzle.
+    auto move_before = [&lines](size_t i) {
+        while (i > 0 && lines[i - 1].rfind("M73 ", 0) == 0)
+            --i;
+        return i - 1;
+    };
+    auto move_after = [&lines](size_t i) {
+        while (i + 2 < lines.size() && lines[i + 1].rfind("M73 ", 0) == 0)
+            ++i;
+        return i + 1;
+    };
     size_t checked = 0;
     for (size_t i = 1; i + 1 < lines.size(); ++i) {
         if (lines[i].rfind("G4 P", 0) != 0)
             continue;
-        if (lines[i - 1].rfind("G1 Z", 0) != 0) {
+        const size_t up = move_before(i), down = move_after(i);
+        if (lines[up].rfind("G1 Z", 0) != 0) {
             // A bare G4 is a short wait (under 1 s, 1000 ms), which does not lift.
+            // PERMANENT DIAGNOSTIC: the lines around a long wait that was not lifted.
+            INFO("before: " << lines[up] << " | wait: " << lines[i] << " | after: " << lines[down]);
             CHECK(std::stoll(lines[i].substr(4)) < 1000);
             continue;
         }
-        REQUIRE(lines[i + 1].rfind("G1 Z", 0) == 0);
+        REQUIRE(lines[down].rfind("G1 Z", 0) == 0);
         // Up to 1 mm over the new layer, then down to the new layer's Z, which the next travel would have
         // raised the nozzle to anyway: never below where the nozzle was.
-        CHECK_THAT(z_of(lines[i - 1]) - z_of(lines[i + 1]), WithinAbs(1., 1e-6));
-        CHECK(z_of(lines[i + 1]) >= z_before[i - 1] - 1e-6);
-        CHECK(z_of(lines[i + 1]) - z_before[i - 1] <= 0.3 + 1e-6); // at most one layer (0.3 mm) up
+        CHECK_THAT(z_of(lines[up]) - z_of(lines[down]), WithinAbs(1., 1e-6));
+        CHECK(z_of(lines[down]) >= z_before[up] - 1e-6);
+        CHECK(z_of(lines[down]) - z_before[up] <= 0.3 + 1e-6); // at most one layer (0.3 mm) up
         ++checked;
     }
     CHECK(checked > 0);

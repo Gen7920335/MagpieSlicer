@@ -34,6 +34,9 @@ struct BundledMods
         dirs.emplace_back(MAGPIE_OFFICIAL_MODS_DIR);
 #endif
         ModHost::set_active_mods(std::make_shared<const ModHost::ModSet>(ModHost::ModSet::load_dirs(dirs, errors)));
+        // PERMANENT DIAGNOSTIC: which mod failed to load and why.
+        for (const std::string &error : errors)
+            UNSCOPED_INFO(error);
         REQUIRE(errors.empty());
     }
     ~BundledMods() { ModHost::set_active_mods(previous); }
