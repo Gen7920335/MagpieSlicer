@@ -2171,7 +2171,9 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
             // An auxiliary tower of a G-code event mod prints full layers with the support filament (line 1's
             // temperature drop tower).
             const bool aux_tower = ModHost::gcode_events_tower_requested(object);
-            for (const int filament : { printing_filament(pc, config.support_filament.value), support_interface_printing_filament(pc, config.support_interface_filament.value, config.support_filament.value) }) {
+            const int base_filament      = printing_filament(pc, config.support_filament.value);
+            const int interface_filament = support_interface_printing_filament(pc, config.support_interface_filament.value, config.support_filament.value);
+            for (const int filament : { base_filament, interface_filament }) {
                 std::vector<int> candidates;
                 if (filament > 0)
                     candidates.push_back(filament);
@@ -2180,11 +2182,20 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
                         candidates.push_back(int(extruder) + 1);
                 for (const int candidate : candidates) {
                     check(candidate, config, "support_line_width", support_mm, first);
-                    // Raft bands are not split by H/2: they print at their own, full heights (line 1).
+                    // Raft bands are not split by H/2: they print at their own, full heights (line 1). Each raft band
+                    // against the nozzle that prints it, mm: the base layers (and the first layer under a raft of
+                    // more than one layer) with the support filament, the interface and contact layers (and the
+                    // first layer of a one-layer raft) with the interface filament. Every height against both
+                    // nozzles refused a raft whose base, 0.75 x a large support nozzle, was taller than a small
+                    // interface nozzle (seeds 112, 116, 120 of the U1 random test).
                     if (object.has_raft()) {
-                        const SlicingParameters &sp = object.slicing_parameters();
-                        const double raft_mm = std::max({ sp.first_print_layer_height, sp.base_raft_layer_height,
-                                                          sp.interface_raft_layer_height, sp.contact_raft_layer_height });
+                        const SlicingParameters &sp       = object.slicing_parameters();
+                        const bool               one_band = config.raft_layers.value == 1;
+                        const double base_mm      = std::max(one_band ? 0. : sp.first_print_layer_height, sp.base_raft_layer_height);
+                        const double interface_mm = std::max({ one_band ? sp.first_print_layer_height : 0., sp.interface_raft_layer_height,
+                                                               sp.contact_raft_layer_height });
+                        const double raft_mm = filament == base_filament && filament == interface_filament ? std::max(base_mm, interface_mm) :
+                                               filament == base_filament ? base_mm : interface_mm;
                         check(candidate, config, "support_line_width", raft_mm, true);
                     }
                     if (aux_tower)
@@ -6278,11 +6289,36 @@ std::optional<Polygon> Print::generated_wipe_tower_footprint() const
 // footprint so an off-plate tower fails with a clear error instead of exporting unprintable
 // G-code. Run after psWipeTower is done, so a caller that catches the error still finds the
 // generated tower (Print::generated_wipe_tower_refit) and the GUI shows the real one.
+// MAGPIE: how far a combined skirt reaches past the tower's footprint, mm: the tower is part of the outline the skirt
+// goes around (_make_skirt), skirt_distance from it, skirt_loops lines of the skirt flow. A tower inside the bed
+// with its skirt outside printed off the bed (seed 336 of the U1 random test: H/2 + multi-nozzle walls made the
+// tower 104 mm deep against a 66 mm estimate; tower to Y 270.0 mm, skirt to 272.6 mm, bed to 271 mm).
+static double skirt_reach_past_tower_mm(const Print &print)
+{
+    const PrintConfig &config = print.config();
+    if (config.skirt_loops.value <= 0 || config.skirt_type.value != stCombined || print.objects().empty())
+        return 0.;
+    const Flow flow = print.skirt_flow();
+    return config.skirt_distance.value + config.skirt_loops.value * flow.spacing() + 0.5 * flow.width();
+}
+
+// The generated tower footprint grown by the skirt that goes around it.
+static Polygon tower_footprint_with_skirt(const Print &print, const Polygon &footprint)
+{
+    const double reach_mm = skirt_reach_past_tower_mm(print);
+    if (reach_mm <= 0.)
+        return footprint;
+    const Polygons grown = offset(footprint, float(scale_(reach_mm)), jtRound, float(scale_(0.1)));
+    return grown.empty() ? footprint : grown.front();
+}
+
 void Print::validate_generated_wipe_tower_footprint() const
 {
-    const std::optional<Polygon> footprint = this->generated_wipe_tower_footprint();
-    if (!footprint)
+    const std::optional<Polygon> tower_footprint = this->generated_wipe_tower_footprint();
+    if (!tower_footprint)
         return;
+    // MAGPIE: the skirt around the tower must stay on the bed too.
+    const std::optional<Polygon> footprint = tower_footprint_with_skirt(*this, *tower_footprint);
     const Polygons printable_polys = this->get_extruder_shared_printable_polygon();
     if (!printable_polys.empty() && !diff(Polygons{*footprint}, printable_polys).empty()) {
         // PERMANENT DIAGNOSTIC: the generated footprint against the bed, which the error does not say.
@@ -6294,7 +6330,7 @@ void Print::validate_generated_wipe_tower_footprint() const
         throw Slic3r::SlicingError(L("Prime tower is partially outside the printable area, and it cannot be printed.\n"));
     }
     // The cutter/purge corner is a physical obstacle — the brim must stay out like the body.
-    if (!intersection(get_bed_excluded_area(m_config), Polygons{*footprint}).empty())
+    if (!intersection(get_bed_excluded_area(m_config), Polygons{*tower_footprint}).empty())
         throw Slic3r::SlicingError(L("Prime tower is too close to an exclusion area, and collisions will be caused.\n"));
 }
 
@@ -6303,16 +6339,20 @@ std::optional<Vec2d> Print::generated_wipe_tower_refit() const
     const std::optional<Polygon> footprint = this->generated_wipe_tower_footprint();
     if (!footprint || !this->is_step_done(psWipeTower))
         return std::nullopt;
+    // MAGPIE: the skirt around the tower must end up on the bed too.
+    const Polygon  with_skirt      = tower_footprint_with_skirt(*this, *footprint);
     const Polygons printable_polys = this->get_extruder_shared_printable_polygon();
-    if (printable_polys.empty() || diff(Polygons{*footprint}, printable_polys).empty())
+    if (printable_polys.empty() || diff(Polygons{with_skirt}, printable_polys).empty())
         return std::nullopt;
     // Same rule as the GUI drag clamp, which holds the real tower's box WIPE_TOWER_MARGIN (mm) inside.
-    const Vec2f shift = WipeTower::move_box_inside_polygon(get_extents(*footprint), printable_polys, scaled<coord_t>(WIPE_TOWER_MARGIN));
+    const Vec2f shift = WipeTower::move_box_inside_polygon(get_extents(with_skirt), printable_polys, scaled<coord_t>(WIPE_TOWER_MARGIN));
     if (shift.isZero())
         return std::nullopt;
     Polygon moved = *footprint;
     moved.translate(Point(scaled<coord_t>(shift.x()), scaled<coord_t>(shift.y())));
-    if (!diff(Polygons{moved}, printable_polys).empty() || !intersection(get_bed_excluded_area(m_config), Polygons{moved}).empty())
+    Polygon moved_with_skirt = with_skirt;
+    moved_with_skirt.translate(Point(scaled<coord_t>(shift.x()), scaled<coord_t>(shift.y())));
+    if (!diff(Polygons{moved_with_skirt}, printable_polys).empty() || !intersection(get_bed_excluded_area(m_config), Polygons{moved}).empty())
         return std::nullopt;
     // Never onto an object: the space the placement kept free was sized from the estimate.
     // Instance hulls as layered_print_cleareance_valid builds them, moved into the tower's frame.

@@ -329,7 +329,9 @@ std::pair<SupportGeneratorLayersPtr, SupportGeneratorLayersPtr> generate_interfa
                             polygons_append(top_contact_layer.bottom_z - EPSILON > top_interface_z ? polygons_top_contact_projected_base : polygons_top_contact_projected_interface,
                                 // For snug supports, project the overhang polygons covering the whole overhang, so that they will merge without a gap with support polygons of the other layers.
                                 // For grid supports, merging of support regions will be performed by the projection into grid.
-                                snug_supports ? *top_contact_layer.overhang_polygons : top_contact_layer.polygons);
+                                // MAGPIE: tree supports (Mixed support runs one under a normal support type, so a snug
+                                // style stays set) keep no overhang polygons; their contact polygons stand in.
+                                snug_supports && top_contact_layer.overhang_polygons ? *top_contact_layer.overhang_polygons : top_contact_layer.polygons);
                         }
                     }
                     if (num_bottom_interface_layers > 0) {

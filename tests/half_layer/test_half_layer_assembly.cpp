@@ -2740,6 +2740,56 @@ TEST_CASE("A half-layer tower placed by the estimate is refitted onto the bed on
     CHECK_FALSE(print.generated_wipe_tower_refit());
 }
 
+// A combined skirt goes around the tower too. A tower whose footprint fits the bed but whose skirt does not printed
+// the skirt off the bed (seed 336 of the U1 random test); the check and the refit hold tower and skirt on the bed.
+TEST_CASE("A tower is refitted so that the skirt around it stays on the bed", "[HalfLayer][ExecutionTower][TowerPlacement]")
+{
+    auto config = multifilament_config(2);
+    config.set_num_extruders(2);
+    set_toolhead_nozzle_diameter(config, 0, 0.4);
+    set_toolhead_nozzle_diameter(config, 1, 0.4);
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false},
+        {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"},
+        {"prime_tower_brim_width", 3}, {"wipe_tower_rotation_angle", 0},
+        {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"wall_loops", 2},
+        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
+        {"skirt_loops", 3}, {"skirt_distance", 4}, {"skirt_type", "combined"}, {"brim_type", "no_brim"}}); // mm
+    size_flush_to_nozzles(config);
+    config.set_key_value("grab_length", new ConfigOptionFloats{0., 0.});
+    std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides;
+    for (int extruder : {1, 2})
+        overrides.push_back({{"extruder", extruder}});
+    Print print;
+    print.is_BBL_printer() = true; // Type1 tower
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(10.), cube(10.)}, print, model, config, &overrides);
+    REQUIRE(print.has_wipe_tower());
+    REQUIRE_NOTHROW(print.process());
+    const std::optional<Polygon> generated_at_50 = print.generated_wipe_tower_footprint();
+    REQUIRE(generated_at_50);
+    const BoundingBox generated_box = get_extents(*generated_at_50);
+
+    // The tower's footprint 1 mm inside the far bed edge: its skirt, more than 4 mm out, leaves the bed.
+    const Polygons bed = print.get_extruder_shared_printable_polygon();
+    const BoundingBox bed_box = get_extents(bed);
+    const double edge_y_mm = 50. + unscaled(bed_box.max.y() - generated_box.max.y()) - 1.;
+    config.set_deserialize_strict({{"wipe_tower_y", std::to_string(edge_y_mm)}});
+    print.apply(model, config);
+    REQUIRE_THROWS_AS(print.process(), Slic3r::SlicingError);
+    const std::optional<Polygon> generated_at_edge = print.generated_wipe_tower_footprint();
+    REQUIRE(generated_at_edge);
+    CHECK(diff(Polygons{*generated_at_edge}, bed).empty());
+
+    const std::optional<Vec2d> refit = print.generated_wipe_tower_refit();
+    REQUIRE(refit);
+    config.set_deserialize_strict({{"wipe_tower_x", std::to_string(refit->x())}, {"wipe_tower_y", std::to_string(refit->y())}});
+    print.apply(model, config);
+    // The check that refused the tower above holds tower and skirt on the bed.
+    REQUIRE_NOTHROW(print.process());
+    CHECK_FALSE(print.generated_wipe_tower_refit());
+}
+
 // The pre-slice tower estimate places the tower and reserves its room on the plate. A banded layer (H/2) is printed
 // as a lower band, a core and an upper band, and the tower takes a tool change for each visit (A-B-A rather than
 // A-B), so the estimate has to reserve room for those visits: without them the generated tower was deeper than the

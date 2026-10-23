@@ -123,6 +123,38 @@ static size_t outer_wall_path_nozzle(const PerimeterGenerator &generator, Extrus
     return printing_nozzle_index(*generator.print_config, int(filament), generator.is_bbl_printer);
 }
 
+// MAGPIE: the overhang (bridge) flow of a wall path the wall planner routes to another filament than Orca's (a detail
+// wall, or every wall of a large nozzle override layer), resolved on the nozzle that prints the path the way
+// region_bridging_flow() resolves the region's own (LayerRegion.cpp). overhang_flow is the region's; a 0.2 mm detail
+// nozzle printed the 0.8 mm region's 0.8 mm overhang lines (seed 106 of the U1 random test).
+static Flow planned_overhang_flow(const PerimeterGenerator &generator, ExtrusionToolHint hint)
+{
+    if (generator.wall_planner == nullptr)
+        return generator.overhang_flow;
+    const unsigned int base     = unsigned(std::max(1, generator.config->outer_wall_filament_id.value));
+    const unsigned int filament = generator.wall_planner->wall_filament(size_t(generator.layer_id), hint, base);
+    if (filament == 0)
+        return generator.overhang_flow;
+    const size_t nozzle    = printing_nozzle_index(*generator.print_config, int(filament), generator.is_bbl_printer);
+    const float  nozzle_mm = float(generator.print_config->nozzle_diameter.get_at(nozzle));
+    // Nozzle diameters closer than this are one size, mm.
+    if (std::abs(nozzle_mm - generator.overhang_flow.nozzle_diameter()) <= EPSILON)
+        return generator.overhang_flow;
+    const double bridge_width = bridge_line_width_mm(*generator.print_config, *generator.config, nozzle);
+    const double ratio        = generator.config->bridge_flow.value;
+    if (generator.object_config->thick_bridges.value) {
+        float thread_mm = bridge_width > 0. ? float(bridge_width) : nozzle_mm;
+        if (ratio > 0.)
+            thread_mm *= float(std::sqrt(ratio));
+        return Flow::bridging_flow(thread_mm, nozzle_mm);
+    }
+    Flow base_flow = feature_flow(WidthFeature::InnerWall, { generator.print_config, generator.object_config, generator.config }, nozzle,
+                                  float(generator.layer_height), generator.layer_id == 0);
+    if (bridge_width > 0.)
+        base_flow = Flow(float(bridge_width), base_flow.height(), nozzle_mm);
+    return base_flow.with_flow_ratio(ratio);
+}
+
 // MAGPIE: the diameter of the nozzle the region's outer wall filament prints on, a BBL filament_map included.
 // Orca read nozzle_diameter[outer_wall_filament_id - 1], the slot numbered like the filament: on an H2D with
 // 0.4/0.8 mm nozzles and filament 1 mapped to the 0.8 mm nozzle the overhang and bridge checks took the unused
@@ -373,7 +405,7 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
                     half_layer_shell_bridge_flow(perimeter_generator, loop_tool_hint,
                         Flow(float(extrusion_width), extrusion_height,
                             perimeter_generator.wall_flow_at_depth(loop.depth).nozzle_diameter())) :
-                    perimeter_generator.overhang_flow;
+                    planned_overhang_flow(perimeter_generator, loop_tool_hint);
                 extrusion_paths_append(paths, std::move(remain_polines),
                                        erOverhangPerimeter, bridge_flow.mm3_per_mm(),
                                        bridge_flow.width(), bridge_flow.height());
@@ -666,7 +698,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
             const size_t first_bridge = paths.size();
             const bool half_shell_bridge = perimeter_generator.half_layer_outer_walls && is_external;
             extrusion_paths_append(paths, clip_extrusion(extrusion_path, lower_slices_paths, ctDifference), erOverhangPerimeter,
-                half_shell_bridge ? path_flow : perimeter_generator.overhang_flow);
+                half_shell_bridge ? path_flow : planned_overhang_flow(perimeter_generator, wall_tool_hint));
             if (half_shell_bridge) {
                 for (size_t idx = first_bridge; idx < paths.size(); ++idx) {
                     ExtrusionPath &path = paths[idx];
@@ -2220,6 +2252,13 @@ void PerimeterGenerator::process_classic()
         if (! gaps.empty()) { // collapse
             double min = gap_fill_min_width;
             double max = 2. * perimeter_spacing;
+            // MAGPIE: the gap fill prints with the solid infill flow's nozzle (thin fills follow the internal solid
+            // filament), so on a printer whose nozzles differ it fills no wider than that nozzle's own gap fill
+            // limit; 2 x the walls' spacing on a larger wall nozzle sent 1.0-1.6 mm gap fill through a 0.4 mm
+            // nozzle (seed 216 of the U1 random test, Orca does the same). Diameters closer than EPSILON (mm) are one
+            // size, where nothing changes.
+            if (std::abs(this->solid_infill_flow.nozzle_diameter() - this->perimeter_flow.nozzle_diameter()) > EPSILON)
+                max = std::min(max, 2. * double(this->solid_infill_flow.scaled_spacing()));
             ExPolygons gaps_ex = diff_ex(
                 //FIXME offset2 would be enough and cheaper.
                 opening_ex(gaps, float(min / 2.)),
@@ -2960,6 +2999,21 @@ for (size_t surface_idx = range.begin(); surface_idx < range.end(); ++surface_id
                         half_layer_wall_boundary_overlap(*this, wall_plan, depth + 1, this->detail_wall_count));
                 }
             }
+            // MAGPIE: the full pass of the single wall pass (only_one_wall_top) lays all full_pass_walls walls, so its
+            // H/2 profile reaches the second wall too; the profile above follows the single pass's one wall. Without it
+            // the second H/2 wall took the inner wall's spacing on the inner wall's nozzle while the outer wall's tool
+            // printed it.
+            Arachne::WallToolPathsParams full_pass_params = input_params_tmp;
+            if (half_layer_outer_walls && only_one_wall_top) {
+                full_pass_params.fixed_outer_wall_spacings.clear();
+                full_pass_params.fixed_outer_wall_overlaps.clear();
+                const int full_profile_count = std::min(full_pass_walls, std::max(2, this->detail_wall_count));
+                for (int depth = 0; depth < full_profile_count; ++depth) {
+                    full_pass_params.fixed_outer_wall_spacings.push_back(wall_flow_at_depth(size_t(depth)).scaled_spacing());
+                    full_pass_params.fixed_outer_wall_overlaps.push_back(
+                        half_layer_wall_boundary_overlap(*this, wall_plan, depth + 1, this->detail_wall_count));
+                }
+            }
 
             Polygons   last_p = to_polygons(last);
             Arachne::WallToolPaths wallToolPaths(last_p, arachne_outer_spacing, perimeter_spacing, coord_t(loop_number + 1),
@@ -3023,7 +3077,7 @@ wall_0_inset, layer_height, input_params_tmp);
                 auto generate_full_perimeters = [&]() {
                     if (full_perimeters_generated)
                         return;
-                    Arachne::WallToolPaths full_tool_paths(last_p, arachne_outer_spacing, perimeter_spacing, coord_t(full_pass_walls), wall_0_inset, layer_height, input_params_tmp);
+                    Arachne::WallToolPaths full_tool_paths(last_p, arachne_outer_spacing, perimeter_spacing, coord_t(full_pass_walls), wall_0_inset, layer_height, full_pass_params);
                     full_perimeters           = full_tool_paths.getToolPaths();
                     full_inner_contour        = full_tool_paths.getInnerContour();
                     full_perimeters_generated = true;

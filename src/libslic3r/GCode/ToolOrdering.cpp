@@ -147,6 +147,22 @@ unsigned int LayerTools::internal_solid_filament_id(const PrintRegion &region) c
 	return resolve_mixed(result);
 }
 
+// MAGPIE: the role that picks the filament of a fill collection. The gap fill a surface fill makes
+// (Fill::_create_gap_fill) is part of that surface's collection and prints with it, so it does not decide: a bottom
+// surface with gap fill was erMixed and printed with the internal solid filament, at widths resolved on the bottom
+// surface filament's nozzle, and a top surface whose gap fill came first was registered as internal solid
+// (collect_extruders read the first entity). A collection of gap fill alone keeps erGapFill.
+static ExtrusionRole surface_fill_role(const ExtrusionEntityCollection &fill)
+{
+    ExtrusionRole role = erNone;
+    for (const ExtrusionEntity *entity : fill.entities) {
+        const ExtrusionRole er = entity->role();
+        if (er != erGapFill)
+            role = (role == erNone || role == er) ? er : erMixed;
+    }
+    return role == erNone && ! fill.entities.empty() ? erGapFill : role;
+}
+
 // Returns a zero based extruder this eec should be printed with, according to PrintRegion config or extruder_override if overriden.
 unsigned int LayerTools::extruder(const ExtrusionEntityCollection &extrusions, const PrintRegion &region) const
 {
@@ -160,7 +176,7 @@ unsigned int LayerTools::extruder(const ExtrusionEntityCollection &extrusions, c
     if (this->extruder_override == 0) {
         if (extrusions.has_infill()) {
             if (extrusions.has_solid_infill()) {
-                ExtrusionRole role = extrusions.role();
+                const ExtrusionRole role = surface_fill_role(extrusions);
                 if (role == erTopSolidInfill || role == erIroning)
                     extruder = region.config().top_surface_filament_id;
                 else if (role == erBottomSurface)
@@ -1158,9 +1174,17 @@ static void append_planner_wall_filaments(const PrintObject &object, const Print
     const unsigned int base = unsigned(std::max(1, region.config().outer_wall_filament_id.value));
     if (const unsigned int f = planner->wall_filament(layer_id, ExtrusionToolHint::Auto, base))
         out.emplace_back(f);
-    if (has_wall_tool_hint(perimeters))
+    if (has_wall_tool_hint(perimeters)) {
         if (const unsigned int f = planner->wall_filament(layer_id, ExtrusionToolHint::DetailWall, base))
             out.emplace_back(f);
+        // MAGPIE: a plan keeps at least two large walls whatever the wall count, so the inner wall filament prints
+        // even with one wall loop, where the caller does not list it. Unlisted, those walls fell to the layer's last
+        // tool (GCode::process_layer), a different nozzle from the one their width was resolved on.
+        bool plan_inner_walls = false;
+        planner->tool_uses(plan_inner_walls);
+        if (plan_inner_walls && region.config().wall_loops.value <= 1 && region.config().inner_wall_filament_id.value > 0)
+            out.emplace_back(unsigned(region.config().inner_wall_filament_id.value));
+    }
 }
 
 void ToolOrdering::collect_extruders(const PrintObject &object, const std::vector<std::pair<double, unsigned int>> &per_layer_extruder_switches)
@@ -1264,12 +1288,13 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
             for (const ExtrusionEntity *ee : layerm->fills.entities) {
                 // fill represents infill extrusions of a single island.
                 const auto *fill = dynamic_cast<const ExtrusionEntityCollection*>(ee);
-                ExtrusionRole role = fill->entities.empty() ? erNone : fill->entities.front()->role();
+                ExtrusionRole role = fill->entities.empty() ? erNone : surface_fill_role(*fill);
                 if (role == erTopSolidInfill || role == erIroning)
                     has_top_solid_surface = true;
                 else if (role == erBottomSurface)
                     has_bottom_surface = true;
-                else if (is_solid_infill(role) || (half_sources != nullptr && role == erGapFill))
+                // A mixed solid collection prints with the internal solid filament (LayerTools::extruder).
+                else if (is_solid_infill(role) || role == erMixed || (half_sources != nullptr && role == erGapFill))
                     has_internal_solid = true;
                 else if (role != erNone)
                     has_infill = true;
@@ -1671,6 +1696,14 @@ void ToolOrdering::fill_wipe_tower_partitions(const PrintConfig &config, coordf_
             }
     }
 
+    // MAGPIE: a banded print's logical support events (H/2) can leave a layer with neither object nor support, which
+    // the G-code never prints (collect_layers_to_print drops it): a tower layer planned there was never emitted, and
+    // every later tool change took the tower plan of the layer before (seed 119 of the U1 random test, raft + H/2:
+    // the event at 0.75 mm between the raft and the 0.95 mm first layer). Vanilla prints no such layers.
+    if (m_half_layer_execution_enabled)
+        for (LayerTools &lt : m_layer_tools)
+            if (lt.has_wipe_tower && !lt.has_object && !lt.has_support && lt.half_layer_frame_index == size_t(-1))
+                lt.has_wipe_tower = false;
     // Calculate the wipe_tower_layer_height values.
     coordf_t wipe_tower_print_z_last = 0.;
     for (LayerTools &lt : m_layer_tools)

@@ -323,6 +323,26 @@ TEST_CASE("Mixed support prints one raft", "[MixedSupport]")
     CHECK(raft_layers >= object.slicing_parameters().raft_layers());
 }
 
+TEST_CASE("Mixed support keeps a snug style's interfaces over a raft when tree support prints them", "[MixedSupport]")
+{
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    // Every overhang goes to tree support (no part reaches the bed straight down by 100 %), while the support type
+    // stays normal, so the snug style reaches the interface step with the tree's contact layers.
+    DynamicPrintConfig config = mixed_config({{"mixed_support.coverage_threshold", 100.}});
+    config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(smsSnug));
+    config.set_key_value("raft_layers", new ConfigOptionInt(2));
+    config.set_key_value("support_interface_top_layers", new ConfigOptionInt(2));
+    config.set_key_value("support_interface_bottom_layers", new ConfigOptionInt(2));
+
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({pillar_under_ceiling()}, print, config));
+    const PrintObject &object = *print.objects().front();
+    CHECK(any_layer(object, stInnerTree));
+    const auto layers = object.support_layers();
+    CHECK(std::any_of(layers.begin(), layers.end(), [](const SupportLayer *l) { return l->has_extrusions(); }));
+}
+
 TEST_CASE("Mixed support works with common nozzle diameters", "[MixedSupport]")
 {
     BundledMods mods;

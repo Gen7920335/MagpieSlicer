@@ -410,6 +410,30 @@ TEST_CASE("Each feature prints with its assigned filament (three filaments)", "[
     CHECK(tools_for_role(gcode, "infill")    == std::set<int>{ 1 }); // filament 2
 }
 
+TEST_CASE("Top and bottom surfaces print with their own filaments when gap fill joins them", "[MultiFilament][Regression]")
+{
+    // A triangular prism leaves narrow corners in every solid layer, which Fill's gap fill fills inside the surface's
+    // collection. That gap fill must not move the surface to the internal solid filament.
+    const std::string gcode = slice({ make_cylinder(12., 6., 2. * PI / 3.) },
+        multifilament_config(3, {
+            { "sparse_infill_filament_id",  1 },
+            { "internal_solid_filament_id", 1 },
+            { "top_surface_filament_id",    2 },
+            { "bottom_surface_filament_id", 3 },
+            { "outer_wall_filament_id",     1 },
+            { "inner_wall_filament_id",     1 },
+            { "gap_fill_target",            "everywhere" },
+            { "top_shell_layers",           3 },
+            { "bottom_shell_layers",        3 },
+            { "skirt_loops",                0 },
+            { "brim_type",                  "no_brim" },
+        }));
+    const std::map<std::string, std::set<int>> tools = tools_by_type(gcode);
+    REQUIRE(tools.count("Gap infill") == 1);
+    CHECK(tools.at("Top surface") == std::set<int>{ 1 });
+    CHECK(tools.at("Bottom surface") == std::set<int>{ 2 });
+}
+
 // The override must survive tool ordering: object 1's walls print on their filament's
 // tool, object 0 stays on the first. If dropped, every wall prints on tool 0.
 TEST_CASE("Per-object wall filament override is honored", "[MultiFilament]")
@@ -777,6 +801,8 @@ TEST_CASE("Wipe tower temperature-wait park is regenerated when the tower moves"
         { "ooze_prevention",                1 },
         { "standby_temperature_delta",      -40 },
         { "wait_for_temp_on_wipe_tower",    1 },
+        // A skirt would go around the tower at the bed edge and off the bed, which the generated tower check refuses.
+        { "skirt_loops",                    0 },
     });
     // init_print force-sets this on its own copy; set it here too so the re-apply below
     // diffs in wipe_tower_x ONLY — the exact GUI increment under test.

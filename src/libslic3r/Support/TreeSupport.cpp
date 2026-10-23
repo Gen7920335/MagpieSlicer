@@ -1698,17 +1698,22 @@ void TreeSupport::generate_toolpaths()
         SupportLayer *ts_layer = m_object->get_support_layer(layer_nr);
 
         Flow support_flow(support_extrusion_width, ts_layer->height, nozzle_diameter);
+        // MAGPIE: the raft interface prints with the support interface filament, so at the interface width of its
+        // nozzle (support_material_interface_flow); the support base's flow put 0.58 mm lines on a 0.2 mm interface
+        // nozzle (seed 116 of the U1 random test). Same flow wherever both print on one nozzle size.
+        const Flow interface_flow(m_support_material_interface_flow.width(), float(ts_layer->height), m_support_material_interface_flow.nozzle_diameter());
         Fill* filler_interface = Fill::new_from_type(ipRectilinear);
         filler_interface->angle = M_PI_2;  // interface should be perpendicular to base
-        filler_interface->spacing = support_flow.spacing();
+        filler_interface->spacing = interface_flow.spacing();
 
         FillParams fill_params;
         fill_params.density = interface_density;
         fill_params.dont_adjust = true;
 
         fill_expolygons_generate_paths(ts_layer->support_fills.entities, raft_interface_areas,
-            filler_interface, fill_params, erSupportMaterialInterface, support_flow);
+            filler_interface, fill_params, erSupportMaterialInterface, interface_flow);
 
+        filler_interface->spacing = support_flow.spacing();
         fill_params.density = object_config.raft_first_layer_density * 0.01;
         fill_expolygons_generate_paths(ts_layer->support_fills.entities, raft_base_areas,
             filler_interface, fill_params, erSupportMaterial, support_flow);

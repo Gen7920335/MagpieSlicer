@@ -2062,6 +2062,37 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
     CHECK(error.string.empty() == should_pass);
 }
 
+TEST_CASE("Half-height prints check each raft band against the nozzle that prints it", "[Print][validate][HalfLayer]")
+{
+    // Support base on the 0.6 mm nozzle (raft base layers 0.75 x 0.6 = 0.45 mm), interface on the 0.4 mm nozzle
+    // (interface and contact raft layers 0.3 mm). Every band fits its own nozzle; checking the 0.45 mm base against
+    // the 0.4 mm interface nozzle refused the print. A 0.15 mm interface nozzle has no room for the interface bands,
+    // which are at least one layer (0.2 mm) tall.
+    OfficialMods mods;
+    const double interface_nozzle = GENERATE(0.4, 0.15);
+    const bool   should_pass      = interface_nozzle >= 0.2;
+    auto config = multifilament_config(2, {
+        {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, // mm
+        {"wall_loops", 2}, {"line_width", "100%"}, {"initial_layer_line_width", "100%"},
+        {"outer_wall_line_width", "100%"}, {"inner_wall_line_width", "100%"}, {"support_line_width", "100%"},
+        {"enable_support", true}, {"support_type", "normal(auto)"}, {"raft_layers", 3},
+        {"support_filament", 1}, {"support_interface_filament", 2},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}, {"enable_prime_tower", false},
+        {"use_relative_e_distances", true}, {"layer_change_gcode", "G92 E0\n"},
+    });
+    Slic3r::Test::half_layer_params(config, true);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.6, interface_nozzle}); // mm
+    config.set_key_value("max_layer_height", new ConfigOptionFloats{0.45, 0.45}); // mm
+    DYNAMIC_SECTION("interface nozzle " << interface_nozzle << " mm") {
+        Print print;
+        Model model;
+        init_print({cube(20)}, print, model, config);
+        const StringObjectException error = print.validate();
+        INFO(error.string);
+        CHECK(error.string.empty() == should_pass);
+    }
+}
+
 TEST_CASE("A line width error on a mixed-nozzle printer names the nozzle absolute widths are scaled from", "[Print][validate]")
 {
     const bool mixed = GENERATE(false, true);

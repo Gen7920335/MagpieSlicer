@@ -212,7 +212,11 @@ static ExtrusionPaths thick_polyline_to_extrusion_paths_2(const ThickPolyline& t
             path.polyline.append(Point3(lines[idx].a));
         }
         path.polyline.append(Point3(lines[final_size - 1].b));
-        if (length > SCALED_EPSILON) {
+        // MAGPIE: a run whose mean gap width is under this (spacing, mm) is no extrusion: its width would equal the
+        // flow's rounded ends, and Flow::spacing() throws on a zero spacing. Medial axis can leave such runs where a
+        // half-height wall band (H/2) borders a thin wall (seed 234 of the U1 random test: 0.034 mm at 0.16 mm).
+        constexpr double min_gap_spacing_mm = 0.005;
+        if (length > SCALED_EPSILON && unscale<double>(sum / length) >= min_gap_spacing_mm) {
             double w = sum / length;
             Flow new_flow = flow.with_width(unscale<float>(w) + flow.height() * float(1. - 0.25 * PI));
             path.mm3_per_mm = new_flow.mm3_per_mm();

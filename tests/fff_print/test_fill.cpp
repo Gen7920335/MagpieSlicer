@@ -40,6 +40,7 @@
 #include "libslic3r/Fill/FillGyroid.hpp"
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include "libslic3r/Flow.hpp"
+#include "libslic3r/VariableWidth.hpp"
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/IntersectionPoints.hpp"
 #include "libslic3r/Layer.hpp"
@@ -2514,4 +2515,22 @@ TEST_CASE("Monotonic line top surfaces print their gap fill next to their lines 
     }
     REQUIRE(gap_fills > 0);
     CHECK(gap_fills_before_a_line > 0);
+}
+
+TEST_CASE("Gap fill drops a medial axis run of zero width instead of failing", "[Fill][Regression]")
+{
+    // A 10 mm run whose width is 0 at every point: its line would be only the flow's rounded ends, a zero spacing
+    // Flow::spacing() refuses. A 0.2 mm run next to it still prints.
+    const Flow flow(0.45f, 0.16f, 0.4f); // width, height, nozzle (mm)
+    ThickPolyline zero;
+    zero.points = { Point::new_scale(0., 0.), Point::new_scale(10., 0.) };
+    zero.width  = { 0., 0. };
+    ThickPolyline normal;
+    normal.points = { Point::new_scale(0., 5.), Point::new_scale(10., 5.) };
+    normal.width  = { scaled<double>(0.2), scaled<double>(0.2) };
+    std::vector<ExtrusionEntity *> out;
+    REQUIRE_NOTHROW(variable_width({ zero, normal }, erGapFill, flow, out));
+    CHECK(out.size() == 1);
+    for (ExtrusionEntity *e : out)
+        delete e;
 }

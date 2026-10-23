@@ -1153,6 +1153,42 @@ std::string join_lines(const std::vector<std::string> &lines)
 
 } // namespace
 
+TEST_CASE("With one wall loop the large walls of a plan print with the inner wall filament", "[MultiNozzleWalls][ToolOrdering]")
+{
+    OfficialMods mods;
+    const char *wall_generator = GENERATE("classic", "arachne");
+    DYNAMIC_SECTION(wall_generator) {
+        // Filament 1 (0.6 mm) prints the outer walls, filament 2 (0.2 mm, same colour) the detail walls, filament 3
+        // (0.8 mm) the inner walls. With one wall loop the plan still keeps two large walls (inner walls), which the
+        // layer's tool list must name, or they print with whatever tool printed last.
+        DynamicPrintConfig config = multifilament_config(3, {
+            { "outer_wall_filament_id", 1 }, { "inner_wall_filament_id", 3 }, { "sparse_infill_filament_id", 1 },
+            { "internal_solid_filament_id", 1 }, { "top_surface_filament_id", 1 }, { "bottom_surface_filament_id", 1 },
+            { "wall_generator", wall_generator }, { "wall_loops", 1 }, { "skirt_loops", 0 }, { "brim_type", "no_brim" },
+            { "sparse_infill_density", 15 }, { "only_one_wall_top", false }, { "only_one_wall_first_layer", false },
+            { "layer_height", 0.15 }, { "initial_layer_print_height", 0.15 }, // mm, under the 0.2 mm nozzle
+            { "line_width", "100%" }, { "outer_wall_line_width", "100%" }, { "inner_wall_line_width", "100%" },
+            { "initial_layer_line_width", "100%" },
+        });
+        config.set_num_extruders(3);
+        config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(false));
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.6, 0.2, 0.8 });
+        config.set_key_value("filament_colour", new ConfigOptionStrings{ "#FF0000", "#FF0000", "#0000FF" });
+        size_flush_to_nozzles(config);
+        multi_nozzle_params(config, { { "enable", true }, { "small_wall_count", 1 }, { "detail_toolhead", 2 } });
+        Print print;
+        Model model;
+        init_print({ cube(20) }, print, model, config);
+        const std::string gcode = Slic3r::Test::gcode(print);
+        // The plan is active: the detail nozzle prints outer walls.
+        REQUIRE(tools_for_type(gcode, "Outer wall").count(1) == 1);
+        CHECK(tools_for_type(gcode, "Inner wall") == std::set<int>{ 2 });
+        const std::vector<std::string> mismatches = width_mismatches(print, gcode);
+        INFO(join_lines(mismatches));
+        CHECK(mismatches.empty());
+    }
+}
+
 TEST_CASE("Every role on a mixed-nozzle printer prints the width resolved on its own nozzle", "[MultiNozzleWalls][Widths]")
 {
     // The planner is the native multi-nozzle walls mod; its parameters are read while its manifest is active.
@@ -1206,6 +1242,156 @@ TEST_CASE("Every role on a mixed-nozzle printer prints the width resolved on its
         INFO(join_lines(mismatches));
         CHECK(mismatches.empty());
     }
+}
+
+TEST_CASE("Gap fill between walls of a larger inner wall nozzle stays within the printing nozzle's gap fill width", "[MultiNozzleWalls][Widths][Classic]")
+{
+    OfficialMods mods;
+    // Outer walls and solid infill (which prints wall gap fill) on the 0.4 mm nozzle, inner walls on the 0.8 mm one.
+    // Fins 1.5 to 3.5 mm wide leave gaps between the walls up to 2 x the 0.8 mm walls' spacing.
+    DynamicPrintConfig config = two_nozzle_config(0.4, 0.8, 1, "classic", false);
+    config.set_deserialize_strict({
+        { "inner_wall_filament_id", 2 }, { "wall_loops", 3 }, { "gap_fill_target", "nowhere" },
+        { "layer_height", 0.2 }, { "initial_layer_print_height", 0.2 }, // mm
+        { "line_width", "110%" }, { "outer_wall_line_width", "100%" }, { "inner_wall_line_width", "110%" },
+        { "initial_layer_line_width", "110%" }, { "internal_solid_infill_line_width", "100%" } });
+    TriangleMesh mesh = make_cube(20., 20., 4.);
+    for (int i = 0; i < 5; ++i) {
+        TriangleMesh fin = make_cube(1.5 + 0.5 * i, 10., 4.); // mm
+        fin.translate(float(22. + 5. * i), 0.f, 0.f);
+        mesh.merge(fin);
+    }
+    Print print;
+    Model model;
+    init_print({ mesh }, print, model, config);
+    std::string gcode;
+    REQUIRE_NOTHROW(gcode = Slic3r::Test::gcode(print));
+    double widest = 0.;   // mm, gap fill on the 0.4 mm nozzle's tool
+    int    tool   = 0;
+    double width  = 0.;
+    std::string role;
+    GCodeReader reader;
+    reader.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw());
+        const std::string cmd(line.cmd());
+        if (raw.rfind(";TYPE:", 0) == 0)
+            role = raw.substr(6);
+        else if (raw.rfind(";WIDTH:", 0) == 0)
+            width = std::atof(raw.c_str() + 7);
+        else if (cmd.size() >= 2 && cmd[0] == 'T' && std::isdigit((unsigned char) cmd[1]))
+            tool = std::stoi(cmd.substr(1));
+        else if (tool == 0 && role == "Gap infill" && line.extruding(self) && line.dist_XY(self) > 0)
+            widest = std::max(widest, width);
+    });
+    // 2 x the 0.4 mm nozzle's solid infill spacing (about 0.37 mm), with the flow's rounded ends.
+    CHECK(widest <= 2. * 0.4);
+}
+
+TEST_CASE("A tree support raft's interface prints at the interface nozzle's width", "[MultiNozzleWalls][Widths][Support]")
+{
+    OfficialMods mods;
+    const char *style = GENERATE("default", "tree_slim");
+    DYNAMIC_SECTION("tree support style " << style) {
+        // Support base on the 0.4 mm nozzle, support interface on the 0.2 mm one, two raft layers under a table
+        // whose top overhangs 5 mm. The raft's interface layer is printed by the 0.2 mm nozzle.
+        DynamicPrintConfig config = two_nozzle_config(0.4, 0.2, 1, "classic", false);
+        config.set_deserialize_strict({
+            { "layer_height", 0.15 }, { "initial_layer_print_height", 0.15 }, // mm, under the 0.2 mm nozzle
+            { "line_width", "110%" }, { "initial_layer_line_width", "110%" }, { "support_line_width", "110%" },
+            { "enable_support", true }, { "support_type", "tree(auto)" }, { "support_style", style },
+            { "raft_layers", 2 }, { "support_filament", 1 }, { "support_interface_filament", 2 } });
+        TriangleMesh mesh = make_cube(10., 10., 6.);
+        mesh.translate(5.f, 5.f, 0.f);
+        TriangleMesh top = make_cube(20., 20., 2.);
+        top.translate(0.f, 0.f, 6.f);
+        mesh.merge(top);
+        Print print;
+        Model model;
+        init_print({ mesh }, print, model, config);
+        const std::string gcode = Slic3r::Test::gcode(print);
+        REQUIRE(tools_for_type(gcode, "Support interface").count(1) == 1);
+        const std::vector<std::string> mismatches = width_mismatches(print, gcode);
+        INFO(join_lines(mismatches));
+        CHECK(mismatches.empty());
+    }
+}
+
+TEST_CASE("Overhang walls of planned walls take the bridge width of the nozzle that prints them", "[MultiNozzleWalls][Widths]")
+{
+    OfficialMods mods;
+    const char *wall_generator = GENERATE("classic", "arachne");
+    const bool  override_only  = GENERATE(false, true);
+    DYNAMIC_SECTION(wall_generator << (override_only ? " override range" : " detail walls")) {
+        // Walls on the 0.8 mm nozzle; the 0.2 mm nozzle prints the detail walls, or every wall of layers 2-60 by a
+        // large nozzle override. The top of the table overhangs 5 mm: its overhang walls are bridges on whichever
+        // nozzle prints the wall, not the 0.8 mm region's 0.8 mm bridges.
+        DynamicPrintConfig config = two_nozzle_config(0.8, 0.2, 1, wall_generator, !override_only);
+        config.set_deserialize_strict({
+            { "layer_height", 0.15 }, { "initial_layer_print_height", 0.15 }, // mm, under the 0.2 mm nozzle
+            { "line_width", "100%" }, { "outer_wall_line_width", "100%" }, { "inner_wall_line_width", "100%" },
+            { "initial_layer_line_width", "100%" }, { "detect_overhang_wall", true } });
+        if (override_only)
+            multi_nozzle_params(config, { { "override_regions", "2:60:2" } });
+        TriangleMesh mesh = make_cube(10., 10., 6.);
+        mesh.translate(5.f, 5.f, 0.f);
+        TriangleMesh top = make_cube(20., 20., 2.);
+        top.translate(0.f, 0.f, 6.f);
+        mesh.merge(top);
+        Print print;
+        Model model;
+        init_print({ mesh }, print, model, config);
+        std::string gcode;
+        REQUIRE_NOTHROW(gcode = Slic3r::Test::gcode(print));
+        // Widest overhang wall per tool, mm.
+        std::map<int, double> widest;
+        int    tool  = 0;
+        double width = 0.;
+        std::string role;
+        GCodeReader reader;
+        reader.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+            const std::string raw(line.raw());
+            const std::string cmd(line.cmd());
+            if (raw.rfind(";TYPE:", 0) == 0)
+                role = raw.substr(6);
+            else if (raw.rfind(";WIDTH:", 0) == 0)
+                width = std::atof(raw.c_str() + 7);
+            else if (cmd.size() >= 2 && cmd[0] == 'T' && std::isdigit((unsigned char) cmd[1]))
+                tool = std::stoi(cmd.substr(1));
+            else if (role == "Overhang wall" && line.extruding(self) && line.dist_XY(self) > 0)
+                widest[tool] = std::max(widest[tool], width);
+        });
+        REQUIRE(widest.count(1) == 1);
+        // A bridge is at most its nozzle's diameter wide (round bridges) or the wall width; 2 x leaves room for either.
+        CHECK(widest[1] <= 2. * 0.2);
+    }
+}
+
+TEST_CASE("H/2 second walls under a single top wall take the outer wall's width on a larger inner wall nozzle", "[MultiNozzleWalls][Widths][HalfLayer][Arachne]")
+{
+    OfficialMods mods;
+    // Outer walls on the 0.2 mm nozzle, inner walls on the 0.6 mm one. H/2 makes the two outer walls outer walls,
+    // printed by the outer wall's tool; with a single wall on top surfaces the full wall pass laid the second one at
+    // the inner wall's spacing (0.545 mm from a 0.2 mm nozzle, seed 2 of the U1 random test).
+    DynamicPrintConfig config = two_nozzle_config(0.2, 0.6, 1, "arachne", false);
+    config.set_deserialize_strict({
+        { "inner_wall_filament_id", 2 }, { "wall_loops", 4 },
+        { "layer_height", 0.14 }, { "initial_layer_print_height", 0.14 }, // mm, under the 0.2 mm nozzle
+        { "line_width", "121%" }, { "outer_wall_line_width", "146%" }, { "inner_wall_line_width", "93%" },
+        { "initial_layer_line_width", "120%" },
+        { "top_shell_layers", 3 }, { "only_one_wall_top", true } });
+    Slic3r::Test::half_layer_params(config, true);
+    TriangleMesh mesh = make_cube(20., 20., 6.);
+    TriangleMesh top  = make_cube(10., 10., 3.);
+    top.translate(5.f, 5.f, 6.f);
+    mesh.merge(top);
+    Print print;
+    Model model;
+    init_print({ mesh }, print, model, config);
+    std::string gcode;
+    REQUIRE_NOTHROW(gcode = Slic3r::Test::gcode(print));
+    const std::vector<std::string> mismatches = width_mismatches(print, gcode);
+    INFO(join_lines(mismatches));
+    CHECK(mismatches.empty());
 }
 
 TEST_CASE("Detail and large walls under a single top wall print their own nozzle's width", "[MultiNozzleWalls][Widths][HalfLayer]")
