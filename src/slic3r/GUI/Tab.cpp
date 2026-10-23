@@ -1,7 +1,6 @@
 //#include "slic3r/Utils/Serial.hpp"
 #include "Tab.hpp"
 #include "ModParamsPanel.hpp"
-#include "PerNozzleLineWidthsPanel.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
 #include "PresetHints.hpp"
 #include "libslic3r/IMEXHelpers.hpp"
@@ -2874,30 +2873,13 @@ void TabPrint::build()
         optgroup->append_single_option_line("internal_solid_infill_line_width","quality_settings_line_width#internal-solid-infill");
         optgroup->append_single_option_line("support_line_width","quality_settings_line_width#support");
         optgroup->append_single_option_line("bridge_line_width","quality_settings_line_width#bridge");
-        // MAGPIE: per-nozzle line widths, shown on a printer whose nozzles differ in size; not per object.
-        if (dynamic_cast<TabPrintModel*>(this) == nullptr) {
-            Line line{ "", "" };
-            line.full_width = 1;
-            line.widget = [this](wxWindow* parent) -> wxSizer* {
-                m_per_nozzle_line_widths = new PerNozzleLineWidthsPanel(parent);
-                // The page can be destroyed without clear_pages(); forget the panel then.
-                m_per_nozzle_line_widths->Bind(wxEVT_DESTROY, [this](wxWindowDestroyEvent& event) {
-                    if (event.GetEventObject() == m_per_nozzle_line_widths)
-                        m_per_nozzle_line_widths = nullptr;
-                    event.Skip();
-                });
-                m_per_nozzle_line_widths->on_change = [this](const std::string& key, const std::vector<double>& values) {
-                    m_config->set_key_value(key, new ConfigOptionFloats(values));
-                    update_dirty();
-                    on_value_change(key, m_config->opt_serialize(key));
-                };
-                load_per_nozzle_line_widths();
-                auto* sizer = new wxBoxSizer(wxHORIZONTAL);
-                sizer->Add(m_per_nozzle_line_widths, 1, wxEXPAND);
-                return sizer;
-            };
-            optgroup->append_line(line);
-        }
+        // MAGPIE: the per-nozzle line widths as Orca's per-extruder rows, shown instead of the rows above on a printer
+        // whose nozzles differ in size (load_per_nozzle_line_widths); the process preset only, not per object.
+        if (m_type == Preset::TYPE_PRINT)
+            for (const char* width_key : { "line_width", "initial_layer_line_width", "outer_wall_line_width", "inner_wall_line_width",
+                                           "top_surface_line_width", "sparse_infill_line_width", "internal_solid_infill_line_width",
+                                           "support_line_width", "bridge_line_width" })
+                optgroup->append_single_option_line(per_nozzle_line_width_key(width_key), "quality_settings_line_width", 0);
 
         optgroup = page->new_optgroup(L("Seam"), L"param_seam");
         optgroup->append_single_option_line("seam_position", "quality_settings_seam#seam-position");
@@ -3063,6 +3045,10 @@ void TabPrint::build()
         optgroup->append_single_option_line("skin_infill_depth", "strength_settings_patterns#locked-zag");
         optgroup->append_single_option_line("skin_infill_line_width", "strength_settings_patterns#locked-zag");
         optgroup->append_single_option_line("skeleton_infill_line_width", "strength_settings_patterns#locked-zag");
+        if (m_type == Preset::TYPE_PRINT) {
+            optgroup->append_single_option_line(per_nozzle_line_width_key("skin_infill_line_width"), "strength_settings_patterns#locked-zag", 0);
+            optgroup->append_single_option_line(per_nozzle_line_width_key("skeleton_infill_line_width"), "strength_settings_patterns#locked-zag", 0);
+        }
         optgroup->append_single_option_line("symmetric_infill_y_axis", "strength_settings_infill#symmetric-infill-y-axis");
         optgroup->append_single_option_line("infill_complete_top", "strength_settings_patterns#fill-pattern-tops");
         optgroup->append_single_option_line("infill_shift_step", "strength_settings_patterns#cross-zag");
@@ -3419,17 +3405,125 @@ void TabPrint::reload_config()
     load_per_nozzle_line_widths();
 }
 
+std::vector<double> TabPrint::per_nozzle_values(const std::string& width_key) const
+{
+    const auto* nozzles = m_preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
+    std::vector<double> values(nozzles != nullptr ? nozzles->values.size() : 0, 0.);
+    // A short list leaves the nozzles past its end on the setting (0), as slicing reads it (LineWidths.cpp), not on its
+    // first entry as ConfigOptionVector::get_at() would.
+    if (const auto* opt = m_config->option<ConfigOptionFloats>(per_nozzle_line_width_key(width_key)))
+        for (size_t idx = 0; idx < values.size() && idx < opt->values.size(); ++idx)
+            values[idx] = std::max(0., opt->values[idx]);
+    return values;
+}
+
 void TabPrint::load_per_nozzle_line_widths()
 {
-    if (m_per_nozzle_line_widths == nullptr)
+    if (m_type != Preset::TYPE_PRINT)
         return;
-    const bool was_shown = m_per_nozzle_line_widths->IsShown();
-    m_per_nozzle_line_widths->load(*m_config, m_preset_bundle->printers.get_edited_preset().config);
-    // MAGPIE: the table appears or goes when the printer's nozzles start or stop differing in size (a nozzle picked in
-    // the sidebar): the page lays out again, or the shown table keeps no room.
-    if (was_shown != m_per_nozzle_line_widths->IsShown()) {
+    const DynamicPrintConfig& printer = m_preset_bundle->printers.get_edited_preset().config;
+    const bool                rows    = per_nozzle_widths_switch();
+    // Line visibility: the Line width rows on a printer with one nozzle size, the per-nozzle rows on one with several.
+    // The two lattice widths show only for the locked zag pattern, as ConfigManipulation has them.
+    const bool locked_zag = m_config->has("sparse_infill_pattern") &&
+                            m_config->opt_enum<InfillPattern>("sparse_infill_pattern") == InfillPattern::ipLockedZag;
+    m_per_nozzle_loaded.clear();
+    for (const char* width_key : per_nozzle_line_width_base_keys())
+        m_per_nozzle_loaded[per_nozzle_line_width_key(width_key)] = per_nozzle_values(width_key);
+    for (const char* width_key : per_nozzle_line_width_base_keys()) {
+        const bool lattice = std::strcmp(width_key, "skin_infill_line_width") == 0 || std::strcmp(width_key, "skeleton_infill_line_width") == 0;
+        const bool shown   = !lattice || locked_zag;
+        toggle_line(width_key, shown && !rows);
+        toggle_line(per_nozzle_line_width_key(width_key), shown && rows, 0);
+    }
+    if (rows != m_per_nozzle_rows) {
+        m_per_nozzle_rows = rows;
+        // The variant switch appears or goes with the rows (Tab::update_extruder_variants).
+        update_extruder_variants(-1, false);
+        if (m_active_page)
+            m_active_page->update_visibility(m_mode, true);
         m_page_view->Layout();
         m_page_view->GetParent()->Layout();
+    }
+    if (!rows)
+        return;
+    // Each row shows the width its nozzle prints: the per-nozzle value, or the setting scaled to the nozzle, in mm
+    // rounded to 0.01 mm. Display only: the preset keeps 0 until the value is edited (on_value_change).
+    const int nozzle = get_current_active_extruder();
+    DynamicPrintConfig resolved = *m_config;
+    for (const char* key : { "nozzle_diameter", "printer_variant" })
+        if (const ConfigOption* opt = printer.option(key))
+            resolved.set_key_value(key, opt->clone());
+    for (const char* width_key : per_nozzle_line_width_base_keys()) {
+        const std::vector<double> values = per_nozzle_values(width_key);
+        if (nozzle < 0 || size_t(nozzle) >= values.size())
+            continue;
+        const double mm = values[nozzle] > 0. ? values[nozzle] :
+                                                std::round(per_nozzle_line_width_fallback_mm(resolved, width_key, size_t(nozzle)) * 100.) / 100.;
+        for (const PageShp& page : m_pages)
+            if (Field* field = page->get_field(per_nozzle_line_width_key(width_key), 0))
+                field->set_value(mm, false);
+    }
+}
+
+void TabPrint::on_value_change(const std::string& opt_key, const boost::any& value)
+{
+    // MAGPIE: an edit of a per-nozzle row ("<key>_per_nozzle#n"), which the row's field already wrote to the nozzle's
+    // entry (ConfigOptionsGroup::change_opt_value). The value the row showed for an unset nozzle (the setting,
+    // rounded) leaves it unset, so the rounding never becomes a stored width.
+    const std::string key = opt_key.substr(0, opt_key.find('#'));
+    const char*       width_key = nullptr;
+    for (const char* k : per_nozzle_line_width_base_keys())
+        if (key == per_nozzle_line_width_key(k))
+            width_key = k;
+    const int nozzle = get_current_active_extruder();
+    if (width_key == nullptr || m_type != Preset::TYPE_PRINT || nozzle < 0) {
+        Tab::on_value_change(opt_key, value);
+        return;
+    }
+    auto it = m_per_nozzle_loaded.find(key);
+    const bool was_unset = it == m_per_nozzle_loaded.end() || size_t(nozzle) >= it->second.size() || it->second[nozzle] == 0.;
+    std::vector<double> values = per_nozzle_values(width_key);
+    if (values.size() <= size_t(nozzle))
+        values.resize(size_t(nozzle) + 1, 0.);
+    const double edited = boost::any_cast<double>(value);
+    DynamicPrintConfig resolved = *m_config;
+    for (const char* k : { "nozzle_diameter", "printer_variant" })
+        if (const ConfigOption* opt = m_preset_bundle->printers.get_edited_preset().config.option(k))
+            resolved.set_key_value(k, opt->clone());
+    const double shown = std::round(per_nozzle_line_width_fallback_mm(resolved, width_key, size_t(nozzle)) * 100.) / 100.;
+    values[nozzle] = was_unset && std::abs(edited - shown) < 1e-9 ? 0. : edited; // mm
+    m_config->set_key_value(key, new ConfigOptionFloats(values));
+    update_dirty();
+    Tab::on_value_change(key, m_config->opt_serialize(key));
+    load_per_nozzle_line_widths();
+}
+
+void TabPrint::clear_per_nozzle_widths(const std::vector<size_t>& nozzles)
+{
+    if (m_type != Preset::TYPE_PRINT)
+        return;
+    bool changed = false;
+    for (const char* width_key : per_nozzle_line_width_base_keys()) {
+        const std::string key = per_nozzle_line_width_key(width_key);
+        const auto*       opt = m_config->option<ConfigOptionFloats>(key);
+        if (opt == nullptr)
+            continue;
+        std::vector<double> values = opt->values;
+        bool                cleared = false;
+        for (size_t nozzle : nozzles)
+            if (nozzle < values.size() && values[nozzle] != 0.) {
+                values[nozzle] = 0.;
+                cleared = true;
+            }
+        if (cleared) {
+            m_config->set_key_value(key, new ConfigOptionFloats(values));
+            changed = true;
+        }
+    }
+    if (changed) {
+        update_dirty();
+        reload_config();
     }
 }
 
@@ -3546,6 +3640,7 @@ void TabPrint::toggle_options()
         }
         cb->SetValue(n);
     }
+    load_per_nozzle_line_widths();
 }
 
 void TabPrint::update()
@@ -3597,7 +3692,8 @@ void TabPrint::clear_pages()
 
     m_recommended_thin_wall_thickness_description_line = nullptr;
     m_top_bottom_shell_thickness_explanation = nullptr;
-    m_per_nozzle_line_widths = nullptr;
+    m_per_nozzle_rows = false;
+    m_per_nozzle_loaded.clear();
 }
 
 //BBS: GUI refactor
@@ -6975,6 +7071,19 @@ void TabPrinter::on_value_change(const std::string& opt_key, const boost::any& v
         std::string opt_key_pure = opt_key;
         boost::erase_tail(opt_key_pure, opt_key_pure.size() - pos);
 
+        // MAGPIE: a nozzle whose diameter changed starts from the line width settings scaled to its new size (a single
+        // extruder multi-material printer changes them all).
+        if (opt_key_pure == "nozzle_diameter")
+            if (auto* print_tab = dynamic_cast<TabPrint*>(wxGetApp().get_tab(Preset::TYPE_PRINT))) {
+                std::vector<size_t> nozzles;
+                if (m_config->opt_bool("single_extruder_multi_material"))
+                    for (size_t i = 0; i < m_config->option<ConfigOptionFloats>("nozzle_diameter")->values.size(); ++i)
+                        nozzles.push_back(i);
+                else
+                    nozzles.push_back(size_t(opt_idx));
+                print_tab->clear_per_nozzle_widths(nozzles);
+            }
+
         if (opt_key_pure == "retract_after_wipe" || opt_key_pure == "retract_before_wipe") {
             auto percent_value_clamp = [](double percent_value) { return std::clamp(percent_value, 0., 100.); };
             double dvalue = boost::any_cast<double>(value);
@@ -9036,7 +9145,8 @@ void Tab::update_extruder_variants(int extruder_id, bool reload)
         // switch has no nozzle variants to select and nothing to sync. The printer tab still enables it
         // to choose the extruder its Extruder and Motion ability pages edit.
         m_extruder_switch_variants = extruder_nums >= 2 && m_preset_bundle->support_different_extruders();
-        if (m_extruder_switch_variants || (m_type == Preset::TYPE_PRINTER && extruder_nums >= 2)) {
+        // MAGPIE: and the process tab enables it to pick the nozzle of the per-nozzle line width rows.
+        if (m_extruder_switch_variants || (m_type == Preset::TYPE_PRINTER && extruder_nums >= 2) || per_nozzle_widths_switch()) {
             auto options = generate_extruder_options();
             m_extruder_switch->SetOptions(options);
             int item_n = options.empty() ? 0 : options.size();
@@ -9340,6 +9450,18 @@ bool Tab::get_extruder_sync_enable_state(int extruder_id)
     return false;
 }
 
+bool Tab::per_nozzle_widths_switch() const
+{
+    if (m_type != Preset::TYPE_PRINT || m_preset_bundle == nullptr)
+        return false;
+    // Nozzle diameters closer than EPSILON (mm) are one size, as absolute_line_width_reference_nozzle() has them.
+    const auto* nozzles = m_preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
+    if (nozzles == nullptr || nozzles->values.size() < 2)
+        return false;
+    const auto [lo, hi] = std::minmax_element(nozzles->values.begin(), nozzles->values.end());
+    return *hi - *lo > EPSILON;
+}
+
 bool Tab::variant_switch_active() const
 {
     if (m_extruder_switch)
@@ -9400,10 +9522,14 @@ void Tab::switch_excluder(int extruder_id, bool reload)
             ExtruderType(extruders->values[extruder_id]), get_actual_nozzle_volume_type(extruder_id), variant_keys.second, stride);
     };
     auto index = m_variant_combo ? extruder_id : get_index_for_extruder(extruder_id == -1 ? 0 : extruder_id);
-    if (index < 0)
+    // MAGPIE: the per-nozzle line width rows take the switch's nozzle, with or without a variant index.
+    const bool per_nozzle = per_nozzle_widths_switch();
+    if (index < 0 && !per_nozzle)
         return;
-    if (m_extruder_switch) m_extruder_switch->SetClientData(reinterpret_cast<void*>(static_cast<std::uintptr_t>(index)));
-    if (m_variant_combo) m_variant_combo->SetClientData(reinterpret_cast<void *>(static_cast<std::uintptr_t>(index)));
+    if (index >= 0) {
+        if (m_extruder_switch) m_extruder_switch->SetClientData(reinterpret_cast<void*>(static_cast<std::uintptr_t>(index)));
+        if (m_variant_combo) m_variant_combo->SetClientData(reinterpret_cast<void *>(static_cast<std::uintptr_t>(index)));
+    }
     for (auto page : m_pages) {
         bool is_extruder = false;
         int  page_index  = index;
@@ -9429,6 +9555,16 @@ void Tab::switch_excluder(int extruder_id, bool reload)
                     page->m_opt_id_map.insert({opt.first, opt.first});
                     continue;
                 }
+                // MAGPIE: a per-nozzle line width row is indexed by the nozzle, not by the nozzle variant.
+                if (opt.second.second >= 0 && boost::ends_with(opt.second.first, "_per_nozzle")) {
+                    const int nozzle = std::max(0, extruder_id);
+                    const_cast<int &>(opt.second.second) = nozzle;
+                    page->m_opt_id_map.insert({opt.second.first + "#" + std::to_string(nozzle), opt.first});
+                    group->draw_multi_extruder = variant_switch_active();
+                    continue;
+                }
+                if (index < 0)
+                    continue;
 
                 if (opt.second.second >= 0) {
                     const_cast<int &>(opt.second.second) = page_index;

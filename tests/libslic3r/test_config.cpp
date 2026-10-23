@@ -1913,7 +1913,9 @@ TEST_CASE("Every direct read of a per-nozzle line width field is in the reviewed
     // Reviewed 2026-10-20: the accessor (LineWidths.cpp), its definitions and preparation (PrintConfig), the preset
     // key list, line 1 migration, per-nozzle validation and the bridge error key (Print.cpp), the output check's
     // bound (GCode.cpp, which reads the values on purpose so it does not trust the accessor), the region merge test
-    // (Layer.cpp), the placeholder width (Flow.cpp) and the settings tab table.
+    // (Layer.cpp), the placeholder width (Flow.cpp). Reviewed 2026-10-23: the settings tab's per-nozzle rows (Tab.cpp:
+    // their lines, the width a row shows, an edit and the clearing when a nozzle changes all read a short list's missing
+    // nozzles as 0, the setting, as LineWidths.cpp does).
     static const std::map<std::string, size_t> reviewed {
         { "src/libslic3r/Flow.cpp", 1 },
         { "src/libslic3r/GCode.cpp", 2 },
@@ -1924,7 +1926,7 @@ TEST_CASE("Every direct read of a per-nozzle line width field is in the reviewed
         { "src/libslic3r/Print.cpp", 3 },
         { "src/libslic3r/PrintConfig.cpp", 8 },
         { "src/libslic3r/PrintConfig.hpp", 13 },
-        { "src/slic3r/GUI/PerNozzleLineWidthsPanel.cpp", 1 },
+        { "src/slic3r/GUI/Tab.cpp", 14 },
     };
     const boost::filesystem::path root = boost::filesystem::path(std::string(TEST_DATA_DIR)).parent_path().parent_path();
     auto ident = [](char c) { return std::isalnum((unsigned char) c) || c == '_'; };

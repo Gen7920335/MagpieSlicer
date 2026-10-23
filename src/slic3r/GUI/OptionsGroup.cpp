@@ -1375,6 +1375,11 @@ std::pair<OG_CustomCtrl*, bool*> ConfigOptionsGroup::get_custom_ctrl_with_blinki
 void ConfigOptionsGroup::change_opt_value(const t_config_option_key& opt_key, const boost::any& value, int opt_index /*= 0*/)
 
 {
+    // MAGPIE: a per-nozzle line width list grows with 0 (the setting) for the nozzles past its end, which slicing reads
+    // as unset (LineWidths.cpp); ConfigOptionVector::set_at() would copy its first entry into them.
+    if (boost::ends_with(opt_key, "_per_nozzle") && opt_index > 0)
+        if (auto* values = const_cast<DynamicPrintConfig&>(*m_config).option<ConfigOptionFloats>(opt_key); values != nullptr && values->values.size() <= size_t(opt_index))
+            values->values.resize(size_t(opt_index) + 1, 0.);
     Slic3r::GUI::change_opt_value(const_cast<DynamicPrintConfig&>(*m_config), opt_key, value, opt_index);
     if (m_modelconfig)
         m_modelconfig->touch();

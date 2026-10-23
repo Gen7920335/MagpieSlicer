@@ -304,8 +304,6 @@ set(SLIC3R_GUI_SOURCES
     GUI/ModLayerRangesEditor.hpp
     GUI/ModParamsPanel.cpp
     GUI/ModParamsPanel.hpp
-    GUI/PerNozzleLineWidthsPanel.cpp
-    GUI/PerNozzleLineWidthsPanel.hpp
     GUI/IdleScheduler.cpp
     GUI/IdleScheduler.hpp
     GUI/ImageGrid.cpp

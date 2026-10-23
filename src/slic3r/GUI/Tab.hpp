@@ -150,7 +150,6 @@ protected:
 
 using PageShp = std::shared_ptr<Page>;
 class ModParamsPanel;
-class PerNozzleLineWidthsPanel;
 
 class Tab: public wxPanel
 {
@@ -399,6 +398,9 @@ public:
     // Whether the variant switch (m_extruder_switch / m_variant_combo) is enabled: on the printer tab for
     // any multi-extruder printer, on the other tabs when it switches nozzle variants.
     bool        variant_switch_active() const;
+    // MAGPIE: whether the process tab's variant switch picks the nozzle of the per-nozzle line width rows: the
+    // process tab, on a printer whose nozzles differ in size.
+    bool        per_nozzle_widths_switch() const;
     // Orca: whether `page` is the printer tab's single "Extruder" page, which edits the extruder selected on the switch.
     bool        is_printer_extruder_page(const Page* page) const { return m_type == Preset::TYPE_PRINTER && page && page->title() == "Extruder"; }
     // Shows the variant switch row on pages with options that follow it.
@@ -563,14 +565,25 @@ public:
 	void		update() override;
 	void		clear_pages() override;
 	bool 		supports_printer_technology(const PrinterTechnology tech) const override { return tech == ptFFF; }
+	void		on_value_change(const std::string& opt_key, const boost::any& value) override;
+
+	// MAGPIE: the per-nozzle line widths of these nozzles go back to the line width settings (0), in the preset being
+	// edited: a nozzle whose diameter changed starts from the setting scaled to its new size.
+	void		clear_per_nozzle_widths(const std::vector<size_t>& nozzles);
 
 private:
-	// MAGPIE: shows the per-nozzle line widths for the selected printer's nozzles.
+	// MAGPIE: the per-nozzle line width rows (Orca's per-extruder rows, nozzle picked on the variant switch): shown in
+	// place of the Line width rows on a printer whose nozzles differ in size, each showing the width its nozzle prints.
 	void		load_per_nozzle_line_widths();
+	// The per-nozzle values of a width setting, one per nozzle of the printer (0 = the setting).
+	std::vector<double> per_nozzle_values(const std::string& width_key) const;
 
 	ogStaticText*	m_recommended_thin_wall_thickness_description_line = nullptr;
 	ogStaticText*	m_top_bottom_shell_thickness_explanation = nullptr;
-	PerNozzleLineWidthsPanel* m_per_nozzle_line_widths = nullptr;
+	// Whether the per-nozzle rows show, as last laid out.
+	bool		m_per_nozzle_rows = false;
+	// The per-nozzle values of each width setting as last loaded, one per nozzle: what a row's edit changes.
+	std::map<std::string, std::vector<double>> m_per_nozzle_loaded;
 };
 
 class TabPrintModel : public TabPrint

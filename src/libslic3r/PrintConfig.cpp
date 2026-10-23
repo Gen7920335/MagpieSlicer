@@ -9143,11 +9143,13 @@ void PrintConfigDef::init_fff_params()
         def = this->add(per_nozzle_line_width_key(width_key), coFloats);
         def->label    = width_def.label;
         def->category = width_def.category;
-        def->tooltip  = L("Line width for each nozzle, in mm, on a printer whose nozzles differ in size. 0 uses the line width setting, scaled to that nozzle.");
+        def->tooltip  = L("Line width of the nozzle picked above, in mm, on a printer whose nozzles differ in size. The field shows "
+                          "the width the nozzle prints: its own value, or else the line width setting scaled to it. A value you "
+                          "enter stays this nozzle's until its diameter changes.");
         def->sidetext = L("mm");
         def->min      = 0;
         def->max      = 10;
-        def->mode     = comAdvanced;
+        def->mode     = width_def.mode;
         def->set_default_value(new ConfigOptionFloats{ 0. });
     }
 }

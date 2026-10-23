@@ -1976,6 +1976,15 @@ void Sidebar::priv::set_row_nozzle_diameter(size_t extruder, double diameter_mm)
     BOOST_LOG_TRIVIAL(info) << "Sidebar: nozzle diameter of T" << extruder + 1 << " set to " << diameter_mm << " mm";
     // Dirties the preset and updates the printer tab, the plater and this card (Tab::load_config).
     printer_tab->load_config(new_conf);
+    // The nozzles whose diameter changed start from the line width settings scaled to their new size.
+    if (auto* print_tab = dynamic_cast<TabPrint*>(wxGetApp().get_tab(Preset::TYPE_PRINT))) {
+        // One nozzle for all extruders on a single extruder multi-material printer: all of them changed.
+        std::vector<size_t> changed;
+        for (size_t i = 0; i < nozzles->values.size(); ++i)
+            if (i == extruder || new_conf.opt_bool("single_extruder_multi_material"))
+                changed.push_back(i);
+        print_tab->clear_per_nozzle_widths(changed);
+    }
     // The per-nozzle line width table and the toolhead lists of the process settings follow the nozzles.
     if (Tab *print_tab = wxGetApp().get_tab(Preset::TYPE_PRINT))
         print_tab->reload_config();
