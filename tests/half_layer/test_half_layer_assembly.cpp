@@ -2769,6 +2769,36 @@ TEST_CASE("A half-layer print over a raft keeps its tower plan in step with the 
     CHECK_FALSE(gcode.empty());
 }
 
+// The tower layer added in the raft gap (the gap is wider than a 0.2 mm nozzle's 0.15 mm maximum layer height) changes
+// to the tool the first object layer starts with. Under H/2 that is the lower outer-wall band's tool; it took Orca's
+// first extruder of the layer, here the inner wall's, and the G-code stopped with "toolchange it didn't expect"
+// (seed 557 of the U1 random test).
+TEST_CASE("The raft gap tower layer changes to the tool a half-layer print starts its first layer with", "[HalfLayer][ExecutionTower]")
+{
+    auto config = multifilament_config(3);
+    config.set_num_extruders(3);
+    for (int toolhead : {0, 1, 2})
+        set_toolhead_nozzle_diameter(config, toolhead, 0.2); // mm
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2, 3});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false},
+        {"enable_prime_tower", true}, {"wipe_tower_x", "120"}, {"wipe_tower_y", "120"},
+        {"layer_height", 0.12}, {"initial_layer_print_height", 0.12}, {"wall_loops", 2}, // mm
+        {"raft_layers", 3}, {"support_filament", 3}, {"support_interface_filament", 2},
+        {"outer_wall_filament_id", 3}, {"inner_wall_filament_id", 1},
+        {"sparse_infill_filament_id", 3}, {"internal_solid_filament_id", 3}, {"top_surface_filament_id", 1},
+        {"bottom_surface_filament_id", 1}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
+    size_flush_to_nozzles(config);
+    config.set_key_value("grab_length", new ConfigOptionFloats{0., 0., 0.});
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(10.)}, print, model, config);
+    REQUIRE(print.has_wipe_tower());
+    std::string gcode;
+    REQUIRE_NOTHROW(gcode = Slic3r::Test::gcode(print));
+    CHECK_FALSE(gcode.empty());
+}
+
 // A combined skirt goes around the tower too. A tower whose footprint fits the bed but whose skirt does not printed
 // the skirt off the bed (seed 336 of the U1 random test); the check and the refit hold tower and skirt on the bed.
 TEST_CASE("A tower is refitted so that the skirt around it stays on the bed", "[HalfLayer][ExecutionTower][TowerPlacement]")

@@ -1584,7 +1584,14 @@ void ToolOrdering::fill_wipe_tower_partitions(const PrintConfig &config, coordf_
                         // still be worth looking into it more and decide if it is a bug or an obsolete assert.
                         //assert(lt_prev.extruders.back() == lt_next.extruders.front());
                         lt_extra.has_wipe_tower = true;
-                        lt_extra.extruders.push_back(lt_next.extruders.front());
+                        // MAGPIE: the tower changes to the tool the object's first layer starts with. Under H/2 that
+                        // is its execution frame's first visit (the lower outer-wall band), not Orca's first extruder:
+                        // the G-code asked the tower for another tool than this layer's change planned ("toolchange it
+                        // didn't expect", seed 557 of the U1 random test).
+                        const HalfLayerExecutionFrame *next_frame = m_half_layer_execution_plan && lt_next.half_layer_frame_index != size_t(-1) ?
+                            &m_half_layer_execution_plan->frames[lt_next.half_layer_frame_index] : nullptr;
+                        lt_extra.extruders.push_back(next_frame != nullptr && !next_frame->plan.visits.empty() ?
+                            next_frame->plan.visits.front().tool.filament : lt_next.extruders.front());
                         lt_extra.wipe_tower_partitions = lt_next.wipe_tower_partitions;
                     }
                 }
