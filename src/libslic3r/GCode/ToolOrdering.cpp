@@ -1392,8 +1392,9 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
             if (er == erSupportMaterialInterface) has_interface = true;
             if (has_support && has_interface) break;
         }
-        unsigned int extruder_support   = object.config().support_filament.value;
-        unsigned int extruder_interface = object.config().support_interface_filament.value;
+        // MAGPIE: printing_filament(): filament 1 for "default" when the nozzles differ in size.
+        unsigned int extruder_support   = printing_filament(object.print()->config(), object.config().support_filament.value);
+        unsigned int extruder_interface = support_interface_printing_filament(object.print()->config(), object.config().support_interface_filament.value, object.config().support_filament.value);
         if (has_support) {
             if (extruder_support > 0 || !has_interface || extruder_interface == 0 || layer_tools.has_object)
                 layer_tools.extruders.push_back(extruder_support);
@@ -3838,14 +3839,17 @@ bool WipingExtrusions::is_support_overriddable(const ExtrusionRole role, const P
     if (!object.config().flush_into_support)
         return false;
 
+    // MAGPIE: support pinned to filament 1 on a printer whose nozzles differ in size (printing_filament()) keeps its tool.
+    const int support   = printing_filament(object.print()->config(), object.config().support_filament.value);
+    const int interface = support_interface_printing_filament(object.print()->config(), object.config().support_interface_filament.value, object.config().support_filament.value);
     if (role == erMixed) {
-        return object.config().support_filament == 0 || object.config().support_interface_filament == 0;
+        return support == 0 || interface == 0;
     }
     else if (role == erSupportMaterial || role == erSupportTransition) {
-        return object.config().support_filament == 0;
+        return support == 0;
     }
     else if (role == erSupportMaterialInterface) {
-        return object.config().support_interface_filament == 0;
+        return interface == 0;
     }
 
     return false;
@@ -3956,8 +3960,9 @@ float WipingExtrusions::mark_wiping_extrusions(const Print& print, unsigned int 
                     if (this_support_layer == nullptr)
                         break;
 
-                    bool support_overriddable = object_config.support_filament == 0;
-                    bool support_intf_overriddable = object_config.support_interface_filament == 0;
+                    // MAGPIE: support pinned to filament 1 (printing_filament()) keeps its tool.
+                    bool support_overriddable = printing_filament(object->print()->config(), object_config.support_filament.value) == 0;
+                    bool support_intf_overriddable = support_interface_printing_filament(object->print()->config(), object_config.support_interface_filament.value, object_config.support_filament.value) == 0;
                     if (!support_overriddable && !support_intf_overriddable)
                         break;
 

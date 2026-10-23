@@ -1603,7 +1603,7 @@ private:
     }
 
     static void append_model_object_extruders(const ModelObject &mo, std::vector<unsigned int> &extruders);
-    static bool append_support_extruders(const PrintObjectConfig &config, unsigned int num_extruders, std::vector<unsigned int> &extruders);
+    static bool append_support_extruders(const PrintConfig &print_config, const PrintObjectConfig &config, unsigned int num_extruders, std::vector<unsigned int> &extruders);
     void        append_tool_change_extruders(std::vector<unsigned int> &extruders) const;
     void        append_wipe_tower_extruder(std::vector<unsigned int> &extruders) const;
     void        update_shrinkage_compensation(size_t num_extruders, std::vector<int> &variant_index);

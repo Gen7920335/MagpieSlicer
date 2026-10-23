@@ -2304,7 +2304,9 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
     // check if the sharp tails should be extended higher
     bool detect_first_sharp_tail_only = false;
     // MAGPIE: on the support interface nozzle (as Orca), its per-nozzle line width included.
-    const size_t   width_nozzle    = printing_nozzle_index(object.print()->config(), object.config().support_interface_filament.value, object.print()->is_BBL_printer());
+    const size_t   width_nozzle    = printing_nozzle_index(object.print()->config(),
+        support_interface_printing_filament(object.print()->config(), object.config().support_interface_filament.value, object.config().support_filament.value),
+        object.print()->is_BBL_printer());
     const coordf_t extrusion_width = line_width_setting_on_nozzle(*m_object_config, "line_width", width_nozzle).get_abs_value(object.print()->config().nozzle_diameter.get_at(width_nozzle));
     const coordf_t extrusion_width_scaled = scale_(extrusion_width);
     if (is_auto(m_object_config->support_type.value) && g_config_support_sharp_tails && !detect_first_sharp_tail_only) {

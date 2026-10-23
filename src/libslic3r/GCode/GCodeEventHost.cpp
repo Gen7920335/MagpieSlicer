@@ -1,5 +1,6 @@
 #include "GCodeEventHost.hpp"
 
+#include "../Extruder.hpp"
 #include "../GCode.hpp"
 #include "../Flow.hpp"
 #include "../Print.hpp"
@@ -78,7 +79,14 @@ struct GCodeEventWriter
     static int32_t nozzle_of(void *w, int32_t filament)
     {
         return guarded(w, int32_t(-1), [filament](GCode &g) {
-            return filament < 0 || g.m_print == nullptr ? int32_t(-1) : int32_t(g.m_print->get_extruder_id(unsigned(filament)));
+            if (filament < 0 || g.m_print == nullptr)
+                return int32_t(-1);
+            // The nozzle the writer prints the filament with (GCode::check_extrusion_width() reads the same): the
+            // print's filament map leaves every filament on nozzle 0 on a printer with one toolhead per filament.
+            for (const Extruder &extruder : g.m_writer.extruders())
+                if (extruder.id() == unsigned(filament))
+                    return int32_t(extruder.extruder_id());
+            return int32_t(g.m_print->get_extruder_id(unsigned(filament)));
         });
     }
     static uint32_t filaments(void *w, int32_t *ids, uint32_t cap)

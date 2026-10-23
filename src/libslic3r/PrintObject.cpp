@@ -3,6 +3,7 @@
 #include "Config.hpp"
 #include "Exception.hpp"
 #include "Line.hpp"
+#include "LineWidths.hpp"
 #include "Flow.hpp"
 #include "Model.hpp"
 #include "Point.hpp"
@@ -4832,8 +4833,9 @@ std::vector<unsigned int> PrintObject::printing_extruders() const
             if (filament_id > 0)
                 extruders.emplace_back(std::min<size_t>(size_t(filament_id - 1), filament_count > 0 ? filament_count - 1 : 0));
         };
-        append_fixed_filament(config().support_filament.value);
-        append_fixed_filament(config().support_interface_filament.value);
+        // MAGPIE: printing_filament(): filament 1 for "default" when the nozzles differ in size.
+        append_fixed_filament(printing_filament(print()->config(), config().support_filament.value));
+        append_fixed_filament(support_interface_printing_filament(print()->config(), config().support_interface_filament.value, config().support_filament.value));
     }
     if (extruders.empty())
         extruders.emplace_back(0);

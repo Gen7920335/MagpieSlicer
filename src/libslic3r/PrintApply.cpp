@@ -1323,7 +1323,7 @@ void Print::update_shrinkage_compensation(size_t num_extruders, std::vector<int>
         append_model_object_extruders(*model_object, extruders);
         const PrintObjectConfig object_config = PrintObject::object_config_from_model_object(m_default_object_config, *model_object, num_extruders, variant_index);
         if (PrintObject::has_support_material(object_config))
-            append_support_extruders(object_config, (unsigned int)num_extruders, extruders);
+            append_support_extruders(m_config, object_config, (unsigned int)num_extruders, extruders);
     }
     this->append_tool_change_extruders(extruders);
     // A mixed slot prints with its physical components.

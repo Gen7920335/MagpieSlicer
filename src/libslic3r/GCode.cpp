@@ -3678,8 +3678,10 @@ bool GCode::place_layer_time_tower(const Print &print)
     const std::vector<Vec2d> &area = m_config.printable_area.values;
     if (area.size() < 3 || m_writer.filament() == nullptr)
         return false;
-    const double nozzle = m_config.nozzle_diameter.get_at(this->cur_extruder_index()); // mm
-    const double brim   = layer_time_tower_brim(nozzle);                                // mm
+    // The nozzle of the tool printing (check_extrusion_width's): cur_extruder_index() reads the print's filament map,
+    // which on a printer with one toolhead per filament leaves every filament on nozzle 0.
+    const double nozzle = EXTRUDER_CONFIG(nozzle_diameter);          // mm
+    const double brim   = layer_time_tower_brim(nozzle);             // mm
     const double side   = m_layer_time_tower_size;                                      // mm
     const double skirt  = layer_time_tower_skirt(m_config.skirt_loops.value, m_config.skirt_distance.value, nozzle); // mm
 
@@ -3721,7 +3723,8 @@ std::string GCode::extrude_layer_time_tower(coordf_t print_z)
 {
     // Tower speed, mm/s: slow, so its line re-primes the nozzle after the wait.
     constexpr double tower_speed = 30.;
-    const double nozzle = m_config.nozzle_diameter.get_at(this->cur_extruder_index()); // mm
+    // The nozzle of the tool printing, as place_layer_time_tower() reads it.
+    const double nozzle = EXTRUDER_CONFIG(nozzle_diameter); // mm
     // The tower's layer is as tall as the step since its last one (a support-only layer between adds to it). A step
     // taller than the nozzle's tallest layer (max_layer_height, mm; 0.75 nozzle diameters when unset), as under an
     // object that starts up on support, is printed as several loops, each at its own Z and the last at print_z: a
@@ -3729,7 +3732,7 @@ std::string GCode::extrude_layer_time_tower(coordf_t print_z)
     const double height = print_z - m_layer_time_tower_last_z; // mm
     if (height <= EPSILON)
         return {};
-    double max_loop_height = m_config.max_layer_height.get_at(this->cur_extruder_index()); // mm
+    double max_loop_height = EXTRUDER_CONFIG(max_layer_height); // mm
     if (max_loop_height <= EPSILON)
         max_loop_height = 0.75 * nozzle;
     const int    loops       = std::max(1, int(std::ceil(height / max_loop_height - EPSILON)));
@@ -3856,9 +3859,11 @@ std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
                 site.park_x       = there.x();
                 site.park_y       = there.y();
                 site.travel_speed = EXTRUDER_CONFIG(travel_speed);
-                double accel      = m_config.travel_acceleration.get_at(this->cur_extruder_index());
+                // Orca's acceleration index for the tool, as _extrude() reads it.
+                const size_t accel_index = get_nozzle_config_index(m_writer.filament()->id());
+                double accel      = m_config.travel_acceleration.get_at(accel_index);
                 if (accel <= 0.)
-                    accel = m_config.default_acceleration.get_at(this->cur_extruder_index());
+                    accel = m_config.default_acceleration.get_at(accel_index);
                 site.park_trip_s = 2. * LayerTimeBlendExport::rest_to_rest_time((there - here).norm(), site.travel_speed, accel);
                 site.park_lift_z = site.lift_z;
                 if (print.config().print_sequence.value == PrintSequence::ByObject && m_max_layer_z > print_z) {
@@ -6844,10 +6849,13 @@ void append_half_layer_support_tasks(const PrintObject &object, const Layer &log
     };
 
     auto resolved_support_filaments = [&]() {
-        const bool support_dontcare = object.config().support_filament.value == 0;
-        const bool interface_dontcare = object.config().support_interface_filament.value == 0;
-        unsigned support = support_dontcare ? incoming_filament : object.config().support_filament.value - 1;
-        unsigned interface = interface_dontcare ? incoming_filament : object.config().support_interface_filament.value - 1;
+        // printing_filament(): filament 1 for "default" when the nozzles differ in size.
+        const int  support_filament   = printing_filament(print_config, object.config().support_filament.value);
+        const int  interface_filament = support_interface_printing_filament(print_config, object.config().support_interface_filament.value, object.config().support_filament.value);
+        const bool support_dontcare = support_filament == 0;
+        const bool interface_dontcare = interface_filament == 0;
+        unsigned support = support_dontcare ? incoming_filament : support_filament - 1;
+        unsigned interface = interface_dontcare ? incoming_filament : interface_filament - 1;
         if (!tools.has_extruder(incoming_filament) && !tools.extruders.empty()) {
             if (support_dontcare) support = tools.extruders.front();
             if (interface_dontcare) interface = tools.extruders.front();
@@ -8341,14 +8349,18 @@ LayerResult GCode::process_layer(
                 ExtrusionRole   role               = support_layer.support_fills.role();
                 bool            has_support        = role == erMixed || role == erSupportMaterial || role == erSupportTransition;
                 bool            has_interface      = role == erMixed || role == erSupportMaterialInterface;
+                // MAGPIE: printing_filament(): filament 1 for "default" when the nozzles differ in size, the support's
+                // widths being resolved on its nozzle.
+                const int       support_filament   = printing_filament(print.config(), object.config().support_filament.value);
+                const int       interface_filament = support_interface_printing_filament(print.config(), object.config().support_interface_filament.value, object.config().support_filament.value);
                 // Extruder ID of the support base. -1 if "don't care".
-                unsigned int    support_extruder   = object.config().support_filament.value - 1;
+                unsigned int    support_extruder   = support_filament - 1;
                 // Shall the support be printed with the active extruder, preferably with non-soluble, to avoid tool changes?
-                bool            support_dontcare   = object.config().support_filament.value == 0;
+                bool            support_dontcare   = support_filament == 0;
                 // Extruder ID of the support interface. -1 if "don't care".
-                unsigned int    interface_extruder = object.config().support_interface_filament.value - 1;
+                unsigned int    interface_extruder = interface_filament - 1;
                 // Shall the support interface be printed with the active extruder, preferably with non-soluble, to avoid tool changes?
-                bool            interface_dontcare = object.config().support_interface_filament.value == 0;
+                bool            interface_dontcare = interface_filament == 0;
 
                 // BBS: apply wiping overridden extruders
                 WipingExtrusions& wiping_extrusions = const_cast<LayerTools&>(layer_tools).wiping_extrusions();

@@ -2,6 +2,7 @@
 
 #include "Exception.hpp"
 
+#include <algorithm>
 #include <cstring>
 
 namespace Slic3r {
@@ -41,8 +42,25 @@ const std::array<WidthRoute, size_t(WidthFeature::Count)> &width_routes()
     return routes;
 }
 
+int printing_filament(const PrintConfig &print, int filament_id)
+{
+    if (filament_id != 0 || print.nozzle_diameter.values.size() < 2)
+        return filament_id;
+    // Nozzle diameters closer than this are one size, mm (absolute_line_width_reference_nozzle()).
+    const auto [smallest, largest] = std::minmax_element(print.nozzle_diameter.values.begin(), print.nozzle_diameter.values.end());
+    return *largest - *smallest > EPSILON ? 1 : 0;
+}
+
+int support_interface_printing_filament(const PrintConfig &print, int interface_filament, int support_filament)
+{
+    if (interface_filament != 0 || printing_filament(print, 0) == 0)
+        return interface_filament;
+    return printing_filament(print, support_filament);
+}
+
 size_t printing_nozzle_index(const PrintConfig &print, int filament_id, bool is_bbl_printer)
 {
+    filament_id  = printing_filament(print, filament_id);
     int extruder = filament_id;
     if (is_bbl_printer && print.nozzle_diameter.size() > 1 && filament_id >= 1 && size_t(filament_id - 1) < print.filament_map.size())
         extruder = print.filament_map.get_at(filament_id - 1);
@@ -60,6 +78,8 @@ size_t feature_printing_nozzle(WidthFeature feature, const WidthConfigs &configs
         filament_id = (configs.object->*route.object_filament).value;
     if (filament_id < 0 || configs.print == nullptr)
         throw Slic3r::InvalidArgument("feature_printing_nozzle(): the feature is printed by the printing tool, or a config is missing");
+    if (feature == WidthFeature::SupportInterface && configs.object != nullptr)
+        filament_id = support_interface_printing_filament(*configs.print, filament_id, configs.object->support_filament.value);
     return printing_nozzle_index(*configs.print, filament_id, is_bbl_printer);
 }
 

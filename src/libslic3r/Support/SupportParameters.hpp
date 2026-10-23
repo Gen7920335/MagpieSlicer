@@ -43,11 +43,15 @@ struct SupportParameters {
 
         this->zero_gap_interface_top = slicing_params.zero_gap_interface_top;
         this->zero_gap_interface_bottom = slicing_params.zero_gap_interface_bottom;
+        // MAGPIE: the filaments printing support and interface, printing_filament() giving filament 1 for "default" when
+        // the nozzles differ in size.
+        const int support_filament   = printing_filament(print_config, object_config.support_filament.value);
+        const int interface_filament = support_interface_printing_filament(print_config, object_config.support_interface_filament.value, object_config.support_filament.value);
         const bool soluble_interface_non_soluble_base =
             // Interface extruder soluble.
-            object_config.support_interface_filament.value > 0 && print_config.filament_soluble.get_at(object_config.support_interface_filament.value - 1) &&
+            interface_filament > 0 && print_config.filament_soluble.get_at(interface_filament - 1) &&
             // Base extruder: Either "print with active extruder" not soluble.
-            (object_config.support_filament.value == 0 || ! print_config.filament_soluble.get_at(object_config.support_filament.value - 1));
+            (support_filament == 0 || ! print_config.filament_soluble.get_at(support_filament - 1));
         const bool non_soluble_base_top = this->zero_gap_interface_top && soluble_interface_non_soluble_base;
         const bool non_soluble_base_bottom = this->zero_gap_interface_bottom && soluble_interface_non_soluble_base;
 
@@ -59,8 +63,8 @@ struct SupportParameters {
             // BBS: if support interface and support base do not use the same filament, add a base layer to improve their adhesion
             // Note: support materials (such as Supp.W) can't be used as support base now, so support interface and base are still using different filaments even if
             // support_filament==0
-            bool different_support_interface_filament = object_config.support_interface_filament != 0 &&
-                                                       object_config.support_interface_filament != object_config.support_filament;
+            bool different_support_interface_filament = interface_filament != 0 &&
+                                                       interface_filament != support_filament;
  
             if (non_soluble_base_top) { // ORCA: Try to support soluble dense interfaces with non-soluble dense interfaces.
                 this->num_top_base_interface_layers = size_t(std::min(int(num_top_interface_layers) / 2, 2));
@@ -115,13 +119,13 @@ struct SupportParameters {
             this->support_material_interface_flow.with_flow_ratio(bridge_flow_ratio) :
             Flow::bridging_flow(bridge_flow_ratio * this->support_material_interface_flow.nozzle_diameter(), this->support_material_interface_flow.nozzle_diameter());
         
-        this->can_merge_support_regions = object_config.support_filament.value == object_config.support_interface_filament.value;
-        if (!this->can_merge_support_regions && (object_config.support_filament.value == 0 || object_config.support_interface_filament.value == 0)) {
+        this->can_merge_support_regions = support_filament == interface_filament;
+        if (!this->can_merge_support_regions && (support_filament == 0 || interface_filament == 0)) {
             // One of the support extruders is of "don't care" type.
             auto object_extruders = object.object_extruders();
             // MAGPIE (Magpie line 1): object_extruders() is 0-based, the support filament settings 1-based.
             if (object_extruders.size() == 1 &&
-                *object_extruders.begin() + 1 == std::max<unsigned int>(object_config.support_filament.value, object_config.support_interface_filament.value))
+                *object_extruders.begin() + 1 == unsigned(std::max(support_filament, interface_filament)))
                 // Object is printed with the same extruder as the support.
                 this->can_merge_support_regions = true;
         }

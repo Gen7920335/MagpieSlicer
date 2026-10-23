@@ -93,7 +93,7 @@ SlicingParameters SlicingParameters::create_from_config(
     // support will not trigger tool change, but it will use the current nozzle instead.
     // In that case all the nozzles have to be of the same diameter.
     coordf_t support_material_extruder_dmr           = print_config.nozzle_diameter.get_at(nozzle_of_filament(object_config.support_filament.value) - 1);
-    coordf_t support_material_interface_extruder_dmr = print_config.nozzle_diameter.get_at(nozzle_of_filament(object_config.support_interface_filament.value) - 1);
+    coordf_t support_material_interface_extruder_dmr = print_config.nozzle_diameter.get_at(nozzle_of_filament(support_interface_printing_filament(print_config, object_config.support_interface_filament.value, object_config.support_filament.value)) - 1);
 
     // ORCA: store Z distance
     const coordf_t support_top_z_gap    = object_config.support_top_z_distance.value;
@@ -143,10 +143,10 @@ SlicingParameters SlicingParameters::create_from_config(
         // Has some form of support. Add the support layers to the minimum / maximum layer height limits.
         params.min_layer_height = std::max(
             min_layer_height_from_nozzle(print_config, nozzle_of_filament(object_config.support_filament)),
-            min_layer_height_from_nozzle(print_config, nozzle_of_filament(object_config.support_interface_filament)));
+            min_layer_height_from_nozzle(print_config, nozzle_of_filament(support_interface_printing_filament(print_config, object_config.support_interface_filament.value, object_config.support_filament.value))));
         params.max_layer_height = std::min(
             max_layer_height_from_nozzle(print_config, nozzle_of_filament(object_config.support_filament)),
-            max_layer_height_from_nozzle(print_config, nozzle_of_filament(object_config.support_interface_filament)));
+            max_layer_height_from_nozzle(print_config, nozzle_of_filament(support_interface_printing_filament(print_config, object_config.support_interface_filament.value, object_config.support_filament.value))));
         params.max_suport_layer_height = params.max_layer_height;
     }
 

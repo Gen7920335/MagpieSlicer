@@ -12,6 +12,7 @@
 #include "test_helpers.hpp"
 #include "test_utils.hpp"
 
+#include <cctype>
 #include <map>
 #include <optional>
 #include <set>
@@ -469,4 +470,54 @@ TEST_CASE("An automatic filament map slices the walls on the nozzle it derives",
         REQUIRE(found.size() == 1);
         CHECK_THAT(*found.begin(), WithinAbs(expected, 1e-3));
     }
+}
+
+TEST_CASE("Support set to the current tool is printed by filament 1 when the nozzles differ in size", "[LineWidths][Support]")
+{
+    PrintConfig mixed;
+    mixed.nozzle_diameter.values = { 0.8, 0.2 }; // mm
+    CHECK(printing_filament(mixed, 0) == 1);
+    CHECK(printing_filament(mixed, 2) == 2);
+    CHECK(printing_nozzle_index(mixed, 0, false) == 0);
+    PrintConfig same;
+    same.nozzle_diameter.values = { 0.4, 0.4 }; // mm
+    CHECK(printing_filament(same, 0) == 0);
+    CHECK(printing_filament(same, 2) == 2);
+    // A "default" interface follows the support base (the tool that just printed it), filament 1 when both are default.
+    CHECK(support_interface_printing_filament(mixed, 0, 2) == 2);
+    CHECK(support_interface_printing_filament(mixed, 0, 0) == 1);
+    CHECK(support_interface_printing_filament(mixed, 1, 2) == 1);
+    CHECK(support_interface_printing_filament(same, 0, 2) == 0);
+
+    // The object on filament 2, its support "default" (0, no tool change). With a 0.8 and a 0.2 mm nozzle the
+    // support is laid out for nozzle 1's 0.8 mm; the 0.2 mm nozzle printing it 0.8 mm wide stopped the slice
+    // ("Line width check failed: Support ..."). With one nozzle size it stays with the tool printing the object.
+    auto support_tools = [](double first_mm, double second_mm, const char *support_filament = "0") {
+        DynamicPrintConfig config = two_nozzles(first_mm, second_mm, 2);
+        config.set_deserialize_strict({ { "enable_support", "1" }, { "support_type", "normal(auto)" },
+                                        { "support_filament", support_filament }, { "support_interface_filament", "0" } });
+        Print print;
+        Model model;
+        init_print({ table_mesh() }, print, model, config);
+        const std::string output = gcode(print);
+        std::set<int> tools;
+        int           tool = -1;
+        std::string   role;
+        GCodeReader   reader;
+        reader.parse_buffer(output, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+            const std::string raw(line.raw());
+            if (raw.size() >= 2 && raw[0] == 'T' && std::isdigit(static_cast<unsigned char>(raw[1])))
+                tool = std::stoi(raw.substr(1));
+            else if (raw.rfind(";TYPE:", 0) == 0)
+                role = raw.substr(6);
+            else if (line.extruding(self) && line.dist_XY(self) > 0 && role.rfind("Support", 0) == 0)
+                tools.insert(tool);
+        });
+        return tools;
+    };
+    CHECK(support_tools(0.8, 0.2) == std::set<int>{ 0 });
+    CHECK(support_tools(0.4, 0.4) == std::set<int>{ 1 });
+    // The base on filament 2's 0.2 mm nozzle: the "default" interface stays with it (the low temperature interface
+    // prints the interface with the support filament), at that nozzle's width.
+    CHECK(support_tools(0.8, 0.2, "2") == std::set<int>{ 1 });
 }

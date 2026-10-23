@@ -70,8 +70,20 @@ struct WidthConfigs
     const PrintRegionConfig *region = nullptr;
 };
 
-// The 0-based physical nozzle that prints filament filament_id (1-based). 0 and out-of-range ids give nozzle 0, the
-// way nozzle_diameter_for_filament() reads nozzle_diameter.get_at().
+// The filament printing a feature whose filament setting is filament_id (1-based). 0 is Orca's "default" of support,
+// the tool that happens to be current, whose nozzle is unknown while the support is laid out. On a printer whose
+// nozzles differ in size it is filament 1, the support's widths and layer heights being resolved on its nozzle; with
+// one nozzle size 0 stays 0 (any tool).
+int printing_filament(const PrintConfig &print, int filament_id);
+
+// The filament printing support interface set to interface_filament, the support base being set to support_filament
+// (1-based). A "default" interface (0) prints with the tool that just printed the base, so on a printer whose nozzles
+// differ in size it is the base's filament (filament 1 when that is "default" too), and its widths are resolved there.
+int support_interface_printing_filament(const PrintConfig &print, int interface_filament, int support_filament);
+
+// The 0-based physical nozzle that prints filament filament_id (1-based), printing_filament() resolving 0.
+// Out-of-range ids and 0 with one nozzle size give nozzle 0, the way nozzle_diameter_for_filament() reads
+// nozzle_diameter.get_at().
 size_t printing_nozzle_index(const PrintConfig &print, int filament_id, bool is_bbl_printer);
 
 // The 0-based physical nozzle printing `feature`, by the routing table. Not for PrintingTool features.

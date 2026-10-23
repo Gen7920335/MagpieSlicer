@@ -3,6 +3,7 @@
 #include "../ClipperZUtils.hpp"
 #include "../ExtrusionEntityCollection.hpp"
 #include "../Layer.hpp"
+#include "../LineWidths.hpp"
 #include "../HalfLayerPlan.hpp"
 #include "../Print.hpp"
 #include "../Fill/FillBase.hpp"
@@ -92,8 +93,11 @@ std::vector<unsigned int> support_exclusion_filaments(
     const PrintObject &object,
     const bool interface_material)
 {
-    const int configured = interface_material ? object.config().support_interface_filament.value :
-                                                object.config().support_filament.value;
+    // MAGPIE: printing_filament(): filament 1 for "default" when the nozzles differ in size.
+    const int configured = object.print() == nullptr ? 0 :
+        interface_material ? support_interface_printing_filament(object.print()->config(), object.config().support_interface_filament.value,
+                                                                 object.config().support_filament.value) :
+                             printing_filament(object.print()->config(), object.config().support_filament.value);
     if (configured > 0)
         return { unsigned(configured - 1) };
 

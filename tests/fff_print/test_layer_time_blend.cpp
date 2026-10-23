@@ -18,6 +18,7 @@
 #include <fstream>
 #include <limits>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -841,6 +842,50 @@ TEST_CASE("The tower catches up on a raft in loops no taller than the nozzle's t
     CHECK(z_first_loop.front() <= 0.3 + 1e-3);
     // Each block ends at its layer's Z: the blocks' Z values rise by one layer (0.3 mm) from the first.
     CHECK_THAT(z_per_block[1] - z_per_block[0], WithinAbs(0.3, 1e-3));
+}
+
+TEST_CASE("The layer time tower is printed in the width of the nozzle printing it", "[LayerTimeBlend]")
+{
+    // The tower read its nozzle through the print's filament map (cur_extruder_index()), the writer through its own:
+    // sliced for a Snapmaker U1 the print's map was 1,1,1,1 and the writer's 1,2,3,4, so filament 4 on its 0.2 mm
+    // toolhead printed the tower 0.9 mm wide, nozzle 1's 0.8 mm automatic perimeter width (OrcaCube, 2026-10-23).
+    // This fixture's two maps agree (1,2), so it states the width the tower must have rather than reproducing that
+    // split; the OrcaCube run is the counterfactual.
+    DynamicPrintConfig config = multifilament_config(2, {
+        {"outer_wall_filament_id", 2}, {"inner_wall_filament_id", 2}, {"sparse_infill_filament_id", 2},
+        {"internal_solid_filament_id", 2}, {"top_surface_filament_id", 2}, {"bottom_surface_filament_id", 2},
+        {"layer_height", 0.3}, {"initial_layer_print_height", 0.3}, // mm
+        {"wall_loops", 2}, {"sparse_infill_density", 15}, {"enable_support", false}, {"skirt_loops", 0},
+        {"brim_type", "no_brim"}, {"slow_down_for_layer_cooling", false}, {"use_relative_e_distances", true},
+        {"enable_prime_tower", false},
+    });
+    config.set_num_extruders(2);
+    config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(false));
+    const double first_nozzle_mm = 0.8, second_nozzle_mm = 0.4;
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{first_nozzle_mm, second_nozzle_mm});
+    size_flush_to_nozzles(config);
+    const DynamicPrintConfig blend = wait_at_config("tower", 10.);
+    for (const char *key : {"mod_settings", "printer_mod_settings"})
+        config.set_key_value(key, blend.option(key)->clone());
+
+    const std::vector<std::string> lines = lines_of(slice_mesh(pillar_with_slab(), config));
+    std::set<double> tower_widths; // mm, the widths the tower blocks extrude at
+    bool             in_block = false;
+    double           width    = 0.; // mm, the last ;WIDTH: tag (written only when the width changes)
+    for (const std::string &line : lines) {
+        if (line == ";MAGPIE_WAIT_TOWER_BEGIN")
+            in_block = true;
+        else if (line == ";MAGPIE_WAIT_TOWER_END")
+            in_block = false;
+        else if (line.rfind(";WIDTH:", 0) == 0)
+            width = std::stod(line.substr(7));
+        else if (in_block && axis_value(line, 'E') && *axis_value(line, 'E') > 0. && (axis_value(line, 'X') || axis_value(line, 'Y')))
+            tower_widths.insert(width);
+    }
+    REQUIRE_FALSE(tower_widths.empty());
+    // Flow's automatic perimeter width is 1.125 x the nozzle.
+    for (const double width : tower_widths)
+        CHECK_THAT(width, WithinAbs(1.125 * second_nozzle_mm, 1e-3));
 }
 
 TEST_CASE("On a later plate the tower and the park position stay where they are on the first", "[LayerTimeBlend]")

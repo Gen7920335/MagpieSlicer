@@ -658,7 +658,8 @@ static ExPolygons outer_inner_brim_area(const Print& print,
                     if (key.object_id == object->id())
                         expolygons_append(brim_area, areas);
             }
-            support_material_extruder = object->config().support_filament;
+            // MAGPIE: printing_filament(): filament 1 for "default" when the nozzles differ in size.
+            support_material_extruder = printing_filament(print.config(), object->config().support_filament.value);
             if (support_material_extruder == 0 && object->has_support_material()) {
                 if (print.config().print_sequence == PrintSequence::ByObject)
                     support_material_extruder = objectWithExtruder.second;

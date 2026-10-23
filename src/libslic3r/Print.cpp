@@ -758,7 +758,7 @@ std::vector<unsigned int> Print::support_material_extruders() const
     auto num_extruders = (unsigned int)m_config.filament_diameter.size();
 
     for (PrintObject *object : m_objects) {
-        if (object->has_support_material() && append_support_extruders(object->config(), num_extruders, extruders))
+        if (object->has_support_material() && append_support_extruders(m_config, object->config(), num_extruders, extruders))
             support_uses_current_extruder = true;
     }
 
@@ -772,21 +772,24 @@ std::vector<unsigned int> Print::support_material_extruders() const
 
 // Appends 0-based indices of the support and support interface filaments of an object printing support material.
 // Returns true if support or support interface is printed with the filament of the object.
-bool Print::append_support_extruders(const PrintObjectConfig &config, unsigned int num_extruders, std::vector<unsigned int> &extruders)
+bool Print::append_support_extruders(const PrintConfig &print_config, const PrintObjectConfig &config, unsigned int num_extruders, std::vector<unsigned int> &extruders)
 {
     bool uses_current_extruder = false;
-    assert(config.support_filament >= 0);
-    if (config.support_filament == 0)
+    // MAGPIE: printing_filament(): filament 1 for "default" when the nozzles differ in size.
+    const int support_filament   = printing_filament(print_config, config.support_filament.value);
+    const int interface_filament = support_interface_printing_filament(print_config, config.support_interface_filament.value, config.support_filament.value);
+    assert(support_filament >= 0);
+    if (support_filament == 0)
         uses_current_extruder = true;
     else {
-        unsigned int i = (unsigned int)config.support_filament - 1;
+        unsigned int i = (unsigned int)support_filament - 1;
         extruders.emplace_back((i >= num_extruders) ? 0 : i);
     }
-    assert(config.support_interface_filament >= 0);
-    if (config.support_interface_filament == 0)
+    assert(interface_filament >= 0);
+    if (interface_filament == 0)
         uses_current_extruder = true;
     else {
-        unsigned int i = (unsigned int)config.support_interface_filament - 1;
+        unsigned int i = (unsigned int)interface_filament - 1;
         extruders.emplace_back((i >= num_extruders) ? 0 : i);
     }
     return uses_current_extruder;
@@ -1880,12 +1883,15 @@ StringObjectException Print::check_multi_filament_valid(const Print& print)
 
             if (print_object->has_support_material()) { // extruder used by supports
                 auto num_extruders                 = (unsigned int) print_config.filament_diameter.size();
-                assert(print_object->config().support_filament >= 0);
-                if (print_object->config().support_filament >= 1 && (unsigned int)print_object->config().support_filament < num_extruders + 1)
-                    obj_used_extruder_ids.insert((unsigned int) print_object->config().support_filament - 1);//0-based extruder id
-                assert(print_object->config().support_interface_filament >= 0);
-                if (print_object->config().support_interface_filament >= 1 && (unsigned int)print_object->config().support_interface_filament < num_extruders + 1)
-                    obj_used_extruder_ids.insert((unsigned int) print_object->config().support_interface_filament - 1);
+                // MAGPIE: printing_filament(): filament 1 for "default" when the nozzles differ in size.
+                const int support_filament   = printing_filament(print_config, print_object->config().support_filament.value);
+                const int interface_filament = support_interface_printing_filament(print_config, print_object->config().support_interface_filament.value, print_object->config().support_filament.value);
+                assert(support_filament >= 0);
+                if (support_filament >= 1 && (unsigned int)support_filament < num_extruders + 1)
+                    obj_used_extruder_ids.insert((unsigned int) support_filament - 1);//0-based extruder id
+                assert(interface_filament >= 0);
+                if (interface_filament >= 1 && (unsigned int)interface_filament < num_extruders + 1)
+                    obj_used_extruder_ids.insert((unsigned int) interface_filament - 1);
             }
             std::vector<std::string> filament_types;
             std::vector<int> nozzle_temperatures;
@@ -2165,7 +2171,7 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
             // An auxiliary tower of a G-code event mod prints full layers with the support filament (line 1's
             // temperature drop tower).
             const bool aux_tower = ModHost::gcode_events_tower_requested(object);
-            for (const int filament : { config.support_filament.value, config.support_interface_filament.value }) {
+            for (const int filament : { printing_filament(pc, config.support_filament.value), support_interface_printing_filament(pc, config.support_interface_filament.value, config.support_filament.value) }) {
                 std::vector<int> candidates;
                 if (filament > 0)
                     candidates.push_back(filament);
@@ -2593,8 +2599,9 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         if (temperature_c < firmware_min_extrude_temperature_c)
             return {Slic3r::format(_u8L("Support interface sublayer temperature %1% °C is below the firmware cold-extrusion limit of %2% °C."),
                                    temperature_c, firmware_min_extrude_temperature_c), object, ""};
-        const std::vector<unsigned int> support_filaments = oc.support_filament.value > 0 ?
-            std::vector<unsigned int>{ unsigned(oc.support_filament.value - 1) } : object->object_extruders();
+        const int                       support_filament  = printing_filament(m_config, oc.support_filament.value);
+        const std::vector<unsigned int> support_filaments = support_filament > 0 ?
+            std::vector<unsigned int>{ unsigned(support_filament - 1) } : object->object_extruders();
         for (const unsigned int filament : support_filaments) {
             const int max_temperature_c = m_config.nozzle_temperature_range_high.get_at(filament);
             if (max_temperature_c > 0 && temperature_c > max_temperature_c)
@@ -3053,9 +3060,10 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
             double first_layer_min_nozzle_diameter;
             if (object->has_raft()) {
                 // if we have raft layers, only support material extruder is used on first layer
+                // MAGPIE: printing_filament(): filament 1 for "default" when the nozzles differ in size.
                 size_t first_layer_extruder = object->config().raft_layers == 1
-                    ? object->config().support_interface_filament-1
-                    : object->config().support_filament-1;
+                    ? support_interface_printing_filament(m_config, object->config().support_interface_filament.value, object->config().support_filament.value)-1
+                    : printing_filament(m_config, object->config().support_filament.value)-1;
                 first_layer_min_nozzle_diameter = (first_layer_extruder == size_t(-1)) ?
                     min_nozzle_diameter :
                     m_config.nozzle_diameter.get_at(first_layer_extruder);

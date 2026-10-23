@@ -249,7 +249,8 @@ double Flow::mm3_per_mm() const
 }
 
 // MAGPIE: support widths and the nozzle printing them come from the routing table (LineWidths.hpp), the per-nozzle
-// line width fields included. A support filament of 0 (no tool change, the current extruder) reads nozzle 0.
+// line width fields included. A support filament of 0 (no tool change, the current extruder) reads nozzle 0, and on a
+// printer whose nozzles differ in size it is printed by filament 1 (printing_filament()).
 static Flow object_feature_flow(const PrintObject *object, WidthFeature feature, float layer_height, bool first_layer)
 {
     const WidthConfigs configs { &object->print()->config(), &object->config(), nullptr };

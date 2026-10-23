@@ -5,6 +5,7 @@
 
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/I18N.hpp"
+#include "libslic3r/LineWidths.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/calib.hpp"
@@ -281,8 +282,9 @@ std::optional<std::pair<std::string, std::string>> validate_gcode_events(const P
         return std::nullopt;
     const PrintObjectConfig &oc = object.config();
     std::vector<int32_t>     filaments;
-    if (oc.support_filament.value > 0)
-        filaments.push_back(int32_t(oc.support_filament.value - 1));
+    // printing_filament(): filament 1 for "default" when the nozzles differ in size.
+    if (const int support_filament = printing_filament(object.print()->config(), oc.support_filament.value); support_filament > 0)
+        filaments.push_back(int32_t(support_filament - 1));
     else
         for (const unsigned int filament : object.object_extruders())
             filaments.push_back(int32_t(filament));
