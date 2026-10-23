@@ -16,6 +16,14 @@
 
 ## History
 
+### 2026-10-24 U1 random-settings test fixes (branch rand-fixes from toolhead-ui 7e3ad3ce54, worktree D:\claude\magpie-next-bblwall) - BUILT
+
+- Gen asked to fix every bug the random test found (report D:\claude\goldenand\REPORT_KO.md, B1-B11, U1, U2), build, then keep running test rounds. Causes were found with probe builds (removed) before the fixes.
+- Fixed: B8 snug + tree contact layers null deref (SupportCommon); B10 inner wall filament listed for a plan's large walls with one wall loop (ToolOrdering append_planner_wall_filaments); B1 H/2 profile for the single-wall-top full pass (PerimeterGenerator full_pass_params); B1 zero-width gap fill run (VariableWidth); B2 planned walls' overhang flow on the printing nozzle (PerimeterGenerator planned_overhang_flow); B3 H/2 raft bands checked per printing nozzle (Print validate_half_layer_nozzles); B6 tree raft interface flow; B5/B7/U2 surface fill role ignores its gap fill (ToolOrdering surface_fill_role, extruder() and collect_extruders); U1 classic gap fill width capped on the printing nozzle when nozzles differ; B4 banded event layers with nothing to print carry no tower layer (ToolOrdering fill_wipe_tower_partitions); B11 generated tower check/refit include the combined skirt (Print).
+- Verified: ctest 2986/2989 (3 JPEG, deps), 12 new tests each fail with the fix off; gate D:\claude\goldenfix (gates.sh, cmp.py vs golden/thui/b4) 181/197 identical, mods off identical, the 16 others intended (H/2 second wall width, detail overhang width); --mod-test 10/10. Test edit: "Wipe tower temperature-wait park is regenerated when the tower moves" now sets skirt_loops 0 (its edge tower's skirt left the bed).
+- Not pushed. ORCA_PATCHES.md "Fixes from the U1 random-settings test".
+
+
 ### 2026-10-22 Printer connection mods and the Anycubic LAN mod (branch mod-anycubic, worktree D:\claude\magpie-next-anycubic) - UNBUILT
 
 - Static review only; no build, ctest or golden (Gen). Commits fbc11b815d..3bc28f63bd on review-fixes 8ed3ab0a42. Design in docs/HLSD/mods.md "Printer connections"; report docs/ANYCUBIC_MOD_REPORT_KO.md (UNKNOWNs listed there).

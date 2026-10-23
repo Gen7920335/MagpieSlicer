@@ -193,6 +193,24 @@ Format: what was wrong, what changed, where, the guard test.
 - Test: "Overhang walls of a BBL printer do not depend on which slot holds the nozzle filament_map names"
   (test_multi_nozzle_walls.cpp). Written unbuilt: its failure without the change is not yet shown.
 
+## Fixes from the U1 random-settings test (2026-10-24, branch rand-fixes)
+
+Found by slicing randomized U1 settings (harness D:\claude\goldenand); each has a regression test that fails on the
+pre-fix sources (counterfactual build). Golden gate D:\claude\goldenfix: 181/197 identical to golden/thui/b4,
+mods off identical; the 16 others are the intended H/2 second-wall width (Arachne, single wall on top) and the
+detail-nozzle overhang width.
+
+- Surface fill role (ToolOrdering `surface_fill_role`): the gap fill Fill::_create_gap_fill puts into a surface's
+  collection no longer decides the filament. Orca printed a bottom surface with gap fill (erMixed) with the internal
+  solid filament, and registered a top surface whose first entity was gap fill as internal solid.
+- VariableWidth: a medial axis run whose mean width is under 0.005 mm is dropped; Orca threw "negative spacing".
+- PerimeterGenerator classic gap fill: on mixed nozzle sizes no wider than 2 x the solid infill flow's spacing (the
+  nozzle that prints it); Orca filled up to 2 x the walls' spacing through a smaller nozzle.
+- Tree support raft interface layers use the support interface flow (interface nozzle).
+- SupportCommon generate_interface_layers: a snug style with tree contact layers (no overhang polygons) uses the
+  contact polygons instead of dereferencing null.
+- Generated tower check and CLI refit include the combined skirt around the tower.
+
 ## Known Orca bugs not patched
 
 - The Type-1 tower (`WipeTower::set_extruder`) takes one line width for every tool from the nozzle of the last
