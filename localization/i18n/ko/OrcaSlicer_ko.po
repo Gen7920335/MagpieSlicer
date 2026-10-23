@@ -31794,11 +31794,6 @@ msgid "Orca Palette"
 msgstr "Orca 팔레트"
 
 # AI Translated
-#. TRN: Keep the brand name "Orca" unchanged; translate only the palette descriptor.
-msgid "RAL Classic"
-msgstr "RAL Classic"
-
-# AI Translated
 #. TRN: Keep the standard/brand name "RAL" unchanged.
 msgid "RAL Classic"
 msgstr "RAL 클래식"

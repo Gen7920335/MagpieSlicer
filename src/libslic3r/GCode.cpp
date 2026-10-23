@@ -9093,7 +9093,7 @@ LayerResult GCode::process_layer(
                 if (auxiliary_done.insert(object_instance).second) {
                     set_logical_auxiliary_context(task);
                     gcode += generate_object_skirt_group(print, *task.object, task.instance_id, layer_tools, layer, visit.tool.filament);
-                    gcode += generate_object_brim(print, *task.object, task.instance_id, first_layer, task.logical_layer);
+                    gcode += generate_object_brim(print, *task.object, task.instance_id, first_layer, visit.tool.filament, task.logical_layer);
                 }
 
                 prepare_task(task);
