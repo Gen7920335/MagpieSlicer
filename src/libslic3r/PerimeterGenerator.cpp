@@ -2256,13 +2256,17 @@ void PerimeterGenerator::process_classic()
         if (! gaps.empty()) { // collapse
             double min = gap_fill_min_width;
             double max = 2. * perimeter_spacing;
-            // MAGPIE: the gap fill prints with the solid infill flow's nozzle (thin fills follow the internal solid
-            // filament), so on a printer whose nozzles differ it fills no wider than that nozzle's own gap fill
-            // limit; 2 x the walls' spacing on a larger wall nozzle sent 1.0-1.6 mm gap fill through a 0.4 mm
-            // nozzle (seed 216 of the U1 random test, Orca does the same). Diameters closer than EPSILON (mm) are one
-            // size, where nothing changes.
-            if (std::abs(this->solid_infill_flow.nozzle_diameter() - this->perimeter_flow.nozzle_diameter()) > EPSILON)
-                max = std::min(max, 2. * double(this->solid_infill_flow.scaled_spacing()));
+            // MAGPIE: the gap fill prints with the outer wall's tool (a fill of gap fill only has no infill role, so
+            // LayerTools::extruder() gives it the outer wall filament), so on a printer whose nozzles differ it fills
+            // no wider than twice the solid infill spacing on that tool's nozzle; 2 x the walls' spacing on a larger
+            // wall nozzle sent 1.0-1.6 mm gap fill through a 0.4 mm nozzle (seed 216 of the U1 random test) and
+            // 0.85 mm through a 0.2 mm one (seed 606; Orca does the same). The cap first read the solid infill
+            // filament's nozzle, which is not the one printing. Diameters closer than EPSILON (mm) are one size,
+            // where nothing changes.
+            const size_t gap_nozzle = outer_wall_path_nozzle(*this, ExtrusionToolHint::Auto);
+            if (std::abs(this->print_config->nozzle_diameter.get_at(gap_nozzle) - this->perimeter_flow.nozzle_diameter()) > EPSILON)
+                max = std::min(max, 2. * double(feature_flow(WidthFeature::InternalSolidInfill, { print_config, object_config, config },
+                                                             gap_nozzle, float(layer_height), layer_id == 0).scaled_spacing()));
             ExPolygons gaps_ex = diff_ex(
                 //FIXME offset2 would be enough and cheaper.
                 opening_ex(gaps, float(min / 2.)),

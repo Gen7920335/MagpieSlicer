@@ -1247,11 +1247,14 @@ TEST_CASE("Every role on a mixed-nozzle printer prints the width resolved on its
 TEST_CASE("Gap fill between walls of a larger inner wall nozzle stays within the printing nozzle's gap fill width", "[MultiNozzleWalls][Widths][Classic]")
 {
     OfficialMods mods;
-    // Outer walls and solid infill (which prints wall gap fill) on the 0.4 mm nozzle, inner walls on the 0.8 mm one.
-    // Fins 1.5 to 3.5 mm wide leave gaps between the walls up to 2 x the 0.8 mm walls' spacing.
+    // Outer walls (whose tool prints the wall gap fill) on the 0.4 mm nozzle, inner walls on the 0.8 mm one. Fins 1.5
+    // to 3.5 mm wide leave gaps between the walls up to 2 x the 0.8 mm walls' spacing. The solid infill on the inner
+    // walls' nozzle is seed 606 of the U1 random test: the cap read that nozzle, not the one printing the gap fill.
+    const int solid_filament = GENERATE(1, 2);
+    CAPTURE(solid_filament);
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.8, 1, "classic", false);
     config.set_deserialize_strict({
-        { "inner_wall_filament_id", 2 }, { "wall_loops", 3 }, { "gap_fill_target", "nowhere" },
+        { "inner_wall_filament_id", 2 }, { "internal_solid_filament_id", solid_filament }, { "wall_loops", 3 }, { "gap_fill_target", "nowhere" },
         { "layer_height", 0.2 }, { "initial_layer_print_height", 0.2 }, // mm
         { "line_width", "110%" }, { "outer_wall_line_width", "100%" }, { "inner_wall_line_width", "110%" },
         { "initial_layer_line_width", "110%" }, { "internal_solid_infill_line_width", "100%" } });
