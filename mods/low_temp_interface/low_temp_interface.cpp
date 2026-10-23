@@ -270,6 +270,12 @@ bool build_tower_path(State &s, mp_ctx *ctx, TowerPath &path)
         layer_height = float(step);
     if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
         return false;
+    // A tower layer taller than the nozzle cannot be printed (the core refuses such layers, and its flow has no valid
+    // width): independent support layers of a larger support nozzle step 0.6 mm between two interface tool visits of a
+    // 0.4 mm nozzle (seed 619 of the U1 random test stopped in Flow::with_spacing). The tower stops growing there and
+    // the cooling falls back to the cooling position, as without a tower; a later layer would print in the air above it.
+    if (layer_height > nozzle_diameter)
+        return false;
 
     const TowerTools tower_tools_now = tower_tools(s, ctx);
     const bool       multiple_widths = tower_tools_now.multiple_widths();
@@ -382,7 +388,8 @@ bool build_tower_brim_paths(const State &s, mp_ctx *ctx, std::vector<TowerPath> 
         return false;
     const float nozzle_diameter = float(config_at(ctx, "nozzle_diameter", physical_extruder_id).value_or(0.));
     const float layer_height    = float(layer_height_now);
-    if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
+    // The tower layer's height limit (build_tower_path()), mm.
+    if (nozzle_diameter <= 0.0f || layer_height <= 0.0f || layer_height > nozzle_diameter)
         return false;
 
     const TowerTools tools           = tower_tools(s, ctx);
