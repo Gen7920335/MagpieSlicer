@@ -126,13 +126,17 @@ static size_t outer_wall_path_nozzle(const PerimeterGenerator &generator, Extrus
 // MAGPIE: the overhang (bridge) flow of a wall path the wall planner routes to another filament than Orca's (a detail
 // wall, or every wall of a large nozzle override layer), resolved on the nozzle that prints the path the way
 // region_bridging_flow() resolves the region's own (LayerRegion.cpp). overhang_flow is the region's; a 0.2 mm detail
-// nozzle printed the 0.8 mm region's 0.8 mm overhang lines (seed 106 of the U1 random test).
-static Flow planned_overhang_flow(const PerimeterGenerator &generator, ExtrusionToolHint hint)
+// nozzle printed the 0.8 mm region's 0.8 mm overhang lines (seed 106 of the U1 random test). Without a planner an
+// outer wall path prints on the outer wall filament, while overhang_flow is resolved on the inner wall's nozzle: a
+// 0.2 mm outer wall nozzle printed 0.83 mm overhangs of a 0.8 mm inner wall nozzle (seed 431; vanilla Orca too).
+static Flow planned_overhang_flow(const PerimeterGenerator &generator, ExtrusionToolHint hint, bool outer_wall)
 {
-    if (generator.wall_planner == nullptr)
-        return generator.overhang_flow;
     const unsigned int base     = unsigned(std::max(1, generator.config->outer_wall_filament_id.value));
-    const unsigned int filament = generator.wall_planner->wall_filament(size_t(generator.layer_id), hint, base);
+    unsigned int       filament = generator.wall_planner != nullptr ?
+        generator.wall_planner->wall_filament(size_t(generator.layer_id), hint, base) : 0;
+    // A planner that leaves this layer to Orca (0) routes it like no planner (outer_wall_path_nozzle()).
+    if (filament == 0 && outer_wall)
+        filament = base;
     if (filament == 0)
         return generator.overhang_flow;
     const size_t nozzle    = printing_nozzle_index(*generator.print_config, int(filament), generator.is_bbl_printer);
@@ -405,7 +409,7 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
                     half_layer_shell_bridge_flow(perimeter_generator, loop_tool_hint,
                         Flow(float(extrusion_width), extrusion_height,
                             perimeter_generator.wall_flow_at_depth(loop.depth).nozzle_diameter())) :
-                    planned_overhang_flow(perimeter_generator, loop_tool_hint);
+                    planned_overhang_flow(perimeter_generator, loop_tool_hint, is_external);
                 extrusion_paths_append(paths, std::move(remain_polines),
                                        erOverhangPerimeter, bridge_flow.mm3_per_mm(),
                                        bridge_flow.width(), bridge_flow.height());
@@ -698,7 +702,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
             const size_t first_bridge = paths.size();
             const bool half_shell_bridge = perimeter_generator.half_layer_outer_walls && is_external;
             extrusion_paths_append(paths, clip_extrusion(extrusion_path, lower_slices_paths, ctDifference), erOverhangPerimeter,
-                half_shell_bridge ? path_flow : planned_overhang_flow(perimeter_generator, wall_tool_hint));
+                half_shell_bridge ? path_flow : planned_overhang_flow(perimeter_generator, wall_tool_hint, is_external));
             if (half_shell_bridge) {
                 for (size_t idx = first_bridge; idx < paths.size(); ++idx) {
                     ExtrusionPath &path = paths[idx];

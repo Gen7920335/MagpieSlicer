@@ -1874,6 +1874,54 @@ TEST_CASE("H/2 shell bridges take the bridge width of the nozzle that prints the
     CHECK(widths.count(1) == 0);
 }
 
+// MAGPIE: without a wall planner an outer wall's overhang lines print on the outer wall filament, so their width is
+// resolved on that filament's nozzle. They took the region's overhang flow, which is resolved on the inner wall's
+// nozzle: a 0.2 mm outer wall nozzle printed the 0.8 mm inner wall nozzle's overhang width (vanilla Orca does too)
+// and the line width check stopped the slice.
+TEST_CASE("Outer wall overhangs take the width of the outer wall nozzle", "[MultiNozzleWalls][Widths]")
+{
+    OfficialMods mods;
+    const char *engine = GENERATE("classic", "arachne");
+    // A large nozzle override far above the part opens a wall planner that leaves every printed layer to Orca.
+    const bool  planner = GENERATE(false, true);
+    CAPTURE(engine, planner);
+    DynamicPrintConfig config = multifilament_config(2, {
+        { "wall_generator", engine }, { "wall_loops", 3 }, { "layer_height", 0.12 }, { "initial_layer_print_height", 0.12 }, // mm
+        { "skirt_loops", 0 }, { "brim_type", "no_brim" }, { "enable_prime_tower", false }, { "enable_support", false },
+        { "detect_overhang_wall", true }, { "outer_wall_filament_id", 2 }, { "inner_wall_filament_id", 1 },
+    });
+    config.set_num_extruders(2);
+    config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(false));
+    const double inner_nozzle = 0.8, outer_nozzle = 0.2; // mm
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ inner_nozzle, outer_nozzle });
+    size_flush_to_nozzles(config);
+    if (planner)
+        multi_nozzle_params(config, { { "override_regions", "500:501:1" } });
+    std::string gcode;
+    REQUIRE_NOTHROW(gcode = slice({ TestMesh::overhang }, config));
+
+    int    tool = -1;
+    bool   overhang = false;
+    double width = 0.; // mm, the last ;WIDTH
+    std::map<int, double> widest; // tool -> widest overhang wall line, mm
+    std::istringstream lines(gcode);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.size() >= 2 && line[0] == 'T' && std::isdigit((unsigned char) line[1]))
+            tool = std::stoi(line.substr(1));
+        else if (line.rfind(";TYPE:", 0) == 0)
+            overhang = line == ";TYPE:Overhang wall";
+        else if (line.rfind(";WIDTH:", 0) == 0)
+            width = std::stod(line.substr(7));
+        else if (overhang && line.rfind("G1 ", 0) == 0 && line.find(" E") != std::string::npos && line.find('X') != std::string::npos)
+            widest[tool] = std::max(widest[tool], width);
+    }
+    for (const auto &[t, w] : widest)
+        UNSCOPED_INFO("tool " << t << ": widest overhang wall " << w << " mm");
+    // The outer wall overhangs are printed by T1; none is as wide as twice its nozzle.
+    REQUIRE(widest.count(1) == 1);
+    CHECK(widest[1] < 2. * outer_nozzle);
+}
+
 // MAGPIE: on a BBL printer filament_map names the nozzle a filament prints on. Here filament 1 prints the walls on
 // nozzle 2 (0.8 mm), so its H/2 shell bridges take nozzle 2's bridge width; reading filament 1 as nozzle 1 gave them
 // the 0.4 mm nozzle's field (the 0.3 mm lines a 0.4/0.8 mm H2D printed with the map swapped).
