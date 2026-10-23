@@ -2261,9 +2261,12 @@ void PerimeterGenerator::process_classic()
             // no wider than twice the solid infill spacing on that tool's nozzle; 2 x the walls' spacing on a larger
             // wall nozzle sent 1.0-1.6 mm gap fill through a 0.4 mm nozzle (seed 216 of the U1 random test) and
             // 0.85 mm through a 0.2 mm one (seed 606; Orca does the same). The cap first read the solid infill
-            // filament's nozzle, which is not the one printing. Diameters closer than EPSILON (mm) are one size,
-            // where nothing changes.
-            const size_t gap_nozzle = outer_wall_path_nozzle(*this, ExtrusionToolHint::Auto);
+            // filament's nozzle, which is not the one printing. Without detail wall routing the gap fill carries no tool
+            // hint, so a wall planner's choice for the layer does not reach it: in a large nozzle override layer the
+            // walls went to the 0.8 mm override nozzle and the gap fill, sized for it, to the 0.4 mm outer wall
+            // nozzle (seed 720). Diameters closer than EPSILON (mm) are one size, where nothing changes.
+            const size_t gap_nozzle = this->detail_wall_routing ? outer_wall_path_nozzle(*this, ExtrusionToolHint::LargeWall) :
+                printing_nozzle_index(*this->print_config, std::max(1, this->config->outer_wall_filament_id.value), this->is_bbl_printer);
             if (std::abs(this->print_config->nozzle_diameter.get_at(gap_nozzle) - this->perimeter_flow.nozzle_diameter()) > EPSILON)
                 max = std::min(max, 2. * double(feature_flow(WidthFeature::InternalSolidInfill, { print_config, object_config, config },
                                                              gap_nozzle, float(layer_height), layer_id == 0).scaled_spacing()));

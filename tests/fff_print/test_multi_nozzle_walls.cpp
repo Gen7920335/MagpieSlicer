@@ -1251,13 +1251,18 @@ TEST_CASE("Gap fill between walls of a larger inner wall nozzle stays within the
     // to 3.5 mm wide leave gaps between the walls up to 2 x the 0.8 mm walls' spacing. The solid infill on the inner
     // walls' nozzle is seed 606 of the U1 random test: the cap read that nozzle, not the one printing the gap fill.
     const int solid_filament = GENERATE(1, 2);
-    CAPTURE(solid_filament);
+    // A large nozzle override over every layer (seed 720) moves the walls to the 0.8 mm nozzle; the gap fill keeps the
+    // outer wall filament's 0.4 mm one.
+    const bool override_layers = GENERATE(false, true);
+    CAPTURE(solid_filament, override_layers);
     DynamicPrintConfig config = two_nozzle_config(0.4, 0.8, 1, "classic", false);
     config.set_deserialize_strict({
         { "inner_wall_filament_id", 2 }, { "internal_solid_filament_id", solid_filament }, { "wall_loops", 3 }, { "gap_fill_target", "nowhere" },
         { "layer_height", 0.2 }, { "initial_layer_print_height", 0.2 }, // mm
         { "line_width", "110%" }, { "outer_wall_line_width", "100%" }, { "inner_wall_line_width", "110%" },
         { "initial_layer_line_width", "110%" }, { "internal_solid_infill_line_width", "100%" } });
+    if (override_layers)
+        multi_nozzle_params(config, { { "override_regions", "1:100:2" } });
     TriangleMesh mesh = make_cube(20., 20., 4.);
     for (int i = 0; i < 5; ++i) {
         TriangleMesh fin = make_cube(1.5 + 0.5 * i, 10., 4.); // mm
