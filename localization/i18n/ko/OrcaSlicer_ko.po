@@ -43378,3 +43378,39 @@ msgstr "올리브 그레이"
 # AI Translated
 msgid "Pale violet red"
 msgstr "페일 바이올렛 레드"
+
+# AI Translated
+msgid "Add range"
+msgstr "구간 추가"
+
+# AI Translated
+msgid "Add a layer range. Layer numbers start at 1; where ranges overlap, the last row wins."
+msgstr "레이어 구간을 추가합니다. 레이어 번호는 1부터 시작하며, 구간이 겹치면 마지막 줄이 우선합니다."
+
+# AI Translated
+#, boost-format
+msgid "Kept as written, not read: %1%"
+msgstr "읽지 못해 적힌 그대로 둔 항목: %1%"
+
+# AI Translated
+#, boost-format
+msgid "T%1% (not on this printer)"
+msgstr "T%1% (이 프린터에 없음)"
+
+# AI Translated
+msgid "Remove this range"
+msgstr "이 구간 삭제"
+
+# AI Translated
+#, boost-format
+msgid "T%1% (%2% mm)"
+msgstr "T%1% (%2% mm)"
+
+# AI Translated
+msgid "- no filament"
+msgstr "- 필라멘트 없음"
+
+# AI Translated
+#, boost-format
+msgid "Nozzle diameter of T%1%, in mm (Printer settings > Extruder %1%)"
+msgstr "T%1% 노즐 지름, mm (프린터 설정 > 압출기 %1%)"

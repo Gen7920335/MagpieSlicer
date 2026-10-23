@@ -1710,6 +1710,9 @@ ExtruderGroup::NozzleRow ExtruderGroup::create_nozzle_row()
         }
     });
     use_nozzle_row_font(combo_row_diameter);
+    // Wide enough for "0.15" and the drop-down arrow: the row gives it no stretch, and an empty combo measures
+    // next to nothing.
+    combo_row_diameter->SetMinSize(wxSize(combo_row_diameter->GetTextExtent("0.15").x + FromDIP(34), combo_row_diameter->GetMinSize().y));
     combo_row_diameter->Hide();
     row.diameter_combo = combo_row_diameter;
 
