@@ -1187,6 +1187,29 @@ TEST_CASE("Lightning infill slices the same model the same way twice", "[Fill][R
     REQUIRE(second.sequence == first.sequence);
 }
 
+// MAGPIE: the lightning trees are indexed by object layer, without the raft layers Layer::id() counts. With a raft every
+// layer took the trees of the layer raft_layers above, and the top layers read past the end of the generator's layers
+// (seed 637 of the U1 random test crashed; vanilla Orca does too). Over a raft the object's infill is the same as without.
+TEST_CASE("Lightning infill over a raft is the same as without one", "[Fill][Regression]")
+{
+    auto shape_for = [](int raft_layers) {
+        Print print;
+        Slic3r::Test::init_and_process_print({Slic3r::Test::cube(20)}, print,
+                                            {{"sparse_infill_pattern", "lightning"},
+                                             {"sparse_infill_density", "15%"},
+                                             {"raft_layers", raft_layers},
+                                             {"layer_height", 0.2}});
+        return sparse_infill_shape(print);
+    };
+
+    const SparseInfillShape plain = shape_for(0);
+    const SparseInfillShape rafted = shape_for(2);
+
+    REQUIRE(plain.path_count > 0);
+    CHECK(rafted.path_count == plain.path_count);
+    CHECK_THAT(rafted.length, Catch::Matchers::WithinRel(plain.length, 1e-6));
+}
+
 TEST_CASE("Lightning infill rounds the turns of its branches with the smooth factor", "[Fill]")
 {
     auto shape_for = [](const std::string &smooth_factor) {

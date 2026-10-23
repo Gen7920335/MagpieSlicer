@@ -1386,7 +1386,11 @@ void Layer::make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLigh
         // Create the filler object.
         std::unique_ptr<Fill> f = std::unique_ptr<Fill>(Fill::new_from_type(surface_fill.params.pattern));
         f->set_bounding_box(bbox);
-        f->layer_id = this->id();
+        // MAGPIE: the lightning generator's layers are the object's, without the raft layers Layer::id() counts (as
+        // generate_sparse_infill_polylines_for_anchoring() below converts). With a raft every layer took the trees of
+        // the layer raft_layers above and the top layers read past the end (seed 637 of the U1 random test; vanilla
+        // Orca crashes the same). The other patterns keep Orca's id.
+        f->layer_id = surface_fill.params.pattern == ipLightning ? this->id() - this->object()->get_layer(0)->id() : this->id();
         {
             const auto &rcfg = m_regions[surface_fill.region_id]->region().config();
             f->dont_alternate_fill_direction = rcfg.zaa_enabled && rcfg.zaa_dont_alternate_fill_direction;
