@@ -6977,7 +6977,16 @@ void append_half_layer_support_tasks(const PrintObject &object, const Layer &log
             initialize_half_layer_normal_owner(task);
             core.push_back(std::move(task));
         };
+        const size_t first_task = core.size();
         collect(collect, physical->support_fills, physical->support_fills);
+        // MAGPIE: one physical layer's support body before its interface, each in its stored order. Tree support
+        // stores every branch's body next to its interface, so the stored order changed tool on every branch when the
+        // two print with different filaments: 128 tool changes on a layer of seed 636 of the U1 random test against 3
+        // without H/2, and a 297 mm tower. Body and interface of one layer do not overlap, and Orca prints a support
+        // layer by extruder too; no interface moves ahead of a body.
+        std::stable_partition(core.begin() + std::ptrdiff_t(first_task), core.end(), [](const HalfLayerExecutionTask &task) {
+            return task.wipe_root_kind == HalfLayerWipeRootKind::SupportBody;
+        });
     }
 }
 std::vector<GCode::InstanceToPrint> GCode::sort_print_object_instances(

@@ -3,6 +3,7 @@
 #include "libslic3r/GCode.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Format/DRC.hpp"
+#include "libslic3r/Format/OBJ.hpp"
 #include "libslic3r/Format/bbs_3mf.hpp"
 #include "libslic3r/HalfLayerSupportSources.hpp"
 #include "libslic3r/HalfLayerWalls.hpp"
@@ -2797,6 +2798,51 @@ TEST_CASE("The raft gap tower layer changes to the tool a half-layer print start
     std::string gcode;
     REQUIRE_NOTHROW(gcode = Slic3r::Test::gcode(print));
     CHECK_FALSE(gcode.empty());
+}
+
+// One physical support layer prints its body before its interface. Tree support stores every branch's body next to
+// its interface, so with the two on different filaments the stored order changed tool on every branch (128 tool
+// changes on a layer of seed 636 of the U1 random test, 3 without H/2) and the tower grew off the bed.
+TEST_CASE("Half-layer support changes tool once per layer between its body and its interface", "[HalfLayer][ExecutionTower]")
+{
+    auto config = multifilament_config(3);
+    config.set_num_extruders(3);
+    config.set_deserialize_strict({{"single_extruder_multi_material", false}, {"enable_prime_tower", false},
+        {"layer_height", 0.08}, {"initial_layer_print_height", 0.08}, {"enable_support", true}, // mm
+        {"support_type", "tree(auto)"}, {"support_style", "tree_slim"}, {"support_threshold_angle", 60},
+        {"support_filament", 2}, {"support_interface_filament", 3}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, false, true);
+    size_flush_to_nozzles(config);
+    config.set_key_value("grab_length", new ConfigOptionFloats{0., 0., 0.});
+    Print print;
+    Model model;
+    TriangleMesh frog;
+    {
+        Slic3r::ObjInfo obj_info;
+        std::string     message;
+        Slic3r::load_obj((std::string(TEST_DATA_DIR) + "/frog_legs.obj").c_str(), &frog, obj_info, message);
+    }
+    REQUIRE_FALSE(frog.empty());
+    // Two objects: their branches interleave in the stored order.
+    init_print(std::vector<TriangleMesh>{frog, frog}, print, model, config);
+    std::string output;
+    REQUIRE_NOTHROW(output = Slic3r::Test::gcode(print));
+    std::map<std::string, int> changes; // layer Z comment -> tool changes on it
+    std::string z;
+    std::istringstream lines(output);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.rfind(";Z:", 0) == 0)
+            z = line.substr(3);
+        else if (line.size() >= 2 && line[0] == 'T' && std::isdigit((unsigned char) line[1]))
+            ++changes[z];
+    }
+    int most = 0;
+    for (const auto &[layer_z, n] : changes)
+        most = std::max(most, n);
+    UNSCOPED_INFO("most tool changes on one layer: " << most);
+    // A few per layer (the object's tool, the support body's and the interface's, around the H/2 passes), not one per
+    // branch. Measured: 5 with the body first, 18 in the stored order.
+    CHECK(most <= 6);
 }
 
 // A combined skirt goes around the tower too. A tower whose footprint fits the bed but whose skirt does not printed
