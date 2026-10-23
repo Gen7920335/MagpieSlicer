@@ -2740,6 +2740,35 @@ TEST_CASE("A half-layer tower placed by the estimate is refitted onto the bed on
     CHECK_FALSE(print.generated_wipe_tower_refit());
 }
 
+// Over a raft, a banded print's logical support events can leave a layer with nothing to print between the raft and
+// the first object layer. A tower layer planned there was never emitted, so the next tool change took that layer's
+// plan and failed (seed 119 of the U1 random test: "toolchange it didn't expect").
+TEST_CASE("A half-layer print over a raft keeps its tower plan in step with the printed layers", "[HalfLayer][ExecutionTower]")
+{
+    auto config = multifilament_config(2);
+    config.set_num_extruders(2);
+    set_toolhead_nozzle_diameter(config, 0, 0.4);
+    set_toolhead_nozzle_diameter(config, 1, 0.4);
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false},
+        {"enable_prime_tower", true}, {"wipe_tower_x", "120"}, {"wipe_tower_y", "120"},
+        {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"wall_loops", 2},
+        {"raft_layers", 2}, {"support_filament", 2}, {"support_interface_filament", 0},
+        {"outer_wall_filament_id", 2}, {"inner_wall_filament_id", 2},
+        {"sparse_infill_filament_id", 1}, {"internal_solid_filament_id", 1}, {"top_surface_filament_id", 1},
+        {"bottom_surface_filament_id", 1}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
+    size_flush_to_nozzles(config);
+    config.set_key_value("grab_length", new ConfigOptionFloats{0., 0.});
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(10.)}, print, model, config);
+    REQUIRE(print.has_wipe_tower());
+    std::string gcode;
+    REQUIRE_NOTHROW(gcode = Slic3r::Test::gcode(print));
+    CHECK_FALSE(gcode.empty());
+}
+
 // A combined skirt goes around the tower too. A tower whose footprint fits the bed but whose skirt does not printed
 // the skirt off the bed (seed 336 of the U1 random test); the check and the refit hold tower and skirt on the bed.
 TEST_CASE("A tower is refitted so that the skirt around it stays on the bed", "[HalfLayer][ExecutionTower][TowerPlacement]")
