@@ -1696,14 +1696,6 @@ void ToolOrdering::fill_wipe_tower_partitions(const PrintConfig &config, coordf_
             }
     }
 
-    // MAGPIE: a banded print's logical support events (H/2) can leave a layer with neither object nor support, which
-    // the G-code never prints (collect_layers_to_print drops it): a tower layer planned there was never emitted, and
-    // every later tool change took the tower plan of the layer before (seed 119 of the U1 random test, raft + H/2:
-    // the event at 0.75 mm between the raft and the 0.95 mm first layer). Vanilla prints no such layers.
-    if (m_half_layer_execution_enabled)
-        for (LayerTools &lt : m_layer_tools)
-            if (lt.has_wipe_tower && !lt.has_object && !lt.has_support && lt.half_layer_frame_index == size_t(-1))
-                lt.has_wipe_tower = false;
     // Calculate the wipe_tower_layer_height values.
     coordf_t wipe_tower_print_z_last = 0.;
     for (LayerTools &lt : m_layer_tools)

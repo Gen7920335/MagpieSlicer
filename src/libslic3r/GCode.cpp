@@ -2193,6 +2193,30 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         assert(m_layer_idx >= 0);
         if (m_layer_idx >= (int) m_tool_changes.size())
             return gcode;
+        // MAGPIE: a banded print (H/2) can plan tower layers below the layer being printed that no printed layer
+        // reaches (its logical support events), whose tool changes the next printed layer's execution frame makes.
+        // Catch up: a used-up tower layer below the printed one moves on to the next, and a no-change entry of such
+        // a layer is printed now, so the tower stays whole and each tool change takes the plan it was made for.
+        // Before, the tool change took the lower layer's plan ("toolchange it didn't expect", seeds 119 and 448 of
+        // the U1 random test). Heights closer than same_layer_mm (mm) are one layer; only when a tower layer is
+        // below the printed one does anything change.
+        {
+            constexpr double same_layer_mm = 1e-4;
+            const bool       type2         = gcodegen.wipe_tower_type() == WipeTowerType::Type2;
+            while (m_layer_idx + 1 < int(m_tool_changes.size()) && !m_tool_changes[m_layer_idx].empty() &&
+                   double(m_tool_changes[m_layer_idx].front().print_z) < double(gcodegen.m_last_layer_z) - same_layer_mm) {
+                if (size_t(m_tool_change_idx) < m_tool_changes[m_layer_idx].size()) {
+                    const WipeTower::ToolChangeResult &pending = m_tool_changes[m_layer_idx][m_tool_change_idx];
+                    if (pending.new_tool == extruder_id || pending.initial_tool != pending.new_tool)
+                        break;
+                    gcode += type2 ? append_tcr2(gcodegen, pending, pending.new_tool, -1.) : append_tcr(gcodegen, pending, pending.new_tool, -1.);
+                    ++ m_tool_change_idx;
+                    continue;
+                }
+                ++ m_layer_idx;
+                m_tool_change_idx = 0;
+            }
+        }
         if (gcodegen.wipe_tower_type() == WipeTowerType::Type2) {
             if (gcodegen.writer().need_toolchange(extruder_id) || finish_layer) {
                 if (m_layer_idx < (int) m_tool_changes.size()) {
@@ -2251,6 +2275,14 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         assert(m_layer_idx >= 0);
         if (m_layer_idx >= (int) m_tool_changes.size())
             return true;
+        // MAGPIE: a used-up tower layer below the printed one moves on to the next, as tool_change() catches up
+        // (heights closer than 1e-4 mm are one layer).
+        while (m_layer_idx + 1 < int(m_tool_changes.size()) && !m_tool_changes[m_layer_idx].empty() &&
+               size_t(m_tool_change_idx) >= m_tool_changes[m_layer_idx].size() &&
+               double(m_tool_changes[m_layer_idx].front().print_z) < double(gcodegen.m_last_layer_z) - 1e-4) {
+            ++ m_layer_idx;
+            m_tool_change_idx = 0;
+        }
 
         bool   ignore_sparse = wipe_tower_layer_is_combined_away(m_tool_changes[m_layer_idx]);
         if (m_sparse_layers_skipped)
