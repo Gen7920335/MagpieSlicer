@@ -2,6 +2,7 @@
 #include "../Exception.hpp"
 #include "../IMEXHelpers.hpp"
 #include "../Model.hpp"
+#include "../ModHost/LegacySettings.hpp"
 #include "../Preset.hpp"
 #include "../Utils.hpp"
 #include "../LocalesUtils.hpp"
@@ -722,6 +723,38 @@ bool bbs_is_valid_object_type(const std::string& type)
 }
 
 namespace Slic3r {
+
+// MAGPIE: the settings of an object, part, modifier or layer range are read one key at a time, which takes a
+// Magpie line 1 setting out (handle_legacy) without anything to move it to the mods' parameters: the whole-config
+// migration runs only when a config is loaded in one piece. These two collect such keys for the level and move
+// them to its object_mod_settings / region_mod_settings once all its keys are read
+// (ModHost::migrate_legacy_object_settings).
+template<class Config>
+static void set_level_setting(Config &config, const std::string &key, const std::string &value,
+                              ConfigSubstitutionContext &substitutions, std::map<std::string, std::string> &legacy)
+{
+    std::string opt_key = key, opt_value = value;
+    if (ModHost::stash_legacy_setting(opt_key, opt_value, legacy) && opt_key.empty())
+        return;
+    config.set_deserialize(opt_key, opt_value, substitutions);
+}
+
+static void migrate_level_settings(DynamicPrintConfig &config, std::map<std::string, std::string> &legacy)
+{
+    if (!legacy.empty())
+        ModHost::migrate_legacy_object_settings(config, legacy);
+}
+
+static void migrate_level_settings(ModelConfig &config, std::map<std::string, std::string> &legacy)
+{
+    if (legacy.empty())
+        return;
+    DynamicPrintConfig level = config.get();
+    ModHost::migrate_legacy_object_settings(level, legacy);
+    for (const char *key : { "object_mod_settings", "region_mod_settings" })
+        if (const ConfigOption *opt = level.option(key); opt != nullptr && (config.get().option(key) == nullptr || *config.get().option(key) != *opt))
+            config.set_key_value(key, opt->clone());
+}
 
 bool is_published_3mf_flag(const std::string &value)
 {
@@ -2274,6 +2307,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 model_object->auto_drop = obj_metadata->second.auto_drop.value_or(legacy_auto_drop);
 
                 // apply object's name and config data
+                std::map<std::string, std::string> legacy_settings;
                 for (const Metadata& metadata : obj_metadata->second.metadata) {
                     if (metadata.key == "name")
                         model_object->name = metadata.value;
@@ -2281,8 +2315,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     else if (metadata.key == "module")
                         model_object->module_name = metadata.value;
                     else
-                        model_object->config.set_deserialize(metadata.key, metadata.value, config_substitutions);
+                        set_level_setting(model_object->config, metadata.key, metadata.value, config_substitutions, legacy_settings);
                 }
+                migrate_level_settings(model_object->config, legacy_settings);
 
                 // select object's detected volumes
                 volumes_ptr = &obj_metadata->second.volumes;
@@ -3093,6 +3128,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
                     // get Z range information
                     DynamicPrintConfig config;
+                    std::map<std::string, std::string> legacy_settings;
 
                     for (const auto& option : range_tree) {
                         if (option.first != "option")
@@ -3100,8 +3136,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                         std::string opt_key = option.second.get<std::string>("<xmlattr>.opt_key");
                         std::string value = option.second.data();
 
-                        config.set_deserialize(opt_key, value, config_substitutions);
+                        set_level_setting(config, opt_key, value, config_substitutions, legacy_settings);
                     }
+                    migrate_level_settings(config, legacy_settings);
 
                     config_ranges[{ min_z, max_z }].assign_config(std::move(config));
                 }
@@ -5434,6 +5471,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             // Apply the seam mode after all base-type metadata, regardless of XML key order.
             ModelVolumeType precise_seam_type = ModelVolumeType::INVALID;
             // apply the remaining volume's metadata
+            std::map<std::string, std::string> legacy_settings;
             for (const Metadata& metadata : volume_data->metadata) {
                 if (metadata.key == NAME_KEY)
                     volume->name = metadata.value;
@@ -5467,8 +5505,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 else if ((metadata.key == MATRIX_KEY) || (metadata.key == MESH_SHARED_KEY))
                     continue;
                 else
-                    volume->config.set_deserialize(metadata.key, metadata.value, config_substitutions);
+                    set_level_setting(volume->config, metadata.key, metadata.value, config_substitutions, legacy_settings);
             }
+            migrate_level_settings(volume->config, legacy_settings);
 
             // Missing or unknown seam modes retain the ordinary modifier fallback.
             // Ignore seam metadata on other base types; legacy inline seam types still load above.
@@ -5620,6 +5659,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             volume->set_type(volume_data.part_type);
 
             // apply the remaining volume's metadata
+            std::map<std::string, std::string> legacy_settings;
             for (const Metadata& metadata : volume_data.metadata) {
                 if (metadata.key == NAME_KEY)
                     volume->name = metadata.value;
@@ -5647,8 +5687,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 else if (metadata.key == SOURCE_IN_METERS)
                     volume->source.is_converted_from_meters = metadata.value == "1";
                 else
-                    volume->config.set_deserialize(metadata.key, metadata.value, config_substitutions);
+                    set_level_setting(volume->config, metadata.key, metadata.value, config_substitutions, legacy_settings);
             }
+            migrate_level_settings(volume->config, legacy_settings);
 
             // this may happen for 3mf saved by 3rd part softwares
             if (volume->name.empty()) {

@@ -14,6 +14,7 @@
 #include "libslic3r/AppConfig.hpp"
 #include "libslic3r/ModHost/Expr.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
+#include "libslic3r/ModHost/NetPermission.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "slic3r/Utils/Http.hpp"
 #include "slic3r/Utils/ModNetService.hpp"
@@ -22,6 +23,7 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/log/trivial.hpp>
 
 #include <wx/filename.h>
 #include <wx/filepicker.h>
@@ -81,14 +83,15 @@ struct ModPrinterDialog::FieldCtrl
     wxWindow                       *ctrl  = nullptr;
     wxStaticText                   *help  = nullptr;
 
+    // ::ComboBox is a ::TextInput: the choice comes first, or its shown label would be read as the value.
     std::string value() const
     {
-        if (auto *text = dynamic_cast<::TextInput *>(ctrl))
-            return into_u8(text->GetTextCtrl()->GetValue());
         if (auto *choice = dynamic_cast<::ComboBox *>(ctrl)) {
             const int i = choice->GetSelection();
             return i >= 0 && size_t(i) < def->options.size() ? def->options[size_t(i)].value : std::string();
         }
+        if (auto *text = dynamic_cast<::TextInput *>(ctrl))
+            return into_u8(text->GetTextCtrl()->GetValue());
         if (auto *picker = dynamic_cast<wxDirPickerCtrl *>(ctrl))
             return into_u8(picker->GetPath());
         return {};
@@ -96,13 +99,13 @@ struct ModPrinterDialog::FieldCtrl
 
     void set_value(const std::string &v)
     {
-        if (auto *text = dynamic_cast<::TextInput *>(ctrl))
-            text->GetTextCtrl()->SetValue(from_u8(v));
-        else if (auto *choice = dynamic_cast<::ComboBox *>(ctrl)) {
+        if (auto *choice = dynamic_cast<::ComboBox *>(ctrl)) {
             for (size_t i = 0; i < def->options.size(); ++i)
                 if (def->options[i].value == v)
                     choice->SetSelection(int(i));
-        } else if (auto *picker = dynamic_cast<wxDirPickerCtrl *>(ctrl))
+        } else if (auto *text = dynamic_cast<::TextInput *>(ctrl))
+            text->GetTextCtrl()->SetValue(from_u8(v));
+        else if (auto *picker = dynamic_cast<wxDirPickerCtrl *>(ctrl))
             picker->SetPath(from_u8(v));
     }
 
@@ -418,23 +421,26 @@ void ModPrinterDialog::open_web_panel(size_t index)
     const std::string panel_id = panel.id;
     // Not on the script-message callback's stack: the session may answer with an event that runs script in this view.
     std::weak_ptr<ModPrinterAgent> weak_agent = m_agent;
-    view->Bind(wxEVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED, [weak_agent, panel_id](wxWebViewEvent &e) {
+    const std::string              host       = m_host;
+    view->Bind(wxEVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED, [weak_agent, panel_id, host](wxWebViewEvent &e) {
         const std::string text = into_u8(e.GetString());
-        wxGetApp().CallAfter([weak_agent, panel_id, text]() {
+        wxGetApp().CallAfter([weak_agent, panel_id, host, text]() {
             std::shared_ptr<ModPrinterAgent> agent = weak_agent.lock();
             if (!agent)
                 return;
             json data = json::parse(text, nullptr, false);
             if (data.is_discarded())
                 data = text;
-            std::string result, error;
-            agent->panel_command({{"cmd", "panel_message"}, {"panel", panel_id}, {"data", std::move(data)}}, false, result, error);
+            std::string error;
+            if (!agent->web_panel_command({{"cmd", "panel_message"}, {"panel", panel_id}, {"data", std::move(data)}}, host, error) &&
+                !error.empty())
+                BOOST_LOG_TRIVIAL(warning) << "Mod web panel " << panel_id << ": " << error;
         });
     });
     dlg->Bind(wxEVT_CLOSE_WINDOW, [this, index, dlg](wxCloseEvent &) {
         m_open_panels.erase(index);
-        std::string result, error;
-        m_agent->panel_command({{"cmd", "panel_closed"}, {"panel", m_agent->mod().gui.printer.panels[index].id}}, false, result, error);
+        std::string error;
+        m_agent->web_panel_command({{"cmd", "panel_closed"}, {"panel", m_agent->mod().gui.printer.panels[index].id}}, m_host, error);
         dlg->Destroy();
     });
     m_open_panels[index] = dlg;
@@ -446,6 +452,19 @@ void ModPrinterDialog::on_agent_event(const json &event)
     const std::string type = event.value("type", std::string());
     if (type == "status" || type == "connection") {
         update_state();
+        return;
+    }
+    if (type == "open_url") {
+        // A page the mod asks to open in the user's browser (the sign-in), only https and only to a host its network
+        // list names.
+        const std::string url = event.value("url", std::string());
+        std::string       url_host;
+        uint16_t          url_port = 0;
+        if (boost::starts_with(url, "https://") && ModHost::url_host_port(url, url_host, url_port) &&
+            ModHost::network_allows(m_agent->mod().network, url_host, url_port))
+            wxLaunchDefaultBrowser(wxString::FromUTF8(url.c_str()));
+        else
+            BOOST_LOG_TRIVIAL(warning) << "Mod " << m_agent->mod().id << ": not opening a page outside its network list";
         return;
     }
     if (type == "panel_message") {

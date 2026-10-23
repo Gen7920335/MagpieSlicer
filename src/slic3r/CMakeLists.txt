@@ -300,6 +300,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/ModManagerDialog.hpp
     GUI/ModObjectSettingsDialog.cpp
     GUI/ModObjectSettingsDialog.hpp
+    GUI/ModLayerRangesEditor.cpp
+    GUI/ModLayerRangesEditor.hpp
     GUI/ModParamsPanel.cpp
     GUI/ModParamsPanel.hpp
     GUI/PerNozzleLineWidthsPanel.cpp

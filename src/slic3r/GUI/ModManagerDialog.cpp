@@ -43,7 +43,7 @@ wxString origin_text(const ModHost::ModListing &m)
 
 enum { TAG_VERIFIED, TAG_UNVERIFIED };
 
-// The trust tags of the Source column: a gold badge with a check mark for verified mods, a red one with an
+// The trust tags of the Source column: a Magpie blue badge with a check mark for verified mods, a red one with an
 // exclamation mark for unverified ones. Drawn here so they follow the font size without new image files.
 wxImageList *make_tag_images(int size)
 {
@@ -75,7 +75,7 @@ wxImageList *make_tag_images(int size)
         return wxBitmap(image);
     };
     auto *images = new wxImageList(size, size, true, 2);
-    images->Add(badge(wxColour(0xD4, 0xA0, 0x17), true));  // TAG_VERIFIED: gold
+    images->Add(badge(wxColour(0x39, 0x8F, 0xF4), true));  // TAG_VERIFIED: Magpie blue (#398FF4)
     images->Add(badge(wxColour(0xD9, 0x30, 0x25), false)); // TAG_UNVERIFIED: red
     return images;
 }

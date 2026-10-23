@@ -509,8 +509,14 @@ public:
 protected:
 	// MAGPIE: a "Mods" page with the parameters the loaded mods store in this tab's preset; no page
 	// when no mod has one. `scope` is "process", "printer" or "filament".
+	// Parameters a mod places next to Orca's own settings (ModParamUi) go there instead: a row after an option's
+	// line, or a group of the page; a place this tab does not have leaves the row on the Mods page.
 	void			add_mods_page(const std::string& scope);
-	ModParamsPanel* m_mod_params_panel { nullptr };
+	// A panel of `keys` on this tab, kept in m_mod_params_panels while it lives.
+	ModParamsPanel* add_mod_params_panel(wxWindow* parent, std::shared_ptr<const ModHost::ModSet> mods, const std::string& scope,
+	                                     const std::vector<std::string>& keys, bool labels);
+	// Every live panel of mod parameters on this tab: the Mods page and the placed rows and groups.
+	std::vector<ModParamsPanel*> m_mod_params_panels;
 	// MAGPIE: the support type dropdown with the loaded support mods' entries (ModHost/SupportMenu.hpp), in place
 	// of the support_type field when a mod adds one; null otherwise.
 	void			add_support_type_line(ConfigOptionsGroupShp optgroup);

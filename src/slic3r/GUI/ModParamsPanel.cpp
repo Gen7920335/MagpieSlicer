@@ -3,6 +3,7 @@
 #include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "I18N.hpp"
+#include "ModLayerRangesEditor.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/ModHost/SupportMenu.hpp"
@@ -25,6 +26,15 @@ namespace GUI {
 using json = nlohmann::json;
 
 namespace {
+
+// A nozzle diameter in mm as the sidebar spells it: "0.4", "0.25", "0.15".
+wxString nozzle_text(double mm)
+{
+    wxString text = wxString::FromCDouble(mm, 2);
+    while (text.EndsWith("0") && !text.EndsWith(".0"))
+        text.RemoveLast();
+    return text;
+}
 
 std::string stored_text(const DynamicPrintConfig &config, const std::string &scope)
 {
@@ -83,27 +93,41 @@ wxString display_value(const json &stored, const ModHost::ModParam &p, const std
 
 } // namespace
 
-ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::ModSet> mods, const std::string &scope)
+ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::ModSet> mods, const std::string &scope,
+                               const std::vector<std::string> &keys, bool labels)
     : wxPanel(parent), m_mods(std::move(mods)), m_scope(scope)
 {
-    auto *grid = new wxFlexGridSizer(3, FromDIP(4), FromDIP(8));
-    grid->AddGrowableCol(1);
+    auto *grid = new wxFlexGridSizer(labels ? 3 : 2, FromDIP(4), FromDIP(8));
+    grid->AddGrowableCol(labels ? 1 : 0);
     for (const ModHost::Mod &mod : m_mods->mods())
         for (const ModHost::ModParam &p : mod.params) {
-            if (tab_scope(p) != m_scope || ModHost::is_support_menu_param(mod, p.name))
+            const std::string key = mod.id + "." + p.name;
+            if (std::find(keys.begin(), keys.end(), key) == keys.end())
                 continue;
-            const std::string key   = mod.id + "." + p.name;
             const std::string language = into_u8(wxGetApp().current_language_code_safe());
             const wxString    label = wxString::FromUTF8(ModHost::localized_text(p.labels, language, p.label.empty() ? key : p.label));
-            auto *text = new wxStaticText(this, wxID_ANY, label);
-            text->SetToolTip(wxString::FromUTF8(key + "  (" + ModHost::localized_text(mod.names, language, mod.name.empty() ? mod.id : mod.name) + " " + mod.version + ")"));
-            // Long labels wrap; otherwise the widest one pushed every value off the side of the sidebar.
-            text->Wrap(FromDIP(170));
-            grid->Add(text, 0, wxALIGN_CENTER_VERTICAL);
+            const wxString    tooltip = wxString::FromUTF8(key + "  (" + ModHost::localized_text(mod.names, language, mod.name.empty() ? mod.id : mod.name) + " " + mod.version + ")");
+            wxStaticText     *text = nullptr;
+            if (labels) {
+                text = new wxStaticText(this, wxID_ANY, label);
+                text->SetToolTip(tooltip);
+                // Long labels wrap; otherwise the widest one pushed every value off the side of the sidebar.
+                text->Wrap(FromDIP(170));
+                grid->Add(text, 0, wxALIGN_CENTER_VERTICAL);
+            }
 
             wxWindow *control = nullptr;
             std::vector<std::string> choice_values;
-            if (!p.options.empty() || !p.choices_from.empty()) {
+            if (p.ui.widget == "toolhead") {
+                // MAGPIE: filled for the printer being edited when the values load (fill_toolhead_choice).
+                auto *choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(140), -1));
+                choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { commit(); });
+                control = choice;
+            } else if (p.ui.widget == "layer_ranges") {
+                auto *editor = new ModLayerRangesEditor(this);
+                editor->on_change = [this]() { commit(); };
+                control = editor;
+            } else if (!p.options.empty() || !p.choices_from.empty()) {
                 wxArrayString choices;
                 for (const ModHost::ModParamOption &o : p.options) {
                     choices.Add(wxString::FromUTF8(ModHost::localized_text(o.labels, language, o.label)));
@@ -131,25 +155,92 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
                 tc->Bind(wxEVT_KILL_FOCUS, [this](wxFocusEvent &e) { commit(); e.Skip(); });
                 control = tc;
             }
+            control->SetToolTip(tooltip);
             grid->Add(control, 0, wxALIGN_CENTER_VERTICAL);
             auto *unit = new wxStaticText(this, wxID_ANY, wxString::FromUTF8(p.unit));
             grid->Add(unit, 0, wxALIGN_CENTER_VERTICAL);
-            m_rows.push_back({key, &p, control, {text, control, unit}, std::move(choice_values)});
+            std::vector<wxWindow *> windows{control, unit};
+            if (text != nullptr)
+                windows.push_back(text);
+            m_rows.push_back({key, &p, control, std::move(windows), std::move(choice_values)});
         }
     auto *outer = new wxBoxSizer(wxVERTICAL);
     outer->Add(grid, 0, wxEXPAND | wxALL, FromDIP(4));
     SetSizer(outer);
 }
 
-bool ModParamsPanel::has_params(const ModHost::ModSet *mods, const std::string &scope)
+std::vector<std::string> ModParamsPanel::param_keys(const ModHost::ModSet *mods, const std::string &scope)
 {
+    std::vector<std::string> keys;
     if (mods == nullptr)
-        return false;
+        return keys;
     for (const ModHost::Mod &mod : mods->mods())
         for (const ModHost::ModParam &p : mod.params)
             if (tab_scope(p) == scope && !ModHost::is_support_menu_param(mod, p.name))
-                return true;
-    return false;
+                keys.push_back(mod.id + "." + p.name);
+    return keys;
+}
+
+const ModHost::ModParam *ModParamsPanel::find_param(const ModHost::ModSet *mods, const std::string &key)
+{
+    if (mods == nullptr)
+        return nullptr;
+    for (const ModHost::Mod &mod : mods->mods())
+        for (const ModHost::ModParam &p : mod.params)
+            if (key == mod.id + "." + p.name)
+                return &p;
+    return nullptr;
+}
+
+wxString ModParamsPanel::param_label(const ModHost::ModSet *mods, const std::string &key)
+{
+    const ModHost::ModParam *p = find_param(mods, key);
+    if (p == nullptr)
+        return wxString::FromUTF8(key);
+    const std::string language = into_u8(wxGetApp().current_language_code_safe());
+    return wxString::FromUTF8(ModHost::localized_text(p->labels, language, p->label.empty() ? key : p->label));
+}
+
+void ModParamsPanel::fill_toolhead_choice(Row &row)
+{
+    auto *choice = dynamic_cast<wxChoice *>(row.control);
+    if (choice == nullptr || wxGetApp().preset_bundle == nullptr)
+        return;
+    PresetBundle             &bundle   = *wxGetApp().preset_bundle;
+    const DynamicPrintConfig &printer  = bundle.printers.get_edited_preset().config;
+    const auto               *nozzles  = printer.option<ConfigOptionFloats>("nozzle_diameter");
+    const size_t              count    = nozzles != nullptr ? nozzles->values.size() : 0;
+    // The toolheads a filament of the project is printed with: on a Bambu printer the filament map's, else
+    // filament n on toolhead n (the way the core maps them, printing_nozzle_index).
+    std::vector<bool>         has_filament(count, false);
+    const size_t              filaments = bundle.filament_presets.size();
+    const auto               *map       = bundle.project_config.option<ConfigOptionInts>("filament_map");
+    for (size_t f = 0; f < filaments; ++f) {
+        int toolhead = int(f) + 1;
+        if (bundle.is_bbl_vendor() && count > 1 && map != nullptr && f < map->values.size())
+            toolhead = map->values[f];
+        if (toolhead >= 1 && size_t(toolhead) <= count)
+            has_filament[size_t(toolhead - 1)] = true;
+    }
+    choice->Clear();
+    row.choice_values.clear();
+    choice->Append(_L("Auto"));
+    row.choice_values.push_back("0");
+    for (size_t t = 0; t < count; ++t) {
+        const wxString nozzle = nozzle_text(nozzles->values[t]);
+        // TRN %1%: a toolhead number, %2%: its nozzle diameter in mm.
+        wxString label = format_wxstr(_L("T%1% (%2% mm)"), t + 1, nozzle);
+        if (!has_filament[t])
+            // TRN Appended to a toolhead in the crisp corner toolhead list: no filament of the project is printed with it.
+            label += " " + _L("- no filament");
+        choice->Append(label);
+        row.choice_values.push_back(std::to_string(t + 1));
+    }
+}
+
+std::string ModParamsPanel::stored_json(const DynamicPrintConfig &config, const std::string &scope)
+{
+    return stored_text(config, scope);
 }
 
 const char *ModParamsPanel::config_key(const std::string &scope)
@@ -167,7 +258,24 @@ void ModParamsPanel::load_from_config(const DynamicPrintConfig &config)
     const json stored = parse_object(m_loaded_json);
     m_loading         = true;
     for (Row &row : m_rows) {
-        if (auto *choice = dynamic_cast<wxChoice *>(row.control)) {
+        if (row.param->ui.widget == "toolhead") {
+            fill_toolhead_choice(row);
+            auto        *choice = static_cast<wxChoice *>(row.control);
+            auto         it     = stored.find(row.key);
+            const double v      = it != stored.end() && it->is_number() ? it->get<double>() : std::get<double>(row.param->default_value);
+            const auto   found  = std::find(row.choice_values.begin(), row.choice_values.end(), std::to_string(std::llround(v)));
+            // A toolhead this printer does not have shows as no selection and keeps its stored value (commit skips it).
+            choice->SetSelection(found == row.choice_values.end() ? wxNOT_FOUND : int(found - row.choice_values.begin()));
+        } else if (row.param->ui.widget == "layer_ranges") {
+            auto it = stored.find(row.key);
+            std::vector<wxString> toolheads;
+            if (wxGetApp().preset_bundle != nullptr)
+                if (const auto *nozzles = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter"))
+                    for (size_t t = 0; t < nozzles->values.size(); ++t)
+                        toolheads.push_back(format_wxstr(_L("T%1% (%2% mm)"), t + 1, nozzle_text(nozzles->values[t])));
+            static_cast<ModLayerRangesEditor *>(row.control)->set_value(
+                it != stored.end() && it->is_string() ? it->get<std::string>() : std::get<std::string>(row.param->default_value), toolheads);
+        } else if (auto *choice = dynamic_cast<wxChoice *>(row.control)) {
             auto        it    = stored.find(row.key);
             std::string value = it != stored.end() && it->is_string() ? it->get<std::string>() : std::get<std::string>(row.param->default_value);
             const auto &opts  = row.choice_values;
@@ -189,11 +297,19 @@ void ModParamsPanel::commit()
 {
     if (m_loading)
         return;
-    json stored = parse_object(m_loaded_json);
+    // From what the preset holds now when the tab has other panels on the same key (current_text).
+    json stored = parse_object(current_text ? current_text() : m_loaded_json);
     for (Row &row : m_rows) {
         const ModHost::ModParam &p = *row.param;
         json                     value;
-        if (auto *choice = dynamic_cast<wxChoice *>(row.control)) {
+        if (p.ui.widget == "toolhead") {
+            const int sel = static_cast<wxChoice *>(row.control)->GetSelection();
+            if (sel == wxNOT_FOUND || size_t(sel) >= row.choice_values.size())
+                continue; // nothing chosen: keep what is stored
+            value = json(std::stoll(row.choice_values[size_t(sel)]));
+        } else if (p.ui.widget == "layer_ranges") {
+            value = static_cast<ModLayerRangesEditor *>(row.control)->value();
+        } else if (auto *choice = dynamic_cast<wxChoice *>(row.control)) {
             const int sel = choice->GetSelection();
             if (sel == wxNOT_FOUND)
                 continue; // nothing chosen: keep what is stored
@@ -228,8 +344,10 @@ void ModParamsPanel::commit()
     }
     const std::string text = stored.empty() ? std::string() : stored.dump();
     update_visibility();
-    if (text == m_loaded_json)
+    if (text == (current_text ? current_text() : m_loaded_json)) {
+        m_loaded_json = text;
         return;
+    }
     m_loaded_json = text;
     if (on_change)
         on_change(text);
@@ -237,6 +355,13 @@ void ModParamsPanel::commit()
 
 std::optional<ModHost::ExprValue> ModParamsPanel::row_value(const Row &row) const
 {
+    if (row.param->ui.widget == "toolhead") {
+        const int sel = static_cast<wxChoice *>(row.control)->GetSelection();
+        return sel == wxNOT_FOUND || size_t(sel) >= row.choice_values.size() ? std::nullopt :
+                                                                               std::optional<ModHost::ExprValue>(std::stod(row.choice_values[size_t(sel)]));
+    }
+    if (row.param->ui.widget == "layer_ranges")
+        return ModHost::ExprValue(static_cast<ModLayerRangesEditor *>(row.control)->value());
     if (auto *choice = dynamic_cast<wxChoice *>(row.control)) {
         const int sel = choice->GetSelection();
         return sel == wxNOT_FOUND ? std::nullopt : std::optional<ModHost::ExprValue>(row.choice_values[size_t(sel)]);

@@ -11,6 +11,6 @@
     "slots": [ { "slot": "gcode.events", "version": 1, "impl": "snapmaker_u1" } ],
     "thread_safe": true,
     "params": {
-        "start_guard": { "invalidates": ["psGCodeExport"], "type": "bool", "default": true, "scope": "printer", "label": "Guard the start G-code (U1)", "label_ko": "시작 G-code 보호 (U1)" }
+        "start_guard": { "invalidates": ["psGCodeExport"], "type": "bool", "default": true, "scope": "printer", "label": "Guard the start G-code (U1)", "label_ko": "시작 G-code 보호 (U1)", "ui": { "after": "machine_start_gcode" } }
     }
 }

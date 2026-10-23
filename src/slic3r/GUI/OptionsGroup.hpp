@@ -216,6 +216,10 @@ public:
 
     wxGridSizer*        get_grid_sizer() { return m_grid_sizer; }
 	const std::vector<Line>& get_lines() { return m_lines; }
+	// MAGPIE: puts `line`, a line without options (a widget row), `skip` lines after the line holding the option
+	// `opt_key` (past the lines put there before), before the group is activated. False when no line of the group
+	// holds it.
+	bool insert_line_after(const t_config_option_key& opt_key, const Line& line, size_t skip = 0);
 	bool				is_legend_line();
 	// if we have to set the same control alignment for different option groups,
     // we have to set same max contrtol width to all of them

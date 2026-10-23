@@ -776,8 +776,17 @@ struct ExtruderGroup : StaticBox
 
         Label *    prefix         = nullptr;
         Label *    diameter_label = nullptr; // read-only nozzle diameter of this extruder
+        // MAGPIE: the nozzle diameter of this extruder, chosen in place, on a card that lists several extruders
+        // of a printer that is not a Bambu one; the readout stays for every other card.
+        ComboBox * diameter_combo = nullptr;
         ComboBox * flow           = nullptr;
     };
+    // MAGPIE: called with a row and the diameter (mm) picked in its dropdown.
+    std::function<void(size_t row, double diameter_mm)> on_row_diameter;
+    // The row whose diameter was just picked: its flow type moves to one the new nozzle offers when it has to.
+    size_t flow_reset_row = size_t(-1);
+    // Whether the shown rows edit their diameters (diameter_combo) instead of reading them out.
+    bool rows_edit_diameter() const { return nozzle_row_count > 1 && group_index < 0; }
 
     ExtruderGroup(wxWindow * parent, int index, wxString const &title);
     wxBoxSizer *      sizer        = nullptr;
@@ -848,6 +857,7 @@ struct ExtruderGroup : StaticBox
         for (const NozzleRow &row : rows) {
             row.prefix->SetFont(NozzleRow::prefix_font());
             row.diameter_label->SetFont(NozzleRow::diameter_font());
+            row.diameter_combo->Rescale();
             row.flow->Rescale();
         }
         update_row_widths();
@@ -1008,6 +1018,8 @@ struct Sidebar::priv
     // otherwise reuses the app_config-cached option when the machine's nozzle config is unchanged.
     std::optional<NozzleOption> get_nozzle_options(MachineObject* obj, int extruder_count, bool support_multi_nozzle, bool is_manual);
     bool switch_diameter(bool single);
+    // MAGPIE: sets extruder `extruder`'s nozzle diameter (mm) in the printer preset being edited.
+    void set_row_nozzle_diameter(size_t extruder, double diameter_mm);
     // Switch to the printer preset offering `diameter`.
     bool switch_diameter_to(const wxString &diameter);
     void update_sync_status(const MachineObject* obj);
@@ -1686,6 +1698,21 @@ ExtruderGroup::NozzleRow ExtruderGroup::create_nozzle_row()
     row.diameter_label->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#363636")));
     row.diameter_label->Hide();
 
+    // MAGPIE: the row's diameter, the printer preset's nozzle_diameter of this extruder (Sidebar sets it).
+    auto combo_row_diameter = new ComboBox(this, wxID_ANY, wxString(""), wxDefaultPosition, wxDefaultSize, 0, nullptr, wxCB_READONLY);
+    combo_row_diameter->GetDropDown().SetUseContentWidth(true);
+    combo_row_diameter->Bind(wxEVT_COMBOBOX, [this, row_index, combo_row_diameter](wxCommandEvent &evt) {
+        double mm = 0.;
+        if (on_row_diameter && combo_row_diameter->GetString(evt.GetInt()).ToCDouble(&mm) && mm > 0.) {
+            flow_reset_row = row_index;
+            on_row_diameter(row_index, mm);
+            flow_reset_row = size_t(-1);
+        }
+    });
+    use_nozzle_row_font(combo_row_diameter);
+    combo_row_diameter->Hide();
+    row.diameter_combo = combo_row_diameter;
+
     auto combo_flow = new ComboBox(this, wxID_ANY, wxString(""), wxDefaultPosition, wxDefaultSize, 0, nullptr, wxCB_READONLY);
     combo_flow->GetDropDown().SetUseContentWidth(true);
     combo_flow->Bind(wxEVT_COMBOBOX, [this, row_index, combo_flow](wxCommandEvent &evt) {
@@ -1712,6 +1739,7 @@ ExtruderGroup::NozzleRow ExtruderGroup::create_nozzle_row()
     if (row_index == 0)
         row_sizer->Add(combo_diameter, 1, wxRIGHT, FromDIP(5));
     row_sizer->Add(row.diameter_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(5));
+    row_sizer->Add(row.diameter_combo, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(5));
     row_sizer->Add(row.flow, 1);
     // Row-major: T1 T2 on the first line, T3 T4 on the second, and so on.
     row_columns[row_index % 2]->Add(row_sizer, 0, wxEXPAND | wxBOTTOM, FromDIP(5));
@@ -1737,6 +1765,33 @@ void ExtruderGroup::update_row_widths()
     }
 }
 
+// MAGPIE: the sizes a row's dropdown offers: the nozzles of the printer's variants, Magpie line 1's toolhead sizes,
+// and the one the row has, in mm, smallest first.
+static std::vector<std::string> nozzle_row_choices(double current)
+{
+    std::vector<std::pair<double, std::string>> sizes;
+    auto add = [&sizes](double mm) {
+        const std::string text = get_diameter_string(float(mm));
+        if (mm > 0. && std::none_of(sizes.begin(), sizes.end(), [&text](const auto &s) { return s.second == text; }))
+            sizes.emplace_back(mm, text);
+    };
+    for (double mm : { 0.15, 0.2, 0.4, 0.6, 0.8, 1.0 })
+        add(mm);
+    for (const std::string &variant : wxGetApp().preset_bundle->printers.diameters_of_selected_printer()) {
+        // A variant names its nozzle first ("0.4", "0.4 High Flow").
+        char        *end = nullptr;
+        const double mm  = std::strtod(variant.c_str(), &end);
+        if (end != variant.c_str())
+            add(mm);
+    }
+    add(current);
+    std::sort(sizes.begin(), sizes.end());
+    std::vector<std::string> out;
+    for (const auto &s : sizes)
+        out.push_back(s.second);
+    return out;
+}
+
 void ExtruderGroup::SetRowDiameters(const std::vector<double> &diameters)
 {
     for (size_t i = 0; i < std::min(nozzle_row_count, diameters.size()); ++i) {
@@ -1744,6 +1799,19 @@ void ExtruderGroup::SetRowDiameters(const std::vector<double> &diameters)
         const wxString text = from_u8(get_diameter_string(diameters[i]));
         rows[i].diameter_label->SetLabelText(text);
         rows[i].diameter_label->SetToolTip(text + " mm");
+        if (rows_edit_diameter()) {
+            ComboBox *combo = rows[i].diameter_combo;
+            combo->Clear();
+            int select = -1;
+            for (const std::string &choice : nozzle_row_choices(diameters[i])) {
+                if (choice == get_diameter_string(diameters[i]))
+                    select = int(combo->GetCount());
+                combo->Append(from_u8(choice));
+            }
+            combo->SetSelection(select);
+            // TRN %1%: a toolhead number. The tooltip of a toolhead's nozzle diameter dropdown in the sidebar.
+            combo->SetToolTip(format_wxstr(_L("Nozzle diameter of T%1%, in mm (Printer settings > Extruder %1%)"), i + 1));
+        }
     }
     update_row_widths();
     Layout();
@@ -1764,12 +1832,14 @@ void ExtruderGroup::SetNozzleRowCount(size_t count)
         if (i >= rows.size())
             rows.push_back(create_nozzle_row());
         rows[i].prefix->Show(row_count > 1);
-        rows[i].diameter_label->Show(group_index < 0); // the dual left/right cards show combo_diameter
+        rows[i].diameter_label->Show(group_index < 0 && !rows_edit_diameter()); // the dual left/right cards show combo_diameter
+        rows[i].diameter_combo->Show(rows_edit_diameter());
         // The flow combo's own visibility is decided with its choices, see update_extruder_variant.
     }
     for (size_t i = row_count; i < rows.size(); ++i) {
         rows[i].prefix->Hide();
         rows[i].diameter_label->Hide();
+        rows[i].diameter_combo->Hide();
         rows[i].flow->Hide();
     }
 
@@ -1880,6 +1950,35 @@ void ExtruderGroup::SetTitle(const wxString& title)
         hover_label->SetTitle(title);
 }
 
+void Sidebar::priv::set_row_nozzle_diameter(size_t extruder, double diameter_mm)
+{
+    auto *printer_tab = dynamic_cast<TabPrinter *>(wxGetApp().get_tab(Preset::TYPE_PRINTER));
+    DynamicPrintConfig new_conf = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    auto *nozzles = new_conf.option<ConfigOptionFloats>("nozzle_diameter");
+    if (printer_tab == nullptr || nozzles == nullptr || extruder >= nozzles->values.size() ||
+        std::abs(nozzles->values[extruder] - diameter_mm) <= EPSILON) // mm
+        return;
+    if (new_conf.opt_bool("single_extruder_multi_material") && nozzles->values.size() > 1) {
+        // One nozzle for all extruders, as the printer settings' nozzle diameter field asks (TabPrinter).
+        MessageDialog dialog(plater, _L("This is a single extruder multi-material printer, diameters of all extruders "
+                                        "will be set to the new value. Do you want to proceed?"),
+                             _L("Nozzle diameter"), wxICON_WARNING | wxYES_NO);
+        if (dialog.ShowModal() != wxID_YES) {
+            single_extruder->SetRowDiameters(nozzles->values);
+            return;
+        }
+        std::fill(nozzles->values.begin(), nozzles->values.end(), diameter_mm);
+    } else
+        nozzles->values[extruder] = diameter_mm;
+    // Dirties the preset and updates the printer tab, the plater and this card (Tab::load_config).
+    printer_tab->load_config(new_conf);
+    // The per-nozzle line width table and the toolhead lists of the process settings follow the nozzles.
+    if (Tab *print_tab = wxGetApp().get_tab(Preset::TYPE_PRINT))
+        print_tab->reload_config();
+    if (Tab *print_tab = wxGetApp().get_tab(Preset::TYPE_PRINT))
+        print_tab->update();
+}
+
 bool Sidebar::priv::switch_diameter(bool single)
 {
     wxString diameter;
@@ -1917,7 +2016,8 @@ bool Sidebar::priv::switch_diameter_to(const wxString &diameter)
     auto* nozzle_diameter = dynamic_cast<const ConfigOptionFloats*>(printer_preset.config.option("nozzle_diameter"));
     // ORCA: the left/right combos of a BBL multi-nozzle printer set the nozzles apart without leaving
     // the preset (see switch_diameter), so there the preset is only kept while every nozzle matches.
-    const bool nozzles_apart = nozzle_diameter && nozzle_diameter->size() > 1 && wxGetApp().preset_bundle->is_bbl_vendor() &&
+    // MAGPIE: on any printer whose sidebar sets nozzles apart (the rows' diameter dropdowns), not only Bambu's.
+    const bool nozzles_apart = nozzle_diameter && nozzle_diameter->size() > 1 &&
         std::any_of(nozzle_diameter->values.begin(), nozzle_diameter->values.end(),
                     [&diameter](double value) { return get_diameter_string(value) != diameter.ToStdString(); });
     // The combo lists printer variants, and the variant of a mixed-nozzle machine ("0.4+0.6") is no
@@ -3251,6 +3351,9 @@ Sidebar::Sidebar(Plater *parent)
         p->left_extruder->combo_diameter->Bind(wxEVT_COMBOBOX, switch_diameter);
         p->right_extruder->combo_diameter->Bind(wxEVT_COMBOBOX, switch_diameter);
         p->single_extruder->combo_diameter->Bind(wxEVT_COMBOBOX, switch_diameter);
+        // MAGPIE: a toolhead's nozzle picked in its row goes into the printer preset being edited, the way the
+        // dual left/right cards set nozzles apart (switch_diameter): the preset stays, its nozzle_diameter changes.
+        p->single_extruder->on_row_diameter = [this](size_t row, double diameter_mm) { p->set_row_nozzle_diameter(row, diameter_mm); };
 
         p->vsizer_printer = new wxBoxSizer(wxVERTICAL);
         p->layout_printer(true, true);
@@ -4033,7 +4136,7 @@ void Sidebar::update_presets(Preset::Type preset_type)
         auto diameters = wxGetApp().preset_bundle->printers.diameters_of_selected_printer();
         auto diameter = printer_preset.config.opt_string("printer_variant");
         auto extruder_max_nozzle_count = printer_preset.config.option<ConfigOptionIntsNullable>("extruder_max_nozzle_count");
-        auto update_extruder_variant = [printer_model, extruders_def, extruders, nozzle_volumes_def, nozzle_volumes, extruder_variants,diameter,extruder_max_nozzle_count](ExtruderGroup & extruder, size_t row, int index) {
+        auto update_extruder_variant = [printer_model, extruders_def, extruders, nozzle_volumes_def, nozzle_volumes, extruder_variants, diameter_of_variant = diameter, extruder_max_nozzle_count, nozzle_diameter](ExtruderGroup & extruder, size_t row, int index) {
             ComboBox *combo_flow = extruder.rows[row].flow;
             combo_flow->Clear();
             // A profile may leave the per-extruder lists shorter than the nozzle count (they are
@@ -4044,6 +4147,14 @@ void Sidebar::update_presets(Preset::Type preset_type)
                 return;
             }
             auto type = extruders_def->enum_labels[extruders->values[index]];
+            // MAGPIE: a nozzle set apart from the variant's size (the rows' diameter dropdowns) offers the flow types
+            // of its own size; every other row keeps the variant's, as Orca has it.
+            std::string diameter = diameter_of_variant;
+            if (extruder.rows_edit_diameter() && index < int(nozzle_diameter->values.size())) {
+                const std::string own = get_diameter_string(nozzle_diameter->values[index]);
+                if (diameter.substr(0, diameter.find_first_not_of("0123456789.")) != own)
+                    diameter = own;
+            }
             int select = -1;
             for (size_t i = 0; i < nozzle_volumes_def->enum_labels.size(); ++i) {
                 // get_at falls back to the first entry when a profile defines no per-extruder value,
@@ -4066,8 +4177,17 @@ void Sidebar::update_presets(Preset::Type preset_type)
                     combo_flow->Append(_L(nozzle_volumes_def->enum_labels[i]), {}, (void*)(intptr_t)cur_volume_type);
                 }
             }
-            if (select == -1)
+            if (select == -1) {
                 select = combo_flow->GetCount() - 1;
+                // MAGPIE: the extruder's flow type is not one its nozzle offers (a diameter just picked in the row):
+                // it takes the type the row now shows, as picking it would.
+                if (select >= 0 && extruder.flow_reset_row == row && index < int(nozzle_volumes->values.size())) {
+                    const int shown = int(intptr_t(combo_flow->GetClientData(select)));
+                    if (nozzle_volumes->values[index] != shown)
+                        if (auto *printer_tab = dynamic_cast<TabPrinter *>(wxGetApp().get_tab(Preset::TYPE_PRINTER)))
+                            wxGetApp().CallAfter([printer_tab, index, shown]() { printer_tab->set_extruder_volume_type(index, NozzleVolumeType(shown)); });
+                }
+            }
             combo_flow->SetSelection(select);
             // No flow variant for this extruder: the diameter keeps the whole row.
             combo_flow->Show(combo_flow->GetCount() > 0);

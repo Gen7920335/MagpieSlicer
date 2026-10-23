@@ -12,8 +12,8 @@
     "slots": [ { "slot": "layer.bands", "version": 1, "impl": "half_layer" } ],
     "thread_safe": true,
     "params": {
-        "outer_walls": { "scope": "object", "invalidates": ["posPerimeters", "posSupportMaterial"], "type": "bool", "default": false, "label": "Half-height outer walls", "label_ko": "절반 높이 외벽" },
-        "support":     { "scope": "object", "invalidates": ["posSupportMaterial"], "type": "bool", "default": false, "label": "Half-height support", "label_ko": "절반 높이 서포트" }
+        "outer_walls": { "scope": "object", "invalidates": ["posPerimeters", "posSupportMaterial"], "type": "bool", "default": false, "label": "Half-height outer walls", "label_ko": "절반 높이 외벽", "ui": { "after": "wall_loops" } },
+        "support":     { "scope": "object", "invalidates": ["posSupportMaterial"], "type": "bool", "default": false, "label": "Half-height support", "label_ko": "절반 높이 서포트", "ui": { "after": "enable_support" } }
     },
     // Line 1 (and line 2 before H/2 was a native mod) saved these as the rule wrote them; their defaults carry nothing.
     "legacy_keys": {

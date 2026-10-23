@@ -119,6 +119,8 @@ set(lisbslic3r_sources
     StageTimer.hpp
     ModHost/ModIndex.cpp
     ModHost/ModIndex.hpp
+    ModHost/LayerRanges.cpp
+    ModHost/LayerRanges.hpp
     ModHost/LegacySettings.cpp
     ModHost/LegacySettings.hpp
     ModHost/ModSet.cpp

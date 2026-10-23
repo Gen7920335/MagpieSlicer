@@ -253,7 +253,12 @@ bool stash_legacy_setting(std::string &opt_key, std::string &value, std::map<std
     return false;
 }
 
-LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std::string, std::string> &stash)
+namespace {
+
+// Where the migrated values go: a whole config (process, printer) or the settings of one object level.
+enum class LegacyLevel { Config, Object };
+
+LegacyMigration migrate(DynamicPrintConfig &config, std::map<std::string, std::string> &stash, LegacyLevel level)
 {
     LegacyMigration result;
     if (stash.empty())
@@ -284,6 +289,11 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
         else if (in(toolhead_width_keys, key)) {
             if (!toolhead_width_set(value))
                 continue;
+            // A printer setting; an object's settings cannot hold it.
+            if (level == LegacyLevel::Object) {
+                result.dropped.push_back(key);
+                continue;
+            }
             // MAGPIE: into the per-nozzle line width field of the same width, in mm per nozzle. Only where the
             // config holds process settings (a project, a full config); a printer preset alone cannot carry them.
             const std::string width_key      = key.substr(std::string("toolhead_").size());
@@ -339,8 +349,10 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
         }
         return std::nullopt;
     };
-    auto store_of = [&mods](const std::string &param) -> const char * {
+    auto store_of = [&mods, level](const std::string &param) -> const char * {
         const ModParam *p = mods.find_param(param);
+        if (level == LegacyLevel::Object)
+            return p == nullptr ? nullptr : p->scope == "object" ? "object_mod_settings" : p->scope == "region" ? "region_mod_settings" : nullptr;
         return p != nullptr && p->scope == "printer" ? "printer_mod_settings" : "mod_settings";
     };
     std::map<std::string, json> stored;
@@ -362,8 +374,12 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
     };
     std::set<std::string> changed;
     for (const auto &[param, v] : params) {
-        const char *store  = store_of(param);
-        json       &values = stored_values(store);
+        const char *store = store_of(param);
+        if (store == nullptr) {
+            result.dropped.push_back(param);
+            continue;
+        }
+        json &values = stored_values(store);
         if (values.contains(param))
             continue;
         if (auto d = default_of(param); d && (*d == v || (d->is_number() && v.is_number() && d->get<double>() == v.get<double>())))
@@ -377,6 +393,18 @@ LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std
     for (const std::string &key : result.dropped)
         BOOST_LOG_TRIVIAL(warning) << "Magpie line 1 setting not supported by this build, ignored: " << key;
     return result;
+}
+
+} // namespace
+
+LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std::string, std::string> &stash)
+{
+    return migrate(config, stash, LegacyLevel::Config);
+}
+
+LegacyMigration migrate_legacy_object_settings(DynamicPrintConfig &config, std::map<std::string, std::string> &stash)
+{
+    return migrate(config, stash, LegacyLevel::Object);
 }
 
 } // namespace ModHost

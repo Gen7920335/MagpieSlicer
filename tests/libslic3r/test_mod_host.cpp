@@ -3,12 +3,15 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <libslic3r/ModHost/Expr.hpp>
+#include <libslic3r/ModHost/LayerRanges.hpp>
 #include <libslic3r/ModHost/ModSet.hpp>
 #include <libslic3r/ModHost/SlotRegistry.hpp>
 #include <libslic3r/PrintConfig.hpp>
 
 #include <boost/filesystem/path.hpp>
+#include <boost/nowide/fstream.hpp>
 #include <clocale>
+#include <iterator>
 
 #include <map>
 #include <set>
@@ -745,4 +748,83 @@ TEST_CASE("A decimal is written with the digits that read back to the same value
         CHECK(*end == '\0');
     }
     CHECK(format_decimal(0.1) == "0.1");
+}
+
+TEST_CASE("A parameter's place in the settings tab is read and checked", "[ModHost]")
+{
+    const Mod mod = ModSet::parse_mod(R"({"id": "m", "version": "1", "params": {
+        "a": {"type": "float", "default": 0, "ui": {"after": "outer_wall_speed"}},
+        "b": {"type": "int", "default": 0, "ui": {"page": "Quality", "group": "Mine", "group_after": "Precision", "widget": "toolhead"}},
+        "c": {"type": "string", "default": "", "ui": {"page": "Quality", "group": "Mine", "widget": "layer_ranges"}},
+        "d": {"type": "bool", "default": false}
+    }})");
+    REQUIRE(mod.params.size() == 4);
+    CHECK(mod.params[0].ui.after == "outer_wall_speed");
+    CHECK(mod.params[0].ui.placed());
+    CHECK(mod.params[1].ui.page == "Quality");
+    CHECK(mod.params[1].ui.group == "Mine");
+    CHECK(mod.params[1].ui.group_after == "Precision");
+    CHECK(mod.params[1].ui.widget == "toolhead");
+    CHECK(mod.params[2].ui.widget == "layer_ranges");
+    CHECK_FALSE(mod.params[3].ui.placed());
+
+    auto bad = [](const std::string &param) {
+        return ModSet::parse_mod(R"({"id": "m", "version": "1", "params": {"p": )" + param + "}}");
+    };
+    CHECK_THROWS_WITH(bad(R"({"type": "int", "default": 0, "ui": {"after": "wall_loops", "page": "Quality", "group": "G"}})"), ContainsSubstring("not both"));
+    CHECK_THROWS_WITH(bad(R"({"type": "int", "default": 0, "ui": {"group": "G"}})"), ContainsSubstring("needs the \"page\""));
+    CHECK_THROWS_WITH(bad(R"({"type": "float", "default": 0, "ui": {"after": "wall_loops", "widget": "toolhead"}})"), ContainsSubstring("int parameter"));
+    CHECK_THROWS_WITH(bad(R"({"type": "int", "default": 0, "ui": {"after": "wall_loops", "widget": "layer_ranges"}})"), ContainsSubstring("string parameter"));
+    CHECK_THROWS_WITH(bad(R"({"type": "int", "default": 0, "ui": {"after": "wall_loops", "widget": "slider"}})"), ContainsSubstring("toolhead or layer_ranges"));
+    CHECK_THROWS_WITH(bad(R"({"type": "int", "default": 0, "ui": "wall_loops"})"), ContainsSubstring("must be an object"));
+}
+
+// The ranges are read the way the multi-nozzle walls mod reads them (multi_nozzle_walls.cpp, parse_override_range): a
+// range written last:first stays as written, entries it cannot read are kept apart and written back after the ranges.
+TEST_CASE("Layer ranges of a toolhead are read and written back", "[ModHost]")
+{
+    const LayerRangeList list = parse_layer_ranges("1:10:2;bad;30:20:1;;0:5:1;5:6:1:2; 7:8:1");
+    REQUIRE(list.ranges.size() == 2);
+    CHECK(list.ranges[0] == LayerRange{ 1, 10, 2 });
+    CHECK(list.ranges[1] == LayerRange{ 30, 20, 1 });
+    CHECK(list.unread == std::vector<std::string>{ "bad", "0:5:1", "5:6:1:2", " 7:8:1" });
+    CHECK(serialize_layer_ranges(list) == "1:10:2;30:20:1;bad;0:5:1;5:6:1:2; 7:8:1");
+    CHECK(serialize_layer_ranges(parse_layer_ranges("")) == "");
+    CHECK(serialize_layer_ranges(parse_layer_ranges("5:8:3")) == "5:8:3");
+}
+
+// MAGPIE: the official mods place their rows after Orca options and in Orca groups by name. A name Orca renames
+// leaves the row on the Mods page; this test says so first. The option must exist and the settings tab must build a
+// line for it; a group_after must be a group title the tab builds.
+TEST_CASE("The official mods' settings tab places name settings the tabs have", "[ModHost]")
+{
+    std::vector<std::string> errors;
+    const boost::filesystem::path root = boost::filesystem::path(std::string(TEST_DATA_DIR)).parent_path().parent_path();
+    const ModSet set = ModSet::load_dirs({ root / "mods" }, errors);
+    std::string tab_source;
+    {
+        boost::nowide::ifstream in((root / "src" / "slic3r" / "GUI" / "Tab.cpp").string());
+        tab_source.assign(std::istreambuf_iterator<char>(in), {});
+    }
+    REQUIRE(!tab_source.empty());
+    size_t placed = 0;
+    for (const Mod &mod : set.mods())
+        for (const ModParam &p : mod.params) {
+            CAPTURE(mod.id, p.name);
+            if (!p.ui.after.empty()) {
+                CHECK(print_config_def.get(p.ui.after) != nullptr);
+                CHECK((tab_source.find("append_single_option_line(\"" + p.ui.after + "\"") != std::string::npos ||
+                       tab_source.find("get_option(\"" + p.ui.after + "\")") != std::string::npos));
+                ++placed;
+            }
+            if (!p.ui.group.empty()) {
+                CHECK(tab_source.find("add_options_page(L(\"" + p.ui.page + "\")") != std::string::npos);
+                if (!p.ui.group_after.empty())
+                    CHECK(tab_source.find("new_optgroup(L(\"" + p.ui.group_after + "\")") != std::string::npos);
+                ++placed;
+            }
+        }
+    // Every official mod with settings places them (multi-nozzle walls, H/2, supports, low temperature interface,
+    // layer time blending, U1).
+    CHECK(placed >= 20);
 }

@@ -1655,8 +1655,9 @@ void Tab::reload_config()
 {
     if (m_active_page)
         m_active_page->reload_config();
-    if (m_mod_params_panel && m_config)
-        m_mod_params_panel->load_from_config(*m_config);
+    if (m_config)
+        for (ModParamsPanel* panel : m_mod_params_panels)
+            panel->load_from_config(*m_config);
     load_support_menu();
     if (m_type == Preset::TYPE_PRINT && m_config != nullptr)
         m_last_sparse_infill_rotate_template_value = m_config->opt_string("sparse_infill_rotate_template");
@@ -7780,7 +7781,7 @@ void Tab::clear_pages()
     // nulling pointers
     m_parent_preset_description_line = nullptr;
     m_detach_preset_btn = nullptr;
-    m_mod_params_panel = nullptr;
+    m_mod_params_panels.clear();
 
     m_compatible_printers.checkbox  = nullptr;
     m_compatible_printers.btn       = nullptr;
@@ -7789,48 +7790,144 @@ void Tab::clear_pages()
     m_compatible_prints.btn         = nullptr;
 }
 
+ModParamsPanel* Tab::add_mod_params_panel(wxWindow* parent, std::shared_ptr<const ModHost::ModSet> mods, const std::string& scope,
+                                          const std::vector<std::string>& keys, bool labels)
+{
+    auto* panel = new ModParamsPanel(parent, std::move(mods), scope, keys, labels);
+    m_mod_params_panels.push_back(panel);
+    // The page can be cleared without clear_pages() (background page rebuild, cancelled build),
+    // which destroys the panel; forget it then so reload_config() never reaches a freed panel.
+    panel->Bind(wxEVT_DESTROY, [this, panel](wxWindowDestroyEvent& event) {
+        if (event.GetEventObject() == panel)
+            m_mod_params_panels.erase(std::remove(m_mod_params_panels.begin(), m_mod_params_panels.end(), panel), m_mod_params_panels.end());
+        event.Skip();
+    });
+    // All the tab's panels write one key: an edit starts from what the preset holds now.
+    panel->current_text = [this, scope]() { return ModParamsPanel::stored_json(*m_config, scope); };
+    panel->load_from_config(*m_config);
+    panel->on_change = [this, scope, panel](const std::string& text) {
+        const char* key = ModParamsPanel::config_key(scope);
+        if (scope == "filament")
+            m_config->set_key_value(key, new ConfigOptionStrings({ text }));
+        else
+            m_config->set_key_value(key, new ConfigOptionString(text));
+        update_dirty();
+        on_value_change(key, text);
+        // The tab's other panels show what the preset now holds (and so their rows' conditions); a row on another
+        // tab can be shown or hidden by the value just changed.
+        for (ModParamsPanel* other : std::vector<ModParamsPanel*>(m_mod_params_panels))
+            if (other != panel)
+                other->load_from_config(*m_config);
+        for (Tab* tab : wxGetApp().tabs_list)
+            if (tab != this)
+                for (ModParamsPanel* other : tab->m_mod_params_panels)
+                    other->update_visibility();
+    };
+    return panel;
+}
+
 void Tab::add_mods_page(const std::string& scope)
 {
     // Mod parameters are per preset; the per-object tabs have no Mods page yet.
     if (dynamic_cast<TabPrintModel*>(this) != nullptr)
         return;
     std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
-    if (!ModParamsPanel::has_params(mods.get(), scope))
+    const std::vector<std::string> keys = ModParamsPanel::param_keys(mods.get(), scope);
+    if (keys.empty())
+        return;
+
+    // MAGPIE: the placed parameters. A row after an option's line holds one parameter with the line's label; a
+    // group holds its parameters in one panel, the group created after `group_after` when the page has none of
+    // that title. Titles and keys are the untranslated names this tab builds its pages with.
+    std::vector<std::string> on_mods_page;
+    std::vector<std::pair<ConfigOptionsGroupShp, std::vector<std::string>>> group_keys;
+    // Rows put after one option, and groups put after one group, keep the parameters' order: each goes after the
+    // ones placed there before.
+    std::map<std::string, size_t> rows_after;
+    std::map<ConfigOptionsGroup*, size_t> groups_after;
+    auto find_page = [this](const std::string& title) -> PageShp {
+        for (PageShp page : m_pages)
+            if (page->title() == wxString::FromUTF8(title))
+                return page;
+        return nullptr;
+    };
+    auto find_group = [](const PageShp& page, const std::string& title) -> ConfigOptionsGroupShp {
+        for (ConfigOptionsGroupShp group : page->m_optgroups)
+            if (group->title == wxString::FromUTF8(title))
+                return group;
+        return nullptr;
+    };
+    for (const std::string& key : keys) {
+        const ModHost::ModParam* p = ModParamsPanel::find_param(mods.get(), key);
+        const std::string        mod_id = key.substr(0, key.find('.'));
+        bool                     placed = false;
+        if (p != nullptr && !p->ui.after.empty()) {
+            Line line{ ModParamsPanel::param_label(mods.get(), key), wxString::FromUTF8(key) };
+            line.widget = [this, mods, scope, key](wxWindow* parent) -> wxSizer* {
+                auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+                sizer->Add(add_mod_params_panel(parent, mods, scope, { key }, false), 0, wxALIGN_CENTER_VERTICAL);
+                return sizer;
+            };
+            for (PageShp page : m_pages) {
+                for (ConfigOptionsGroupShp group : page->m_optgroups)
+                    if ((placed = group->insert_line_after(p->ui.after, line, rows_after[p->ui.after]))) {
+                        ++rows_after[p->ui.after];
+                        break;
+                    }
+                if (placed)
+                    break;
+            }
+        } else if (p != nullptr && !p->ui.group.empty()) {
+            if (PageShp page = find_page(p->ui.page)) {
+                const std::string     title = ModHost::mod_text(mod_id, p->ui.group);
+                ConfigOptionsGroupShp group = find_group(page, p->ui.group);
+                if (group == nullptr)
+                    group = find_group(page, title);
+                if (group == nullptr) {
+                    ConfigOptionsGroupShp after = p->ui.group_after.empty() ? nullptr : find_group(page, p->ui.group_after);
+                    // With the icon of the group it follows, or of the page's first group.
+                    const wxString icon = after ? after->icon : !page->m_optgroups.empty() ? page->m_optgroups.front()->icon : wxString(L"param_advanced");
+                    group = page->new_optgroup(wxString::FromUTF8(title), icon);
+                    // Moved from the end of the page to right after group_after (and the groups put there before).
+                    if (after) {
+                        auto& groups = page->m_optgroups;
+                        groups.pop_back();
+                        const size_t at = size_t(std::find(groups.begin(), groups.end(), after) - groups.begin()) + 1 + groups_after[after.get()]++;
+                        groups.insert(groups.begin() + std::min(at, groups.size()), group);
+                    }
+                }
+                auto it = std::find_if(group_keys.begin(), group_keys.end(), [&group](const auto& g) { return g.first == group; });
+                if (it == group_keys.end())
+                    group_keys.push_back({ group, { key } });
+                else
+                    it->second.push_back(key);
+                placed = true;
+            }
+        }
+        if (p != nullptr && p->ui.placed() && !placed)
+            BOOST_LOG_TRIVIAL(warning) << "Mod parameter " << key << ": its settings tab place is not on this tab, shown on the Mods page";
+        if (!placed)
+            on_mods_page.push_back(key);
+    }
+    // A group's panel is a full-width widget line, like the IDEX/IQEX modes table: the panel lays out its own label
+    // and value columns, one row per parameter.
+    auto add_panel_line = [this, mods, scope](ConfigOptionsGroupShp group, const std::vector<std::string>& panel_keys) {
+        Line line{ "", "" };
+        line.full_width = 1;
+        line.widget = [this, mods, scope, panel_keys](wxWindow* parent) -> wxSizer* {
+            auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+            sizer->Add(add_mod_params_panel(parent, mods, scope, panel_keys, true), 1, wxEXPAND);
+            return sizer;
+        };
+        group->append_line(line);
+    };
+    for (const auto& [group, group_params] : group_keys)
+        add_panel_line(group, group_params);
+
+    if (on_mods_page.empty())
         return;
     PageShp page = add_options_page(L("Mods"), "custom-gcode_other");
-    ConfigOptionsGroupShp optgroup = page->new_optgroup(L("Mod parameters"), L"param_special");
-    // A full-width widget line, like the IDEX/IQEX modes table: the panel lays out its own label
-    // and value columns, one row per parameter.
-    Line line{ "", "" };
-    line.full_width = 1;
-    line.widget = [this, mods, scope](wxWindow* parent) -> wxSizer* {
-        m_mod_params_panel = new ModParamsPanel(parent, mods, scope);
-        // The page can be cleared without clear_pages() (background page rebuild, cancelled build),
-        // which destroys the panel; forget it then so reload_config() never reaches a freed panel.
-        m_mod_params_panel->Bind(wxEVT_DESTROY, [this](wxWindowDestroyEvent& event) {
-            if (event.GetEventObject() == m_mod_params_panel)
-                m_mod_params_panel = nullptr;
-            event.Skip();
-        });
-        m_mod_params_panel->load_from_config(*m_config);
-        m_mod_params_panel->on_change = [this, scope](const std::string& text) {
-            const char* key = ModParamsPanel::config_key(scope);
-            if (scope == "filament")
-                m_config->set_key_value(key, new ConfigOptionStrings({ text }));
-            else
-                m_config->set_key_value(key, new ConfigOptionString(text));
-            update_dirty();
-            on_value_change(key, text);
-            // A row on another tab can be shown or hidden by the value just changed.
-            for (Tab* tab : wxGetApp().tabs_list)
-                if (tab != this && tab->m_mod_params_panel != nullptr)
-                    tab->m_mod_params_panel->update_visibility();
-        };
-        auto* sizer = new wxBoxSizer(wxHORIZONTAL);
-        sizer->Add(m_mod_params_panel, 1, wxEXPAND);
-        return sizer;
-    };
-    optgroup->append_line(line);
+    add_panel_line(page->new_optgroup(L("Mod parameters"), L"param_special"), on_mods_page);
 }
 
 void Tab::add_support_type_line(ConfigOptionsGroupShp optgroup)

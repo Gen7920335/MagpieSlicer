@@ -1,6 +1,7 @@
 // MAGPIE: Magpie line 1 settings become mod parameters when a line 1 project or preset loads.
 #include <catch2/catch_all.hpp>
 
+#include <libslic3r/ModHost/LegacySettings.hpp>
 #include <libslic3r/ModHost/ModSet.hpp>
 #include <libslic3r/PrintConfig.hpp>
 
@@ -8,6 +9,7 @@
 #include <boost/nowide/fstream.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -307,4 +309,71 @@ TEST_CASE("Line 1 brush and cooling positions become the low temperature interfa
     for (const char *key : { "support_interface_brush_start", "support_interface_brush_end", "support_interface_cooling_position",
                              "support_interface_brush_repetitions", "support_interface_brush_speed", "snapmaker_u1_start_guard" })
         CHECK_FALSE(config.has(key));
+}
+
+// MAGPIE: the crisp corner and H/2 keys a line 1 project saves, each with a value that is not its default, as line 1
+// wrote them (a coPercent with its %, a coStrings list quoted), become these parameters.
+TEST_CASE("Every line 1 crisp corner and H/2 setting loads as its mod parameter", "[LegacySettings]")
+{
+    BundledMods mods;
+    const DynamicPrintConfig config = load({
+        { "use_smaller_nozzles_in_crisp_corners", "1" },
+        { "crisp_corner_detail_toolhead", "3" },
+        { "crisp_corner_small_nozzle_wall_count", "2" },
+        { "crisp_corner_nozzle_wall_overlap", "20%" },
+        { "crisp_corner_interlace_small_nozzle_walls", "1" },
+        { "crisp_corner_large_nozzle_override_regions", "\"1:10:2\";\"20:30:1\"" },
+        { "support_half_layer_height", "1" },
+    });
+    const nlohmann::json m = mod_settings(config);
+    CHECK(m["multi_nozzle_walls.enable"] == true);
+    CHECK(m["multi_nozzle_walls.detail_toolhead"] == 3);
+    CHECK(m["multi_nozzle_walls.small_wall_count"] == 2);
+    CHECK(m["multi_nozzle_walls.wall_overlap"] == 20.);
+    CHECK(m["multi_nozzle_walls.interlock"] == true);
+    CHECK(m["multi_nozzle_walls.override_regions"] == "1:10:2;20:30:1");
+    CHECK(m["half_layer.support"] == true);
+    for (const char *key : { "use_smaller_nozzles_in_crisp_corners", "crisp_corner_detail_toolhead", "crisp_corner_small_nozzle_wall_count",
+                             "crisp_corner_nozzle_wall_overlap", "crisp_corner_interlace_small_nozzle_walls",
+                             "crisp_corner_large_nozzle_override_regions", "support_half_layer_height" })
+        CHECK_FALSE(config.has(key));
+}
+
+// MAGPIE: an object, part or layer range of a line 1 project stores these keys in its own settings, which a 3MF reads
+// one key at a time (bbs_3mf.cpp collects them with stash_legacy_setting). They go into that level's
+// object_mod_settings / region_mod_settings, not into the project's mod_settings; a process parameter cannot be set
+// per object and is left out.
+TEST_CASE("Line 1 settings of an object level become that level's mod parameters", "[LegacySettings]")
+{
+    BundledMods                        mods;
+    std::map<std::string, std::string> stash;
+    DynamicPrintConfig                 level;
+    ConfigSubstitutionContext          substitutions(ForwardCompatibilitySubstitutionRule::Enable);
+    for (const auto &[key, value] : std::map<std::string, std::string>{ { "use_smaller_nozzles_in_crisp_corners", "1" },
+                                                                         { "crisp_corner_detail_toolhead", "4" },
+                                                                         { "outer_wall_half_layer_height", "1" },
+                                                                         { "crisp_corner_small_nozzle_wall_speed", "30" },
+                                                                         { "wall_loops", "3" } }) {
+        std::string opt_key = key, opt_value = value;
+        if (ModHost::stash_legacy_setting(opt_key, opt_value, stash) && opt_key.empty())
+            continue;
+        level.set_deserialize(opt_key, opt_value, substitutions);
+    }
+    const ModHost::LegacyMigration result = ModHost::migrate_legacy_object_settings(level, stash);
+
+    REQUIRE(level.has("region_mod_settings"));
+    REQUIRE(level.has("object_mod_settings"));
+    const nlohmann::json region = nlohmann::json::parse(level.opt_string("region_mod_settings"));
+    const nlohmann::json object = nlohmann::json::parse(level.opt_string("object_mod_settings"));
+    CHECK(region["multi_nozzle_walls.enable"] == true);
+    CHECK(region["multi_nozzle_walls.detail_toolhead"] == 4);
+    CHECK(object["half_layer.outer_walls"] == true);
+    // The process parameter is reported, not written anywhere at this level.
+    CHECK_FALSE(region.contains("multi_nozzle_walls.small_wall_speed"));
+    CHECK_FALSE(object.contains("multi_nozzle_walls.small_wall_speed"));
+    CHECK_FALSE(level.has("mod_settings"));
+    CHECK(std::find(result.dropped.begin(), result.dropped.end(), "multi_nozzle_walls.small_wall_speed") != result.dropped.end());
+    // An Orca setting of the level is kept as it was.
+    CHECK(level.opt_int("wall_loops") == 3);
+    CHECK(stash.empty());
 }

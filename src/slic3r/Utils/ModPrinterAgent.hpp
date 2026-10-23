@@ -59,6 +59,10 @@ public:
     // A neutral command from the panel's actions, refused while printing when idle_only. Blocking; worker or GUI thread.
     // Returns the mod's answer text, or an error for the user in `error`.
     bool panel_command(const nlohmann::json &command, bool idle_only, std::string &result, std::string &error);
+    // A message of one of the mod's web panels ({"cmd": "panel_message" | "panel_closed", "panel", "data"}), sent with
+    // the connection data of `host` (the panel's printer) as "conn". Without a session it opens one that does not
+    // connect, so a page such as a sign-in works before the printer was ever connected; a connection then reuses it.
+    bool web_panel_command(nlohmann::json command, const std::string &host, std::string &error);
     // The merged neutral status, an empty object before the first one.
     nlohmann::json status() const;
     // The connection: MP_PRINTER_* state and the mod's last reason text.
@@ -138,6 +142,10 @@ private:
     void dispatch_printer_connected(const std::string &dev_id);
     void notify_panel(nlohmann::json event);
     void destroy_session();
+    // A new mod session (not connected), or nullptr with `reason`.
+    std::shared_ptr<Session> create_session(std::string &reason);
+    // The connection data the mod gets for a printer: dev_id, host, port, the form's fields, profile and secret keys.
+    nlohmann::json connection_json(const std::string &dev_id, const std::string &host, const std::string &port) const;
 
     std::string                    m_agent_id;
     std::string                    m_display_name;
@@ -145,6 +153,7 @@ private:
 
     mutable std::recursive_mutex   m_mutex; // everything below except the atomics
     std::shared_ptr<Session>       m_session; // a call in flight holds its own reference (Session)
+    bool                           m_panel_session = false; // m_session was opened by a web panel, not connected
     std::string                    m_dev_id;
     std::string                    m_host;
     nlohmann::json                 m_probe_info = nlohmann::json::object();

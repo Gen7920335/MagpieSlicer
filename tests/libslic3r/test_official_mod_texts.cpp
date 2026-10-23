@@ -45,8 +45,8 @@ std::set<std::string> placeholders(const std::string &text)
 TEST_CASE("Every official mod is shown in Korean", "[ModHost][OfficialMods]")
 {
     const std::vector<ModHost::Mod> mods = official_mods();
-    // The eleven official mods (anycubic is the eleventh).
-    CHECK(mods.size() == 11);
+    // The ten official mods (the Anycubic printer mod ships on its own).
+    CHECK(mods.size() == 10);
     for (const ModHost::Mod &mod : mods) {
         CAPTURE(mod.id);
         CHECK(!mod.name.empty());

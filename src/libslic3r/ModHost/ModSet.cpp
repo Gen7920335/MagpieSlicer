@@ -584,7 +584,25 @@ Mod ModSet::parse_mod(const std::string &json_text)
             p.label         = optional_string(def, "label");
             p.labels        = translations(def, "label_");
             p.unit          = optional_string(def, "unit");
-            p.page          = optional_string(def, "page");
+            if (auto ui = def.find("ui"); ui != def.end()) {
+                if (!ui->is_object())
+                    throw ModError(where + ": \"ui\" must be an object");
+                p.ui.after       = optional_string(*ui, "after");
+                p.ui.page        = optional_string(*ui, "page");
+                p.ui.group       = optional_string(*ui, "group");
+                p.ui.group_after = optional_string(*ui, "group_after");
+                p.ui.widget      = optional_string(*ui, "widget");
+                if (!p.ui.after.empty() && !p.ui.group.empty())
+                    throw ModError(where + ": \"ui\" names a row \"after\" an option or a \"group\", not both");
+                if (!p.ui.group.empty() && p.ui.page.empty())
+                    throw ModError(where + ": a \"ui\" \"group\" needs the \"page\" it is on");
+                if (!p.ui.widget.empty() && p.ui.widget != "toolhead" && p.ui.widget != "layer_ranges")
+                    throw ModError(where + ": \"ui\" \"widget\" must be toolhead or layer_ranges");
+                if (p.ui.widget == "toolhead" && p.type != "int")
+                    throw ModError(where + ": the toolhead widget is for an int parameter");
+                if (p.ui.widget == "layer_ranges" && p.type != "string")
+                    throw ModError(where + ": the layer_ranges widget is for a string parameter");
+            }
             if (auto inv = def.find("invalidates"); inv != def.end()) {
                 if (!inv->is_array())
                     throw ModError(where + ": \"invalidates\" must be a list of step names");

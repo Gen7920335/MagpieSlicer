@@ -401,4 +401,6 @@ src/libslic3r/ModHost/ObjectZOffset.cpp
 src/libslic3r/ModHost/SupportStyle.cpp
 src/slic3r/GUI/ModBrowserDialog.cpp
 src/slic3r/GUI/ModManagerDialog.cpp
+src/slic3r/GUI/ModLayerRangesEditor.cpp
 src/slic3r/GUI/ModObjectSettingsDialog.cpp
+src/slic3r/GUI/ModParamsPanel.cpp

@@ -292,6 +292,18 @@ void OptionsGroup::append_line(const Line& line)
         m_options_mode.push_back(option_set[0].opt.mode);
 }
 
+bool OptionsGroup::insert_line_after(const t_config_option_key& opt_key, const Line& line, size_t skip)
+{
+    assert(line.get_options().empty());
+    for (size_t index = 0; index < m_lines.size(); ++index)
+        for (const Option& opt : m_lines[index].get_options())
+            if (opt.opt_id == opt_key) {
+                m_lines.insert(m_lines.begin() + std::min(m_lines.size(), index + 1 + skip), line);
+                return true;
+            }
+    return false;
+}
+
 // BBS: get line for opt_key
 Line* OptionsGroup::get_line(const std::string& opt_key)
 {

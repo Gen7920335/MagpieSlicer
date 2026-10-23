@@ -13,8 +13,8 @@ which is why loading it asks the user unless Magpie vouches for it.
 
 | Tier | What makes it | Installed Mods shows | Loads |
 |---|---|---|---|
-| official | bundled, or signed with `magpie-official-2026` | gold badge, "Official" / "Bundled" | at once |
-| verified | signed with `magpie-verified-2026`, which Gen signs third-party mods with after reviewing them | gold badge, "Verified" | at once |
+| official | bundled, or signed with `magpie-official-2026` | Magpie blue badge, "Official" / "Bundled" | at once |
+| verified | signed with `magpie-verified-2026`, which Gen signs third-party mods with after reviewing them | Magpie blue badge, "Verified" | at once |
 | unverified | no `SIGNATURE`, a key the application does not trust, or files changed after signing | red badge, "Not verified" | native code: after the user accepts the unverified mod warning |
 
 The tiers differ in what the user is shown and asked, not in what a mod may do: every mod may write

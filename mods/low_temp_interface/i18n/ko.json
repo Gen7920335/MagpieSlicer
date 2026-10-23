@@ -4,5 +4,7 @@
     "Support interface temperature %1% °C is below the firmware cold-extrusion limit of %2% °C.": "서포트 접점 온도 %1% °C가 펌웨어의 저온 압출 제한 %2% °C보다 낮습니다.",
     "Support interface temperature %1% °C exceeds the maximum nozzle temperature %2% °C of filament %3%.": "서포트 접점 온도 %1% °C가 필라멘트 %3%의 최대 노즐 온도 %2% °C를 넘습니다.",
     "Invalid temperature tower band or extrusion flow": "온도 강하 타워의 띠 폭이나 압출 유량이 올바르지 않습니다",
-    "Invalid spacing supplied to Flow::with_spacing(), check your layer height and extrusion width.": "Flow::with_spacing()에 잘못된 간격이 전달되었습니다. 레이어 높이와 압출 폭을 확인하세요."
+    "Invalid spacing supplied to Flow::with_spacing(), check your layer height and extrusion width.": "Flow::with_spacing()에 잘못된 간격이 전달되었습니다. 레이어 높이와 압출 폭을 확인하세요.",
+    "Low-temperature support interface": "저온 서포트 접점",
+    "Nozzle cooling and brush": "노즐 냉각과 브러시"
 }

@@ -31,10 +31,3 @@ set(_TEST_NAME mod_resin_support)
 orcaslicer_copy_test_dlls()
 orcaslicer_discover_tests(mod_resin_support_tests)
 
-# The Anycubic printer mod's protocol code (handshake cryptography, MQTT codec, report and command translation).
-set(_anycubic ${CMAKE_SOURCE_DIR}/mods/anycubic)
-add_executable(mod_anycubic_tests ${_anycubic}/unit/test_anycubic.cpp ${_anycubic}/protocol.cpp ${_anycubic}/mqtt.cpp ${_anycubic}/crypto.cpp)
-set_property(TARGET mod_anycubic_tests PROPERTY INCLUDE_DIRECTORIES "${_anycubic};${CMAKE_SOURCE_DIR}/deps_src")
-target_link_libraries(mod_anycubic_tests Catch2::Catch2WithMain)
-set_property(TARGET mod_anycubic_tests PROPERTY FOLDER "tests")
-orcaslicer_discover_tests(mod_anycubic_tests)

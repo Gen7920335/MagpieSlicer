@@ -306,27 +306,8 @@ bool ModPrinterAgent::list_files(const json &query, json &files, std::string &er
 // ---------------------------------------------------------------------------------------------------------------
 // Connection
 
-int ModPrinterAgent::connect_printer(const PrinterConnectionParams &params)
+std::shared_ptr<ModPrinterAgent::Session> ModPrinterAgent::create_session(std::string &reason)
 {
-    if (params.dev_id.empty() || params.host.empty())
-        return BAMBU_NETWORK_ERR_INVALID_HANDLE;
-
-    // The user agrees to the mod's network list before its first connection (ModNetService checks it on every call).
-    if (!mod().network.empty() && !ModNet::has_consent(mod())) {
-        bool agreed = false;
-        if (wxIsMainThread() && consent_prompt())
-            agreed = consent_prompt()(mod());
-        if (!agreed) {
-            std::lock_guard<std::recursive_mutex> lock(m_mutex);
-            m_conn_reason = _u8L("Agree to the mod's network access in the printer connection panel first.");
-            m_conn_state.store(MP_PRINTER_FAILED);
-            notify_panel({{"type", "connection"}});
-            return BAMBU_NETWORK_ERR_CONNECTION_TO_PRINTER_FAILED;
-        }
-    }
-
-    destroy_session();
-
     auto session   = std::make_shared<Session>();
     session->entry = m_entry;
     session->events.size       = sizeof(mp_printer_events_v1);
@@ -343,19 +324,21 @@ int ModPrinterAgent::connect_printer(const PrinterConnectionParams &params)
         return st.code;
     }, &guard_message);
     if (rc != MP_OK || mod_session == nullptr) {
-        std::lock_guard<std::recursive_mutex> lock(m_mutex);
-        m_conn_reason = !message.empty() ? ModHost::mod_text(mod().id, message) : guard_message;
-        m_conn_state.store(MP_PRINTER_FAILED);
-        return BAMBU_NETWORK_ERR_CONNECTION_TO_PRINTER_FAILED;
+        reason = !message.empty() ? ModHost::mod_text(mod().id, message) : guard_message;
+        return nullptr;
     }
     session->session = mod_session;
+    return session;
+}
 
+json ModPrinterAgent::connection_json(const std::string &dev_id, const std::string &host, const std::string &port) const
+{
     // The connection form's values for this printer (the printer panel stores them), and the preset's model.
-    json conn = {{"dev_id", params.dev_id}, {"host", params.host}, {"port", params.port}};
+    json conn = {{"dev_id", dev_id}, {"host", host}, {"port", port}};
     json fields = json::object();
     if (AppConfig *config = GUI::wxGetApp().app_config; config != nullptr) {
         const std::string section = fields_section(mod());
-        const std::string prefix  = store_host(params.host) + "/";
+        const std::string prefix  = store_host(host) + "/";
         if (config->has_section(section))
             for (const auto &[key, value] : config->get_section(section))
                 if (boost::starts_with(key, prefix))
@@ -376,12 +359,95 @@ int ModPrinterAgent::connect_printer(const PrinterConnectionParams &params)
     json secret_keys = json::object();
     for (const ModHost::ModGuiFormField &f : mod().gui.printer.fields)
         if (f.kind == "secret")
-            secret_keys[f.id] = f.id + "." + store_host(params.host);
+            secret_keys[f.id] = f.id + "." + store_host(host);
     conn["secret_keys"] = std::move(secret_keys);
+    return conn;
+}
+
+bool ModPrinterAgent::web_panel_command(json command, const std::string &host, std::string &error)
+{
+    bool has_session;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        has_session = m_session != nullptr;
+    }
+    if (!has_session) {
+        // A closed panel has nothing to tell a session that never existed.
+        if (command.value("cmd", std::string()) != "panel_message")
+            return true;
+        // The page may make the mod reach the network (the sign-in), which needs the user's agreement as a connection does.
+        if (!mod().network.empty() && !ModNet::has_consent(mod())) {
+            const bool agreed = wxIsMainThread() && consent_prompt() && consent_prompt()(mod());
+            if (!agreed) {
+                error = _u8L("Agree to the mod's network access in the printer connection panel first.");
+                return false;
+            }
+        }
+        std::shared_ptr<Session> session = create_session(error);
+        if (!session)
+            return false;
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (!m_session) {
+            m_session       = std::move(session);
+            m_panel_session = true;
+        }
+    }
+    std::string dev_id;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        dev_id = m_dev_id;
+    }
+    // Without an address there is no printer to keep the page's values for (the form is stored per address).
+    if (!host.empty())
+        command["conn"] = connection_json(dev_id.empty() ? host : dev_id, host, std::string());
+    std::string result;
+    return panel_command(command, false, result, error);
+}
+
+int ModPrinterAgent::connect_printer(const PrinterConnectionParams &params)
+{
+    if (params.dev_id.empty() || params.host.empty())
+        return BAMBU_NETWORK_ERR_INVALID_HANDLE;
+
+    // The user agrees to the mod's network list before its first connection (ModNetService checks it on every call).
+    if (!mod().network.empty() && !ModNet::has_consent(mod())) {
+        bool agreed = false;
+        if (wxIsMainThread() && consent_prompt())
+            agreed = consent_prompt()(mod());
+        if (!agreed) {
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            m_conn_reason = _u8L("Agree to the mod's network access in the printer connection panel first.");
+            m_conn_state.store(MP_PRINTER_FAILED);
+            notify_panel({{"type", "connection"}});
+            return BAMBU_NETWORK_ERR_CONNECTION_TO_PRINTER_FAILED;
+        }
+    }
+
+    // A session a web panel opened (the sign-in page, before any connection) is kept: its page may be mid-way.
+    std::shared_ptr<Session> session;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (m_session && m_panel_session)
+            session = m_session;
+    }
+    if (!session) {
+        destroy_session();
+        std::string reason;
+        session = create_session(reason);
+        if (!session) {
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            m_conn_reason = reason;
+            m_conn_state.store(MP_PRINTER_FAILED);
+            return BAMBU_NETWORK_ERR_CONNECTION_TO_PRINTER_FAILED;
+        }
+    }
+
+    const json conn = connection_json(params.dev_id, params.host, params.port);
 
     {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
         m_session       = std::move(session);
+        m_panel_session = false;
         m_dev_id        = params.dev_id;
         m_host          = params.host;
         m_status        = json::object();

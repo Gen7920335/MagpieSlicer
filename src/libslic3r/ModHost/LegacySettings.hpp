@@ -34,5 +34,11 @@ struct LegacyMigration
 // Clears `stash`.
 LegacyMigration migrate_legacy_settings(DynamicPrintConfig &config, std::map<std::string, std::string> &stash);
 
+// The same for the settings of one object, part, modifier or layer range of a project, which a 3MF reads one
+// key at a time (stash_legacy_setting() collects them): values of object and region parameters go into the
+// config's object_mod_settings and region_mod_settings, as the per-object mod settings dialog writes them. A
+// line 1 setting whose parameter is not an object or region one cannot be set per object and is reported dropped.
+LegacyMigration migrate_legacy_object_settings(DynamicPrintConfig &config, std::map<std::string, std::string> &stash);
+
 } // namespace ModHost
 } // namespace Slic3r

@@ -52,6 +52,26 @@ struct ModParamOption
     std::map<std::string, std::string> labels;
 };
 
+// MAGPIE: where the settings tab shows a parameter instead of its Mods page, and how. Names are Orca's own, in
+// English as the source writes them: a page title ("Quality"), an option group title ("Precision") or an option key
+// ("outer_wall_speed"). A place the tab does not have puts the row back on the Mods page.
+struct ModParamUi
+{
+    // A row of its own right after the line of this option key (label, control, unit).
+    std::string after;
+    // Or a row in this group of the page `page`: a group of that title the tab has, or a new one the tab adds
+    // right after the group `group_after` (at the end of the page without one).
+    std::string page;
+    std::string group;
+    std::string group_after;
+    // How the value is edited: "" (by its type), "toolhead" (an int: 0 = automatic, n = toolhead n, as a
+    // dropdown named by the printer's nozzles) or "layer_ranges" (a string of first:last:toolhead entries, as
+    // a table, ModHost::parse_layer_ranges).
+    std::string widget;
+
+    bool placed() const { return !after.empty() || !group.empty(); }
+};
+
 struct ModParam
 {
     std::string              name;
@@ -70,7 +90,7 @@ struct ModParam
     // Translations of the label: "label_<language>" keys, by language ("ko", "pt_BR", ...).
     std::map<std::string, std::string> labels;
     std::string              unit;
-    std::string              page;
+    ModParamUi               ui;
     // Slicing steps to redo when the value changes, by step name ("posSupportMaterial",
     // "psGCodeExport", see mod_step_names()). An empty list redoes everything from slicing, so a mod
     // that leaves it out gets a slower but never a stale result. "none" says the value changes the
