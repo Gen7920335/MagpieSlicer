@@ -1964,6 +1964,7 @@ TEST_CASE("Every direct read of a per-nozzle line width field is in the reviewed
         table += "        { \"" + file + "\", " + std::to_string(count) + " },\n";
     INFO("Current table, after checking every changed read:\n" << table);
     CHECK(found == reviewed);
+}
 
 TEST_CASE("Custom G-code placeholder lists are keyed by option keys", "[Config]")
 {

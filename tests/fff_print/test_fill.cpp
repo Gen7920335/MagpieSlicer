@@ -2384,6 +2384,7 @@ TEST_CASE("Arachne parameters left unset by FillConcentricInternal have defined 
     Arachne::WallToolPathsParams params; // default-initialized, as FillConcentricInternal does
     CHECK_THAT(params.min_length_factor, Catch::Matchers::WithinAbs(0.5f, 1e-6f));
     CHECK_FALSE(params.is_top_or_bottom_layer);
+}
 
 TEST_CASE("Infill lines whose ends are next to each other join into one path", "[Fill]")
 {

@@ -8453,6 +8453,7 @@ TEST_CASE("Importing OrcaSlicer user presets copies new files and keeps local on
     CHECK(second.skipped == 2);
 
     CHECK_THROWS_AS(bundle.import_user_presets_from((orca.path() / "missing").string()), RuntimeError);
+}
 
 TEST_CASE("A disabled filament override is saved and reloaded column by column", "[Preset][Bundle]")
 {
