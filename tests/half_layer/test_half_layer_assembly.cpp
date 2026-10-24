@@ -2845,10 +2845,10 @@ TEST_CASE("Half-layer support changes tool once per layer between its body and i
     CHECK(most <= 6);
 }
 
-// A region's fills print grouped by tool. Gap fill between detail walls goes to the detail nozzle and the rest to the
-// outer wall's, and the stored order alternated the two (41 tool changes on a layer of seed 1454 of the U1 random
-// test, a tower off the bed).
-TEST_CASE("Half-layer fills of a region change tool once per tool", "[HalfLayer][ExecutionTower]")
+// A region's walls and fills print grouped by tool. With multi-nozzle walls the detail and large walls, and the gap
+// fill between them, go to two nozzles, and the stored order (island by island) alternated the two: 41 tool changes on
+// a layer of seed 1454 of the U1 random test and 22 of seed 2013, towers off the bed.
+TEST_CASE("Half-layer walls and fills of a region change tool once per tool", "[HalfLayer][ExecutionTower]")
 {
     Slic3r::Test::OfficialMods mods;
     auto config = multifilament_config(2);
@@ -2890,8 +2890,8 @@ TEST_CASE("Half-layer fills of a region change tool once per tool", "[HalfLayer]
     for (const auto &[layer_z, n] : changes)
         most = std::max(most, n);
     UNSCOPED_INFO("most tool changes on one layer: " << most);
-    // Measured: 22 with the fills grouped (walls still alternate between the two nozzles), 40 in the stored order.
-    CHECK(most <= 30);
+    // Measured: 12 with walls and fills grouped, 22 with the fills only, 40 in the stored order.
+    CHECK(most <= 16);
 }
 
 // A combined skirt goes around the tower too. A tower whose footprint fits the bed but whose skirt does not printed
