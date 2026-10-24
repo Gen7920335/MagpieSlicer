@@ -1110,10 +1110,26 @@ void Tab::update_changed_ui()
     if (m_postpone_update_ui)
         return;
 
+    // MAGPIE: the mod rows compare their values with the saved preset themselves (one key holds them all).
+    for (ModParamsPanel* panel : m_mod_params_panels)
+        panel->update_modified();
+
     const bool deep_compare = (m_type == Preset::TYPE_PRINTER || m_type == Preset::TYPE_PRINT || m_type == Preset::TYPE_FILAMENT
             || m_type == Preset::TYPE_SLA_MATERIAL || m_type == Preset::TYPE_MODEL);
     auto dirty_options = m_presets->current_dirty_options(deep_compare);
     auto nonsys_options = m_presets->current_different_from_parent_options(deep_compare);
+    // MAGPIE: the mods' support type dropdown is a widget line (no option), which the loop below cannot colour.
+    if (m_support_menu != nullptr) {
+        const bool modified = std::find(dirty_options.begin(), dirty_options.end(), "support_type") != dirty_options.end();
+        for (PageShp page : m_pages)
+            for (ConfigOptionsGroupShp group : page->m_optgroups)
+                for (Line& l : const_cast<std::vector<Line>&>(group->get_lines()))
+                    if (l.get_options().empty() && l.label_path == "support_settings_support#type") {
+                        l.set_label_colour(modified ? &wxGetApp().get_label_clr_modified() : &wxGetApp().get_label_clr_default());
+                        if (group->custom_ctrl)
+                            group->custom_ctrl->Refresh();
+                    }
+    }
     if (m_type == Preset::TYPE_PRINTER && static_cast<TabPrinter*>(this)->m_printer_technology == ptFFF) {
         TabPrinter* tab = static_cast<TabPrinter*>(this);
         if (tab->m_initial_extruders_count != tab->m_extruders_count)
@@ -7921,6 +7937,7 @@ ModParamsPanel* Tab::add_mod_params_panel(wxWindow* parent, std::shared_ptr<cons
     });
     // All the tab's panels write one key: an edit starts from what the preset holds now.
     panel->current_text = [this, scope]() { return ModParamsPanel::stored_json(*m_config, scope); };
+    panel->saved_text   = [this, scope]() { return ModParamsPanel::stored_json(m_presets->get_selected_preset().config, scope); };
     panel->load_from_config(*m_config);
     panel->on_change = [this, scope, panel](const std::string& text) {
         const char* key = ModParamsPanel::config_key(scope);
@@ -7980,17 +7997,38 @@ void Tab::add_mods_page(const std::string& scope)
         bool                     placed = false;
         if (p != nullptr && !p->ui.after.empty()) {
             Line line{ ModParamsPanel::param_label(mods.get(), key), wxString::FromUTF8(key) };
-            line.widget = [this, mods, scope, key](wxWindow* parent) -> wxSizer* {
-                auto* sizer = new wxBoxSizer(wxHORIZONTAL);
-                sizer->Add(add_mod_params_panel(parent, mods, scope, { key }, false), 0, wxALIGN_CENTER_VERTICAL);
-                return sizer;
-            };
             for (PageShp page : m_pages) {
-                for (ConfigOptionsGroupShp group : page->m_optgroups)
+                for (ConfigOptionsGroupShp group : page->m_optgroups) {
+                    // A group without a label column (the G-code editors) draws no line labels: the panel shows the
+                    // parameter's label itself there.
+                    const bool panel_label = group->label_width == 0;
+                    std::weak_ptr<ConfigOptionsGroup> weak_group = group;
+                    line.widget = [this, mods, scope, key, panel_label, weak_group](wxWindow* parent) -> wxSizer* {
+                        auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+                        ModParamsPanel* panel = add_mod_params_panel(parent, mods, scope, { key }, panel_label);
+                        // The settings page places a line's widget windows at their own size (OG_CustomCtrl), not by
+                        // a sizer: the panel takes the size of its controls, or it clips them.
+                        panel->Fit();
+                        // The line's label takes Orca's modified colour while the value differs from the saved preset.
+                        panel->on_modified = [weak_group, key](bool modified) {
+                            ConfigOptionsGroupShp group = weak_group.lock();
+                            if (!group)
+                                return;
+                            for (Line& l : const_cast<std::vector<Line>&>(group->get_lines()))
+                                if (l.get_options().empty() && l.label_tooltip == wxString::FromUTF8(key))
+                                    l.set_label_colour(modified ? &wxGetApp().get_label_clr_modified() : &wxGetApp().get_label_clr_default());
+                            if (group->custom_ctrl)
+                                group->custom_ctrl->Refresh();
+                        };
+                        panel->update_modified();
+                        sizer->Add(panel, 0, wxALIGN_CENTER_VERTICAL);
+                        return sizer;
+                    };
                     if ((placed = group->insert_line_after(p->ui.after, line, rows_after[p->ui.after]))) {
                         ++rows_after[p->ui.after];
                         break;
                     }
+                }
                 if (placed)
                     break;
             }
@@ -8031,9 +8069,26 @@ void Tab::add_mods_page(const std::string& scope)
     auto add_panel_line = [this, mods, scope](ConfigOptionsGroupShp group, const std::vector<std::string>& panel_keys) {
         Line line{ "", "" };
         line.full_width = 1;
-        line.widget = [this, mods, scope, panel_keys](wxWindow* parent) -> wxSizer* {
+        // A group of the mod's own (this panel its only line) hides while all its rows are hidden, so no empty title
+        // stays on the page.
+        const bool own_group = group->get_lines().empty();
+        std::weak_ptr<ConfigOptionsGroup> weak_group = group;
+        line.widget = [this, mods, scope, panel_keys, own_group, weak_group](wxWindow* parent) -> wxSizer* {
             auto* sizer = new wxBoxSizer(wxHORIZONTAL);
-            sizer->Add(add_mod_params_panel(parent, mods, scope, panel_keys, true), 1, wxEXPAND);
+            ModParamsPanel* panel = add_mod_params_panel(parent, mods, scope, panel_keys, true);
+            sizer->Add(panel, 1, wxEXPAND);
+            if (own_group) {
+                panel->on_rows_shown = [this, weak_group](bool any_shown) {
+                    ConfigOptionsGroupShp group = weak_group.lock();
+                    if (!group || group->sizer == nullptr)
+                        return;
+                    group->Show(any_shown);
+                    m_page_view->Layout();
+                    m_page_view->GetParent()->Layout();
+                };
+                // After the group has its controls (this runs while it builds them).
+                panel->CallAfter([panel]() { panel->update_visibility(); });
+            }
             return sizer;
         };
         group->append_line(line);

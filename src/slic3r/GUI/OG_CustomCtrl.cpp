@@ -1,5 +1,6 @@
 #include "OG_CustomCtrl.hpp"
 #include "OptionsGroup.hpp"
+#include "ModParamsPanel.hpp"
 #include "MarkdownTip.hpp"
 #include "Plater.hpp"
 #include "GUI_App.hpp"
@@ -115,9 +116,11 @@ void OG_CustomCtrl::init_ctrl_lines()
             height = m_bmp_blinking_sz.GetHeight() + m_v_gap;
             ctrl_lines.emplace_back(CtrlLine(height, this, line, true));
         }
-        else if (opt_group->label_width != 0 && (!line.label.IsEmpty() || option_set.front().opt.gui_type == ConfigOptionDef::GUIType::legend) )
+        // MAGPIE: a widget-only line (no options) gets its row too, also without a label, so its widget is placed.
+        else if ((opt_group->label_width != 0 && (!line.label.IsEmpty() || (!option_set.empty() && option_set.front().opt.gui_type == ConfigOptionDef::GUIType::legend))) ||
+                 (option_set.empty() && line.widget != nullptr))
         {
-            wxSize label_sz = GetTextExtent(line.label);
+            wxSize label_sz = GetTextExtent(line.label.IsEmpty() ? wxString("A") : line.label);
             if (opt_group->split_multi_line) {
                 if (option_set.size() > 1) // BBS
                     height = (label_sz.y + m_v_gap2) * option_set.size() + m_v_gap - m_v_gap2;
@@ -389,8 +392,8 @@ void OG_CustomCtrl::OnMotion(wxMouseEvent& event)
             tooltip += line.og_line.label_tooltip;
             // BBS: markdown tip
             focusedLine = &line;
-            markdowntip = line.og_line.label.empty()
-                ? line.og_line.get_options().front().opt_id : into_u8(line.og_line.label);
+            markdowntip = !line.og_line.label.empty() ? into_u8(line.og_line.label) :
+                          !line.og_line.get_options().empty() ? line.og_line.get_options().front().opt_id : std::string();
             markdowntip.erase(0, markdowntip.find_last_of('#') + 1);
             // BBS
             break;
@@ -572,6 +575,10 @@ void OG_CustomCtrl::correct_widgets_position(wxSizer* widget, const Line& line, 
         if (child->IsWindow()) {
             wxPoint pos = line_pos;
             wxSize  sz = child->GetWindow()->GetSize();
+            // MAGPIE: a mod parameter row's revert button sits where Orca draws a field's undo icon, left of the
+            // value column, so its value lines up with Orca's fields.
+            if (auto* mod_row = dynamic_cast<ModParamsPanel*>(child->GetWindow()); mod_row != nullptr && line.get_options().empty())
+                pos.x -= mod_row->value_column_offset();
             pos.y += std::max(0, int(0.5 * (line_height - sz.y)));
             if (line.extra_widget_sizer && widget == line.extra_widget_sizer)
                 pos.x += m_h_gap;

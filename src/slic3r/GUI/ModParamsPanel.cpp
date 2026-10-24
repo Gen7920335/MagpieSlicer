@@ -4,6 +4,7 @@
 #include "GUI_App.hpp"
 #include "I18N.hpp"
 #include "ModLayerRangesEditor.hpp"
+#include "wxExtensions.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/ModHost/SupportMenu.hpp"
@@ -15,6 +16,9 @@
 #include <wx/sizer.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
+#ifdef __WXMSW__
+#include <wx/msw/wrapwin.h>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -46,6 +50,18 @@ std::string stored_text(const DynamicPrintConfig &config, const std::string &sco
     }
     const auto *opt = config.option<ConfigOptionString>(key);
     return opt ? opt->value : std::string();
+}
+
+// A dropdown as wide as its longest entry within [min_dip, max_dip] DIP, so it fits the sidebar; on Windows its open
+// list is as wide as the longest entry, so every entry reads whole there.
+void fit_choice_width(wxChoice *choice, int min_dip, int max_dip)
+{
+    choice->InvalidateBestSize();
+    const int best = choice->GetBestSize().x;
+    choice->SetMinSize(wxSize(std::clamp(best, choice->FromDIP(min_dip), choice->FromDIP(max_dip)), -1));
+#ifdef __WXMSW__
+    ::SendMessage(static_cast<HWND>(choice->GetHWND()), CB_SETDROPPEDWIDTH, WPARAM(best), 0);
+#endif
 }
 
 json parse_object(const std::string &text)
@@ -97,8 +113,12 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
                                const std::vector<std::string> &keys, bool labels)
     : wxPanel(parent), m_mods(std::move(mods)), m_scope(scope)
 {
-    auto *grid = new wxFlexGridSizer(labels ? 3 : 2, FromDIP(4), FromDIP(8));
-    grid->AddGrowableCol(labels ? 1 : 0);
+    // The page's background, which the revert button's face shows.
+    SetBackgroundColour(parent->GetBackgroundColour());
+    // Label (with labels), revert button, control, unit. A row without labels sits in the value column beside Orca's
+    // settings, so it packs tighter to keep its unit inside the sidebar.
+    auto *grid = new wxFlexGridSizer(labels ? 4 : 3, FromDIP(4), FromDIP(labels ? 8 : 4));
+    grid->AddGrowableCol(labels ? 2 : 1);
     for (const ModHost::Mod &mod : m_mods->mods())
         for (const ModHost::ModParam &p : mod.params) {
             const std::string key = mod.id + "." + p.name;
@@ -112,9 +132,14 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
                 text = new wxStaticText(this, wxID_ANY, label);
                 text->SetToolTip(tooltip);
                 // Long labels wrap; otherwise the widest one pushed every value off the side of the sidebar.
-                text->Wrap(FromDIP(170));
+                text->Wrap(FromDIP(150));
                 grid->Add(text, 0, wxALIGN_CENTER_VERTICAL);
             }
+            // Orca's white bullet, the revert arrow while the value differs from the saved preset (update_modified).
+            auto *revert = new ScalableButton(this, wxID_ANY, "dot");
+            revert->SetBackgroundColour(GetBackgroundColour());
+            revert->Bind(wxEVT_BUTTON, [this, key](wxCommandEvent &) { this->revert(key); });
+            grid->Add(revert, 0, wxALIGN_CENTER_VERTICAL);
 
             wxWindow *control = nullptr;
             std::vector<std::string> choice_values;
@@ -142,7 +167,8 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
                                     wxString::FromUTF8(ModHost::localized_text(provider->names, language, provider->name.empty() ? provider->id : provider->name)));
                         choice_values.push_back(value);
                     }
-                auto *choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(100), -1), choices);
+                auto *choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, choices);
+                fit_choice_width(choice, 100, 140);
                 choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { commit(); });
                 control = choice;
             } else if (p.type == "bool") {
@@ -150,19 +176,31 @@ ModParamsPanel::ModParamsPanel(wxWindow *parent, std::shared_ptr<const ModHost::
                 cb->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &) { commit(); });
                 control = cb;
             } else {
-                auto *tc = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(100), -1), wxTE_PROCESS_ENTER);
+                // Narrow enough that a row beside Orca's settings keeps its unit inside the sidebar.
+                auto *tc = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(labels ? 72 : 60), -1), wxTE_PROCESS_ENTER);
                 tc->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent &) { commit(); });
                 tc->Bind(wxEVT_KILL_FOCUS, [this](wxFocusEvent &e) { commit(); e.Skip(); });
                 control = tc;
             }
             control->SetToolTip(tooltip);
+            if (dynamic_cast<wxChoice *>(control) != nullptr || dynamic_cast<wxTextCtrl *>(control) != nullptr)
+                scroll_page_on_wheel(control);
             grid->Add(control, 0, wxALIGN_CENTER_VERTICAL);
-            auto *unit = new wxStaticText(this, wxID_ANY, wxString::FromUTF8(p.unit));
+            // Orca's translation where it has the unit ("mm/s or %").
+            auto *unit = new wxStaticText(this, wxID_ANY, p.unit.empty() ? wxString() : _(wxString::FromUTF8(p.unit)));
             grid->Add(unit, 0, wxALIGN_CENTER_VERTICAL);
-            std::vector<wxWindow *> windows{control, unit};
+            std::vector<wxWindow *> windows{revert, control, unit};
             if (text != nullptr)
                 windows.push_back(text);
-            m_rows.push_back({key, &p, control, std::move(windows), std::move(choice_values)});
+            Row row;
+            row.key           = key;
+            row.param         = &p;
+            row.control       = control;
+            row.windows       = std::move(windows);
+            row.label         = text;
+            row.revert        = revert;
+            row.choice_values = std::move(choice_values);
+            m_rows.push_back(std::move(row));
         }
     auto *outer = new wxBoxSizer(wxVERTICAL);
     outer->Add(grid, 0, wxEXPAND | wxALL, FromDIP(4));
@@ -236,6 +274,7 @@ void ModParamsPanel::fill_toolhead_choice(Row &row)
         choice->Append(label);
         row.choice_values.push_back(std::to_string(t + 1));
     }
+    fit_choice_width(choice, 140, 160);
 }
 
 std::string ModParamsPanel::stored_json(const DynamicPrintConfig &config, const std::string &scope)
@@ -254,7 +293,12 @@ const char *ModParamsPanel::config_key(const std::string &scope)
 
 void ModParamsPanel::load_from_config(const DynamicPrintConfig &config)
 {
-    m_loaded_json     = stored_text(config, m_scope);
+    load_text(stored_text(config, m_scope));
+}
+
+void ModParamsPanel::load_text(const std::string &text)
+{
+    m_loaded_json     = text;
     const json stored = parse_object(m_loaded_json);
     m_loading         = true;
     for (Row &row : m_rows) {
@@ -291,6 +335,7 @@ void ModParamsPanel::load_from_config(const DynamicPrintConfig &config)
     }
     m_loading = false;
     update_visibility();
+    update_modified();
 }
 
 void ModParamsPanel::commit()
@@ -351,6 +396,55 @@ void ModParamsPanel::commit()
     m_loaded_json = text;
     if (on_change)
         on_change(text);
+    update_modified();
+}
+
+void ModParamsPanel::revert(const std::string &key)
+{
+    if (!saved_text)
+        return;
+    json       stored = parse_object(current_text ? current_text() : m_loaded_json);
+    const json saved  = parse_object(saved_text());
+    if (auto it = saved.find(key); it != saved.end())
+        stored[key] = *it;
+    else
+        stored.erase(key); // the saved preset has the default
+    const std::string text = stored.empty() ? std::string() : stored.dump();
+    if (on_change)
+        on_change(text);
+    load_text(text);
+}
+
+int ModParamsPanel::value_column_offset() const
+{
+    if (m_rows.size() != 1 || m_rows.front().label != nullptr)
+        return 0;
+    return m_rows.front().control->GetPosition().x;
+}
+
+void ModParamsPanel::update_modified()
+{
+    const json current = parse_object(current_text ? current_text() : m_loaded_json);
+    const json saved   = saved_text ? parse_object(saved_text()) : current;
+    bool       any     = false;
+    for (Row &row : m_rows) {
+        // A missing key is the default on both sides; numbers compare by value (3 == 3.0).
+        const auto c        = current.find(row.key);
+        const auto v        = saved.find(row.key);
+        const bool modified = (c == current.end()) != (v == saved.end()) || (c != current.end() && *c != *v);
+        any                 = any || modified;
+        if (modified == row.modified)
+            continue;
+        row.modified = modified;
+        row.revert->SetBitmap_(modified ? "undo" : "dot");
+        row.revert->SetToolTip(modified ? _L("Click to drop current modifications and reset to saved value.") : wxString());
+        if (row.label != nullptr) {
+            row.label->SetForegroundColour(modified ? wxGetApp().get_label_clr_modified() : wxGetApp().get_label_clr_default());
+            row.label->Refresh();
+        }
+    }
+    if (on_modified)
+        on_modified(any);
 }
 
 std::optional<ModHost::ExprValue> ModParamsPanel::row_value(const Row &row) const
@@ -411,6 +505,13 @@ void ModParamsPanel::update_visibility()
         Layout();
         if (wxWindow *parent = GetParent())
             parent->Layout();
+    }
+    bool any_shown = false;
+    for (const Row &row : m_rows)
+        any_shown = any_shown || row.control->IsShown();
+    if (on_rows_shown && m_any_shown != any_shown) {
+        m_any_shown = any_shown;
+        on_rows_shown(any_shown);
     }
 }
 

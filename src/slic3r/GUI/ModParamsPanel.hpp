@@ -10,7 +10,9 @@
 #include <string>
 #include <vector>
 
+class wxStaticText;
 class wxWindow;
+class ScalableButton;
 
 namespace Slic3r {
 
@@ -54,19 +56,41 @@ public:
     // tab stores, so the tabs call this on each other after a change.
     void update_visibility();
 
+    // The JSON the preset held when last saved. A row whose value differs from it shows Orca's modified label colour
+    // and a revert button, which puts the saved value back.
+    std::function<std::string()> saved_text;
+    // Called when the modified state of the panel's rows changes (any row differs from saved_text), for a label the
+    // tab's line draws (a single row without labels).
+    std::function<void(bool modified)> on_modified;
+    // Called with whether any row shows, after rows were shown or hidden by their conditions, so a group holding only
+    // this panel can hide with it.
+    std::function<void(bool any_shown)> on_rows_shown;
+    // Shows each row's modified state against saved_text.
+    void update_modified();
+    // For a single row without labels: how far its control sits right of the panel's left edge (the revert button and
+    // its gap), so the settings page can place the control in the value column.
+    int value_column_offset() const;
+
 private:
     struct Row
     {
         std::string            key; // "<mod id>.<name>"
         const ModHost::ModParam *param;
         wxWindow               *control;
-        std::vector<wxWindow *> windows; // label, control and unit, shown and hidden together
+        std::vector<wxWindow *> windows; // label, revert button, control and unit, shown and hidden together
+        wxStaticText           *label  = nullptr; // nullptr without labels
+        ScalableButton         *revert = nullptr;
+        bool                    modified = false;
         // A dropdown's values, in its order: the parameter's options, or the implementations its choices_from
         // slot lists (ModHost::support_choices), or a toolhead number.
         std::vector<std::string> choice_values;
     };
 
     void commit();
+    // Shows the values of the stored JSON `text`.
+    void load_text(const std::string &text);
+    // Puts back the value the saved preset holds for the row `key` (the revert button).
+    void revert(const std::string &key);
     // The value a row's control shows, as the parameter's type.
     std::optional<ModHost::ExprValue> row_value(const Row &row) const;
     // The toolhead dropdown's entries for the printer being edited: "Auto", then one per nozzle.
@@ -78,6 +102,8 @@ private:
     // The stored object as last loaded, so values of mods that are not loaded survive an edit.
     std::string                            m_loaded_json;
     bool                                   m_loading = false;
+    bool                                   m_any_modified = false;
+    std::optional<bool>                    m_any_shown;
 };
 
 } // namespace GUI

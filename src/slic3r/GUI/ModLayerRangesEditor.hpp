@@ -10,10 +10,14 @@
 
 class wxBoxSizer;
 class wxChoice;
-class wxSpinCtrl;
+class SpinInput;
 
 namespace Slic3r {
 namespace GUI {
+
+// MAGPIE: the mouse wheel over a mod parameter's native control scrolls the settings page, as over Orca's own fields,
+// instead of changing the value under the cursor (a dropdown's selection, a spin box's number).
+void scroll_page_on_wheel(wxWindow *control);
 
 // MAGPIE: a table editor for a mod parameter that lists layer ranges with a toolhead each ("first:last:toolhead;...",
 // ModHost::parse_layer_ranges), the "layer_ranges" widget of a mod parameter: one row per range, a toolhead dropdown
@@ -33,8 +37,8 @@ public:
 private:
     struct RowControls
     {
-        wxSpinCtrl *first    = nullptr;
-        wxSpinCtrl *last     = nullptr;
+        SpinInput  *first    = nullptr;
+        SpinInput  *last     = nullptr;
         wxChoice   *toolhead = nullptr;
         wxWindow   *remove   = nullptr;
     };

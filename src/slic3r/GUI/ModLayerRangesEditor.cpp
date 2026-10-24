@@ -2,18 +2,32 @@
 
 #include "GUI.hpp"
 #include "I18N.hpp"
+#include "Widgets/SpinInput.hpp"
 
 #include <wx/button.h>
 #include <wx/choice.h>
+#include <wx/scrolwin.h>
 #include <wx/sizer.h>
-#include <wx/spinctrl.h>
 #include <wx/stattext.h>
 
 #include <algorithm>
 #include <climits>
+#include <initializer_list>
 
 namespace Slic3r {
 namespace GUI {
+
+void scroll_page_on_wheel(wxWindow *control)
+{
+    control->Bind(wxEVT_MOUSEWHEEL, [control](wxMouseEvent &event) {
+        // The nearest ancestor that scrolls (the settings page); none takes the turn, so the value stays.
+        for (wxWindow *w = control->GetParent(); w != nullptr; w = w->GetParent())
+            if (auto *page = dynamic_cast<wxScrolledWindow *>(w); page != nullptr && page->GetVirtualSize().y > page->GetClientSize().y) {
+                page->ScrollLines((event.GetWheelRotation() > 0 ? -1 : 1) * event.GetLinesPerAction());
+                return;
+            }
+    });
+}
 
 ModLayerRangesEditor::ModLayerRangesEditor(wxWindow *parent) : wxPanel(parent)
 {
@@ -75,10 +89,11 @@ void ModLayerRangesEditor::add_row(const ModHost::LayerRange &range)
     const size_t idx = m_rows.size();
     auto *line = new wxBoxSizer(wxHORIZONTAL);
     RowControls row;
-    row.first = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(64), -1), wxSP_ARROW_KEYS, 1, INT_MAX,
-                               int(std::min<size_t>(range.first, INT_MAX)));
-    row.last  = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(64), -1), wxSP_ARROW_KEYS, 1, INT_MAX,
-                               int(std::min<size_t>(range.last, INT_MAX)));
+    // Orca's spin field, which the mouse wheel leaves alone (a native wxSpinCtrl turns its number under a passing wheel).
+    row.first = new SpinInput(this, wxEmptyString, "", wxDefaultPosition, wxSize(FromDIP(64), -1), wxSP_ARROW_KEYS, 1, INT_MAX,
+                              int(std::min<size_t>(range.first, INT_MAX)));
+    row.last  = new SpinInput(this, wxEmptyString, "", wxDefaultPosition, wxSize(FromDIP(64), -1), wxSP_ARROW_KEYS, 1, INT_MAX,
+                              int(std::min<size_t>(range.last, INT_MAX)));
     wxArrayString names;
     for (const wxString &label : m_toolhead_labels)
         names.Add(label);
@@ -89,6 +104,8 @@ void ModLayerRangesEditor::add_row(const ModHost::LayerRange &range)
             names.Add(format_wxstr(_L("T%1% (not on this printer)"), t));
     row.toolhead = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(110), -1), names);
     row.toolhead->SetSelection(int(range.toolhead) - 1);
+    for (wxWindow *control : std::initializer_list<wxWindow *>{ row.first->GetTextCtrl(), row.last->GetTextCtrl(), row.toolhead })
+        scroll_page_on_wheel(control);
     row.remove = new wxButton(this, wxID_ANY, "x", wxDefaultPosition, wxSize(FromDIP(24), -1), wxBU_EXACTFIT);
     row.remove->SetToolTip(_L("Remove this range"));
 
@@ -109,8 +126,8 @@ void ModLayerRangesEditor::add_row(const ModHost::LayerRange &range)
         r.toolhead = size_t(std::max(0, m_rows[idx].toolhead->GetSelection()) + 1);
         changed();
     };
-    row.first->Bind(wxEVT_SPINCTRL, [read_row](wxSpinEvent &) { read_row(); });
-    row.last->Bind(wxEVT_SPINCTRL, [read_row](wxSpinEvent &) { read_row(); });
+    row.first->Bind(wxEVT_SPINCTRL, [read_row](wxCommandEvent &) { read_row(); });
+    row.last->Bind(wxEVT_SPINCTRL, [read_row](wxCommandEvent &) { read_row(); });
     row.first->Bind(wxEVT_TEXT_ENTER, [read_row](wxCommandEvent &) { read_row(); });
     row.last->Bind(wxEVT_TEXT_ENTER, [read_row](wxCommandEvent &) { read_row(); });
     row.first->Bind(wxEVT_KILL_FOCUS, [read_row](wxFocusEvent &e) { read_row(); e.Skip(); });

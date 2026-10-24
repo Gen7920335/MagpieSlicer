@@ -198,11 +198,12 @@ void OptionsGroup::remove_option_if(std::function<bool(std::string const&)> cons
         opts.erase(std::remove_if(opts.begin(), opts.end(), [&comp](Option& o) { return comp(o.opt.opt_key); }), opts.end());
         l.undo_to_sys = true;
     }
-    for (int i = m_lines.size() - 1; i >= 0; --i) {
-        if (m_lines[i].get_options().empty())
-            m_options_mode.erase(m_options_mode.begin() + i);
-    }
     m_lines.erase(std::remove_if(m_lines.begin(), m_lines.end(), [](auto& l) { return l.get_options().empty(); }), m_lines.end());
+    // MAGPIE: one mode per line with options, as append_line records them. Lines without options (full-width
+    // descriptions, widget-only rows) record none, so the modes are not indexed by line and are rebuilt here.
+    m_options_mode.clear();
+    for (const Line& l : m_lines)
+        m_options_mode.push_back(l.get_options().front().opt.mode);
     // TODO: remove items from g->m_options;
 }
 
@@ -347,7 +348,9 @@ void OptionsGroup::activate_line(Line& line)
     }
 
     auto option_set     = line.get_options();
-    bool is_legend_line = option_set.front().opt.gui_type == ConfigOptionDef::GUIType::legend;
+    // MAGPIE: a widget-only line (a mod parameter row, the mods' support type dropdown) has no options; it is drawn
+    // as its label and widget below, like a line whose widget replaces its option's field.
+    bool is_legend_line = !option_set.empty() && option_set.front().opt.gui_type == ConfigOptionDef::GUIType::legend;
 
     if (!custom_ctrl && m_use_custom_ctrl) {
         custom_ctrl = new OG_CustomCtrl(is_legend_line || !staticbox ? this->parent() : static_cast<wxWindow*>(this->stb), this);
@@ -952,13 +955,19 @@ bool ConfigOptionsGroup::update_visibility(ConfigOptionMode mode)
     int coef            = 0;
     int hidden_row_cnt  = 0;
     const int cols      = m_grid_sizer->GetCols();
-    Line* line          = &m_lines.front();
-    size_t line_opt_end = line->get_options().size();
+    // MAGPIE: lines without options record no mode; skip them, and never step past the last line.
+    auto next_line_with_options = [this](size_t idx) {
+        while (idx < m_lines.size() && m_lines[idx].get_options().empty())
+            ++idx;
+        return idx;
+    };
+    size_t line_idx     = next_line_with_options(0);
+    size_t line_opt_end = line_idx < m_lines.size() ? m_lines[line_idx].get_options().size() : 0;
     for (auto opt_mode : m_options_mode) {
-        const bool show = opt_mode <= mode && line->toggle_visible;
-        if (--line_opt_end == 0) {
-            ++line;
-            line_opt_end = line->get_options().size();
+        const bool show = opt_mode <= mode && (line_idx >= m_lines.size() || m_lines[line_idx].toggle_visible);
+        if (line_opt_end > 0 && --line_opt_end == 0) {
+            line_idx     = next_line_with_options(line_idx + 1);
+            line_opt_end = line_idx < m_lines.size() ? m_lines[line_idx].get_options().size() : 0;
         }
         if (!show) {
             hidden_row_cnt++;
