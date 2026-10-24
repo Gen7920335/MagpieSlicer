@@ -290,8 +290,16 @@ void generate(PrintObject &object, const NativeEntry &entry, const std::vector<P
     // the object above is the top Z distance. Thinner than the thinnest printable layer (the slicing parameters'
     // min_layer_height, mm), they are left out and the gap is a whole layer larger by less than that.
     const double fractional_drop_mm = unscale<double>(areas.fractional_drop);
+    // MAGPIE: support whose layers must be the object's (independent_support_layer_height off, which a prime tower
+    // forces) has no fractional layers: the gap to the object is rounded to whole layers as Orca rounds it (Slicing.cpp),
+    // a drop of at most half a layer by printing the part as a whole layer, a larger one by leaving it out. A fractional
+    // layer 0.01 mm under the object layer gave the tower a 0.01 mm layer that purged a whole tool change, and a
+    // 167 mm tower off the bed (seed 1039 of the U1 random test).
+    const bool whole_layers_only = !object.print()->config().independent_support_layer_height.value;
     auto make_fractional_layer = [&](size_t idx, SupporLayerType type, Polygons &&polygons) -> SupportGeneratorLayer * {
         const Layer &object_layer = *object.get_layer(int(idx));
+        if (whole_layers_only)
+            return fractional_drop_mm <= 0.5 * object_layer.height ? make_layer(idx, type, std::move(polygons)) : nullptr;
         const double print_z      = object_layer.print_z - fractional_drop_mm;
         if (print_z - object_layer.bottom_z() < object.slicing_parameters().min_layer_height - EPSILON)
             return nullptr;

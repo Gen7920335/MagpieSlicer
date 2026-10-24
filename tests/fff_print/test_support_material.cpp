@@ -847,6 +847,38 @@ TEST_CASE("The Cura support generator keeps the top Z distance that is not a who
     CHECK_THAT(top, Catch::Matchers::WithinAbs(top_mm, 1e-6));
 }
 
+// With independent support layer heights off (a prime tower turns them off) support layers must be the object's: the
+// fractional part prints as a whole layer when it drops at most half a layer, and is left out otherwise. A layer
+// 0.01 mm under an object layer made a 0.01 mm tower layer that purged a whole tool change (seed 1039 of the U1 random
+// test, a 167 mm tower).
+TEST_CASE("The Cura support generator keeps to the object's layers when support layers are not independent", "[SupportMaterial]")
+{
+    const auto [layer_height, top_z_distance] = GENERATE(table<double, double>({
+        { 0.25, 0.1 },  // 0.15 mm drop, more than half a layer
+        { 0.2, 0.3 },   // 0.1 mm drop, half a layer
+        { 0.14, 0.15 }, // 0.01 mm drop (seed 1039)
+    }));
+    CAPTURE(layer_height, top_z_distance);
+    Slic3r::Test::OfficialMods mods;
+    Slic3r::Print print;
+    Slic3r::Test::init_and_process_print({ support_tee() }, print, {
+        { "enable_support", 1 }, { "support_type", "normal(auto)" }, { "mod_settings", R"({"cura_support.enable": true})" },
+        { "layer_height", layer_height }, { "initial_layer_print_height", layer_height }, { "min_layer_height", "0.07" },
+        { "support_top_z_distance", top_z_distance }, { "support_interface_top_layers", 3 },
+        { "support_interface_bottom_layers", 0 }, { "independent_support_layer_height", false } });
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(!object.support_layers().empty());
+    for (const SupportLayer *layer : object.support_layers()) {
+        if (layer->support_fills.empty())
+            continue;
+        // Every printed support layer is on an object layer's Z (mm).
+        const bool on_object_layer = std::any_of(object.layers().begin(), object.layers().end(),
+            [layer](const Layer *object_layer) { return std::abs(object_layer->print_z - layer->print_z) < 1e-6; });
+        CAPTURE(layer->print_z);
+        CHECK(on_object_layer);
+    }
+}
+
 TEST_CASE("Cura conical support covers every overhang of an object placed off the origin", "[SupportMaterial]")
 {
     // The printable area the generator clips conical support with was moved into object coordinates by the
