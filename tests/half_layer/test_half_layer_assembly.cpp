@@ -2845,6 +2845,55 @@ TEST_CASE("Half-layer support changes tool once per layer between its body and i
     CHECK(most <= 6);
 }
 
+// A region's fills print grouped by tool. Gap fill between detail walls goes to the detail nozzle and the rest to the
+// outer wall's, and the stored order alternated the two (41 tool changes on a layer of seed 1454 of the U1 random
+// test, a tower off the bed).
+TEST_CASE("Half-layer fills of a region change tool once per tool", "[HalfLayer][ExecutionTower]")
+{
+    Slic3r::Test::OfficialMods mods;
+    auto config = multifilament_config(2);
+    config.set_num_extruders(2);
+    set_toolhead_nozzle_diameter(config, 0, 0.4); // mm
+    set_toolhead_nozzle_diameter(config, 1, 0.6); // mm
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false}, {"enable_prime_tower", false},
+        {"layer_height", 0.14}, {"initial_layer_print_height", 0.14}, {"wall_loops", 3}, {"wall_generator", "classic"}, // mm
+        {"outer_wall_filament_id", 2}, {"inner_wall_filament_id", 2}, {"sparse_infill_filament_id", 2},
+        {"internal_solid_filament_id", 2}, {"top_surface_filament_id", 2}, {"bottom_surface_filament_id", 2},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
+    Slic3r::Test::multi_nozzle_params(config, {{"enable", true}, {"detail_toolhead", 1}, {"small_wall_count", 2}});
+    size_flush_to_nozzles(config);
+    config.set_key_value("grab_length", new ConfigOptionFloats{0., 0.});
+    Print print;
+    Model model;
+    TriangleMesh frog;
+    {
+        Slic3r::ObjInfo obj_info;
+        std::string     message;
+        Slic3r::load_obj((std::string(TEST_DATA_DIR) + "/frog_legs.obj").c_str(), &frog, obj_info, message);
+    }
+    REQUIRE_FALSE(frog.empty());
+    init_print(std::vector<TriangleMesh>{frog, frog}, print, model, config);
+    std::string output;
+    REQUIRE_NOTHROW(output = Slic3r::Test::gcode(print));
+    std::map<std::string, int> changes; // layer Z comment -> tool changes on it
+    std::string z;
+    std::istringstream lines(output);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.rfind(";Z:", 0) == 0)
+            z = line.substr(3);
+        else if (line.size() >= 2 && line[0] == 'T' && std::isdigit((unsigned char) line[1]))
+            ++changes[z];
+    }
+    int most = 0;
+    for (const auto &[layer_z, n] : changes)
+        most = std::max(most, n);
+    UNSCOPED_INFO("most tool changes on one layer: " << most);
+    // Measured: 22 with the fills grouped (walls still alternate between the two nozzles), 40 in the stored order.
+    CHECK(most <= 30);
+}
+
 // A combined skirt goes around the tower too. A tower whose footprint fits the bed but whose skirt does not printed
 // the skirt off the bed (seed 336 of the U1 random test); the check and the refit hold tower and skirt on the bed.
 TEST_CASE("A tower is refitted so that the skirt around it stays on the bed", "[HalfLayer][ExecutionTower][TowerPlacement]")

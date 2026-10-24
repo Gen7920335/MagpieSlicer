@@ -6823,6 +6823,7 @@ void append_half_layer_model_tasks(const PrintObject &object, size_t parent_inde
                 }
             };
             auto fills = [&](bool ironing) {
+                const size_t first_task = out.size();
                 for (const auto *entity : region->fills.entities) {
                     const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(entity);
                     if (collection == nullptr)
@@ -6830,6 +6831,20 @@ void append_half_layer_model_tasks(const PrintObject &object, size_t parent_inde
                     if ((collection->role() == erIroning) == ironing)
                         collect_root(*collection, false);
                 }
+                // MAGPIE: a region's fills grouped by tool, in the order the tools first appear and each tool's fills
+                // in stored order, as Orca groups a layer's extrusions by extruder. Gap fill between detail walls goes
+                // to the detail nozzle and the rest to the outer wall's, and the stored order alternated the two: 41
+                // tool changes on a layer of seed 1454 of the U1 random test and a tower off the bed. Fills of one
+                // region and layer do not overlap.
+                std::vector<unsigned> tool_order;
+                for (size_t i = first_task; i < out.size(); ++i)
+                    if (std::find(tool_order.begin(), tool_order.end(), out[i].tool.filament) == tool_order.end())
+                        tool_order.push_back(out[i].tool.filament);
+                std::stable_sort(out.begin() + std::ptrdiff_t(first_task), out.end(),
+                    [&tool_order](const HalfLayerExecutionTask &a, const HalfLayerExecutionTask &b) {
+                        return std::find(tool_order.begin(), tool_order.end(), a.tool.filament) <
+                               std::find(tool_order.begin(), tool_order.end(), b.tool.filament);
+                    });
             };
             if (region_config.is_infill_first.value && !first_layer) {
                 fills(false);
