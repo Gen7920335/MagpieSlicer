@@ -408,7 +408,11 @@ void Node::removeJunctionOverlap(Polylines &result_lines, const coord_t line_ove
             const Point ab = b - a;
             const auto ab_len = coord_t(ab.cast<double>().norm());
             if (ab_len >= to_be_reduced) {
-                polyline.points.back() = a + (ab.cast<double>() * (double(to_be_reduced) / ab_len)).cast<coord_t>();
+                // MAGPIE: two coincident points with nothing left to reduce made 0 / 0, a NaN point cast to INT64_MIN
+                // (seed 4533 of the U1 random test: lightning tree support, line_overlap 0; the G-code conflict
+                // checker then rasterized a line from x = INT64_MIN until memory ran out).
+                if (ab_len > 0)
+                    polyline.points.back() = a + (ab.cast<double>() * (double(to_be_reduced) / ab_len)).cast<coord_t>();
                 break;
             } else {
                 to_be_reduced -= ab_len;
