@@ -559,7 +559,10 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         size_t fi = gcodegen.get_filament_config_index((int)gcodegen.writer().filament()->id());
         // First layer temperature should be used when on the first layer (obviously) and when
         // "other layers" is set to zero (which means it should not be used).
-        return (gcodegen.layer() == nullptr || gcodegen.layer()->id() == 0
+        // MAGPIE: on_first_layer(), not layer id 0: an object lifted over its support (object.z_offset) has its layer
+        // 0 well above the bed, and the tool changes there heated to the first layer temperature (seeds 2417, 2420
+        // and 2446 of the U1 random test, resin support).
+        return (gcodegen.layer() == nullptr || gcodegen.on_first_layer()
              || gcodegen.config().nozzle_temperature.get_at(fi) == 0)
             ? gcodegen.config().nozzle_temperature_initial_layer.get_at(fi)
             : gcodegen.config().nozzle_temperature.get_at(fi);

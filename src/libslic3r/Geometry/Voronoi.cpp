@@ -200,6 +200,12 @@ VoronoiDiagram::detect_known_voronoi_cell_issues(const VoronoiDiagram &voronoi_d
         if (cell.is_degenerate() || !cell.contains_segment())
             continue; // Skip degenerated cell that has no spoon. Also, skip a cell that doesn't contain a segment.
 
+        // MAGPIE: Boost can return a cell whose source index points past the input, for a gap region of seed 2438 of
+        // the U1 random test (classic walls, gap fill). Reading its source segment threw and stopped the slice; as an
+        // issue it gets the rotation repair and then the caller's fallback (MedialAxis: morphological closing).
+        if (cell.source_index() >= size_t(std::distance(segment_begin, segment_end)))
+            return IssueType::UNKNOWN;
+
         if (const SegmentCellRange cell_range = VoronoiUtils::compute_segment_cell_range(cell, segment_begin, segment_end); cell_range.is_valid()) {
             // Detection if Voronoi edge is intersecting input segment.
             // It detects this type of issue at least in GH issues #8446, #8474 and #8514.
@@ -322,7 +328,8 @@ VoronoiDiagram::try_to_repair_degenerated_voronoi_diagram_by_rotation(const Segm
         if (cell.is_degenerate())
             continue;
 
-        if (cell.contains_segment()) {
+        // MAGPIE: a cell past the input (see detect_known_voronoi_cell_issues) has no input endpoint to map.
+        if (cell.contains_segment() && cell.source_index() < segments_rotated.size()) {
             if (const SegmentCellRange cell_range = VoronoiUtils::compute_segment_cell_range(cell, segments_rotated.begin(), segments_rotated.end()); cell_range.is_valid()) {
                 if (cell_range.edge_end->vertex1()->color() == 0) {
                     // Vertex 1 of edge_end points to the starting endpoint of the input segment (from() or line.a).

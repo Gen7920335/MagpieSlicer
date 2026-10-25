@@ -55,7 +55,10 @@ Flow LayerRegion::flow(FlowRole role) const
 
 Flow LayerRegion::flow(FlowRole role, double layer_height) const
 {
-    return m_region->flow(*m_layer->object(), role, layer_height, m_layer->id() == 0);
+    // MAGPIE: an object lifted over its support (object_z_offset) has its layer 0 off the bed: no first layer width
+    // there (seeds 2420, 2446 and 2453 of the U1 random test), as G-code gives it no first layer speed either.
+    return m_region->flow(*m_layer->object(), role, layer_height,
+                          m_layer->id() == 0 && m_layer->object()->slicing_parameters().object_z_offset <= 0.);
 }
 
 static Flow region_bridging_flow(const LayerRegion &source, FlowRole role, bool thick_bridge, double height_mm)
@@ -152,7 +155,7 @@ static void make_region_perimeters(const LayerRegion &source,
         if (layer_wall_toolhead == 0)
             return source.flow(role, parent_height_mm);
         return feature_flow(PrintRegion::width_feature(role), { &print_config, &object_config, &region_config }, layer_wall_toolhead - 1,
-                            float(parent_height_mm), layer.id() == 0);
+                            float(parent_height_mm), layer.id() == 0 && layer.object()->slicing_parameters().object_z_offset <= 0.);
     };
 
     PerimeterGenerator g(
