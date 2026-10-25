@@ -3602,6 +3602,11 @@ void TreeSupport::drop_nodes()
             SupportNode* i_node = entry.second;
             for (; i_node != nullptr; i_node = i_node->parent)
             {
+                // MAGPIE: a node pruned from an earlier leaf (a merged neighbour, or a shared parent) has its chain
+                // pruned already up to the top; going on unlinked it twice and erased past the end of its child's
+                // parents (seed 3148 of the U1 random test crashed here, mixed support on a raft).
+                if (i_node->is_processed)
+                    break;
                 size_t i_layer = i_node->obj_layer_nr;
                 {
                     // update the parent-child chain
