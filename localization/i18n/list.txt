@@ -395,6 +395,7 @@ src/slic3r/GUI/TaskManager.cpp
 src/slic3r/GUI/Widgets/ProgressDialog.hpp
 src/slic3r/GUI/Widgets/StepCtrl.cpp
 src/libslic3r/ModHost/LayerBands.cpp
+src/libslic3r/ModHost/NativeContacts.cpp
 src/libslic3r/ModHost/NativeCompose.cpp
 src/libslic3r/ModHost/ObjectZOffset.cpp
 src/libslic3r/ModHost/SupportStyle.cpp

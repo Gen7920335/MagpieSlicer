@@ -1,12 +1,16 @@
 #include <libslic3r/ModHost/SlotChoice.hpp>
 #include <catch2/catch_all.hpp>
 
+#include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/ExPolygon.hpp"
+#include "libslic3r/ExtrusionEntityCollection.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/TriangleMesh.hpp"
+#include "libslic3r/libslic3r.h"
 
 #include <boost/filesystem/path.hpp>
 #include <nlohmann/json.hpp>
@@ -176,6 +180,28 @@ TEST_CASE("Resin support with enforcers only keeps the object on the bed", "[Res
     CHECK_THAT(object.slicing_parameters().object_print_z_min, Catch::Matchers::WithinAbs(0., 1e-9));
     // Its first layer is printed: nothing between the bed and the object is left empty.
     CHECK_THAT(object.layers().front()->bottom_z(), Catch::Matchers::WithinAbs(0., 1e-9));
+}
+
+TEST_CASE("Resin support on a raft lays the raft under the whole object without contacts", "[ResinSupport][Raft]")
+{
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    // Enforcers only and none painted: the generator places no contact. Seeds 2218, 2310 and 2347 of the U1 random
+    // test printed the object over an empty raft.
+    DynamicPrintConfig config = resin_config({{"resin_support.enforcers_only", true}, {"resin_support.default_object_elevation", 0.}});
+    config.set_key_value("raft_layers", new ConfigOptionInt(2));
+    Print print;
+    REQUIRE_NOTHROW(init_and_process_print({column_under_ceiling(8.)}, print, config));
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(ModHost::support_generator_name(print.full_print_config(), object.config()) == "resin");
+    REQUIRE_FALSE(object.support_layers().empty());
+    // The bed layer of the raft covers the column's 8 x 8 mm foot, in mm2.
+    const double column_foot_mm2 = 8. * 8.;
+    const SupportLayer &raft_bottom = *object.support_layers().front();
+    CHECK(raft_bottom.has_extrusions());
+    Polygons covered;
+    raft_bottom.support_fills.polygons_covered_by_width(covered, float(SCALED_EPSILON));
+    CHECK(area(union_(covered)) * SCALING_FACTOR * SCALING_FACTOR >= column_foot_mm2);
 }
 
 TEST_CASE("Resin support automatic points follow the support threshold angle", "[ResinSupport]")

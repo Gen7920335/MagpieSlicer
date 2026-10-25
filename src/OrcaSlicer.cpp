@@ -7128,6 +7128,9 @@ int CLI::run(int argc, char **argv)
                                                         if (status.message_type == PrintStateBase::SlicingEmptyGcodeLayers
                                                             || status.message_type == PrintStateBase::SlicingGcodeOverlap)
                                                         {
+                                                            // MAGPIE: say why: the CLI stopped with an empty error line and the
+                                                            // reason only in --logfile (seed 2218 of the U1 random test).
+                                                            boost::nowide::cerr << status.text << std::endl;
                                                             sliced_info.sliced_plates.push_back(sliced_plate_info);
                                                             record_exit_reson(outfile_dir, CLI_SLICING_ERROR, index+1, cli_errors[CLI_SLICING_ERROR], sliced_info);
                                                             flush_and_exit(CLI_SLICING_ERROR);
@@ -8200,6 +8203,13 @@ bool CLI::setup(int argc, char **argv)
         boost::nowide::cerr << "Could not create data directory: " << data_dir() << std::endl;
         return false;
     }
+#ifdef WIN32
+    // MAGPIE: PERMANENT DIAGNOSTIC. A CLI crash left no trace: the default exception handler writes its call stack
+    // to <data dir>/log/crash_*.log only once a folder is set, which only the GUI did (seed 2233 of the U1 random
+    // test exited 0xC0000005 with an empty log).
+    if (!data_dir().empty())
+        CBaseException::set_log_folder(data_dir());
+#endif
     // MAGPIE: mods under <datadir>/mods take part in CLI slicing the same way as in the GUI. Without --datadir and
     // without an action the GUI starts and loads them once it has set its data directory: the native code loads
     // only at the first load, which here would see no data directory and skip the installed mods.

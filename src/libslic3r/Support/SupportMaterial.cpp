@@ -2472,10 +2472,16 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
         return SupportGeneratorLayersPtr();
 
     if (const std::vector<Polygons> *demand = m_overrides.contact_demand) {
-        // MAGPIE: the module's demand decides where contacts go; Orca's overhang detection does not.
+        // MAGPIE: the module's demand decides where contacts go; Orca's overhang detection does not. Except the raft:
+        // a first layer sitting on it (not lifted, m_slicing_params.object_z_offset 0) keeps its whole outline as
+        // the raft contact detect_overhangs gave it, so the raft lies under the object whatever the module demands.
+        // Without it the raft lay only under the module's first-layer contacts, and under none at all left an
+        // object hanging over an empty raft (seeds 2218, 2310 and 2347 of the U1 random test: resin support).
+        const bool keep_raft_contact = this->has_raft() && m_slicing_params.object_z_offset <= 0.;
         for (size_t layer_id = layer_id_start; layer_id < num_layers; ++ layer_id)
-            overhangs_per_layers[layer_id] = layer_id < demand->size() && ! (*demand)[layer_id].empty() ?
-                intersection_ex((*demand)[layer_id], object.layers()[layer_id]->lslices) : ExPolygons();
+            if (layer_id > 0 || ! keep_raft_contact)
+                overhangs_per_layers[layer_id] = layer_id < demand->size() && ! (*demand)[layer_id].empty() ?
+                    intersection_ex((*demand)[layer_id], object.layers()[layer_id]->lslices) : ExPolygons();
     } else if (const std::vector<Polygons> *mask = m_overrides.contact_mask) {
         // MAGPIE: a module keeps only the overhangs inside its mask.
         for (size_t layer_id = layer_id_start; layer_id < num_layers; ++ layer_id)

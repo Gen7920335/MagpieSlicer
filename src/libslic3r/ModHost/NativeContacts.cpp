@@ -3,6 +3,8 @@
 #include "NativeMods.hpp"
 
 #include "libslic3r/Exception.hpp"
+#include "libslic3r/I18N.hpp"
+#include "libslic3r/format.hpp"
 #include "libslic3r/ExPolygon.hpp"
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/Layer.hpp"
@@ -13,6 +15,7 @@
 
 #include "../../../mods/sdk/include/magpie_slot_support_contacts.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -217,20 +220,23 @@ void generate(PrintObject &object, const NativeEntry &entry)
             });
         });
     call(object, entry, ctx, [&]() { return table.compute(entry.user, &ctx, &in.c, &out); });
-    if (out.layer_count == 0)
-        return;
 
     // Per object layer; layers past the mod's output get no contacts.
     std::vector<Polygons> contacts(object.layer_count());
     for (size_t i = 0; i < contacts.size() && i < out.layer_count; ++i)
         if (out.contacts != nullptr)
             contacts[i] = polygons_of(out.contacts[i]);
+    // MAGPIE: a generator that places no contacts still owes the object its raft, which the support generator builds
+    // (seed 2218 of the U1 random test lost the raft and the object floated).
+    const bool no_contacts = std::all_of(contacts.begin(), contacts.end(), [](const Polygons &c) { return c.empty(); });
+    if (no_contacts && !object.slicing_parameters().has_raft() && object.slicing_parameters().object_z_offset <= 0.)
+        return;
 
     SupportMaterialOverrides overrides;
     overrides.contact_demand = &contacts;
     overrides.body_at        = [&](const std::vector<coordf_t> &print_z) {
         std::vector<ExPolygons> bodies(print_z.size());
-        if (print_z.empty())
+        if (print_z.empty() || no_contacts)
             return bodies;
         std::vector<mp_expolys> lists(print_z.size());
         call(object, entry, ctx, [&]() {
@@ -247,6 +253,18 @@ void generate(PrintObject &object, const NativeEntry &entry)
     overrides.ignore_support_type = true;
     PrintObjectSupportMaterial support(&object, object.slicing_parameters(), overrides);
     support.generate(object);
+    // MAGPIE: an object raised for its support (object_z_offset) with nothing printed under it hangs in the air, and
+    // the slice stopped later on "empty layers" with no word of why. Contacts alone do not decide it: seeds 2234 and
+    // 2358 of the U1 random test had contacts, yet the resin tree built no pillar (100 % small pillar, 0.6 mm
+    // branching pillars on a 0.8 mm nozzle), and the contact layer under the object was printed with nothing below. So the check reads the built support layers: one must stand on the bed (its
+    // bottom, print_z - height, at z = 0 within EPSILON mm).
+    const bool supported = std::any_of(object.support_layers().begin(), object.support_layers().end(),
+                                       [](const SupportLayer *l) { return l->print_z - l->height <= EPSILON && l->has_extrusions(); });
+    if (object.slicing_parameters().object_z_offset > 0. && !supported)
+        throw SlicingError(entry.mod->id() + ": " +
+            Slic3r::format(_u8L("No support was generated for \"%1%\", which is raised %2% mm for its support. Lower the "
+                                "object elevation, or change the support settings so that support is generated."),
+                           object.model_object()->name, object.slicing_parameters().object_z_offset));
 }
 
 } // namespace NativeContacts
