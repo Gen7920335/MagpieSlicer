@@ -2191,9 +2191,15 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
                     if (object.has_raft()) {
                         const SlicingParameters &sp       = object.slicing_parameters();
                         const bool               one_band = config.raft_layers.value == 1;
-                        const double base_mm      = std::max(one_band ? 0. : sp.first_print_layer_height, sp.base_raft_layer_height);
-                        const double interface_mm = std::max({ one_band ? sp.first_print_layer_height : 0., sp.interface_raft_layer_height,
-                                                               sp.contact_raft_layer_height });
+                        // Under an object a mod lifts (object.z_offset) the interface layers carry only the columns,
+                        // printed by the support filament at its own height (SlicingParameters), and no interface or
+                        // contact is printed (seed 3640: a 0.3 mm interface layer for the 0.4 mm support nozzle was
+                        // checked against the 0.2 mm interface nozzle).
+                        const bool   lifted       = sp.object_z_offset > 0.;
+                        const double base_mm      = std::max({ one_band ? 0. : sp.first_print_layer_height, sp.base_raft_layer_height,
+                                                               lifted ? sp.interface_raft_layer_height : 0. });
+                        const double interface_mm = lifted ? 0. :
+                            std::max({ one_band ? sp.first_print_layer_height : 0., sp.interface_raft_layer_height, sp.contact_raft_layer_height });
                         const double raft_mm = filament == base_filament && filament == interface_filament ? std::max(base_mm, interface_mm) :
                                                filament == base_filament ? base_mm : interface_mm;
                         check(candidate, config, "support_line_width", raft_mm, true);
