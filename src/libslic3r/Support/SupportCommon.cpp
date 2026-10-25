@@ -1836,11 +1836,28 @@ void generate_support_toolpaths(
                     filler->angle = support_params.raft_angle_base;
                     filler->spacing = support_params.support_material_flow.spacing();
                     filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / support_params.support_density));
+                    const Polygons regions = tree_polygons.empty() ? to_infill_polygons : diff(to_infill_polygons, tree_polygons);
+                    if (support_params.keep_narrow_islands) {
+                        // MAGPIE: island by island like the base layers, so a column narrower than the line spacing
+                        // still prints on a raft under a lifted object (seed 2935 of the U1 random test: resin pillars
+                        // of about 1 mm2 on a 0.8 mm nozzle left the raft interface layer empty, and the object
+                        // stopped on "empty layers").
+                        for (const ExPolygon &island : union_safety_offset_ex(regions)) {
+                            const size_t before = support_layer.support_fills.entities.size();
+                            if (support_params.with_sheath)
+                                fill_expolygons_with_sheath_generate_paths(support_layer.support_fills.entities, to_polygons(island), filler,
+                                                                           float(support_params.support_density), ExtrusionRole::erSupportMaterial,
+                                                                           flow, support_params, true, false);
+                            if (! support_params.with_sheath || support_layer.support_fills.entities.size() == before)
+                                fill_expolygons_generate_paths(support_layer.support_fills.entities, ExPolygons{island}, filler,
+                                                               float(support_params.support_density), ExtrusionRole::erSupportMaterial, flow, true);
+                        }
+                    } else
                     fill_expolygons_with_sheath_generate_paths(
                         // Destination
                         support_layer.support_fills.entities,
                         // Regions to fill
-                        tree_polygons.empty() ? to_infill_polygons : diff(to_infill_polygons, tree_polygons),
+                        regions,
                         // Filler and its parameters
                         filler, float(support_params.support_density),
                         // Extrusion parameters
