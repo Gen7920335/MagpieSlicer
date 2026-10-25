@@ -811,9 +811,10 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
                 }
                 ExtrusionMultiPath multi_path;
                 multi_path.tool_hint = wall_tool_hint;
-                // MAGPIE: H/2 selects shell and core walls by inset; Orca leaves open walls without one.
-                if (perimeter_generator.half_layer_outer_walls)
-                    multi_path.inset_idx = int(extrusion->inset_idx);
+                // MAGPIE: the inset tells an open wall's tool (is_inner_wall: an overhang-only inner wall went to the
+                // outer wall filament at the inner width, 0.957 mm on a 0.2 mm nozzle in seed 3621 of the U1 random
+                // test, Arachne), and H/2 selects shell and core walls by it. Orca left open walls without one.
+                multi_path.inset_idx = int(extrusion->inset_idx);
                 multi_path.paths.emplace_back(std::move(paths.front()));
 
                 for (auto it_path = std::next(paths.begin()); it_path != paths.end(); ++it_path) {
@@ -821,8 +822,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
                         extrusion_coll.append(ExtrusionMultiPath(std::move(multi_path)));
                         multi_path = ExtrusionMultiPath();
                         multi_path.tool_hint = wall_tool_hint;
-                        if (perimeter_generator.half_layer_outer_walls)
-                            multi_path.inset_idx = int(extrusion->inset_idx);
+                        multi_path.inset_idx = int(extrusion->inset_idx);
                     }
                     multi_path.paths.emplace_back(std::move(*it_path));
                 }
