@@ -22611,6 +22611,16 @@ msgstr "툴 경로 최적화"
 msgid "Support generator \"%1%\" is not installed."
 msgstr "서포트 생성기 \"%1%\"이(가) 설치되어 있지 않습니다."
 
+# AI Translated
+#, boost-format
+msgid ""
+"No support was generated for \"%1%\", which is raised %2% mm for its support. "
+"Lower the object elevation, or change the support settings so that support is "
+"generated."
+msgstr ""
+"\"%1%\"에 서포트가 생성되지 않았습니다. 이 객체는 서포트를 위해 %2% mm 띄워져 있습니다. "
+"객체 띄우기 높이를 낮추거나, 서포트가 생성되도록 서포트 설정을 바꾸세요."
+
 msgid "Slicing mesh"
 msgstr "슬라이싱 메시"
 
