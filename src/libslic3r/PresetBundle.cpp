@@ -6210,6 +6210,13 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
     //BBS: add different settings check logic
     bool has_different_settings_to_system                           = config.option("different_settings_to_system")?true:false;
     std::vector<std::string> different_values                       = std::move(config.option<ConfigOptionStrings>("different_settings_to_system", true)->values);
+    // MAGPIE: a project without a different_settings_to_system list (saved from presets that had no system parent) cannot
+    // tell its own values from the system preset's, so none of them is refreshed from the base. Since #15953 the kept-key
+    // set always held the bookkeeping keys, the refresh ran for such a project too and replaced every setting with the
+    // system preset's (GUI test: a project saved before the U1 system preset was installed reopened with its defaults).
+    auto kept_project_keys = [has_different_settings_to_system](const std::string &entry) {
+        return has_different_settings_to_system ? project_different_keys(entry) : std::set<std::string>();
+    };
     std::string &compatible_printers_condition  = Preset::compatible_printers_condition(config);
     std::string &compatible_prints_condition    = Preset::compatible_prints_condition(config);
     std::string &inherits                       = Preset::inherits(config);
@@ -6317,7 +6324,7 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
         if (!is_published) {
             //BBS: add different settings logic
             BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": load print preset from print_settings_id");
-            std::set<std::string> print_different_keys_set = project_different_keys(different_values[0]);
+            std::set<std::string> print_different_keys_set = kept_project_keys(different_values[0]);
             if (!print_compatible_printers.empty()) {
                 ConfigOptionStrings* compatible_printers = config.option<ConfigOptionStrings>("compatible_printers", true);
                 compatible_printers->values = print_compatible_printers;
@@ -6328,7 +6335,7 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
             //clear compatible printers
             clear_compatible_printers(config);
 
-            std::set<std::string> printer_different_keys_set = project_different_keys(different_values[num_filaments + 1]);
+            std::set<std::string> printer_different_keys_set = kept_project_keys(different_values[num_filaments + 1]);
             //BBS: add config related logs
             BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": load printer preset from printer_settings_id");
             load_preset(this->printers, num_filaments + 1, "printer_settings_id", printer_different_keys_set, std::string());
@@ -6347,7 +6354,7 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
     			Preset                *loaded = nullptr;
 
                 //BBS: add different settings logic
-                std::set<std::string> filament_different_keys_set = project_different_keys(different_values[1]);
+                std::set<std::string> filament_different_keys_set = kept_project_keys(different_values[1]);
 
                 std::string filament_id = filament_ids[0];
                 //BBS: add config related logs
@@ -6410,7 +6417,7 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
                     cfg.opt_string("inherits", true)                      = inherits_values[i + 1];
 
                     //BBS: add different settings logic
-                    std::set<std::string> filament_different_keys_set = project_different_keys(different_values[i+1]);
+                    std::set<std::string> filament_different_keys_set = kept_project_keys(different_values[i+1]);
 
                     std::string filament_id = filament_ids[i];
 
