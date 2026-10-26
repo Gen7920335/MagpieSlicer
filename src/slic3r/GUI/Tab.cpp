@@ -3478,7 +3478,9 @@ void TabPrint::load_per_nozzle_line_widths()
                                                 std::round(per_nozzle_line_width_fallback_mm(resolved, width_key, size_t(nozzle)) * 100.) / 100.;
         for (const PageShp& page : m_pages)
             if (Field* field = page->get_field(per_nozzle_line_width_key(width_key), 0))
-                field->set_value(mm, false);
+                // MAGPIE: a text field takes the text it shows; a bare double threw boost::bad_any_cast out of
+                // TextCtrl::set_value and closed the app on opening a project with several nozzle sizes.
+                field->set_value(double_to_string(mm, 2), false);
     }
 }
 
