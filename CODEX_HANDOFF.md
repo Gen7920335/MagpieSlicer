@@ -16,6 +16,16 @@
 
 ## History
 
+### 2026-10-27 LTB preview layer times and random-test fixes (branch ltb-preview-display, worktree D:\claude\magpie-next-bblwall) - BUILT
+
+- 15bcf8d373: the preview's layer times run from wait site to wait site (layer_time_blend_preview_times, result.layer_time_blend.sites); the G-code is unchanged.
+- bec8ab6e68: wait_site_times counts a tool change booked between the site's last G1 and the site (uncached_block_times; g1_times_cache skips non-motion blocks). Seed 5752 waited over wait_cap.
+- 486e9035ce: m_role_tag_claimed: after the core claims the tower's role tag without writing it (tool turn on a tower layer, H/2 visit), the next path writes its tag even with the tower role (drop tower cooling pass, layer time tower). Seed 6524.
+- 0e6202557f: Layer::prints_first_layer_widths() is the one first-layer-width rule (a lifted object's layer 0 takes normal widths); the wall planner's detail flow used layer_id == 0 and routed a lifted first layer's walls to a same-size crisp corner toolhead. Seed 6855.
+- PERMANENT DIAGNOSTIC (NativeContacts.cpp): when a lifted object gets no support on the bed, the lowest support layers (print_z, height, extrusions) are logged before the error.
+- UNKNOWN (seed 6828 r68): resin branching at 2 mm elevation with 0.26 mm layers builds contacts but no body (body_at empty at every z), so the "No support was generated" stop fires; with 0.2 mm layers or 2.5 mm elevation it builds. Next measurement: the Prusa tree's head and pillar counts for 0.26 vs 0.2 (which head placement check rejects), to tell a valid geometric rejection from a layer-grid fault.
+- Report D:\claude\reports\LTB_RAND_GUI_KO.md. Random rounds 57- (golden/rand, bin_cur), GUI loop golden/ltbprev/gui. Not pushed.
+
 ### 2026-10-24 U1 random-settings test fixes (branch rand-fixes from toolhead-ui 7e3ad3ce54, worktree D:\claude\magpie-next-bblwall) - BUILT
 
 - Gen asked to fix every bug the random test found (report D:\claude\goldenand\REPORT_KO.md, B1-B11, U1, U2), build, then keep running test rounds. Causes were found with probe builds (removed) before the fixes.

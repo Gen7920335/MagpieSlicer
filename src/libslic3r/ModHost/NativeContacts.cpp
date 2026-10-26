@@ -16,6 +16,7 @@
 #include "../../../mods/sdk/include/magpie_slot_support_contacts.h"
 
 #include <algorithm>
+#include <boost/log/trivial.hpp>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -260,11 +261,23 @@ void generate(PrintObject &object, const NativeEntry &entry)
     // bottom, print_z - height, at z = 0 within EPSILON mm).
     const bool supported = std::any_of(object.support_layers().begin(), object.support_layers().end(),
                                        [](const SupportLayer *l) { return l->print_z - l->height <= EPSILON && l->has_extrusions(); });
-    if (object.slicing_parameters().object_z_offset > 0. && !supported)
+    if (object.slicing_parameters().object_z_offset > 0. && !supported) {
+        // PERMANENT DIAGNOSTIC: the lowest support layers, to tell support that was never built (no body under the
+        // contacts, as in seed 6828 of the U1 random test) from support that stops short of the bed.
+        size_t listed = 0;
+        for (const SupportLayer *l : object.support_layers()) {
+            BOOST_LOG_TRIVIAL(error) << entry.mod->id() << ": no support on the bed; support layer print_z " << l->print_z
+                                     << " height " << l->height << " extrusions " << l->has_extrusions();
+            if (++listed == 6)
+                break;
+        }
+        BOOST_LOG_TRIVIAL(error) << entry.mod->id() << ": " << object.support_layers().size() << " support layers, object_z_offset "
+                                 << object.slicing_parameters().object_z_offset;
         throw SlicingError(entry.mod->id() + ": " +
             Slic3r::format(_u8L("No support was generated for \"%1%\", which is raised %2% mm for its support. Lower the "
                                 "object elevation, or change the support settings so that support is generated."),
                            object.model_object()->name, object.slicing_parameters().object_z_offset));
+    }
 }
 
 } // namespace NativeContacts
