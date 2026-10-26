@@ -91,6 +91,9 @@ private:
     void load_text(const std::string &text);
     // Puts back the value the saved preset holds for the row `key` (the revert button).
     void revert(const std::string &key);
+    // The saved preset's own text when `text` holds the same values (defaults filled in for this panel's rows), else
+    // `text`: rewriting the same values must not leave the preset marked modified.
+    std::string kept_saved_text(const std::string &text) const;
     // The value a row's control shows, as the parameter's type.
     std::optional<ModHost::ExprValue> row_value(const Row &row) const;
     // The toolhead dropdown's entries for the printer being edited: "Auto", then one per nozzle.

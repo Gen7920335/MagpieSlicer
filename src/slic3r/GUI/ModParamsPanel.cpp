@@ -387,7 +387,7 @@ void ModParamsPanel::commit()
         else
             stored[row.key] = value;
     }
-    const std::string text = stored.empty() ? std::string() : stored.dump();
+    const std::string text = kept_saved_text(stored.empty() ? std::string() : stored.dump());
     update_visibility();
     if (text == (current_text ? current_text() : m_loaded_json)) {
         m_loaded_json = text;
@@ -409,10 +409,31 @@ void ModParamsPanel::revert(const std::string &key)
         stored[key] = *it;
     else
         stored.erase(key); // the saved preset has the default
-    const std::string text = stored.empty() ? std::string() : stored.dump();
+    const std::string text = kept_saved_text(stored.empty() ? std::string() : stored.dump());
     if (on_change)
         on_change(text);
     load_text(text);
+}
+
+std::string ModParamsPanel::kept_saved_text(const std::string &text) const
+{
+    // MAGPIE: a saved preset may store defaults and order its keys otherwise; a rewrite of the same values left the
+    // preset marked modified after its only change was reverted (GUI test, resin tree type).
+    if (!saved_text)
+        return text;
+    const std::string saved_raw = saved_text();
+    const json        saved     = parse_object(saved_raw);
+    const json        stored    = parse_object(text);
+    bool              same      = true;
+    for (auto it = stored.begin(); same && it != stored.end(); ++it)
+        same = saved.contains(it.key()) && saved.at(it.key()) == it.value();
+    for (auto it = saved.begin(); same && it != saved.end(); ++it)
+        if (!stored.contains(it.key())) {
+            // Dropped from the text: equal only if it is one of this panel's rows at its default.
+            const auto row = std::find_if(m_rows.begin(), m_rows.end(), [&it](const Row &r) { return r.key == it.key(); });
+            same = row != m_rows.end() && std::visit([&it](const auto &d) { return it.value() == json(d); }, row->param->default_value);
+        }
+    return same ? saved_raw : text;
 }
 
 int ModParamsPanel::value_column_offset() const
@@ -428,10 +449,16 @@ void ModParamsPanel::update_modified()
     const json saved   = saved_text ? parse_object(saved_text()) : current;
     bool       any     = false;
     for (Row &row : m_rows) {
-        // A missing key is the default on both sides; numbers compare by value (3 == 3.0).
-        const auto c        = current.find(row.key);
-        const auto v        = saved.find(row.key);
-        const bool modified = (c == current.end()) != (v == saved.end()) || (c != current.end() && *c != *v);
+        // A missing key is the default on both sides; numbers compare by value (3 == 3.0). MAGPIE: a saved preset may
+        // store a value equal to the default (a project written by the CLI), which a commit drops again: comparing
+        // the values with the default filled in keeps such a row unmodified (GUI test: changing the resin tree type
+        // marked the points density and head width rows modified too).
+        const auto c          = current.find(row.key);
+        const auto v          = saved.find(row.key);
+        const json fallback   = std::visit([](const auto &d) { return json(d); }, row.param->default_value);
+        const json c_value    = c != current.end() ? *c : fallback;
+        const json v_value    = v != saved.end() ? *v : fallback;
+        const bool modified   = c_value != v_value;
         any                 = any || modified;
         if (modified == row.modified)
             continue;
