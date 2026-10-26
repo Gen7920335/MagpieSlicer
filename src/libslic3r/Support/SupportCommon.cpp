@@ -606,11 +606,15 @@ static inline void fill_expolygon_generate_paths(
     }
     if (keep_narrow_island && density > 0.f && polylines.empty()) {
         // MAGPIE: the fill missed this island (a pillar narrower than the line spacing). Print an
-        // inset loop with a bead no wider than half the island and no thinner than the layer, so the
-        // island is neither lost nor enlarged.
+        // inset loop with a bead no wider than half the island, so the island is neither lost nor
+        // enlarged, and no narrower than the narrowest bead with a positive spacing at this layer
+        // height (as WallPlanner::detail_flow). A floor at the layer height lost a 0.48 mm pillar
+        // under 0.39 mm support layers (seed 4810 of the U1 random test): the inset vanished,
+        // the layer printed nothing and the contact above hung in the air.
         const auto   size           = get_extents(surface.expolygon).size();
         const double island_width   = unscale<double>(std::min(size.x(), size.y())); // mm
-        const double bead_width     = std::max(double(flow.height()), std::min(double(flow.width()), 0.5 * island_width)); // mm
+        const double min_bead_width = double(flow.height()) * (1. - 0.25 * PI) + EPSILON; // mm
+        const double bead_width     = std::max(min_bead_width, std::min(double(flow.width()), 0.5 * island_width)); // mm
         const Flow   narrow_flow(float(bead_width), flow.height(), flow.nozzle_diameter());
         for (const ExPolygon &inset : offset_ex(surface.expolygon, -0.5 * scale_(bead_width)))
             extrusion_entities_append_paths(dst, draw_perimeters(inset, 0.), role, narrow_flow.mm3_per_mm(), narrow_flow.width(),
