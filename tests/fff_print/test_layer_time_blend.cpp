@@ -948,3 +948,87 @@ TEST_CASE("The reheat of a tool after its idle cool-down counts as no time", "[L
     const std::string none        = "G90\nM83\nG1 X0 Y0 F600\nM109 S220\n" + layer_change + "G1 X100 F600\nG1 X0 F600\n";
     CHECK_THAT(estimated_time(idle_reheat, false), WithinAbs(estimated_time(none, false), 0.5));
 }
+
+TEST_CASE("The preview shows each wait on the layer it was planned for", "[LayerTimeBlend][GCodeViewer]")
+{
+    // Moves of layers 0, 1 and 2 with times 1 2 | 3 4 5 | 6 s. The site of layer 1 at 7 s lies 4 s past the layer's
+    // start (3 s): that time moves down to layer 0. The site of layer 2 at 13 s lies 2 s before its layer's start
+    // (15 s), as when the estimate booked a dwell asked for after the layer change on an earlier move: 2 s move up.
+    GCodeProcessorResult result;
+    const std::vector<std::pair<unsigned int, float>> moves = {{0, 1.f}, {0, 2.f}, {1, 3.f}, {1, 4.f}, {1, 5.f}, {2, 6.f}};
+    for (const auto &[layer, time] : moves) {
+        GCodeProcessorResult::MoveVertex move;
+        move.layer_id = layer;
+        move.time     = {time, 7.f};
+        result.moves.push_back(move);
+    }
+    const std::vector<float> own = {1.f, 2.f, 3.f, 4.f, 5.f, 6.f};
+    // Blending off: no sites, the moves' own times.
+    CHECK(layer_time_blend_preview_times(result) == own);
+
+    result.layer_time_blend.active = true;
+    result.layer_time_blend.sites  = {{1, 7.}, {2, 13.}};
+    const std::vector<float> preview = layer_time_blend_preview_times(result);
+    REQUIRE(preview.size() == own.size());
+    const std::vector<float> expected = {1.f, 6.f, 0.f, 3.f, 3.f, 8.f};
+    for (size_t i = 0; i < own.size(); ++i)
+        CHECK_THAT(preview[i], WithinAbs(expected[i], 1e-6));
+    // The layers run from site to site: layer 1 from 7 s to 13 s.
+    CHECK_THAT(preview[2] + preview[3] + preview[4], WithinAbs(13. - 7., 1e-6));
+    // The result itself keeps its times, in both modes.
+    CHECK(result.moves[2].time[0] == 3.f);
+    CHECK(result.moves[2].time[1] == 7.f);
+}
+
+TEST_CASE("The preview's layer times are the planner's when waiting over the tower", "[LayerTimeBlend][GCodeViewer]")
+{
+    // Over the tower the wait comes after the next layer's layer change, so by the moves' layers it falls on the
+    // layer above the one it lengthens.
+    const double         max_diff_s = 10.;
+    GCodeProcessorResult result;
+    {
+        BundledMods mods;
+        REQUIRE(mods.errors.empty());
+        Print        print;
+        Model        model;
+        TriangleMesh mesh = pillar_with_slab();
+        mesh.translate(100.f, 100.f, 0.f);
+        std::vector<TriangleMesh> meshes;
+        meshes.push_back(std::move(mesh));
+        init_print(std::move(meshes), print, model, wait_at_config("tower", max_diff_s), nullptr, /*arrange=*/false);
+        gcode(print, &result);
+    }
+    const GCodeProcessorResult::LayerTimeBlendInfo &blend = result.layer_time_blend;
+    REQUIRE(blend.active);
+    REQUIRE(blend.sites.size() > 10);
+    REQUIRE_FALSE(blend.layers.empty());
+
+    const size_t        normal = static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal);
+    const unsigned int  layers = result.moves.back().layer_id + 1;
+    std::vector<double> own(layers, 0.), shown(layers, 0.);
+    const std::vector<float> preview = layer_time_blend_preview_times(result);
+    double own_total = 0., shown_total = 0.;
+    for (size_t i = 0; i < result.moves.size(); ++i) {
+        own[result.moves[i].layer_id] += result.moves[i].time[normal];
+        shown[result.moves[i].layer_id] += preview[i];
+        own_total += result.moves[i].time[normal];
+        shown_total += preview[i];
+    }
+    CHECK_THAT(shown_total, WithinAbs(own_total, 0.01));
+    // Each layer between two sites shows the time from its site to the next (the first layer holds the start G-code
+    // too); by the moves' own layers the waits land a layer up, so some layer's own time is off by more than a second.
+    size_t off = 0;
+    for (size_t k = 2; k < blend.sites.size(); ++k) {
+        const unsigned int layer = blend.sites[k - 1].layer_id;
+        REQUIRE(blend.sites[k].layer_id == layer + 1);
+        const double interval = blend.sites[k].time_s - blend.sites[k - 1].time_s;
+        CHECK_THAT(shown[layer], WithinAbs(interval, 0.01));
+        off += std::abs(own[layer] - interval) > 1.;
+    }
+    CHECK(off > 0);
+    // The slider's hover tooltip: a waiting layer's time before its wait plus the wait is the time it shows.
+    for (const GCodeProcessorResult::LayerTimeBlendLayer &layer : blend.layers) {
+        REQUIRE(layer.layer_id < layers);
+        CHECK_THAT(shown[layer.layer_id], WithinAbs(double(layer.original_s + layer.added_s), 0.05));
+    }
+}

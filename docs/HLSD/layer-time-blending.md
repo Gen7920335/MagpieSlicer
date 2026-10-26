@@ -52,7 +52,12 @@ G-code is written:
 5. The export's own processor runs over the file as written, so statistics, M73 and the preview
    match it. The result keeps each waiting layer's time before its wait and the wait
    (`GCodeProcessorResult::layer_time_blend`): the Layer Time legend gives their totals and the layer
-   slider's hover tooltip both numbers for the layer under the mouse.
+   slider's hover tooltip both numbers for the layer under the mouse. It also keeps each site's time:
+   a site and the wait before it come after the next layer's layer change, so by the moves' layers a
+   wait would show on the layer above the one it lengthens. The preview's layer times
+   (`layer_time_blend_preview_times`, Normal mode) move the time from each layer's start to its site
+   to the layer before, so they run from site to site, the planner's layer times. The G-code and
+   the result's move times stay as estimated.
 
 Orca counts an M109 as no time. While blending runs with a G-code event mod that changes nozzle temperatures within
 layers (the low temperature support interface; gcode.events `MP_GCODE_CHANGES_TEMPERATURE`) the estimate follows each nozzle's temperature (`layer_time_blend_heat_rate` / `_cool_rate`) and counts

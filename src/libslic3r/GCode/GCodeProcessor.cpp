@@ -3999,6 +3999,14 @@ void GCodeProcessor::finalize(bool post_process)
     // calculate_time early-returns with fewer than two queued blocks (see calculate_time).
     calculate_time(m_result, 0, 0.0f, EMoveType::Noop, /*is_final=*/true);
 
+    // MAGPIE: the wait sites' times, for the preview's layer times (layer_time_blend_preview_times).
+    if (m_result.layer_time_blend.active) {
+        m_result.layer_time_blend.sites.clear();
+        for (const WaitSiteTime &mark : wait_site_times())
+            if (mark.kind == WaitMarkKind::Site)
+                m_result.layer_time_blend.sites.push_back({ std::max(1u, mark.layer_id) - 1, mark.time_s });
+    }
+
     // process the time blocks
     for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i) {
         TimeMachine& machine = m_time_processor.machines[i];
@@ -4043,6 +4051,46 @@ const std::string &GCodeProcessor::wait_tower_end_tag()
 {
     static const std::string tag = "MAGPIE_WAIT_TOWER_END";
     return tag;
+}
+
+std::vector<float> layer_time_blend_preview_times(const GCodeProcessorResult &result)
+{
+    const size_t                                          normal = static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal);
+    const std::vector<GCodeProcessorResult::MoveVertex> &moves  = result.moves;
+    std::vector<float>                                    times(moves.size());
+    for (size_t i = 0; i < moves.size(); ++i)
+        times[i] = moves[i].time[normal];
+    // Moves up to `amount` s to the move `to` from the moves of `layer`, starting at index `i` and going forwards
+    // or backwards; a move's time does not go below zero.
+    auto shift = [&](size_t i, bool forwards, unsigned int layer, double amount, size_t to) {
+        double moved = 0.;
+        while (i < moves.size() && moves[i].layer_id == layer && moved < amount) {
+            const double part = std::min(double(times[i]), amount - moved);
+            times[i] -= float(part);
+            moved += part;
+            if (!forwards && i == 0)
+                break;
+            i = forwards ? i + 1 : i - 1;
+        }
+        times[to] += float(moved);
+    };
+    // Moves' layers never decrease, so one pass finds each site's layer start and the time before it, summed from
+    // the moves' own times: the shifts only trade time between neighbouring layers and leave those sums alone.
+    size_t i      = 0;
+    double before = 0.; // time of the moves before moves[i], s
+    for (const GCodeProcessorResult::LayerTimeBlendSite &site : result.layer_time_blend.sites) {
+        while (i < moves.size() && moves[i].layer_id < site.layer_id)
+            before += double(moves[i++].time[normal]);
+        if (i == 0 || i == moves.size() || moves[i].layer_id != site.layer_id)
+            continue; // no layer before the site's, or no moves in the site's layer
+        const double down = site.time_s - before; // time from the layer's start to the site, s
+        if (down > 0.)
+            shift(i, true, site.layer_id, down, i - 1);
+        else if (down < 0.)
+            // The estimate booked time asked for after the layer's start (a dwell) on a move before it.
+            shift(i - 1, false, moves[i - 1].layer_id, -down, i);
+    }
+    return times;
 }
 
 std::vector<GCodeProcessor::WaitSiteTime> GCodeProcessor::wait_site_times() const

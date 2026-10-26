@@ -409,9 +409,17 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
             float        original_s;
             float        added_s;
         };
+        // A wait site: the move layer (0-based, as MoveVertex::layer_id) it starts, and the estimated (Normal mode)
+        // time from the start of the print to it, s. The planner's layer times run from site to site.
+        struct LayerTimeBlendSite
+        {
+            unsigned int layer_id;
+            double       time_s;
+        };
         struct LayerTimeBlendInfo
         {
             std::vector<LayerTimeBlendLayer> layers;
+            std::vector<LayerTimeBlendSite>  sites; // filled by GCodeProcessor::finalize() while active
             float                            added_total_s = 0.f;
             bool                             active        = false;
         } layer_time_blend;
@@ -1832,6 +1840,14 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
         //get current used extruder
         int get_extruder_id(bool force_initialize = true)const;
    };
+
+    // MAGPIE: the Normal mode move times for the preview, with each layer time blending wait shown on the layer
+    // it was planned for. The planner's layer time runs from a layer's site to the next layer's site, and a site
+    // (with the wait written before it) comes after the next layer's layer change, so by the moves' layers the
+    // wait would show on the layer above. Each site moves the time between its layer's start and the site to the
+    // layer before, which makes the preview's layer times the planner's. The G-code and the result's own times
+    // are left as they are. Without sites (blending off) the times are the moves' own.
+    std::vector<float> layer_time_blend_preview_times(const GCodeProcessorResult &result);
 
 } /* namespace Slic3r */
 

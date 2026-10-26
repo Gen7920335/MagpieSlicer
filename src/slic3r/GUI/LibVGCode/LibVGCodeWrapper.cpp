@@ -4,6 +4,7 @@
 ///|/
 #include <Eigen/Geometry>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -255,6 +256,13 @@ GCodeInputData convert(const Slic3r::GCodeProcessorResult& result, const std::ve
         if (starts_path(moves[i - 1], moves[i], i == 1))
             ++vertices_count;
     ret.vertices.reserve(vertices_count);
+    // MAGPIE: layer time blending's waits shown on the layers they were planned for (Normal mode times only).
+    const std::vector<float> preview_times = Slic3r::layer_time_blend_preview_times(result);
+    auto times_of = [&](size_t i) {
+        auto times = moves[i].time;
+        times[static_cast<size_t>(Slic3r::PrintEstimatedStatistics::ETimeMode::Normal)] = preview_times[i];
+        return times;
+    };
     // libvgcode numbers its layers from the vertices it is given and expects them to
     // arrive one layer after the other with consecutive ids: a layer without any move
     // (a belt file can carry layer changes that print nothing) would leave a gap, and
@@ -300,7 +308,7 @@ GCodeInputData convert(const Slic3r::GCodeProcessorResult& result, const std::ve
             curr.mm3_per_mm, curr.fan_speed, curr.temperature,
             result.filament_densities[curr.extruder_id] * curr.mm3_per_mm * (curr.position - prev.position).norm(),
             convert(curr.extrusion_role), curr_type, static_cast<uint32_t>(curr.gcode_id), layer_id,
-            static_cast<uint8_t>(curr.extruder_id), static_cast<uint8_t>(curr.cp_color_id), curr.time,
+            static_cast<uint8_t>(curr.extruder_id), static_cast<uint8_t>(curr.cp_color_id), times_of(i),
             /* ORCA: Add Pressure Advance visualization support */ 0.0f, curr.pressure_advance,
             /* ORCA: Add Acceleration visualization support */ curr.acceleration,
             /* ORCA: Add Jerk visualization support */ curr.jerk };
@@ -308,7 +316,7 @@ GCodeInputData convert(const Slic3r::GCodeProcessorResult& result, const std::ve
         const libvgcode::PathVertex vertex = { xform_pos(curr.position), curr.height, curr.width, curr.feedrate, curr.actual_feedrate,
             curr.mm3_per_mm, curr.fan_speed, curr.temperature, convert(curr.extrusion_role), curr_type,
             static_cast<uint32_t>(curr.gcode_id), layer_id,
-            static_cast<uint8_t>(curr.extruder_id), static_cast<uint8_t>(curr.cp_color_id), curr.time,
+            static_cast<uint8_t>(curr.extruder_id), static_cast<uint8_t>(curr.cp_color_id), times_of(i),
             /* ORCA: Add Pressure Advance visualization support */ 0.0f, curr.pressure_advance,
             /* ORCA: Add Acceleration visualization support */ curr.acceleration,
             /* ORCA: Add Jerk visualization support */ curr.jerk };
