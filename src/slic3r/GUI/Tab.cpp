@@ -3477,10 +3477,14 @@ void TabPrint::load_per_nozzle_line_widths()
         const double mm = values[nozzle] > 0. ? values[nozzle] :
                                                 std::round(per_nozzle_line_width_fallback_mm(resolved, width_key, size_t(nozzle)) * 100.) / 100.;
         for (const PageShp& page : m_pages)
-            if (Field* field = page->get_field(per_nozzle_line_width_key(width_key), 0))
+            if (Field* field = page->get_field(per_nozzle_line_width_key(width_key), 0)) {
                 // MAGPIE: a text field takes the text it shows; a bare double threw boost::bad_any_cast out of
                 // TextCtrl::set_value and closed the app on opening a project with several nozzle sizes.
                 field->set_value(double_to_string(mm, 2), false);
+                // MAGPIE: the row is one field for every nozzle; its tooltip names the nozzle shown, not entry 0.
+                if (wxWindow* window = field->getWindow())
+                    window->SetToolTip(get_formatted_tooltip_text(field->m_opt, per_nozzle_line_width_key(width_key) + "#" + std::to_string(nozzle)));
+            }
     }
 }
 
