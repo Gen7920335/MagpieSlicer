@@ -927,6 +927,10 @@ protected:
     bool                                m_enable_extrusion_role_markers;
     // Keeps track of the last extrusion role passed to the processor
     ExtrusionRole                       m_last_processor_extrusion_role;
+    // MAGPIE: m_last_processor_extrusion_role was set to erWipeTower for a tower's G-code text without a role tag of
+    // its own (process_layer, after a tool change on a layer with a tower), so the next path writes its tag even when
+    // it is a tower path itself (the layer time tower, a mod's temperature drop tower). Orca's own paths never are.
+    bool                                m_role_tag_claimed { false };
     // How many times will change_layer() be called?
     // change_layer() will update the progress bar.
     unsigned int                        m_layer_count;

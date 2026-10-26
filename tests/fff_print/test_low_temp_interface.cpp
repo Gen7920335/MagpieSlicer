@@ -4,11 +4,13 @@
 #include <catch2/catch_all.hpp>
 
 #include "libslic3r/ClipperUtils.hpp"
+#include "libslic3r/ExtrusionEntity.hpp"
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/GCode/AuxiliaryTower.hpp"
 #include "libslic3r/GCode/AuxiliaryTowerUndo.hpp"
+#include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/ModHost/GCodeEvents.hpp"
 
 #include "magpie_slot_gcode_events.h"
@@ -1256,4 +1258,57 @@ TEST_CASE("The temperature drop tower prints at the same place on a later plate"
     CHECK(first == second);
     for (const std::string &line : second)
         CHECK(line.find(" X-") == std::string::npos);
+}
+
+TEST_CASE("Every temperature drop tower cooling pass prints under the tower's role tag", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    // On a layer with a prime tower the core takes the tower's role as already tagged after each tool's turn starts,
+    // as Orca does for the tower's own G-code text, even where no tower text came (an H/2 frame's visit that
+    // changes no tool). Orca's own next path is never a tower path, but the cooling pass is: it wrote no role tag
+    // and its lines took the role before it (random slice 6524: sparse infill at the interface temperature).
+    OfficialMods       mods;
+    DynamicPrintConfig config = multifilament_config(2, { { "enable_support", "1" }, { "support_type", "tree(auto)" }, { "support_style", "organic" },
+                                                          { "support_interface_top_layers", "4" }, { "support_filament", "2" },
+                                                          { "support_interface_filament", "0" }, { "enable_prime_tower", "1" },
+                                                          { "layer_height", "0.2" }, { "initial_layer_print_height", "0.2" },
+                                                          { "wipe_tower_x", "150" }, { "wipe_tower_y", "20" } });
+    // The prime tower at the front right of the 200 mm bed (mm); the drop tower takes the rear left. Two toolheads.
+    config.set_num_extruders(2);
+    config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(false));
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.4, 0.4 });
+    size_flush_to_nozzles(config);
+    config.set_key_value("nozzle_temperature", new ConfigOptionInts({ 220, 220 }));
+    config.set_key_value("nozzle_temperature_initial_layer", new ConfigOptionInts({ 220, 220 }));
+    // Cura support prints the interface with the support filament; H/2 outer walls frame every layer.
+    set_mod_params(config, { { "low_temp_interface.enable", true }, { "low_temp_interface.temperature", 170 },
+                             { "low_temp_interface.tower", true }, { "cura_support.enable", true },
+                             { "half_layer.outer_walls", true } });
+    // The overhang on the support's filament 2 and a cube on filament 1 beside it put both tools on every layer.
+    TriangleMesh cube = make_cube(20., 20., 20.);
+    cube.translate(40.f, 0.f, 0.f);
+    const std::string output = slice_with_object_overrides({ mesh(TestMesh::overhang), cube }, config,
+                                                           { { { "extruder", "2" } }, { { "extruder", "1" } } });
+
+    const std::string role_tag  = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Role);
+    const std::string tower_tag = role_tag + ExtrusionEntity::role_to_string(erWipeTower);
+    std::string        role;
+    bool               in_pass = false;
+    size_t             passes = 0, pass_extrusions = 0;
+    std::istringstream stream(output);
+    for (std::string line; std::getline(stream, line);) {
+        if (line.rfind(role_tag, 0) == 0)
+            role = line;
+        else if (line.find("temperature drop tower cooling pass end") != std::string::npos)
+            in_pass = false;
+        else if (line.find("temperature drop tower cooling pass") != std::string::npos) {
+            in_pass = true;
+            ++passes;
+        } else if (in_pass && line.rfind("G1 ", 0) == 0 && gcode_word(line, 'E') && *gcode_word(line, 'E') > 0. &&
+                   (gcode_word(line, 'X') || gcode_word(line, 'Y'))) {
+            ++pass_extrusions;
+            CHECK(role == tower_tag);
+        }
+    }
+    REQUIRE(passes > 0);
+    CHECK(pass_extrusions > 0);
 }

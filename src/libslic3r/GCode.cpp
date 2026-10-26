@@ -9178,8 +9178,10 @@ LayerResult GCode::process_layer(
             if (visit_changes_tool)
                 m_half_layer_pending_source_z = std::isfinite(m_half_layer_pending_source_z) ?
                     std::max(m_half_layer_pending_source_z, visit_source_nominal_z) : visit_source_nominal_z;
-            if (has_wipe_tower)
+            if (has_wipe_tower) {
                 m_last_processor_extrusion_role = erWipeTower;
+                m_role_tag_claimed              = true;
+            }
             if (visit.tower_only)
                 continue;
 
@@ -9361,8 +9363,10 @@ LayerResult GCode::process_layer(
         gcode += std::move(gcode_toolchange);
 
         // let analyzer tag generator aware of a role type change
-        if (layer_tools.has_wipe_tower && m_wipe_tower)
+        if (layer_tools.has_wipe_tower && m_wipe_tower) {
             m_last_processor_extrusion_role = erWipeTower;
+            m_role_tag_claimed              = true;
+        }
 
         // Belt printers: now that this pass's tool is selected, lay down any ordinary-layer
         // apron band whose brim filament is this extruder, before the object extrusion at
@@ -12068,7 +12072,8 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
     char buf[64];
     assert(is_decimal_separator_point());
 
-    if (path.role() != m_last_processor_extrusion_role) {
+    if (path.role() != m_last_processor_extrusion_role || m_role_tag_claimed) {
+        m_role_tag_claimed              = false;
         m_last_processor_extrusion_role = path.role();
         sprintf(buf, ";%s%s\n", GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Role).c_str(), ExtrusionEntity::role_to_string(m_last_processor_extrusion_role).c_str());
         gcode += buf;
