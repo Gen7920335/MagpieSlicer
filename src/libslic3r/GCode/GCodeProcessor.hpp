@@ -887,6 +887,11 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
             // (s), and each booking with the G1 line of the block that took it. Bookkeeping only.
             double requested_additional_time { 0. };
             std::vector<std::pair<unsigned int, float>> additional_time_by_g1_line;
+            // The elapsed time after each Normal mode block that g1_times_cache leaves out (a tool change, a retract,
+            // anything but an extrusion, travel or wipe), with its G1 line, in block order. Such a block takes the
+            // last G1's line id, so without it a site after a tool change and before the next G1 missed the tool
+            // change's booked time. Bookkeeping only.
+            std::vector<std::pair<unsigned int, float>> uncached_block_times;
 
             void reset();
 

@@ -398,6 +398,7 @@ void GCodeProcessor::TimeMachine::reset()
     m_additional_time_buffer.clear();
     requested_additional_time = 0.;
     additional_time_by_g1_line.clear();
+    uncached_block_times.clear();
 }
 
 static void planner_forward_pass_kernel(const GCodeProcessor::TimeBlock& prev, GCodeProcessor::TimeBlock& curr)
@@ -663,8 +664,11 @@ void GCodeProcessor::TimeMachine::calculate_time(GCodeProcessorResult& result, P
             GCodeProcessorResult::MoveVertex& curr_move = result.moves[block.move_id];
             if (curr_move.type != EMoveType::Extrude &&
                 curr_move.type != EMoveType::Travel &&
-                curr_move.type != EMoveType::Wipe)
+                curr_move.type != EMoveType::Wipe) {
+              // MAGPIE: left out of the g1_times_cache push below; the layer time blending sites need its elapsed time.
+              uncached_block_times.emplace_back(block.g1_line_id, float(time));
               continue;
+            }
 
             assert(curr_move.actual_feedrate == 0.0f);
 
@@ -4101,6 +4105,7 @@ std::vector<GCodeProcessor::WaitSiteTime> GCodeProcessor::wait_site_times() cons
     const TimeMachine &machine = m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)];
     const std::vector<TimeMachine::G1LinesCacheItem> &cache = machine.g1_times_cache;
     const auto &booked = machine.additional_time_by_g1_line;
+    const auto &uncached = machine.uncached_block_times;
     std::vector<WaitSiteTime> out;
     out.reserve(m_wait_sites.size());
     double booked_sum  = 0.; // extra time booked on blocks up to the current site's G1, s
@@ -4108,7 +4113,13 @@ std::vector<GCodeProcessor::WaitSiteTime> GCodeProcessor::wait_site_times() cons
     for (const WaitSiteMark &site : m_wait_sites) {
         auto it = std::upper_bound(cache.begin(), cache.end(), site.g1_line_id,
                                    [](unsigned int id, const TimeMachine::G1LinesCacheItem &item) { return id < item.id; });
-        const double elapsed = it == cache.begin() ? 0. : double(std::prev(it)->elapsed_time);
+        double elapsed = it == cache.begin() ? 0. : double(std::prev(it)->elapsed_time);
+        // A block the cache leaves out (a tool change) takes the line of the G1 before it, so the last block up to
+        // the site's G1 may be one of those: elapsed times only grow in block order, so the later of the two counts.
+        auto un = std::upper_bound(uncached.begin(), uncached.end(), site.g1_line_id,
+                                   [](unsigned int id, const std::pair<unsigned int, float> &item) { return id < item.first; });
+        if (un != uncached.begin())
+            elapsed = std::max(elapsed, double(std::prev(un)->second));
         // Bookings come in block order, and sites in G-code order, so one forward pass sums them.
         while (booked_next < booked.size() && booked[booked_next].first <= site.g1_line_id)
             booked_sum += double(booked[booked_next++].second);

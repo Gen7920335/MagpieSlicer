@@ -1032,3 +1032,45 @@ TEST_CASE("The preview's layer times are the planner's when waiting over the tow
         CHECK_THAT(shown[layer.layer_id], WithinAbs(double(layer.original_s + layer.added_s), 0.05));
     }
 }
+
+TEST_CASE("A site right after a tool change counts the tool change's time", "[LayerTimeBlend][GCodeProcessor]")
+{
+    // A tool change's time is booked on a block of its own that takes the line of the G1 before it, and the G1
+    // time cache leaves such blocks out: a site after the change and before the next G1 read the time from before
+    // the change while the booking was taken out, 5 s early here (random slice 5752, a wait over the wait cap).
+    FullPrintConfig config;
+    // Klipper books extra time on the oldest queued block as soon as one is queued, so the swap's time lands on
+    // its own block, which takes the G1 line before it (the Snapmaker U1 of that slice).
+    config.gcode_flavor.value                 = gcfKlipper;
+    config.filament_diameter.values           = {1.75, 1.75};
+    config.filament_map.values                = {1, 1}; // one extruder: T1 is a filament swap, unload + load
+    config.machine_load_filament_time.value   = 3.;     // s
+    config.machine_unload_filament_time.value = 2.;     // s
+    const std::string layer_change = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Layer_Change) + "\n";
+    // 100 mm at 10 mm/s on either side of the swap: 10 s each, plus the acceleration at its ends. Moves follow the
+    // last site, as in any print: the estimator leaves a lone last block unprocessed.
+    auto sites = [&](const std::string &between) {
+        GCodeProcessor processor;
+        processor.reset();
+        processor.initialize_result_moves();
+        processor.apply_config(config);
+        processor.initialize("estimate.gcode");
+        processor.process_buffer("G90\nM83\nT0\nG1 X0 Y0 F600\n" + layer_change + "G1 X100 F600\nT1\n" + between +
+                                 ";MAGPIE_WAIT_SITE\nG1 X0 F600\n;MAGPIE_WAIT_SITE\nG1 Y10 F600\nG1 Y0 F600\n");
+        processor.finalize(false);
+        std::vector<double> out;
+        for (const GCodeProcessor::WaitSiteTime &mark : processor.wait_site_times())
+            out.push_back(mark.time_s);
+        return out;
+    };
+    const std::vector<double> direct = sites("");
+    // The same with a G1 between the swap and the site, which the cache does hold: the reference.
+    const std::vector<double> after_g1 = sites("G1 F600\nG1 X100.001 F600\n");
+    REQUIRE(direct.size() == 2);
+    REQUIRE(after_g1.size() == 2);
+    // The swap's 5 s lie before the first site; the second site is one 10 s move after it.
+    CHECK(direct[0] > 15. - 0.5);
+    CHECK_THAT(direct[0], WithinAbs(after_g1[0], 0.05));
+    CHECK_THAT(direct[1] - direct[0], WithinAbs(after_g1[1] - after_g1[0], 0.05));
+    CHECK(direct[1] - direct[0] < 10.5);
+}
