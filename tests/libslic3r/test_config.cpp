@@ -1926,7 +1926,7 @@ TEST_CASE("Every direct read of a per-nozzle line width field is in the reviewed
         { "src/libslic3r/Print.cpp", 3 },
         { "src/libslic3r/PrintConfig.cpp", 8 },
         { "src/libslic3r/PrintConfig.hpp", 13 },
-        { "src/slic3r/GUI/Tab.cpp", 14 },
+        { "src/slic3r/GUI/Tab.cpp", 15 },
     };
     const boost::filesystem::path root = boost::filesystem::path(std::string(TEST_DATA_DIR)).parent_path().parent_path();
     auto ident = [](char c) { return std::isalnum((unsigned char) c) || c == '_'; };
