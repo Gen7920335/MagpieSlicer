@@ -637,7 +637,10 @@ Mod ModSet::parse_mod(const std::string &json_text)
                         option.label  = optional_string(o, "label");
                         option.labels = translations(o, "label_");
                     }
-                    if (option.value.empty())
+                    // MAGPIE: an empty value is an option only when spelled out with a label (an object with
+                    // "value": "" and "label"), for a parameter whose empty default means "keep the core's choice".
+                    const bool labelled_empty = o.is_object() && o.contains("value") && o.at("value").is_string() && !option.label.empty();
+                    if (option.value.empty() && !labelled_empty)
                         throw ModError(where + ": each option must be a non-empty string or an object with a \"value\"");
                     for (const ModParamOption &seen : p.options)
                         if (seen.value == option.value)
