@@ -3511,7 +3511,17 @@ void TabPrint::on_value_change(const std::string& opt_key, const boost::any& val
             resolved.set_key_value(k, opt->clone());
     const double shown = std::round(per_nozzle_line_width_fallback_mm(resolved, width_key, size_t(nozzle)) * 100.) / 100.;
     values[nozzle] = was_unset && std::abs(edited - shown) < 1e-9 ? 0. : edited; // mm
-    m_config->set_key_value(key, new ConfigOptionFloats(values));
+    // MAGPIE: widths equal to the saved preset's (a short saved list leaves its other nozzles unset, 0) keep the saved
+    // list as it is. A revert wrote the full-length list of the same widths, which compared unequal, and the row stayed
+    // marked modified (GUI test: edit a T2 width, revert, the label stayed orange).
+    const auto* saved = m_presets->get_selected_preset().config.option<ConfigOptionFloats>(key);
+    bool        same  = saved != nullptr;
+    for (size_t idx = 0; same && idx < std::max(values.size(), saved->values.size()); ++idx)
+        same = (idx < values.size() ? values[idx] : 0.) == (idx < saved->values.size() ? std::max(0., saved->values[idx]) : 0.);
+    if (same)
+        m_config->set_key_value(key, saved->clone());
+    else
+        m_config->set_key_value(key, new ConfigOptionFloats(values));
     update_dirty();
     Tab::on_value_change(key, m_config->opt_serialize(key));
     load_per_nozzle_line_widths();
