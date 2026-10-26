@@ -1,4 +1,5 @@
 #include "WipeTowerEstimate.hpp"
+#include "HalfLayerTowerSplit.hpp"
 
 #include "libslic3r/Polygon.hpp"
 #include "WipeTower.hpp"
@@ -131,7 +132,19 @@ WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeT
     // Both planners size every layer, so the tower has to fit its thinnest one: the first layer
     // when it is printed thinner than the rest.
     const double first_layer_height = opt_float("initial_layer_print_height");
-    if (first_layer_height > EPSILON)
+    // MAGPIE: a banded plate prints a tower layer taller than a nozzle in two halves (half_layer_tower_split_needed,
+    // decided by the planner against the layer's own nozzles; here against the smallest configured one, the bound).
+    if (visits > 1) {
+        const auto  *nozzles = floats_of("nozzle_diameter");
+        const double smallest_nozzle_mm = nozzles != nullptr && !nozzles->values.empty() ?
+            *std::min_element(nozzles->values.begin(), nozzles->values.end()) : std::numeric_limits<double>::max();
+        auto printed_mm = [smallest_nozzle_mm](double tower_layer_mm) {
+            return half_layer_tower_split_needed(tower_layer_mm, smallest_nozzle_mm) ? half_layer_tower_half_height(tower_layer_mm) : tower_layer_mm;
+        };
+        layer_height = printed_mm(layer_height);
+        if (first_layer_height > EPSILON)
+            layer_height = std::min(layer_height, printed_mm(first_layer_height));
+    } else if (first_layer_height > EPSILON)
         layer_height = std::min(layer_height, first_layer_height);
 
     const bool   type1            = tower_type == WipeTowerType::Type1;

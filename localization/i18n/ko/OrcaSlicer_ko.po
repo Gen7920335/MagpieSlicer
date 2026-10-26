@@ -43165,6 +43165,16 @@ msgid "The line width of %1% mm set for nozzle %2% (%3% mm) is more than %4% tim
 msgstr "노즐 %2%(%3% mm)에 설정한 선 너비 %1% mm가 그 노즐의 %4%배를 넘습니다."
 
 # AI Translated
+#, boost-format
+msgid "Layer height cannot exceed nozzle diameter: the prime tower prints %1% mm layers with nozzle %2% (%3% mm)."
+msgstr "레이어 높이는 노즐 직경을 초과할 수 없습니다: 프라임 타워가 노즐 %2%(%3% mm)로 %1% mm 레이어를 출력합니다."
+
+# AI Translated
+#, boost-format
+msgid "Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints the skirt or brim at the full %1% mm, which H/2 does not split."
+msgstr "레이어 높이는 노즐 직경을 초과할 수 없습니다: 노즐 %2%(%3% mm)가 스커트나 브림을 %1% mm 전체 높이로 출력하며, H/2는 이를 나누지 않습니다."
+
+# AI Translated
 msgid "Line width per nozzle"
 msgstr "노즐별 선 너비"
 

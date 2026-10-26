@@ -2270,6 +2270,40 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
             }
         }
 
+        // MAGPIE (H/2): a split tower layer (half_layer_tower_split_needed) plans its upper half at the printed
+        // layer's own height. When the layer's last visit has used up the lower half and the upper half holds no
+        // tool change, nothing else would print it before the next layer: print it now with the current tool.
+        // Only a used-up tower layer below the printed one followed by its own no-change layer is touched, which
+        // an unsplit plan never leaves (heights closer than same_layer_mm, mm, are one layer).
+        if (finish_layer) {
+            constexpr double same_layer_mm = 1e-4;
+            const bool       type2         = gcodegen.wipe_tower_type() == WipeTowerType::Type2;
+            const double     printed_z     = double(gcodegen.m_last_layer_z);
+            while (m_layer_idx + 1 < int(m_tool_changes.size()) && !m_tool_changes[m_layer_idx].empty() &&
+                   size_t(m_tool_change_idx) >= m_tool_changes[m_layer_idx].size() &&
+                   double(m_tool_changes[m_layer_idx].front().print_z) < printed_z - same_layer_mm) {
+                const std::vector<WipeTower::ToolChangeResult> &upper = m_tool_changes[m_layer_idx + 1];
+                if (upper.empty() || std::abs(double(upper.front().print_z) - printed_z) > same_layer_mm ||
+                    std::any_of(upper.begin(), upper.end(), [](const WipeTower::ToolChangeResult &tcr) { return tcr.initial_tool != tcr.new_tool; }))
+                    break;
+                ++ m_layer_idx;
+                m_tool_change_idx = 0;
+                bool ignore_sparse = wipe_tower_layer_is_combined_away(upper);
+                double wipe_tower_z = -1.;
+                if (m_sparse_layers_skipped) {
+                    ignore_sparse = wipe_tower_layer_is_sparse(upper);
+                    wipe_tower_z  = type2 ? m_last_wipe_tower_print_z + upper.front().layer_height : m_compacted_tower_z[m_layer_idx];
+                }
+                for (; size_t(m_tool_change_idx) < upper.size(); ++ m_tool_change_idx)
+                    if (!ignore_sparse) {
+                        const WipeTower::ToolChangeResult &tcr = upper[m_tool_change_idx];
+                        gcode += type2 ? append_tcr2(gcodegen, tcr, tcr.new_tool, wipe_tower_z) : append_tcr(gcodegen, tcr, tcr.new_tool, wipe_tower_z);
+                        if (type2 && m_sparse_layers_skipped)
+                            m_last_wipe_tower_print_z = wipe_tower_z;
+                    }
+            }
+        }
+
         return gcode;
     }
 

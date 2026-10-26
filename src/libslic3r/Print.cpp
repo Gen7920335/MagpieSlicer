@@ -46,6 +46,7 @@
 #include "GCode/GCodeProcessor.hpp"
 #include "GCode/ThumbnailData.hpp"
 #include "GCode/HalfLayerExecution.hpp"
+#include "GCode/HalfLayerTowerSplit.hpp"
 #include "GCode/ToolOrdering.hpp"
 #include "ExtrusionEntity.hpp"
 #include <math.h>
@@ -2210,13 +2211,31 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
             }
         }
     }
+    if (!error.string.empty())
+        return error;
+    // The tallest a tower layer gets, and the height the tower prints it at: split in two when the smallest used
+    // nozzle needs it (half_layer_tower_split_needed, the rule the tower planner applies on each H/2 layer).
+    const double full_tower_mm = std::max(first_height_mm, max_height_mm);
+    double smallest_nozzle_mm = std::numeric_limits<double>::max();
+    for (const int filament : used_filaments)
+        smallest_nozzle_mm = std::min(smallest_nozzle_mm, nozzle_diameter_for_filament(pc, filament, print.is_BBL_printer()));
+    const double tower_mm = half_layer_tower_split_needed(full_tower_mm, smallest_nozzle_mm) ?
+        half_layer_tower_half_height(full_tower_mm) : full_tower_mm;
+    // Skirt and brim are not split: the first layer's height, every layer's with a skirt taller than one layer.
     const bool skirt = pc.skirt_loops.value > 0 && (print.has_skirt() || print.has_infinite_skirt());
-    if (error.string.empty() && (skirt || object.has_brim() || print.has_wipe_tower())) {
-        const double auxiliary_mm = print.has_wipe_tower() || (skirt && (pc.skirt_height.value > 1 || print.has_infinite_skirt())) ?
-            std::max(first_height_mm, max_height_mm) : pc.initial_layer_print_height.value;
-        for (const int filament : used_filaments)
-            if (auxiliary_mm > nozzle_diameter_for_filament(pc, filament, print.is_BBL_printer()) + EPSILON)
-                return {L("Layer height cannot exceed nozzle diameter."), &object, "layer_height"};
+    const double skirt_brim_mm = skirt && (pc.skirt_height.value > 1 || print.has_infinite_skirt()) ?
+        full_tower_mm : pc.initial_layer_print_height.value;
+    for (const int filament : used_filaments) {
+        const size_t nozzle    = printing_nozzle_index(pc, filament, print.is_BBL_printer());
+        const double nozzle_mm = pc.nozzle_diameter.get_at(nozzle);
+        if (print.has_wipe_tower() && tower_mm > nozzle_mm + EPSILON)
+            // TRN %1%: layer height in mm, %2%: nozzle number, %3%: its diameter in mm.
+            return {(boost::format(L("Layer height cannot exceed nozzle diameter: the prime tower prints %1% mm layers with nozzle %2% (%3% mm).")) %
+                     tower_mm % (nozzle + 1) % nozzle_mm).str(), &object, "layer_height"};
+        if ((skirt || object.has_brim()) && skirt_brim_mm > nozzle_mm + EPSILON)
+            // TRN %1%: layer height in mm, %2%: nozzle number, %3%: its diameter in mm. H/2 is the half-height feature.
+            return {(boost::format(L("Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints the skirt or brim at the full %1% mm, which H/2 does not split.")) %
+                     skirt_brim_mm % (nozzle + 1) % nozzle_mm).str(), &object, skirt_brim_mm == pc.initial_layer_print_height.value ? "initial_layer_print_height" : "layer_height"};
     }
     return error;
 }
@@ -5858,6 +5877,20 @@ bool Print::enable_timelapse_print() const
 }
 
 
+// MAGPIE (H/2): whether the tower layer of `tools` prints as two half-height layers (half_layer_tower_split_needed):
+// only a layer with an H/2 execution frame, against the smallest nozzle printing on its tower, the incoming tool's
+// (0-based filament) and every visit's.
+static bool half_layer_tower_layer_splits(const PrintConfig &config, bool is_bbl_printer, const LayerTools &tools,
+                                          const HalfLayerExecutionFrame *frame, unsigned int incoming_filament)
+{
+    if (frame == nullptr)
+        return false;
+    double smallest_nozzle_mm = config.nozzle_diameter.get_at(printing_nozzle_index(config, int(incoming_filament) + 1, is_bbl_printer));
+    for (const HalfLayerExecutionVisit &visit : frame->plan.visits)
+        smallest_nozzle_mm = std::min(smallest_nozzle_mm, config.nozzle_diameter.get_at(visit.tool.physical_tool));
+    return half_layer_tower_split_needed(tools.wipe_tower_layer_height, smallest_nozzle_mm);
+}
+
 void Print::_make_wipe_tower()
 {
     m_wipe_tower_data.clear();
@@ -5995,12 +6028,19 @@ void Print::_make_wipe_tower()
 
             if (!layer_tools.has_wipe_tower) continue;
             bool first_layer = &layer_tools == &m_wipe_tower_data.tool_ordering.front();
-            wipe_tower.plan_toolchange((float)layer_tools.print_z, (float)layer_tools.wipe_tower_layer_height, current_filament_id, current_filament_id);
+            const HalfLayerExecutionFrame *execution_frame =
+                m_wipe_tower_data.tool_ordering.execution_frame(layer_tools);
+            // MAGPIE (H/2): a split tower layer's tool changes are planned after the loop, on its two halves.
+            const bool split_tower_layer = half_layer_tower_layer_splits(m_config, this->is_BBL_printer(), layer_tools,
+                                                                         execution_frame, current_filament_id);
+            struct PlannedChange { unsigned int old_filament, new_filament; float wipe_volume_ec, wipe_volume_nc, purge_volume; };
+            std::vector<PlannedChange> split_changes;
+            const unsigned int incoming_filament_id = current_filament_id;
+            if (!split_tower_layer)
+                wipe_tower.plan_toolchange((float)layer_tools.print_z, (float)layer_tools.wipe_tower_layer_height, current_filament_id, current_filament_id);
 
             used_filament_ids.insert(layer_tools.extruders.begin(), layer_tools.extruders.end());
 
-            const HalfLayerExecutionFrame *execution_frame =
-                m_wipe_tower_data.tool_ordering.execution_frame(layer_tools);
             size_t execution_visit_index = 0;
             for (const auto filament_id : m_wipe_tower_data.tool_ordering.execution_filaments(layer_tools)) {
                 const HalfLayerExecutionVisit *execution_visit = execution_frame == nullptr ? nullptr :
@@ -6062,9 +6102,30 @@ void Print::_make_wipe_tower()
                     wipe_volume_nc = 15.f;
                 }
 
-                wipe_tower.plan_toolchange((float)layer_tools.print_z, (float)layer_tools.wipe_tower_layer_height, current_filament_id, filament_id,
-                    wipe_volume_ec, wipe_volume_nc, volume_to_purge);
+                if (split_tower_layer)
+                    split_changes.push_back({current_filament_id, filament_id, wipe_volume_ec, wipe_volume_nc, volume_to_purge});
+                else
+                    wipe_tower.plan_toolchange((float)layer_tools.print_z, (float)layer_tools.wipe_tower_layer_height, current_filament_id, filament_id,
+                        wipe_volume_ec, wipe_volume_nc, volume_to_purge);
                 current_filament_id = filament_id;
+            }
+            if (split_tower_layer) {
+                std::vector<double> purge_mm3;
+                for (const PlannedChange &change : split_changes)
+                    purge_mm3.push_back(double(change.purge_volume) + double(change.wipe_volume_ec));
+                const size_t lower_changes = half_layer_tower_lower_change_count(purge_mm3);
+                const float  half_height   = float(half_layer_tower_half_height(layer_tools.wipe_tower_layer_height));
+                const float  lower_z       = float(layer_tools.print_z) - half_height;
+                wipe_tower.plan_toolchange(lower_z, half_height, incoming_filament_id, incoming_filament_id);
+                for (size_t i = 0; i < split_changes.size(); ++i) {
+                    const PlannedChange &change = split_changes[i];
+                    if (i == lower_changes)
+                        wipe_tower.plan_toolchange((float)layer_tools.print_z, half_height, change.old_filament, change.old_filament);
+                    wipe_tower.plan_toolchange(i < lower_changes ? lower_z : (float)layer_tools.print_z, half_height,
+                        change.old_filament, change.new_filament, change.wipe_volume_ec, change.wipe_volume_nc, change.purge_volume);
+                }
+                if (lower_changes == split_changes.size())
+                    wipe_tower.plan_toolchange((float)layer_tools.print_z, half_height, current_filament_id, current_filament_id);
             }
             if (m_wipe_tower_data.tool_ordering.execution_frame(layer_tools) == nullptr)
                 layer_tools.wiping_extrusions().ensure_perimeters_infills_order(*this);
@@ -6170,10 +6231,17 @@ void Print::_make_wipe_tower()
                 if (!layer_tools.has_wipe_tower)
                     continue;
                 bool first_layer = &layer_tools == &m_wipe_tower_data.tool_ordering.front();
-                wipe_tower.plan_toolchange((float) layer_tools.print_z, (float) layer_tools.wipe_tower_layer_height, current_extruder_id,
-                                           current_extruder_id, false);
                 const HalfLayerExecutionFrame *execution_frame =
                     m_wipe_tower_data.tool_ordering.execution_frame(layer_tools);
+                // MAGPIE (H/2): a split tower layer's tool changes are planned after the loop, on its two halves.
+                const bool split_tower_layer = half_layer_tower_layer_splits(m_config, this->is_BBL_printer(), layer_tools,
+                                                                             execution_frame, current_extruder_id);
+                struct PlannedChange { unsigned int old_extruder, new_extruder; float volume_to_wipe; };
+                std::vector<PlannedChange> split_changes;
+                const unsigned int incoming_extruder_id = current_extruder_id;
+                if (!split_tower_layer)
+                    wipe_tower.plan_toolchange((float) layer_tools.print_z, (float) layer_tools.wipe_tower_layer_height, current_extruder_id,
+                                               current_extruder_id, false);
                 size_t execution_visit_index = 0;
                 for (const auto extruder_id : m_wipe_tower_data.tool_ordering.execution_filaments(layer_tools)) {
                     const HalfLayerExecutionVisit *execution_visit = execution_frame == nullptr ? nullptr :
@@ -6208,10 +6276,31 @@ void Print::_make_wipe_tower()
                         }
 
                         // request a toolchange at the wipe tower with at least volume_to_wipe purging amount
-                        wipe_tower.plan_toolchange((float) layer_tools.print_z, (float) layer_tools.wipe_tower_layer_height,
-                                                   current_extruder_id, extruder_id, volume_to_wipe);
+                        if (split_tower_layer)
+                            split_changes.push_back({current_extruder_id, extruder_id, volume_to_wipe});
+                        else
+                            wipe_tower.plan_toolchange((float) layer_tools.print_z, (float) layer_tools.wipe_tower_layer_height,
+                                                       current_extruder_id, extruder_id, volume_to_wipe);
                         current_extruder_id = extruder_id;
                     }
+                }
+                if (split_tower_layer) {
+                    std::vector<double> purge_mm3;
+                    for (const PlannedChange &change : split_changes)
+                        purge_mm3.push_back(change.volume_to_wipe);
+                    const size_t lower_changes = half_layer_tower_lower_change_count(purge_mm3);
+                    const float  half_height   = float(half_layer_tower_half_height(layer_tools.wipe_tower_layer_height));
+                    const float  lower_z       = float(layer_tools.print_z) - half_height;
+                    wipe_tower.plan_toolchange(lower_z, half_height, incoming_extruder_id, incoming_extruder_id, false);
+                    for (size_t i = 0; i < split_changes.size(); ++i) {
+                        const PlannedChange &change = split_changes[i];
+                        if (i == lower_changes)
+                            wipe_tower.plan_toolchange((float) layer_tools.print_z, half_height, change.old_extruder, change.old_extruder, false);
+                        wipe_tower.plan_toolchange(i < lower_changes ? lower_z : (float) layer_tools.print_z, half_height,
+                                                   change.old_extruder, change.new_extruder, change.volume_to_wipe);
+                    }
+                    if (lower_changes == split_changes.size())
+                        wipe_tower.plan_toolchange((float) layer_tools.print_z, half_height, current_extruder_id, current_extruder_id, false);
                 }
                 if (m_wipe_tower_data.tool_ordering.execution_frame(layer_tools) == nullptr)
                     layer_tools.wiping_extrusions().ensure_perimeters_infills_order(*this);

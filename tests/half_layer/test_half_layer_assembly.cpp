@@ -23,6 +23,7 @@
 #include <sstream>
 #include <fstream>
 #include "libslic3r/GCode/HalfLayerExecution.hpp"
+#include "libslic3r/GCode/HalfLayerTowerSplit.hpp"
 #include "libslic3r/Support/SupportCommon.hpp"
 #include "libslic3r/Support/SupportParameters.hpp"
 #include <cstdlib>
@@ -1398,6 +1399,272 @@ TEST_CASE("Both wipe tower planners consume repeated half-layer visits", "[HalfL
     if (motion_failed || returns == 0 || connections == 0)
         std::ofstream("tower-clearance-" + std::to_string(type1) + "-" + std::to_string(separate_nozzles) +
             "-" + std::to_string(dense_tower) + "-" + std::to_string(configured_hop_mm) + ".gcode") << exported;
+}
+
+TEST_CASE("A split tower layer gives its lower half the shortest prefix holding half the purge", "[HalfLayer][TowerSplit]")
+{
+    CHECK(half_layer_tower_lower_change_count({}) == 0);
+    CHECK(half_layer_tower_lower_change_count({50.}) == 1);
+    CHECK(half_layer_tower_lower_change_count({10., 10., 80.}) == 3);
+    CHECK(half_layer_tower_lower_change_count({80., 10., 10.}) == 1);
+    CHECK(half_layer_tower_lower_change_count({25., 25., 25., 25.}) == 2);
+    // No purge at all: halved by count, the lower half taking the odd one.
+    CHECK(half_layer_tower_lower_change_count({0., 0., 0.}) == 2);
+    // Split only above the nozzle, by more than the slicer's height tolerance (mm).
+    CHECK_FALSE(half_layer_tower_split_needed(0.2, 0.2));
+    CHECK_FALSE(half_layer_tower_split_needed(0.2 + 0.5 * EPSILON, 0.2));
+    CHECK(half_layer_tower_split_needed(0.2 + 2. * EPSILON, 0.2));
+    CHECK(half_layer_tower_half_height(0.3) == Catch::Approx(0.15));
+}
+
+TEST_CASE("Half-layer prime tower layers taller than a nozzle print in two halves", "[HalfLayer][ExecutionTower][TowerSplit]")
+{
+    const bool type1 = GENERATE(false, true);
+    // 0.3 mm layers over a 0.2 mm nozzle that prints only the half-height (0.15 mm) outer walls: every tower
+    // layer prints as two 0.15 mm halves, so the 0.2 mm nozzle never purges a 0.3 mm tower layer.
+    const double layer_mm = 0.3, half_mm = 0.15, small_nozzle_mm = 0.2;
+    auto config = multifilament_config(2);
+    config.set_num_extruders(2);
+    set_toolhead_nozzle_diameter(config, 0, 0.4);
+    set_toolhead_nozzle_diameter(config, 1, small_nozzle_mm);
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false},
+        {"wipe_tower_type", type1 ? "type1" : "type2"},
+        {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"} /* MAGPIE: inside the 200 mm test bed (nightly default is off it) */, {"purge_in_prime_tower", true},
+        {"layer_height", layer_mm}, {"initial_layer_print_height", layer_mm}, {"wall_loops", 2},
+        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
+    config.set_key_value("before_layer_change_gcode", new ConfigOptionString("G92 E0"));
+    config.set_key_value("flush_volumes_matrix", new ConfigOptionFloats{0., 100., 20., 0.});
+    config.set_key_value("flush_multiplier", new ConfigOptionFloats{1.});
+    size_flush_to_nozzles(config); // MAGPIE: nightly checks one flush block and multiplier per nozzle
+    config.set_key_value("grab_length", new ConfigOptionFloats{0., 0.});
+    // The small nozzle (filament 2) prints the outer walls only; everything else is filament 1.
+    std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{{{"extruder", 1}, {"outer_wall_filament_id", 2},
+        {"inner_wall_filament_id", 1}, {"sparse_infill_filament_id", 1}, {"internal_solid_filament_id", 1},
+        {"top_surface_filament_id", 1}, {"bottom_surface_filament_id", 1}}};
+    // A second object on filament 2 by its object setting, with the same role filaments: a plate whose objects all
+    // name one filament gets no tower (normalize_fdm_2 counts the object filaments, Orca too).
+    overrides.push_back(overrides.front());
+    overrides.back().front() = {"extruder", 2};
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(6.), cube(5.)}, print, model, config, &overrides);
+    const StringObjectException error = print.validate();
+    CAPTURE(type1, error.string);
+    REQUIRE(error.string.empty());
+    REQUIRE_NOTHROW(print.process());
+
+    // Planned tower layers: none taller than half a layer, and the tool changes in execution order.
+    const ToolOrdering &ordering = print.tool_ordering();
+    std::vector<std::pair<int, int>> expected;
+    unsigned int current = type1 ? ordering.first_extruder() : ordering.all_extruders().back();
+    for (const LayerTools &tools : ordering.layer_tools()) {
+        if (!tools.has_wipe_tower)
+            continue;
+        for (unsigned int filament : ordering.execution_filaments(tools))
+            if (filament != current) {
+                expected.emplace_back(int(current), int(filament));
+                current = filament;
+            }
+    }
+    REQUIRE_FALSE(expected.empty());
+    std::vector<std::pair<int, int>> generated;
+    size_t tower_layers = 0;
+    for (const auto &layer_changes : print.wipe_tower_data().tool_changes) {
+        tower_layers += layer_changes.empty() ? 0 : 1;
+        for (const WipeTower::ToolChangeResult &change : layer_changes) {
+            CAPTURE(change.print_z, change.layer_height);
+            CHECK_THAT(change.layer_height, Catch::Matchers::WithinAbs(half_mm, 0.0001));
+            if (change.initial_tool >= 0 && change.new_tool >= 0 && change.initial_tool != change.new_tool)
+                generated.emplace_back(change.initial_tool, change.new_tool);
+        }
+    }
+    CHECK(generated == expected);
+    // The taller object, 6 mm in 0.3 mm layers: 20 layers, 40 tower halves.
+    CHECK(tower_layers == 40);
+
+    // Printed tower: every half printed, at 0.15 mm steps from the bed, none skipped or doubled up.
+    std::string exported;
+    REQUIRE_NOTHROW(exported = gcode(print));
+    std::string role;
+    std::set<long> tower_planes; // tower extrusion heights in 0.15 mm steps
+    bool off_plane = false;
+    GCodeReader reader;
+    reader.apply_config(config);
+    reader.parse_buffer(exported, [&](GCodeReader &state, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw());
+        if (raw.rfind(";TYPE:", 0) == 0) role = raw.substr(6);
+        else if (raw.rfind("; FEATURE: ", 0) == 0) role = raw.substr(11);
+        if (role != "Prime tower" || !line.extruding(state) || line.dist_XY(state) <= 0.)
+            return;
+        const double steps = line.new_Z(state) / half_mm;
+        off_plane |= std::abs(steps - std::round(steps)) > 0.00051 / half_mm; // G-code Z is written to 0.001 mm
+        tower_planes.insert(std::lround(steps));
+    });
+    CHECK_FALSE(off_plane);
+    REQUIRE_FALSE(tower_planes.empty());
+    CHECK(*tower_planes.begin() == 1);
+    CHECK(*tower_planes.rbegin() == long(tower_planes.size()));
+    CHECK(tower_planes.size() == 40);
+}
+
+TEST_CASE("A split tower layer whose upper half has no tool change is printed in its own layer", "[HalfLayer][ExecutionTower][TowerSplit]")
+{
+    const bool type1 = GENERATE(false, true);
+    // A walls-only object on the 0.2 mm nozzle (one outer wall, no infill or shells) beside an object on the 0.4 mm
+    // nozzle that is two 2 mm blocks 2 mm apart, under 0.3 mm layers: between the blocks a layer has no tool change
+    // and its upper tower half is a no-change entry that only the layer's last visit prints.
+    const double layer_mm = 0.3, half_mm = 0.15;
+    auto config = multifilament_config(2);
+    config.set_num_extruders(2);
+    set_toolhead_nozzle_diameter(config, 0, 0.4);
+    set_toolhead_nozzle_diameter(config, 1, 0.2);
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false},
+        {"wipe_tower_type", type1 ? "type1" : "type2"},
+        {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"} /* MAGPIE: inside the 200 mm test bed (nightly default is off it) */, {"purge_in_prime_tower", true},
+        {"layer_height", layer_mm}, {"initial_layer_print_height", layer_mm}, {"wall_loops", 2},
+        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
+    config.set_key_value("before_layer_change_gcode", new ConfigOptionString("G92 E0"));
+    // The same layer height limits on both nozzles (mm), so objects on different nozzles layer alike for the tower.
+    config.set_key_value("min_layer_height", new ConfigOptionFloats{0.07, 0.07});
+    config.set_key_value("max_layer_height", new ConfigOptionFloats{0.32, 0.32});
+    size_flush_to_nozzles(config);
+    // The walls-only object's other roles stay on filament 1, which it never prints with.
+    std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{
+        {{"extruder", 2}, {"outer_wall_filament_id", 2}, {"wall_loops", 1}, {"sparse_infill_density", "0%"},
+         {"top_shell_layers", 0}, {"bottom_shell_layers", 0}},
+        {{"extruder", 1}, {"outer_wall_filament_id", 1}}};
+    for (auto &region : overrides)
+        for (const char *key : {"inner_wall_filament_id", "sparse_infill_filament_id", "internal_solid_filament_id",
+                "top_surface_filament_id", "bottom_surface_filament_id"})
+            region.push_back({key, 1});
+    Print print;
+    Model model;
+    TriangleMesh blocks = make_cube(5., 5., 2.), upper_block = make_cube(5., 5., 2.);
+    upper_block.translate(0.f, 0.f, 4.f);
+    blocks.merge(upper_block);
+    init_print(std::vector<TriangleMesh>{cube(6.), blocks}, print, model, config, &overrides);
+    const StringObjectException error = print.validate();
+    CAPTURE(type1, error.string);
+    REQUIRE(error.string.empty());
+    REQUIRE_NOTHROW(print.process());
+    // The plan has such a layer: a tower layer at a model layer's height holding no tool change.
+    size_t tower_layers = 0, upper_halves_without_change = 0;
+    for (const auto &layer_changes : print.wipe_tower_data().tool_changes) {
+        if (layer_changes.empty())
+            continue;
+        ++tower_layers;
+        const double layers = double(layer_changes.front().print_z) / layer_mm;
+        if (std::abs(layers - std::round(layers)) < 0.001 &&
+            std::none_of(layer_changes.begin(), layer_changes.end(),
+                [](const WipeTower::ToolChangeResult &tcr) { return tcr.initial_tool != tcr.new_tool; }))
+            ++upper_halves_without_change;
+    }
+    REQUIRE(upper_halves_without_change > 0);
+    // Every planned half is printed, at 0.15 mm steps from the bed, none skipped, and within its own model layer:
+    // above the layer below (";Z:" is the model layer's height, mm) and no higher than the layer.
+    std::string exported;
+    REQUIRE_NOTHROW(exported = gcode(print));
+    std::string role;
+    std::set<long> tower_planes; // tower extrusion heights in 0.15 mm steps
+    double model_layer_mm = 0.;
+    size_t outside_own_layer = 0;
+    constexpr double encoded_z_tolerance_mm = 0.00051; // G-code Z is written to 0.001 mm
+    GCodeReader reader;
+    reader.apply_config(config);
+    reader.parse_buffer(exported, [&](GCodeReader &state, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw());
+        if (raw.rfind(";Z:", 0) == 0) model_layer_mm = std::stod(raw.substr(3));
+        if (raw.rfind(";TYPE:", 0) == 0) role = raw.substr(6);
+        else if (raw.rfind("; FEATURE: ", 0) == 0) role = raw.substr(11);
+        if (role == "Prime tower" && line.extruding(state) && line.dist_XY(state) > 0.) {
+            const double z_mm = line.new_Z(state);
+            tower_planes.insert(std::lround(z_mm / half_mm));
+            if (z_mm <= model_layer_mm - layer_mm + encoded_z_tolerance_mm || z_mm > model_layer_mm + encoded_z_tolerance_mm)
+                ++outside_own_layer;
+        }
+    });
+    CAPTURE(tower_layers, upper_halves_without_change);
+    CHECK(outside_own_layer == 0);
+    CHECK(tower_planes.size() == tower_layers);
+    REQUIRE_FALSE(tower_planes.empty());
+    CHECK(*tower_planes.rbegin() == long(tower_planes.size()));
+}
+
+TEST_CASE("A brim keeps the full first-layer height against every nozzle under H/2", "[HalfLayer][TowerSplit]")
+{
+    // 0.3 mm layers over a 0.2 mm nozzle printing only half-height outer walls, with a prime tower (split) and a
+    // brim (not split): a 0.3 mm first layer is refused for the brim, a 0.2 mm one is not.
+    const double first_layer_mm = GENERATE(0.3, 0.2);
+    auto config = multifilament_config(2);
+    config.set_num_extruders(2);
+    set_toolhead_nozzle_diameter(config, 0, 0.4);
+    set_toolhead_nozzle_diameter(config, 1, 0.2);
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false},
+        {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"} /* MAGPIE: inside the 200 mm test bed (nightly default is off it) */,
+        {"layer_height", 0.3}, {"initial_layer_print_height", first_layer_mm}, {"wall_loops", 2},
+        {"skirt_loops", 0}, {"brim_type", "outer_only"}, {"brim_width", 3}});
+    Slic3r::Test::half_layer_params(config, true);
+    config.set_key_value("before_layer_change_gcode", new ConfigOptionString("G92 E0"));
+    size_flush_to_nozzles(config);
+    std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{{{"extruder", 1}, {"outer_wall_filament_id", 2},
+        {"inner_wall_filament_id", 1}, {"sparse_infill_filament_id", 1}, {"internal_solid_filament_id", 1},
+        {"top_surface_filament_id", 1}, {"bottom_surface_filament_id", 1}}};
+    overrides.push_back(overrides.front());
+    overrides.back().front() = {"extruder", 2};
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(6.), cube(5.)}, print, model, config, &overrides);
+    const StringObjectException error = print.validate();
+    CAPTURE(first_layer_mm, error.string);
+    if (first_layer_mm > 0.2) {
+        CHECK(error.string.find("skirt or brim") != std::string::npos);
+        CHECK(error.opt_key == "initial_layer_print_height");
+    } else
+        CHECK(error.string.empty());
+}
+
+TEST_CASE("Half-layer prime tower layers no taller than every nozzle are not split", "[HalfLayer][ExecutionTower][TowerSplit]")
+{
+    // 0.2 mm layers over 0.4 and 0.2 mm nozzles: the tower keeps one layer per model layer.
+    auto config = multifilament_config(2);
+    config.set_num_extruders(2);
+    set_toolhead_nozzle_diameter(config, 0, 0.4);
+    set_toolhead_nozzle_diameter(config, 1, 0.2);
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false},
+        {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"} /* MAGPIE: inside the 200 mm test bed (nightly default is off it) */, {"purge_in_prime_tower", true},
+        {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"wall_loops", 2},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
+    config.set_key_value("before_layer_change_gcode", new ConfigOptionString("G92 E0"));
+    size_flush_to_nozzles(config);
+    std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{{{"extruder", 1}, {"outer_wall_filament_id", 2},
+        {"inner_wall_filament_id", 1}, {"sparse_infill_filament_id", 1}, {"internal_solid_filament_id", 1},
+        {"top_surface_filament_id", 1}, {"bottom_surface_filament_id", 1}}};
+    overrides.push_back(overrides.front());
+    overrides.back().front() = {"extruder", 2};
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(6.), cube(5.)}, print, model, config, &overrides);
+    const StringObjectException error = print.validate();
+    CAPTURE(error.string);
+    REQUIRE(error.string.empty());
+    REQUIRE_NOTHROW(print.process());
+    size_t tower_layers = 0;
+    for (const auto &layer_changes : print.wipe_tower_data().tool_changes)
+        if (!layer_changes.empty()) {
+            ++tower_layers;
+            CHECK_THAT(layer_changes.front().layer_height, Catch::Matchers::WithinAbs(0.2, 0.0001));
+        }
+    // The taller object, 6 mm in 0.2 mm layers.
+    CHECK(tower_layers == 30);
 }
 
 TEST_CASE("Dedicated wipe-tower material is an explicit execution visit", "[HalfLayer][TowerAuxiliary]")

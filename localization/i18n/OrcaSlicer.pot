@@ -31451,6 +31451,14 @@ msgstr ""
 msgid "The line width of %1% mm set for nozzle %2% (%3% mm) is more than %4% times that nozzle."
 msgstr ""
 
+#, boost-format
+msgid "Layer height cannot exceed nozzle diameter: the prime tower prints %1% mm layers with nozzle %2% (%3% mm)."
+msgstr ""
+
+#, boost-format
+msgid "Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints the skirt or brim at the full %1% mm, which H/2 does not split."
+msgstr ""
+
 msgid "Line width per nozzle"
 msgstr ""
 
