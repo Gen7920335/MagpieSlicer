@@ -142,6 +142,10 @@ public:
     void                set_id(size_t id)   { m_id = id; }
     PrintObject*        object()            { return m_object; }
     const PrintObject*  object() const      { return m_object; }
+    // MAGPIE: whether this layer's lines take the first layer widths: layer 0 on the bed. An object lifted over its
+    // support (object_z_offset) has its layer 0 off the bed and prints it at the normal widths (seeds 2420, 2446 and
+    // 2453 of the U1 random test), as the G-code gives it no first layer speed either.
+    bool                prints_first_layer_widths() const;
 
     Layer              *upper_layer;
     Layer              *lower_layer;

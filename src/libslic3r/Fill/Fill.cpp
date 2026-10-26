@@ -1076,7 +1076,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 					// nozzle (routing table) rather than on the internal solid infill's.
 					params.extrusion_role == erBottomSurface ?
 					layerm.region().flow(*layer.object(), WidthFeature::BottomSurface, (surface.thickness == -1) ? layer.height : surface.thickness,
-                                              layer.id() == 0 && layer.object()->slicing_parameters().object_z_offset <= 0.) : // MAGPIE: lifted layer 0 is off the bed
+                                              layer.prints_first_layer_widths()) : // MAGPIE: lifted layer 0 is off the bed
 					layerm.flow(extrusion_role, (surface.thickness == -1) ? layer.height : surface.thickness);
 
 				params.role_speed = 0;

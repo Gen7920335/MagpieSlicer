@@ -120,7 +120,7 @@ std::optional<Flow> WallPlanner::detail_flow(const PerimeterGenerator &g) const
     // (outer_wall_line_width, then line_width, the first layer's initial_layer_line_width first, each with its
     // per-nozzle value, else the automatic width).
     Flow flow = feature_flow(WidthFeature::OuterWall, {g.print_config, g.object_config, g.config}, detail.toolhead_1based - 1,
-                             float(g.layer_height), g.layer_id == 0);
+                             float(g.layer_height), g.first_layer_widths);
     // Narrowest width with a positive spacing at this layer height, mm.
     const double min_width_mm = g.layer_height * (1. - 0.25 * PI) + EPSILON;
     if (double(flow.width()) < min_width_mm)

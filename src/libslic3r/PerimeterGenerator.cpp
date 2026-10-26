@@ -153,7 +153,7 @@ static Flow planned_overhang_flow(const PerimeterGenerator &generator, Extrusion
         return Flow::bridging_flow(thread_mm, nozzle_mm);
     }
     Flow base_flow = feature_flow(WidthFeature::InnerWall, { generator.print_config, generator.object_config, generator.config }, nozzle,
-                                  float(generator.layer_height), generator.layer_id == 0);
+                                  float(generator.layer_height), generator.first_layer_widths);
     if (bridge_width > 0.)
         base_flow = Flow(float(bridge_width), base_flow.height(), nozzle_mm);
     return base_flow.with_flow_ratio(ratio);
@@ -2269,7 +2269,7 @@ void PerimeterGenerator::process_classic()
                 printing_nozzle_index(*this->print_config, std::max(1, this->config->outer_wall_filament_id.value), this->is_bbl_printer);
             if (std::abs(this->print_config->nozzle_diameter.get_at(gap_nozzle) - this->perimeter_flow.nozzle_diameter()) > EPSILON)
                 max = std::min(max, 2. * double(feature_flow(WidthFeature::InternalSolidInfill, { print_config, object_config, config },
-                                                             gap_nozzle, float(layer_height), layer_id == 0).scaled_spacing()));
+                                                             gap_nozzle, float(layer_height), first_layer_widths).scaled_spacing()));
             ExPolygons gaps_ex = diff_ex(
                 //FIXME offset2 would be enough and cheaper.
                 opening_ex(gaps, float(min / 2.)),

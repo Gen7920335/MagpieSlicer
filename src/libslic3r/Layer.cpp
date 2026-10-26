@@ -28,6 +28,11 @@
 
 namespace Slic3r {
 
+bool Layer::prints_first_layer_widths() const
+{
+    return m_id == 0 && m_object->slicing_parameters().object_z_offset <= 0.;
+}
+
 Layer::~Layer()
 {
     this->lower_layer = this->upper_layer = nullptr;

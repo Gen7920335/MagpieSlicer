@@ -119,6 +119,8 @@ public:
     const ExPolygons            *lower_slices;
     double                       layer_height;
     int                          layer_id;
+    // MAGPIE: whether the layer's lines take the first layer widths (Layer::prints_first_layer_widths).
+    bool                         first_layer_widths { false };
     coordf_t                     slice_z;
     Flow                         perimeter_flow;
     Flow                         ext_perimeter_flow;

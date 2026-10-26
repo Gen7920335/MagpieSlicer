@@ -2536,3 +2536,29 @@ TEST_CASE("The brim is laid out for the nozzle that prints it when H/2 reorders 
         }
     }
 }
+
+TEST_CASE("A chosen toolhead of the walls' own nozzle size prints no walls on a lifted object's first layer", "[MultiNozzleWalls][Widths][Regression]")
+{
+    // A lifted object's layer 0 is off the bed and its walls take the normal widths, but the planner's detail flow
+    // took the first layer width there, so a same-size chosen toolhead looked finer by that width difference and took
+    // every wall of the layer (random slice 6855: all of layer 12's walls on T2 at the first layer width).
+    OfficialMods       mods;
+    DynamicPrintConfig config = two_nozzle_config(0.6, 0.6, 1, "classic", true);
+    multi_nozzle_params(config, { { "enable", true }, { "small_wall_count", 1 }, { "detail_toolhead", 2 } });
+    // The first layer width differs from the walls' own: 113 % of 0.6 mm is 0.678 mm against the line width of 0.84 mm.
+    config.set_deserialize_strict({ { "line_width", "0.84" }, { "initial_layer_line_width", "113%" }, { "enable_support", "1" },
+                                    { "support_type", "normal(auto)" }, { "support_interface_top_layers", "1" } });
+    set_mod_params(config, { { "resin_support.enable", true }, { "resin_support.default_object_elevation", 2.0 } });
+
+    Print print;
+    Model model;
+    init_print({ make_cube(20., 20., 10.) }, print, model, config);
+    const std::string output = Test::gcode(print);
+    REQUIRE(print.objects().front()->slicing_parameters().object_z_offset > 0.);
+    // Two nozzles of one size: no island needs a finer one, on any layer.
+    const std::vector<std::set<int>> tools = wall_tools_per_layer(output);
+    REQUIRE_FALSE(tools.empty());
+    for (size_t layer = 0; layer < tools.size(); ++layer)
+        if (!tools[layer].empty())
+            CHECK(tools[layer] == std::set<int>{ 0 });
+}
