@@ -535,6 +535,8 @@ protected:
 		bool                     modified = false;
 		// A dropdown's entries: ("", Orca's value) or (parameter key, its value).
 		std::vector<std::pair<std::string, std::string>> entries;
+		// A parameter's option that is one of Orca's (same value and name): (parameter key, value) -> Orca's entry.
+		std::map<std::pair<std::string, std::string>, int> aliases;
 	};
 	// What a merged setting's control shows under one print preset: a dropdown's entry (wxNOT_FOUND for none), or
 	// a number's text.

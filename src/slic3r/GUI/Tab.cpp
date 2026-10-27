@@ -8166,17 +8166,29 @@ wxSizer* Tab::create_merged_setting(wxWindow* line_parent, size_t index)
         auto* choice = new ::ComboBox(parent, wxID_ANY, wxEmptyString, wxDefaultPosition,
                                       wxSize(Field::def_width_wider() * wxGetApp().em_unit(), -1), 0, nullptr, wxCB_READONLY);
         merged.entries.clear();
+        merged.aliases.clear();
         for (size_t i = 0; i < def->enum_values.size(); ++i) {
             choice->Append(_(wxString::FromUTF8(i < def->enum_labels.size() ? def->enum_labels[i] : def->enum_values[i])));
             merged.entries.emplace_back(std::string(), def->enum_values[i]);
         }
         for (const std::string& k : merged.params)
             if (const ModHost::ModParam* p = ModParamsPanel::find_param(mods.get(), k); p != nullptr && p->type == "string")
-                for (const ModHost::ModParamOption& o : p->options)
-                    if (!o.value.empty()) {
-                        choice->Append(wxString::FromUTF8(ModHost::localized_text(o.labels, language, o.label.empty() ? o.value : o.label)));
-                        merged.entries.emplace_back(k, o.value);
+                for (const ModHost::ModParamOption& o : p->options) {
+                    if (o.value.empty())
+                        continue;
+                    // An option with Orca's value and name is Orca's choice (toggle test, support_extras' concentric
+                    // interface: the same G-code as Orca's on six cases): listed once, as Orca's.
+                    const auto orca = std::find(def->enum_values.begin(), def->enum_values.end(), o.value);
+                    if (orca != def->enum_values.end()) {
+                        const size_t i = size_t(orca - def->enum_values.begin());
+                        if (i < def->enum_labels.size() && def->enum_labels[i] == o.label) {
+                            merged.aliases[{ k, o.value }] = int(i);
+                            continue;
+                        }
                     }
+                    choice->Append(wxString::FromUTF8(ModHost::localized_text(o.labels, language, o.label.empty() ? o.value : o.label)));
+                    merged.entries.emplace_back(k, o.value);
+                }
         choice->Bind(wxEVT_COMBOBOX, [this, index](wxCommandEvent&) { on_merged_setting_changed(index); });
         merged.control = choice;
     } else {
@@ -8228,6 +8240,10 @@ Tab::MergedValue Tab::merged_value(const MergedSetting& merged, const DynamicPri
                 if (auto it = stored.find(k); it != stored.end() && it->is_string() && it->get<std::string>() == v)
                     out.selection = int(i);
         }
+        for (const auto& [option, index] : merged.aliases)
+            if (out.selection == wxNOT_FOUND && stored.is_object())
+                if (auto it = stored.find(option.first); it != stored.end() && it->is_string() && it->get<std::string>() == option.second)
+                    out.selection = index;
         if (out.selection == wxNOT_FOUND && print.has(merged.option)) {
             const std::string value = print.opt_serialize(merged.option);
             for (size_t i = 0; i < merged.entries.size(); ++i)
