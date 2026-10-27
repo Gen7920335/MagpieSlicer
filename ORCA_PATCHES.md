@@ -211,6 +211,19 @@ detail-nozzle overhang width.
   contact polygons instead of dereferencing null.
 - Generated tower check and CLI refit include the combined skirt around the tower.
 
+## Settings: a parent off hides its children (GUI only)
+
+- Wrong: Orca greys out a setting whose parent is off (toggle_field) and leaves it on the page; Gen wants it
+  hidden, as Orca already does for some (toggle_line). A few child settings had no rule at all.
+- Change: Tab collects each toggle_options round: an option's last toggle_line and last toggle_option both count,
+  and its line shows when both allow it (Tab::begin_line_round/end_line_round). Options greyed for what the
+  printer is keep Orca's greying (keep_greyed_out: vendor locks, one extruder, belt, air filter, SLA, plate).
+  New rules: support_remove_small_overhang and support_line_width with support or a raft, wipe_tower_filament
+  with a prime tower, slow_down_min_speed with slow_down_for_layer_cooling, the filament tower interface
+  settings with enable_tower_interface_features. Each new rule was checked by slicing with the child changed
+  and the parent off (the same G-code); fan_speedup_overhangs stays (it shares its line with its parent).
+- Output: none; the G-code is unchanged (golden gate).
+
 ## Known Orca bugs not patched
 
 - The Type-1 tower (`WipeTower::set_extruder`) takes one line width for every tool from the nozzle of the last
