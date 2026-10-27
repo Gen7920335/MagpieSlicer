@@ -8985,18 +8985,19 @@ bool TabPrinter::keep_nozzle_diameters()
     if (saved_nozzles != nullptr && saved_nozzles->values == edited_nozzles->values)
         return true;
 
-    const DynamicPrintConfig edits = m_presets->get_edited_preset().config;
-    Preset                   to_save = selected;
-    to_save.config.option<ConfigOptionFloats>("nozzle_diameter", true)->values = edited_nozzles->values;
+    // Copies: saving selects the preset again, which replaces the edited config these options live in.
+    const DynamicPrintConfig  edits   = m_presets->get_edited_preset().config;
+    const ConfigOptionFloats  nozzles = *edited_nozzles;
+    Preset                    to_save = selected;
+    to_save.config.option<ConfigOptionFloats>("nozzle_diameter", true)->values = nozzles.values;
     const std::string name = selected.name;
-    // Selects the saved preset again, which resets the edited copy to it.
     m_presets->save_current_preset(name, false, false, &to_save);
     if (Preset *saved = m_presets->find_preset(name, false, true)) {
         saved->sync_info = "update";
         saved->save_info();
     }
     m_presets->get_edited_preset().config.apply(edits);
-    BOOST_LOG_TRIVIAL(info) << "Printer preset " << name << " keeps the nozzle diameters " << edited_nozzles->serialize();
+    BOOST_LOG_TRIVIAL(info) << "Printer preset " << name << " keeps the nozzle diameters " << nozzles.serialize();
 
     reload_config();
     update_tab_ui();
