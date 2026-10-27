@@ -506,6 +506,14 @@ void DefaultSupportTree::add_pinheads()
             h.r_back_mm = back_r;
         } else if (back_r > m_sm.cfg.head_fallback_radius_mm) {
             filterfn(fidx, i, m_sm.cfg.head_fallback_radius_mm);
+        } else if (m_sm.cfg.heads_stand_on_ground && t.distance() > w) {
+            // MAGPIE: even the fallback head reaches below the ground, without touching the model: it stands there.
+            Head &h = heads[fidx];
+            h.id        = fidx;
+            h.dir       = nn;
+            h.width_mm  = lmin;
+            h.r_back_mm = back_r;
+            h.on_ground = true;
         }
     };
 
@@ -519,7 +527,9 @@ void DefaultSupportTree::add_pinheads()
     for (size_t i = 0; i < heads.size(); ++i)
         if (heads[i].is_valid()) {
             m_builder.add_head(i, heads[i]);
-            m_iheads.emplace_back(i);
+            // MAGPIE: a head standing on the ground needs no pillar.
+            if (!heads[i].on_ground)
+                m_iheads.emplace_back(i);
         }
 
     m_thr();

@@ -196,9 +196,9 @@ void call(const PrintObject &object, const NativeEntry &entry, mp_ctx &ctx, cons
     std::lock_guard<std::mutex> lock(ctx.warnings_mutex);
     for (const auto &[level, text] : ctx.warnings) {
         if (level >= MP_LOG_ERROR)
-            throw SlicingError(entry.mod->id() + ": " + mod_text(entry.mod->id(), text));
+            throw SlicingError(entry.mod->id() + ": " + message_text(entry.mod->id(), text));
         if (level == MP_LOG_WARNING)
-            const_cast<PrintObject &>(object).add_module_warning(PrintStateBase::WarningLevel::NON_CRITICAL, mod_text(entry.mod->id(), text));
+            const_cast<PrintObject &>(object).add_module_warning(PrintStateBase::WarningLevel::NON_CRITICAL, message_text(entry.mod->id(), text));
     }
     ctx.warnings.clear();
 }

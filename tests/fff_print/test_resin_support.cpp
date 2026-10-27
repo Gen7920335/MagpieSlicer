@@ -309,10 +309,11 @@ namespace {
 
 // Seed 6828 of the U1 random test: branching resin support of the 20 mm Orca cube, with that seed's whole config (its
 // four toolheads, widths, support and mod settings, as the CLI wrote them into the G-code) lifted elevation_mm, with
-// layer_mm layers and the given nozzles (mm). Returns the slicing error, empty when it slices. The data leaves out the
+// layer_mm layers and the given nozzles (mm). Returns the slicing error (empty when it slices) and the support
+// step's warnings, one per line. The data leaves out the
 // six enum keys (extruder_type, nozzle_type, nozzle_volume_type, overhang_fan_threshold, retract_lift_enforce,
 // z_hop_types): load_from_ini crashed on each of them alone here, and none of them sizes the support heads.
-std::string lifted_cube_error(double elevation_mm, double layer_mm, const std::vector<double> &nozzles_mm)
+std::pair<std::string, std::string> lifted_cube(double elevation_mm, double layer_mm, const std::vector<double> &nozzles_mm)
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.load_from_ini(std::string(TEST_DATA_DIR) + "/resin_support_seed6828.ini", ForwardCompatibilitySubstitutionRule::Enable);
@@ -329,50 +330,52 @@ std::string lifted_cube_error(double elevation_mm, double layer_mm, const std::v
     const boost::filesystem::path cube_path = boost::filesystem::path(PROFILES_DIR) / ".." / "handy_models" / "OrcaCube_v2.drc";
     TriangleMesh cube;
     if (!load_drc(cube_path.string().c_str(), &cube))
-        return "cannot load " + cube_path.string();
+        return {"cannot load " + cube_path.string(), {}};
     Print print;
     try {
         init_and_process_print({cube}, print, config);
     } catch (const std::exception &e) {
-        return e.what();
+        return {e.what(), {}};
     }
-    return {};
+    std::string warnings;
+    for (const PrintStateBase::Warning &warning : print.objects().front()->step_state_with_warnings(posSupportMaterial).warnings)
+        warnings += warning.message + "\n";
+    return {{}, warnings};
 }
 
 } // namespace
 
-TEST_CASE("A lifted object whose bottom gets no head is refused with the elevation it needs", "[ResinSupport][Elevation][Regression]")
+TEST_CASE("Support heads longer than the lift stand on the bed, and the slice says so", "[ResinSupport][Elevation][Regression]")
 {
     BundledMods mods;
     REQUIRE(mods.errors.empty());
     // The seed's absolute 0.58 mm support width scales to 1.16 mm on its 0.8 mm nozzle (the nozzles differ in size), so
-    // its heads need at least 2.4 mm of lift; with one nozzle size it stays 0.58 mm and 1.7 mm is enough (the warning
-    // logged before the refusal printed 1.16 mm; the CLI measured both lifts).
-    SECTION("no head fits under the bottom") {
-        // Before: "No support was generated", without what to change.
-        const std::string error = lifted_cube_error(2.0, 0.26, {0.8, 0.4, 0.4, 0.6});
-        CAPTURE(error);
-        CHECK(error.find("would print in the air") != std::string::npos);
-        CHECK(error.find("at least") != std::string::npos);
-    }
-    SECTION("support elsewhere on the bed does not hide the floating bottom") {
-        // Before: with 0.2 mm layers the letters' overhangs got pillars on the bed, so the slice passed with most of
-        // the bottom face in the air.
-        const std::string error = lifted_cube_error(2.0, 0.2, {0.8, 0.4, 0.4, 0.6});
-        CAPTURE(error);
-        CHECK(error.find("would print in the air") != std::string::npos);
-        // All nine bottom points are headless; the letters' five heads (numbered as branching tree leaves) once
-        // counted as heads of bottom points 0-4, giving "4 of the 9".
-        CHECK(error.find("9 of the 9") != std::string::npos);
-    }
-    SECTION("a higher lift fits the heads") {
-        const std::string error = lifted_cube_error(3.0, 0.26, {0.8, 0.4, 0.4, 0.6});
-        CAPTURE(error);
+    // a whole head needs at least 2.4 mm of lift; with one nozzle size it stays 0.58 mm and 1.7 mm is enough (the CLI
+    // measured both). A slice without an error has a head on every bottom point: a headless one is refused.
+    SECTION("every bottom point's head stands on the bed") {
+        // Before: refused, 10 of the 10 bottom points without a head ("No support was generated" before that).
+        const auto [error, warnings] = lifted_cube(2.0, 0.26, {0.8, 0.4, 0.4, 0.6});
+        CAPTURE(error, warnings);
         CHECK(error.empty());
+        CHECK(warnings.find("10 support heads are longer than the 2.0 mm elevation") != std::string::npos);
     }
-    SECTION("a smaller support nozzle fits the heads in the same lift") {
-        const std::string error = lifted_cube_error(2.0, 0.26, {0.4, 0.4, 0.4, 0.4});
-        CAPTURE(error);
+    SECTION("with the letters' overhangs supported too") {
+        // Before: refused, 9 of the 9 bottom points without a head (the letters' 5 heads fit on pillars).
+        const auto [error, warnings] = lifted_cube(2.0, 0.2, {0.8, 0.4, 0.4, 0.6});
+        CAPTURE(error, warnings);
         CHECK(error.empty());
+        CHECK(warnings.find("9 support heads are longer than the 2.0 mm elevation") != std::string::npos);
+    }
+    SECTION("a higher lift fits the heads whole") {
+        const auto [error, warnings] = lifted_cube(3.0, 0.26, {0.8, 0.4, 0.4, 0.6});
+        CAPTURE(error, warnings);
+        CHECK(error.empty());
+        CHECK(warnings.find("support heads are longer than") == std::string::npos);
+    }
+    SECTION("a smaller support nozzle fits the heads whole in the same lift") {
+        const auto [error, warnings] = lifted_cube(2.0, 0.26, {0.4, 0.4, 0.4, 0.4});
+        CAPTURE(error, warnings);
+        CHECK(error.empty());
+        CHECK(warnings.find("support heads are longer than") == std::string::npos);
     }
 }

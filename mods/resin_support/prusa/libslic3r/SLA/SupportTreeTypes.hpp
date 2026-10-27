@@ -40,6 +40,9 @@ struct Head: public SupportTreeNode {
 
     long bridge_id = ID_UNSET;
 
+    // MAGPIE: the head reaches below the ground and stands on it (SupportTreeConfig::heads_stand_on_ground).
+    bool on_ground = false;
+
     inline void invalidate() { id = ID_UNSET; }
     inline bool is_valid() const { return id >= 0; }
 

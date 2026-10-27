@@ -392,9 +392,16 @@ void create_branching_tree(SupportTreeBuilder &builder, const SupportableMesh &s
         return;
 
     for (auto &h : heads)
-        if (h && h->is_valid()) {
+        if (h && h->is_valid() && !h->on_ground) {
             leafs.emplace_back(h->junction_point().cast<float>(), h->r_back_mm);
             h->id = long(leafs.size() - 1);
+            builder.add_head(h->id, *h);
+        }
+    // MAGPIE: heads standing on the ground are no tree leaves; they take the ids after the leaves'.
+    long ground_head_id = long(leafs.size());
+    for (auto &h : heads)
+        if (h && h->is_valid() && h->on_ground) {
+            h->id = ground_head_id++;
             builder.add_head(h->id, *h);
         }
 

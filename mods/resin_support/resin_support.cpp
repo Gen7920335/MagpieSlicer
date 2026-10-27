@@ -309,6 +309,8 @@ double minimum_elevation_for_head(const TriangleMesh &mesh, const resin_sla::Sup
 {
     // Elevation search step and range, mm.
     constexpr double resolution_mm = 0.1, range_mm = 30.;
+    // The lift where the head fits whole, above the ground.
+    cfg.heads_stand_on_ground = false;
     auto fits = [&](double elevation_mm) {
         cfg.object_elevation_mm = elevation_mm;
         resin_sla::SupportableMesh one(mesh.its, resin_sla::SupportPoints{ point }, cfg);
@@ -465,6 +467,9 @@ void compute_contacts(mp_ctx *ctx, const mp_support_contacts_input_v1 &in, Outpu
     tree_cfg.object_elevation_mm             = in.print_z_min - in.raft_interface_top_z;
     tree_cfg.max_bridges_on_pillar           = unsigned(std::max(0, st.max_bridges_on_pillar));
     tree_cfg.max_weight_on_model_support     = st.max_weight_on_model;
+    // A head longer than the room under the object is cut at the bed and stands on it (Gen 2026-10-27: no disc
+    // under it; a brim is the user's choice).
+    tree_cfg.heads_stand_on_ground           = true;
 
     resin_sla::SupportableMesh supportable(mesh.its, kept, tree_cfg);
     supportable.zoffset = mesh.bounding_box().min.z();
@@ -559,6 +564,17 @@ void compute_contacts(mp_ctx *ctx, const mp_support_contacts_input_v1 &in, Outpu
                                                  "at the %3% mm elevation. Change the support settings or print the support with a smaller nozzle.") +
                                      sep + std::to_string(headless) + sep + std::to_string(bottom_points) + sep + mm(tree_cfg.object_elevation_mm));
         }
+    }
+    // The heads standing on the bed print as short pins with no pillar or base under them: say so.
+    if (const size_t on_ground = size_t(std::count_if(tree_output.heads.begin(), tree_output.heads.end(),
+                                                         [](const resin_sla::Head &h) { return h.is_valid() && h.on_ground; }));
+        on_ground > 0) {
+        char lift[32];
+        std::snprintf(lift, sizeof(lift), "%.1f", tree_cfg.object_elevation_mm);
+        magpie::host()->warn(ctx, MP_LOG_WARNING,
+                             (std::string("%1% support heads are longer than the %2% mm elevation: they are cut at the bed and stand on "
+                                          "it without a pillar or base. Add a brim if they need to hold better on the bed.") +
+                              '\x1f' + std::to_string(on_ground) + '\x1f' + lift).c_str());
     }
     result.tree = std::move(tree_output);
 

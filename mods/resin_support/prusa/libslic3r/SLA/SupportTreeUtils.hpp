@@ -412,6 +412,14 @@ bool optimize_pinhead_placement(Ex                     policy,
     } else if (back_r > m.cfg.head_fallback_radius_mm) {
         head.r_back_mm = m.cfg.head_fallback_radius_mm;
         ret = optimize_pinhead_placement(policy, m, head);
+    } else if (m.cfg.heads_stand_on_ground && t.distance() > w) {
+        // MAGPIE: even the fallback head reaches below the ground, without touching the model: it stands there.
+        head.dir       = nn;
+        head.width_mm  = lmin;
+        head.r_back_mm = back_r;
+        head.on_ground = true;
+
+        ret = true;
     }
 
     return ret;

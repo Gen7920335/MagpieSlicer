@@ -58,6 +58,10 @@ struct SupportTreeConfig
     // Only generate pillars that can be routed to ground
     bool ground_facing_only = false;
 
+    // MAGPIE: a head that fits nowhere above the ground only because its back end reaches below it stands on the
+    // ground instead (no pillar, no base); the part below the ground is never sliced.
+    bool heads_stand_on_ground = false;
+
     // TODO: unimplemented at the moment. This coefficient will have an impact
     // when bridges and pillars are merged. The resulting pillar should be a bit
     // thicker than the ones merging into it. How much thicker? I don't know
