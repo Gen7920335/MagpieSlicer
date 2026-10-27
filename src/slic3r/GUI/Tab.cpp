@@ -8144,11 +8144,15 @@ const ModHost::ModParam* Tab::active_merged_param(const MergedSetting& merged, c
     return nullptr;
 }
 
-wxSizer* Tab::create_merged_setting(wxWindow* parent, size_t index)
+wxSizer* Tab::create_merged_setting(wxWindow* line_parent, size_t index)
 {
     auto* sizer = new wxBoxSizer(wxHORIZONTAL);
     if (index >= m_merged_settings.size())
         return sizer;
+    // The revert button and the control in one window: the settings page places a widget line's windows at their own
+    // size, not by a sizer (OG_CustomCtrl), and shifts this one left so the control lines up with Orca's fields.
+    auto* parent = new wxPanel(line_parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL, "magpie_merged");
+    parent->SetBackgroundColour(line_parent->GetBackgroundColour());
     MergedSetting&         merged   = m_merged_settings[index];
     const ConfigOptionDef* def      = print_config_def.get(merged.option);
     std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
@@ -8189,15 +8193,19 @@ wxSizer* Tab::create_merged_setting(wxWindow* parent, size_t index)
     // Orca's bullet, the revert arrow while the value differs from the saved preset's (update_merged_modified).
     merged.revert   = new ScalableButton(parent, wxID_ANY, "dot");
     merged.modified = false;
-    merged.revert->SetBackgroundColour(parent->GetBackgroundColour());
+    merged.revert->SetBackgroundColour(line_parent->GetBackgroundColour());
     merged.revert->Bind(wxEVT_BUTTON, [this, index](wxCommandEvent&) { revert_merged(index); });
     merged.revert->Bind(wxEVT_DESTROY, [this, index](wxWindowDestroyEvent& event) {
         if (index < m_merged_settings.size() && event.GetEventObject() == m_merged_settings[index].revert)
             m_merged_settings[index].revert = nullptr;
         event.Skip();
     });
-    sizer->Add(merged.revert, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, parent->FromDIP(4));
-    sizer->Add(merged.control, 0, wxALIGN_CENTER_VERTICAL);
+    auto* row = new wxBoxSizer(wxHORIZONTAL);
+    row->Add(merged.revert, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, parent->FromDIP(4));
+    row->Add(merged.control, 0, wxALIGN_CENTER_VERTICAL);
+    parent->SetSizer(row);
+    parent->Fit();
+    sizer->Add(parent, 0, wxALIGN_CENTER_VERTICAL);
     load_merged_settings();
     return sizer;
 }

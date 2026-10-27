@@ -579,6 +579,11 @@ void OG_CustomCtrl::correct_widgets_position(wxSizer* widget, const Line& line, 
             // value column, so its value lines up with Orca's fields.
             if (auto* mod_row = dynamic_cast<ModParamsPanel*>(child->GetWindow()); mod_row != nullptr && line.get_options().empty())
                 pos.x -= mod_row->value_column_offset();
+            // So does a merged setting's (Tab::create_merged_setting): its control is the panel's first window, made
+            // before the button.
+            if (line.get_options().empty() && child->GetWindow()->GetName() == "magpie_merged" &&
+                !child->GetWindow()->GetChildren().empty())
+                pos.x -= child->GetWindow()->GetChildren().GetFirst()->GetData()->GetPosition().x;
             pos.y += std::max(0, int(0.5 * (line_height - sz.y)));
             if (line.extra_widget_sizer && widget == line.extra_widget_sizer)
                 pos.x += m_h_gap;
