@@ -24,6 +24,8 @@
 #include <cassert>
 #include "slic3r/GUI/Widgets/StateColor.hpp"
 #include "slic3r/GUI/Widgets/TextInput.hpp"
+#include <nlohmann/json.hpp>
+#include <variant>
 #include <memory>
 #include "slic3r/GUI/Field.hpp"
 #include <map>
@@ -1848,8 +1850,26 @@ Field* Tab::get_field(const t_config_option_key& opt_key, Page** selected_page, 
     return field;
 }
 
+// MAGPIE: options greyed out for what the printer is (its vendor, a single extruder, a belt, an air filter it lacks,
+// SLA), not because a parent setting is off: they keep Orca's greying and stay shown.
+static bool keep_greyed_out(const std::string& opt_key)
+{
+    static const std::set<std::string> keys{
+        "raft_layers", "skirt_loops", "skirt_height", "single_extruder_multi_material",
+        "filament_cooling_final_speed", "filament_cooling_initial_speed", "filament_cooling_moves", "filament_loading_speed",
+        "filament_loading_speed_start", "filament_toolchange_delay", "filament_unloading_speed", "filament_unloading_speed_start",
+        "change_filament_gcode", "retract_length_toolchange", "bed_exclude_area", "extruder_printable_area",
+        "extruder_printable_height", "activate_air_filtration_during_print", "activate_air_filtration_on_completion",
+        "manual_filament_change", "material_print_speed", "curr_bed_type", "first_layer_sequence_choice",
+        "other_layers_sequence_choice" };
+    return keys.count(opt_key) > 0;
+}
+
 void Tab::toggle_option(const std::string& opt_key, bool toggle, int opt_index/* = -1*/)
 {
+    // MAGPIE: a setting greyed out because its parent is off hides at the end of the round (end_line_round).
+    if (m_line_round_depth > 0 && !keep_greyed_out(opt_key))
+        m_line_round[{ opt_key, opt_index }].field = toggle;
     if (!m_active_page)
         return;
     Field* field = m_active_page->get_field(opt_key, opt_index);
@@ -1859,6 +1879,10 @@ void Tab::toggle_option(const std::string& opt_key, bool toggle, int opt_index/*
 
 void Tab::toggle_line(const std::string &opt_key, bool toggle, int opt_index)
 {
+    if (m_line_round_depth > 0) {
+        m_line_round[{ opt_key, opt_index }].line = toggle;
+        return;
+    }
     // Apply to every page that owns the option, not just m_active_page. ConfigManipulation runs while
     // each tab updates at preset load, so the Speed Dial sees the same visibility regardless of page.
     for (const PageShp& page : m_pages) {
@@ -1867,6 +1891,27 @@ void Tab::toggle_line(const std::string &opt_key, bool toggle, int opt_index)
             line->toggle_visible = toggle;
     }
 };
+
+void Tab::begin_line_round()
+{
+    if (m_line_round_depth++ == 0)
+        m_line_round.clear();
+}
+
+void Tab::end_line_round()
+{
+    if (m_line_round_depth == 0 || --m_line_round_depth > 0)
+        return;
+    for (const auto& [key, toggle] : m_line_round) {
+        const bool show = toggle.line.value_or(true) && toggle.field.value_or(true);
+        for (const PageShp& page : m_pages)
+            if (page)
+                if (Line* line = page->get_line(key.first, key.second))
+                    line->toggle_visible = show;
+    }
+    m_line_round.clear();
+    update_placed_mod_lines();
+}
 
 void Tab::set_option_label(const std::string &opt_key, const wxString &label, int opt_index)
 {
@@ -3580,8 +3625,10 @@ void TabPrint::update_description_lines()
 void TabPrint::toggle_options()
 {
     if (!m_active_page) return;
-    // MAGPIE: the mod rows placed after options follow them (and their own conditions) once they are toggled.
-    ScopeGuard placed_rows([this] { update_placed_mod_lines(); });
+    // MAGPIE: the options toggled in this round show or hide together at its end, and the mod rows placed after
+    // them follow (end_line_round).
+    begin_line_round();
+    ScopeGuard line_round([this] { end_line_round(); });
     // MAGPIE: the support type dropdown follows enable_support / raft_layers like Orca's field.
     load_support_menu();
     // BBS: whether the preset is Bambu Lab printer
@@ -5168,14 +5215,25 @@ void TabFilament::toggle_options()
     const unsigned int variant_index = selected_variant_index();
     if (!m_active_page)
         return;
-    // MAGPIE: the mod rows placed after options follow them (and their own conditions) once they are toggled.
-    ScopeGuard placed_rows([this] { update_placed_mod_lines(); });
+    // MAGPIE: the options toggled in this round show or hide together at its end, and the mod rows placed after
+    // them follow (end_line_round).
+    begin_line_round();
+    ScopeGuard line_round([this] { end_line_round(); });
     bool is_BBL_printer = false;
     if (m_preset_bundle) {
         is_BBL_printer = wxGetApp().preset_bundle->is_bbl_vendor();
     }
 
     auto printer_cfg = m_preset_bundle->printers.get_edited_preset().config;
+
+    // MAGPIE: a filament's tower interface settings are read only with the process's tower interface features on
+    // (toggle test: the same G-code with them off).
+    {
+        const auto* tower_interface = m_preset_bundle->prints.get_edited_preset().config.option<ConfigOptionBool>("enable_tower_interface_features");
+        for (auto el : {"filament_tower_interface_pre_extrusion_dist", "filament_tower_interface_pre_extrusion_length",
+                        "filament_tower_interface_print_temp"})
+            toggle_option(el, tower_interface != nullptr && tower_interface->value);
+    }
 
     if (m_active_page->title() == L("Cooling")) {
         bool has_enable_overhang_bridge_fan = m_config->opt_bool("enable_overhang_bridge_fan", 0);
@@ -5185,6 +5243,8 @@ void TabFilament::toggle_options()
         // Orca: toggle dont slow down for external perimeters if
         bool has_slow_down_for_layer_cooling = m_config->opt_bool("slow_down_for_layer_cooling", 0);
         toggle_option("dont_slow_down_outer_wall", has_slow_down_for_layer_cooling);
+        // MAGPIE: the minimum slow-down speed is read only while slowing down (toggle test: the same G-code).
+        toggle_option("slow_down_min_speed", has_slow_down_for_layer_cooling);
 
         // ORCA: First layer fan speed override only makes sense when no layers are gated off ("No cooling for
         // the first" == 0). Otherwise the override would set layer 0 to a non-zero value while the gate forces
@@ -6751,8 +6811,10 @@ void TabPrinter::toggle_options()
 {
     if (!m_active_page || m_presets->get_edited_preset().printer_technology() == ptSLA)
         return;
-    // MAGPIE: the mod rows placed after options follow them (and their own conditions) once they are toggled.
-    ScopeGuard placed_rows([this] { update_placed_mod_lines(); });
+    // MAGPIE: the options toggled in this round show or hide together at its end, and the mod rows placed after
+    // them follow (end_line_round).
+    begin_line_round();
+    ScopeGuard line_round([this] { end_line_round(); });
 
     auto nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
 
@@ -7996,7 +8058,10 @@ void Tab::update_placed_mod_lines()
         return ModHost::param_or_setting_value(*full, name);
     };
     bool changed = false;
+    std::set<std::string> merged_options;
     for (const auto& [key, anchor] : m_placed_mod_lines) {
+        if (key.rfind("merge:", 0) == 0)
+            merged_options.insert(anchor);
         const ModHost::ModParam* param = ModParamsPanel::find_param(mods.get(), key);
         for (PageShp page : m_pages) {
             const Line* anchor_line = page ? page->get_line(anchor) : nullptr;
@@ -8011,16 +8076,237 @@ void Tab::update_placed_mod_lines()
                 show = ModHost::param_visible(*param, lookup);
             for (ConfigOptionsGroupShp group : page->m_optgroups)
                 for (Line& line : const_cast<std::vector<Line>&>(group->get_lines()))
-                    if (line.get_options().empty() && line.label_tooltip == wxString::FromUTF8(key) && line.toggle_visible != show) {
+                    if (line.get_options().empty() && line.magpie_key == key && line.toggle_visible != show) {
                         line.toggle_visible = show;
                         changed = true;
                     }
         }
     }
+    // Orca's own line of a merged setting stays hidden: the merged line stands in its place.
+    for (const std::string& option : merged_options)
+        for (PageShp page : m_pages)
+            if (Line* line = page ? page->get_line(option) : nullptr; line != nullptr && line->toggle_visible) {
+                line->toggle_visible = false;
+                changed = true;
+            }
+    load_merged_settings();
     if (changed && m_active_page) {
         m_active_page->update_visibility(m_mode, true);
         m_page_view->GetParent()->Layout();
     }
+}
+
+const ModHost::ModParam* Tab::active_merged_param(const MergedSetting& merged, std::string* key) const
+{
+    std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
+    if (wxGetApp().preset_bundle == nullptr)
+        return nullptr;
+    const DynamicPrintConfig full = wxGetApp().preset_bundle->full_config();
+    const ModHost::ExprLookup lookup = [&full](const std::string& name, std::optional<size_t> index) -> std::optional<ModHost::ExprValue> {
+        return index ? std::nullopt : ModHost::param_or_setting_value(full, name);
+    };
+    for (const std::string& k : merged.params)
+        if (const ModHost::ModParam* p = ModParamsPanel::find_param(mods.get(), k)) {
+            bool holds = true;
+            if (p->ui.merge_when)
+                try {
+                    holds = ModHost::expr_truthy(p->ui.merge_when->evaluate(lookup));
+                } catch (const ModHost::ExprError&) {
+                    holds = false;
+                }
+            if (holds) {
+                if (key != nullptr)
+                    *key = k;
+                return p;
+            }
+        }
+    return nullptr;
+}
+
+wxSizer* Tab::create_merged_setting(wxWindow* parent, size_t index)
+{
+    auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+    if (index >= m_merged_settings.size())
+        return sizer;
+    MergedSetting&         merged   = m_merged_settings[index];
+    const ConfigOptionDef* def      = print_config_def.get(merged.option);
+    std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
+    const std::string      language = into_u8(wxGetApp().current_language_code_safe());
+    if (def != nullptr && def->type == coEnum) {
+        // Orca's choices, then each merged string parameter's own (its "" keeps Orca's value).
+        auto* choice = new ::ComboBox(parent, wxID_ANY, wxEmptyString, wxDefaultPosition,
+                                      wxSize(Field::def_width_wider() * wxGetApp().em_unit(), -1), 0, nullptr, wxCB_READONLY);
+        merged.entries.clear();
+        for (size_t i = 0; i < def->enum_values.size(); ++i) {
+            choice->Append(_(wxString::FromUTF8(i < def->enum_labels.size() ? def->enum_labels[i] : def->enum_values[i])));
+            merged.entries.emplace_back(std::string(), def->enum_values[i]);
+        }
+        for (const std::string& k : merged.params)
+            if (const ModHost::ModParam* p = ModParamsPanel::find_param(mods.get(), k); p != nullptr && p->type == "string")
+                for (const ModHost::ModParamOption& o : p->options)
+                    if (!o.value.empty()) {
+                        choice->Append(wxString::FromUTF8(ModHost::localized_text(o.labels, language, o.label.empty() ? o.value : o.label)));
+                        merged.entries.emplace_back(k, o.value);
+                    }
+        choice->Bind(wxEVT_COMBOBOX, [this, index](wxCommandEvent&) { on_merged_setting_changed(index); });
+        merged.control = choice;
+    } else {
+        // A number: the active parameter's value, or what Orca's setting comes to while it keeps Orca's.
+        auto* text = new ::TextInput(parent, wxEmptyString, wxEmptyString, wxEmptyString, wxDefaultPosition,
+                                     wxSize(Field::def_width() * wxGetApp().em_unit(), -1), wxTE_PROCESS_ENTER);
+        text->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, [this, index](wxCommandEvent&) { on_merged_setting_changed(index); });
+        text->GetTextCtrl()->Bind(wxEVT_KILL_FOCUS, [this, index](wxFocusEvent& e) { on_merged_setting_changed(index); e.Skip(); });
+        merged.control = text;
+    }
+    merged.control->SetToolTip(def != nullptr ? _(def->tooltip) : wxString());
+    // The page can be cleared and rebuilt; forget a destroyed control.
+    merged.control->Bind(wxEVT_DESTROY, [this, index](wxWindowDestroyEvent& event) {
+        if (index < m_merged_settings.size() && event.GetEventObject() == m_merged_settings[index].control)
+            m_merged_settings[index].control = nullptr;
+        event.Skip();
+    });
+    sizer->Add(merged.control, 0, wxALIGN_CENTER_VERTICAL);
+    load_merged_settings();
+    return sizer;
+}
+
+void Tab::load_merged_settings()
+{
+    if (m_config == nullptr || m_merged_settings.empty())
+        return;
+    std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
+    const std::string    text   = ModParamsPanel::stored_json(*m_config, "process");
+    const nlohmann::json stored = nlohmann::json::parse(text.empty() ? std::string("{}") : text, nullptr, false);
+    for (MergedSetting& merged : m_merged_settings) {
+        if (merged.control == nullptr)
+            continue;
+        if (auto* choice = dynamic_cast<::ComboBox*>(merged.control)) {
+            int selection = wxNOT_FOUND;
+            // A merged parameter holding a value of its own shows it; else Orca's value.
+            for (size_t i = 0; i < merged.entries.size() && selection == wxNOT_FOUND; ++i) {
+                const auto& [k, v] = merged.entries[i];
+                if (!k.empty() && stored.is_object())
+                    if (auto it = stored.find(k); it != stored.end() && it->is_string() && it->get<std::string>() == v)
+                        selection = int(i);
+            }
+            if (selection == wxNOT_FOUND && m_config->has(merged.option)) {
+                const std::string value = m_config->opt_serialize(merged.option);
+                for (size_t i = 0; i < merged.entries.size(); ++i)
+                    if (merged.entries[i].first.empty() && merged.entries[i].second == value)
+                        selection = int(i);
+            }
+            if (choice->GetSelection() != selection)
+                choice->SetSelection(selection);
+        } else if (auto* input = dynamic_cast<::TextInput*>(merged.control)) {
+            std::string              key;
+            const ModHost::ModParam* p = active_merged_param(merged, &key);
+            wxString                 shown;
+            std::optional<double>    own;
+            if (p != nullptr && stored.is_object())
+                if (auto it = stored.find(key); it != stored.end() && it->is_number())
+                    own = it->get<double>();
+            const double keep = p != nullptr && std::holds_alternative<double>(p->default_value) ? std::get<double>(p->default_value) : -1.;
+            if (own && *own != keep) {
+                shown = wxString::Format("%d", int(*own));
+            } else if (p != nullptr && p->ui.merge_orca && wxGetApp().preset_bundle != nullptr) {
+                const DynamicPrintConfig full = wxGetApp().preset_bundle->full_config();
+                try {
+                    const ModHost::ExprValue v = p->ui.merge_orca->evaluate(
+                        [&full](const std::string& name, std::optional<size_t> index) -> std::optional<ModHost::ExprValue> {
+                            return index ? std::nullopt : ModHost::param_or_setting_value(full, name);
+                        });
+                    if (const double* d = std::get_if<double>(&v))
+                        shown = wxString::Format("%d", int(*d));
+                } catch (const ModHost::ExprError&) {
+                }
+            }
+            if (shown.empty() && m_config->has(merged.option))
+                shown = wxString::FromUTF8(m_config->opt_serialize(merged.option));
+            if (input->GetTextCtrl()->GetValue() != shown)
+                input->GetTextCtrl()->ChangeValue(shown);
+        }
+    }
+}
+
+void Tab::on_merged_setting_changed(size_t index)
+{
+    if (index >= m_merged_settings.size() || m_merged_settings[index].control == nullptr)
+        return;
+    MergedSetting& merged = m_merged_settings[index];
+    if (auto* choice = dynamic_cast<::ComboBox*>(merged.control)) {
+        const int sel = choice->GetSelection();
+        if (sel < 0 || size_t(sel) >= merged.entries.size())
+            return;
+        const std::string k = merged.entries[size_t(sel)].first;
+        const std::string v = merged.entries[size_t(sel)].second;
+        // Orca's value: the merged parameters back to their default (Orca's); a parameter's value: that one.
+        std::vector<std::pair<std::string, std::string>> values;
+        if (k.empty())
+            for (const std::string& p : merged.params)
+                values.emplace_back(p, std::string());
+        else
+            values.emplace_back(k, nlohmann::json(v).dump());
+        write_merged(merged.option, k.empty() ? v : std::string(), values);
+    } else if (auto* input = dynamic_cast<::TextInput*>(merged.control)) {
+        std::string key;
+        if (active_merged_param(merged, &key) == nullptr)
+            return;
+        long v = 0;
+        if (!input->GetTextCtrl()->GetValue().ToLong(&v)) {
+            load_merged_settings();
+            return;
+        }
+        // A negative number keeps Orca's value (the parameter's default).
+        write_merged(std::string(), std::string(), { { key, v < 0 ? std::string() : nlohmann::json(v).dump() } });
+    }
+}
+
+void Tab::write_merged(const std::string& option, const std::string& option_value,
+                       const std::vector<std::pair<std::string, std::string>>& values)
+{
+    if (m_config == nullptr)
+        return;
+    std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
+    const std::string before = ModParamsPanel::stored_json(*m_config, "process");
+    nlohmann::json    stored = nlohmann::json::parse(before.empty() ? std::string("{}") : before, nullptr, false);
+    if (!stored.is_object())
+        stored = nlohmann::json::object();
+    for (const auto& [k, text] : values) {
+        const ModHost::ModParam* p     = ModParamsPanel::find_param(mods.get(), k);
+        const nlohmann::json     value = text.empty() ? nlohmann::json() : nlohmann::json::parse(text, nullptr, false);
+        // The default (Orca's value) is not stored.
+        const bool is_default = value.is_null() ||
+                                (p != nullptr && std::visit([&value](const auto& d) { return value == nlohmann::json(d); }, p->default_value));
+        if (is_default)
+            stored.erase(k);
+        else
+            stored[k] = value;
+    }
+    const std::string        after = stored.empty() ? std::string() : stored.dump();
+    std::vector<std::string> changed;
+    if (after != before) {
+        m_config->set_key_value("mod_settings", new ConfigOptionString(after));
+        changed.push_back("mod_settings");
+    }
+    if (!option.empty() && !option_value.empty() && m_config->has(option) && m_config->opt_serialize(option) != option_value) {
+        m_config->set_deserialize_strict(option, option_value);
+        changed.push_back(option);
+    }
+    if (changed.empty()) {
+        load_merged_settings();
+        return;
+    }
+    update_dirty();
+    for (const std::string& key : changed) {
+        if (key == "mod_settings")
+            on_value_change(key, m_config->opt_string(key));
+        else if (const ConfigOptionDef* def = print_config_def.get(key); def != nullptr && def->type == coEnum)
+            on_value_change(key, m_config->option(key)->getInt());
+        else
+            on_value_change(key, m_config->opt_serialize(key));
+    }
+    reload_config();
+    update();
 }
 
 void Tab::add_mods_page(const std::string& scope)
@@ -8058,8 +8344,21 @@ void Tab::add_mods_page(const std::string& scope)
         const ModHost::ModParam* p = ModParamsPanel::find_param(mods.get(), key);
         const std::string        mod_id = key.substr(0, key.find('.'));
         bool                     placed = false;
+        // MAGPIE: a parameter merged into an Orca option shows in that option's one control (create_merged_setting).
+        if (p != nullptr && !p->ui.merge_into.empty() && dynamic_cast<TabPrintModel*>(this) == nullptr) {
+            auto it = std::find_if(m_merged_settings.begin(), m_merged_settings.end(),
+                                   [p](const MergedSetting& m) { return m.option == p->ui.merge_into; });
+            if (it == m_merged_settings.end()) {
+                m_merged_settings.push_back({ p->ui.merge_into, {}, nullptr, {} });
+                it = std::prev(m_merged_settings.end());
+            }
+            if (std::find(it->params.begin(), it->params.end(), key) == it->params.end())
+                it->params.push_back(key);
+            continue;
+        }
         if (p != nullptr && !p->ui.after.empty()) {
             Line line{ ModParamsPanel::param_label(mods.get(), key), wxString::FromUTF8(key) };
+            line.magpie_key = key;
             for (PageShp page : m_pages) {
                 for (ConfigOptionsGroupShp group : page->m_optgroups) {
                     // A group without a label column (the G-code editors) draws no line labels: the panel shows the
@@ -8128,6 +8427,35 @@ void Tab::add_mods_page(const std::string& scope)
             BOOST_LOG_TRIVIAL(warning) << "Mod parameter " << key << ": its settings tab place is not on this tab, shown on the Mods page";
         if (!placed)
             on_mods_page.push_back(key);
+    }
+    // MAGPIE: each merged setting is one line right after its option's own line, with the option's label; the
+    // option's line hides (update_placed_mod_lines) and the merged line shows where it would.
+    for (size_t i = 0; i < m_merged_settings.size(); ++i) {
+        const std::string option = m_merged_settings[i].option;
+        if (std::find_if(m_placed_mod_lines.begin(), m_placed_mod_lines.end(),
+                         [&option](const auto& p) { return p.first == "merge:" + option; }) != m_placed_mod_lines.end())
+            continue; // already on this tab's pages
+        const ConfigOptionDef* def = print_config_def.get(option);
+        if (def == nullptr)
+            continue;
+        bool placed = false;
+        for (PageShp page : m_pages) {
+            for (ConfigOptionsGroupShp group : page->m_optgroups) {
+                Line line{ _(def->label), _(def->tooltip) };
+                line.magpie_key = "merge:" + option;
+                line.widget     = [this, i](wxWindow* parent) -> wxSizer* { return create_merged_setting(parent, i); };
+                // Right under the option's own line, above the rows other parameters put after it.
+                if ((placed = group->insert_line_after(option, line, 0))) {
+                    ++rows_after[option];
+                    m_placed_mod_lines.emplace_back("merge:" + option, option);
+                    break;
+                }
+            }
+            if (placed)
+                break;
+        }
+        if (!placed)
+            BOOST_LOG_TRIVIAL(warning) << "Merged setting " << option << ": the option is not on this tab";
     }
     // A group's panel is a full-width widget line, like the IDEX/IQEX modes table: the panel lays out its own label
     // and value columns, one row per parameter.

@@ -17,6 +17,7 @@
 #include "libslic3r/libslic3r.h"
 #include "slic3r/GUI/Field.hpp"
 #include "libslic3r/BeltBrim.hpp"
+#include "libslic3r/ModHost/SlotChoice.hpp"
 #include <cstdlib>
 #include <set>
 #include <map>
@@ -1073,7 +1074,15 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_field("tree_support_brim_width", support_is_tree && !config->opt_bool("tree_support_auto_brim"));
     // tree support use max_bridge_length instead of bridge_no_support
     toggle_line("max_bridge_length", support_is_tree);
-    toggle_line("bridge_no_support", !support_is_tree);
+    // MAGPIE: Cura and resin support (mods) find the overhangs themselves; Orca's bridge and small overhang filters do
+    // nothing there (toggle test: the same G-code on two models, and the code paths never run).
+    const std::string support_generator   = ModHost::support_generator_name(*config, *config);
+    const bool        mod_finds_overhangs = support_generator == "cura" || support_generator == "resin";
+    toggle_line("bridge_no_support", !support_is_tree && !mod_finds_overhangs);
+    toggle_line("support_remove_small_overhang", have_support_material && !mod_finds_overhangs);
+    // MAGPIE: settings read only for support (toggle test: the same G-code with support and raft off).
+    toggle_field("support_line_width", have_support_material);
+    toggle_field("tree_support_wall_count", have_support_material);
     toggle_line("support_critical_regions_only", is_auto(support_type) && support_is_tree);
 
     for (auto el : { "support_interface_filament",
@@ -1148,6 +1157,8 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("preheat_steps", have_ooze_prevention && (preheat_steps > 0));
 
     bool have_prime_tower = config->opt_bool("enable_prime_tower");
+    // MAGPIE: the prime tower's filament is read only for the tower (toggle test: the same G-code with it off).
+    toggle_field("wipe_tower_filament", have_prime_tower);
     // ORCA-Belt: belt printers replace the classic wipe tower with the
     // auto-generated belt purge prism, enabled by the belt-only printer option
     // enable_belt_purge_tower. Its width (a process option) is only relevant

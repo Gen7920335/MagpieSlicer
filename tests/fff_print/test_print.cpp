@@ -2263,3 +2263,24 @@ TEST_CASE("Variable layer height limits come from the nozzle each filament print
     CHECK_THAT(params.min_layer_height, Catch::Matchers::WithinAbs(0.12, 1e-9));
     CHECK_THAT(params.max_layer_height, Catch::Matchers::WithinAbs(0.48, 1e-9));
 }
+
+TEST_CASE("H/2 support leaves an object without support alone", "[Print][HalfLayer][Regression]")
+{
+    // Before: the band plan held the support bands of an object without support, so every travel kept the bands'
+    // clearance (a U1 cube with support off moved each lift with H/2 support on).
+    OfficialMods mods;
+    auto moves = [](bool h2_support) {
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_deserialize_strict({ { "enable_support", "0" }, { "raft_layers", "0" }, { "z_hop", "0.4" } });
+        Slic3r::Test::half_layer_params(config, false, h2_support);
+        const std::string output = Slic3r::Test::slice({ TestMesh::cube_20x20x20 }, config);
+        // The moves, without comments (the settings block names the mod value).
+        std::string        kept;
+        std::istringstream in(output);
+        for (std::string line; std::getline(in, line);)
+            if (!line.empty() && line[0] != ';')
+                kept += line + "\n";
+        return kept;
+    };
+    CHECK(moves(true) == moves(false));
+}

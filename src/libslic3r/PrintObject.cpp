@@ -4683,6 +4683,14 @@ void PrintObject::generate_support_preview()
 bool PrintObject::update_layer_bands()
 {
     LayerBandPlan plan = ModHost::layer_band_plan(this->print()->full_print_config(), m_config, this->model_object()->name);
+    // MAGPIE: support bands need support. An object without support or a raft has none to band, and a plan that
+    // bands nothing else bands nothing: its travel lift and band frames would change an object H/2 does not touch
+    // (H/2 support on with support off moved every travel lift).
+    if (plan.support && !this->has_support_material()) {
+        plan.support = false;
+        if (plan.wall_depths <= 0)
+            plan = LayerBandPlan();
+    }
     // A plan the band executor cannot print bands nothing; Print::validate reports why.
     if (std::string problem = layer_band_plan_problem(plan); !problem.empty()) {
         plan       = LayerBandPlan();

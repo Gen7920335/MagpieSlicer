@@ -66,6 +66,7 @@ public:
 	std::string	label_path;
     bool        undo_to_sys{false}; // BBS: object config
     bool        toggle_visible{true}; // BBS: hide some line
+    std::string magpie_key; // MAGPIE: the mod row or merged setting a widget line shows ("merge:<option>")
 
     size_t		full_width {0};
     widget_t	widget {nullptr};

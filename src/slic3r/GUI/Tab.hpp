@@ -37,6 +37,7 @@
 #include <wx/imaglist.h>
 
 #include <map>
+#include <optional>
 #include <vector>
 #include <memory>
 
@@ -523,6 +524,32 @@ protected:
 	// that option's line shows and its field is enabled, and its own "visible" condition holds.
 	std::vector<std::pair<std::string, std::string>> m_placed_mod_lines;
 	void			update_placed_mod_lines();
+	// MAGPIE: one control for an Orca option and the mod parameters merged into it (ModParamUi::merge_into), in
+	// place of the option's own line, which stays hidden.
+	struct MergedSetting {
+		std::string              option;    // Orca's option key
+		std::vector<std::string> params;    // "<mod id>.<name>" merged into it
+		wxWindow*                control = nullptr;
+		// A dropdown's entries: ("", Orca's value) or (parameter key, its value).
+		std::vector<std::pair<std::string, std::string>> entries;
+	};
+	std::vector<MergedSetting> m_merged_settings;
+	wxSizer*		create_merged_setting(wxWindow* parent, size_t index);
+	void			load_merged_settings();
+	void			on_merged_setting_changed(size_t index);
+	// The parameter of `merged` whose merge_when holds for the presets being edited (the first; nullptr if none).
+	const ModHost::ModParam* active_merged_param(const MergedSetting& merged, std::string* key) const;
+	// Writes `values` ("<mod id>.<name>" -> JSON value, or null for the default) into this tab's mod value key and
+	// `option_value` (serialized) into Orca's option `option` when not empty, then reports the changes as the fields do.
+	void			write_merged(const std::string& option, const std::string& option_value, const std::vector<std::pair<std::string, std::string>>& values);
+	// MAGPIE: a setting greyed out because its parent is off hides instead (Gen 2026-10-27), except the ones greyed
+	// for what the printer is (keep_greyed_out()). Within one toggle_options() round each option's last
+	// toggle_line() and last toggle_option() count, as they did; its line shows when both allow it.
+	struct LineToggle { std::optional<bool> line, field; };
+	std::map<std::pair<std::string, int>, LineToggle> m_line_round;
+	int				m_line_round_depth = 0;
+	void			begin_line_round();
+	void			end_line_round();
 	// MAGPIE: the support type dropdown with the loaded support mods' entries (ModHost/SupportMenu.hpp), in place
 	// of the support_type field when a mod adds one; null otherwise.
 	void			add_support_type_line(ConfigOptionsGroupShp optgroup);

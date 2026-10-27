@@ -435,8 +435,12 @@ TEST_CASE("A visible condition reads parameters and leaves slicing alone", "[Mod
     REQUIRE(mods.resolve(config).empty());
     CHECK(config.opt_int("wall_loops") == 3);
 
+    // A condition may read a setting (the tabs evaluate it on the presets being edited), not an unknown name.
+    CHECK_NOTHROW(build_one(R"({"id": "m", "version": "1",
+        "params": {"g": {"type": "float", "default": 1, "visible": "layer_height > 0.1"}}})"));
     CHECK_THROWS_WITH(build_one(R"({"id": "m", "version": "1",
-        "params": {"g": {"type": "float", "default": 1, "visible": "layer_height > 0.1"}}})"), ContainsSubstring("not a mod parameter"));
+        "params": {"g": {"type": "float", "default": 1, "visible": "no_such_setting > 0.1"}}})"),
+                      ContainsSubstring("neither a mod parameter nor a setting"));
     CHECK_THROWS_AS(ModSet::parse_mod(R"({"id": "m", "version": "1",
         "params": {"g": {"type": "float", "default": 1, "visible": "m.g >"}}})"), ModError);
 }
@@ -827,4 +831,41 @@ TEST_CASE("The official mods' settings tab places name settings the tabs have", 
     // Every official mod with settings places them (multi-nozzle walls, H/2, supports, low temperature interface,
     // layer time blending, U1).
     CHECK(placed >= 20);
+}
+
+TEST_CASE("A parameter merges into one of Orca's options", "[ModHost]")
+{
+    // Gen 2026-10-27: an Orca option and a mod's parameter for the same thing show as one setting.
+    const ModSet mods = build_one(R"json({"id": "demo", "version": "1",
+        "params": {
+            "pattern": {"type": "string", "default": "", "options": ["", "triangles"],
+                        "ui": {"merge_into": "support_interface_pattern"}},
+            "walls":   {"type": "int", "default": -1,
+                        "ui": {"merge_into": "tree_support_wall_count", "merge_when": "support_type == \"normal(auto)\"",
+                               "merge_orca": "min(tree_support_wall_count, 1)"}}}})json");
+    const ModParam &walls = mods.mods().front().params[1];
+    CHECK(walls.ui.merge_into == "tree_support_wall_count");
+    REQUIRE(walls.ui.merge_when.has_value());
+    REQUIRE(walls.ui.merge_orca.has_value());
+    const ExprLookup normal_two = [](const std::string &name, std::optional<size_t>) -> std::optional<ExprValue> {
+        if (name == "support_type")
+            return std::string("normal(auto)");
+        if (name == "tree_support_wall_count")
+            return 2.;
+        return std::nullopt;
+    };
+    CHECK(expr_truthy(walls.ui.merge_when->evaluate(normal_two)));
+    // Orca's 2 gives normal support one wall.
+    CHECK(std::get<double>(walls.ui.merge_orca->evaluate(normal_two)) == 1.);
+
+    CHECK_THROWS_WITH(build_one(R"({"id": "m", "version": "1",
+        "params": {"g": {"type": "int", "default": 1, "ui": {"merge_into": "no_such_option"}}}})"), ContainsSubstring("is not a setting"));
+    CHECK_THROWS_WITH(build_one(R"({"id": "m", "version": "1",
+        "params": {"g": {"type": "int", "default": 1, "ui": {"merge_into": "wall_loops", "after": "wall_loops"}}}})"),
+                      ContainsSubstring("takes the option's place"));
+    CHECK_THROWS_WITH(build_one(R"({"id": "m", "version": "1",
+        "params": {"g": {"type": "bool", "default": false, "ui": {"merge_into": "wall_loops"}}}})"), ContainsSubstring("string or int"));
+    CHECK_THROWS_WITH(build_one(R"({"id": "m", "version": "1",
+        "params": {"g": {"type": "int", "default": 1, "ui": {"merge_into": "wall_loops", "merge_when": "nope > 1"}}}})"),
+                      ContainsSubstring("neither a mod parameter nor a setting"));
 }

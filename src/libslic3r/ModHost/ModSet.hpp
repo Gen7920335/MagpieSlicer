@@ -68,6 +68,14 @@ struct ModParamUi
     // dropdown named by the printer's nozzles) or "layer_ranges" (a string of first:last:toolhead entries, as
     // a table, ModHost::parse_layer_ranges).
     std::string widget;
+    // One setting with Orca's option `merge_into`: the tab shows a single control in that option's place (Orca's
+    // own line hides) for Orca's values and this parameter's. A string parameter adds its non-empty options to
+    // Orca's choices ("" keeps Orca's value). An int parameter overrides Orca's value where `merge_when` holds
+    // (several parameters may merge into one option, each with its own condition); its default keeps Orca's, and
+    // the control then shows `merge_orca`, the value Orca's setting comes to.
+    std::string                  merge_into;
+    std::optional<Expr>          merge_when;
+    std::optional<Expr>          merge_orca;
 
     bool placed() const { return !after.empty() || !group.empty(); }
 };

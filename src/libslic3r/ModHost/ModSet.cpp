@@ -592,6 +592,15 @@ Mod ModSet::parse_mod(const std::string &json_text)
                 p.ui.group       = optional_string(*ui, "group");
                 p.ui.group_after = optional_string(*ui, "group_after");
                 p.ui.widget      = optional_string(*ui, "widget");
+                p.ui.merge_into  = optional_string(*ui, "merge_into");
+                if (std::string text = optional_string(*ui, "merge_when"); !text.empty())
+                    p.ui.merge_when = parse_expr(text, where + " ui merge_when");
+                if (std::string text = optional_string(*ui, "merge_orca"); !text.empty())
+                    p.ui.merge_orca = parse_expr(text, where + " ui merge_orca");
+                if (!p.ui.merge_into.empty() && (p.ui.placed() || !p.ui.widget.empty()))
+                    throw ModError(where + ": a \"ui\" \"merge_into\" takes the option's place; it has no other place or widget");
+                if (!p.ui.merge_into.empty() && p.type != "string" && p.type != "int")
+                    throw ModError(where + ": \"merge_into\" is for a string or int parameter");
                 if (!p.ui.after.empty() && !p.ui.group.empty())
                     throw ModError(where + ": \"ui\" names a row \"after\" an option or a \"group\", not both");
                 if (!p.ui.group.empty() && p.ui.page.empty())
@@ -883,6 +892,18 @@ ModSet ModSet::build(std::vector<Mod> mods)
                 for (const std::string &name : p.visible->names())
                     if (set.m_params.count(name) == 0 && print_config_def.get(name) == nullptr)
                         mod_fail(mod.id, "param '" + p.name + "' visible: \"" + name + "\" is neither a mod parameter nor a setting");
+    for (const Mod &mod : set.m_mods)
+        for (const ModParam &p : mod.params) {
+            if (p.ui.merge_into.empty())
+                continue;
+            if (print_config_def.get(p.ui.merge_into) == nullptr)
+                mod_fail(mod.id, "param '" + p.name + "' merge_into: \"" + p.ui.merge_into + "\" is not a setting");
+            for (const std::optional<Expr> *e : {&p.ui.merge_when, &p.ui.merge_orca})
+                if (*e)
+                    for (const std::string &name : (*e)->names())
+                        if (set.m_params.count(name) == 0 && print_config_def.get(name) == nullptr)
+                            mod_fail(mod.id, "param '" + p.name + "' merge: \"" + name + "\" is neither a mod parameter nor a setting");
+        }
 
     // Check every rule, and group the rules by the setting they write.
     std::map<std::string, std::vector<Ref>> by_target;
