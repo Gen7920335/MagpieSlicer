@@ -222,6 +222,11 @@ detail-nozzle overhang width.
   with a prime tower, slow_down_min_speed with slow_down_for_layer_cooling, the filament tower interface
   settings with enable_tower_interface_features. Each new rule was checked by slicing with the child changed
   and the parent off (the same G-code); fan_speedup_overhangs stays (it shares its line with its parent).
+- Resin support (a mod) hides the Orca support options it does not read: threshold angle and overlap, support
+  expansion, maximum bridge length, critical regions only, the tree style and every tree branch setting (toggle
+  test: resin on, five models, raft 0 and 2, each the same G-code; per-model controls changed it). The tree wall
+  count and build plate only change resin's G-code and stay. The mods' support type dropdown hides with
+  support_type (a widget line, Tab::end_line_round).
 - Output: none; the G-code is unchanged (golden gate).
 
 ## Known Orca bugs not patched

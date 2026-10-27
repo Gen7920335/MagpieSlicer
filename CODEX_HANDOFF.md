@@ -16,6 +16,17 @@
 
 ## History
 
+### 2026-10-27 Settings follow-up after the GUI check (branch settings-fixes2, worktree D:\claude\magpie-next-resin6828b) - BUILT
+
+- GUI check of settings-visibility (test app, test datadir golden\rsv\gdd; report D:\claude\reports\gui_settings_check) found: the support mod groups stayed with support off, the mods' support type dropdown greyed instead of hiding, merged fields had no modified colour/revert, Orca support options shown under resin that it ignores.
+- Support mod rows (resin, Cura, mixed, low temperature interface; Support page groups) show only with support or a raft: their visible conditions start with `(enable_support or raft_layers > 0)`. KNOWN by toggle: support off, changing their settings (10 cases) left the G-code alone; with support on each changed it. Guard test "The official mods' support groups show only while the print has support" fails 50 assertions on the old manifests.
+- A mod group re-read its conditions only on its own edits; Tab::update_placed_mod_lines now re-checks every ModParamsPanel each toggle round (the resin group stayed with support off without it, GUI).
+- Merged settings: modified colour and revert arrow against the saved preset (Tab::merged_value, update_merged_modified, revert_merged); the button and control are one panel ("magpie_merged"), shifted in OG_CustomCtrl like a mod row. Under a support.contacts generator (resin) the merged walls pick as for normal support: resin ignores support_type (NativeContacts) and support_extras.normal_wall_loops changes its G-code on a tree type (five models), tree_wall_loops does not.
+- Interface pattern list: support_extras' concentric override = Orca's concentric (6/6 cases), listed once as Orca's (MergedSetting::aliases; stored values are not rewritten). Grid override differs only in where the interface path starts (interface angle +90 deg); rectilinear override = Orca's at 100 % interface density (6/6), differs below 95 %. Named "Grid +90°/격자 +90°" and "Always rectilinear/항상 직선".
+- Resin hides Orca options it does not read (ConfigManipulation, list in ORCA_PATCHES.md). Measured and kept: tree_support_wall_count (changes resin output; the first test changed it 0 -> 0, a no-op, rerun with 2), support_on_build_plate_only (pillar model).
+- Hilda (636 MB STL) with resin is not deterministic run to run (same config, line counts 571305 vs 573463); not used as evidence. UNKNOWN cause; next measurement: slice one resin Hilda config three times and diff.
+- Gate golden/rsv2 (final binaries bin3, 2d0966e2f2 code + label commits) identical to golden/ltbx on 15 corpora + g_all + g_off; modtests 10/10; ctest 3014/3017 (JPEG) on 9a5f3e7886. GUI recheck screenshots D:\claude\reports\gui_settings_check2.
+
 ### 2026-10-27 Settings merge and hide-when-parent-off (branch settings-visibility, worktree D:\claude\magpie-next-resin6828b) - BUILT
 
 - Audit (exhaustive, mechanical): D:\claudeeports\SETTINGS_DUP_VISIBILITY_AUDIT_KO.md, data/scripts D:\claudeeportsudit (toggle.py slices a child changed with its parent off; same G-code = safe to hide).
