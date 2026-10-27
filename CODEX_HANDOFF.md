@@ -16,6 +16,16 @@
 
 ## History
 
+### 2026-10-27 Settings merge and hide-when-parent-off (branch settings-visibility, worktree D:\claude\magpie-next-resin6828b) - BUILT
+
+- Audit (exhaustive, mechanical): D:\claudeeports\SETTINGS_DUP_VISIBILITY_AUDIT_KO.md, data/scripts D:\claudeeportsudit (toggle.py slices a child changed with its parent off; same G-code = safe to hide).
+- Merged settings: ModParamUi merge_into / merge_when / merge_orca; Tab::create_merged_setting puts one control in the Orca option's place (its line hidden). support_interface_pattern + support_extras.interface_pattern (triangles); tree_support_wall_count + support_extras.normal_wall_loops / tree_wall_loops (one field, the selected support type's count). Stored keys unchanged.
+- Grey -> hide: Tab::begin_line_round/end_line_round (last toggle_line and last toggle_option of a round both count); keep_greyed_out() lists the printer-capability ones. New rules in ConfigManipulation/Tab (support_remove_small_overhang, support_line_width, wipe_tower_filament, slow_down_min_speed, filament tower interface; bridge_no_support and support_remove_small_overhang hidden for Cura/resin).
+- Mod "visible" is a parameter-level key; it was written inside "ui" for low_temp_interface, multi_nozzle_walls, support_extras, half_layer and did nothing; moved. A condition may read settings (ModSet::slot_lookup, param_or_setting_value).
+- H/2 support without support/raft no longer bands the object (PrintObject::update_layer_bands); KNOWN by toggle: support off, H/2 support on vs off was 6445 vs 5162 G-code lines, now identical.
+- Measured and dropped: tree_support_wall_count is not tree-only (normal support's sheath); fan_speedup_overhangs shares its line with its parent.
+- Gate golden/rsv identical to golden/rbrim on every corpus; ctest 3009/3012 (JPEG). GUI screenshots not taken (Gen asked not to open GUI windows).
+
 ### 2026-10-27 Resin floating bottom refusal (branch resin-floating-bottom, worktree D:\claude\magpie-next-resin6828b) - BUILT
 
 - Resin mod: a lifted object whose bottom-face points (within 0.01 mm of the mesh bottom) get no valid head is refused, naming the least lift where the first such point gets a head (minimum_elevation_for_head: one-point create_support_tree, 0.1 mm binary search up to 30 mm). Support geometry unchanged; golden/resin6828 gate identical to golden/h2msg on every corpus. Judgment call: refusal, not warning.
