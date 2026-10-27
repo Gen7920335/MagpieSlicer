@@ -95,6 +95,22 @@
    }
   },
   {
+   "name": "tee_in_place_exceptions",
+   "printer": "u1",
+   "model": "external:tee.stl",
+   "process": {
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"linear\", \"layer_time_blend.max_diff\": 2, \"layer_time_blend.wait_at\": \"in_place\", \"layer_time_blend.exception_cost\": 2}"
+   }
+  },
+  {
+   "name": "frog_log_ease_exceptions",
+   "printer": "u1",
+   "model": "tests/data/frog_legs.obj",
+   "process": {
+    "mod_settings": "{\"layer_time_blend.blend_type\": \"log\", \"layer_time_blend.max_ratio\": 15, \"layer_time_blend.ease_layers\": 3, \"layer_time_blend.exception_cost\": 1.5, \"layer_time_blend.wait_at\": \"in_place\"}"
+   }
+  },
+  {
    "name": "tee_park_cap_warn",
    "printer": "u1",
    "model": "external:tee.stl",
