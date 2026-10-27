@@ -23,9 +23,13 @@ with every pair of neighbours within the limit:
 Two passes, forwards and backwards, give it (`T[i] = max_j(t[j] - D|i - j|)`): the layers before a
 long layer wait too, so the times ramp up to it. With `ease_layers` N > 0 the convex bends, where a
 ramp starts or ends, are limited to a second difference of `D / (N + 1)`; the peak at a long layer
-is not rounded, which would lift every layer around it. Both constraint sets are closed under the
-pointwise minimum, so the smallest solution still exists; the planner alternates the two-pass
-envelope with the upper concave hull of `T - C i^2 / 2` until nothing rises.
+is not rounded, which would lift every layer around it. A layer whose own time already bends more
+(a short layer between two longer ones, layers that alternate with the infill direction) keeps its
+bend: easing rounds the bends blending makes, not the ones the layer times have, which otherwise
+added waits on every other layer of a print that needed none. Each layer's bound is fixed by the
+input, so both constraint sets are closed under the pointwise minimum and the smallest solution
+still exists; the planner alternates the two-pass envelope with the upper concave hull of `T - q`,
+where `q`'s second difference is each layer's bound, until nothing rises.
 
 A chain of layers starts at the first layer and at the first layer of each object of a by-object
 print. Layers below `start_layer` (2 by default, counted per chain) get no wait and do not limit

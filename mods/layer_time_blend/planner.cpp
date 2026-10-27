@@ -70,24 +70,34 @@ std::vector<double> blend_chain(std::vector<double> v, double limit, int ease_la
         lipschitz_envelope(v, limit);
         return v;
     }
-    // Convex bends (ramp starts and ends) take at most `curvature` of second difference: v - curvature * i^2 / 2
-    // must be concave. Both constraint sets are closed under the pointwise minimum, so the smallest
-    // solution exists; alternating the two projections, each of which only raises values, reaches it.
-    const double curvature = limit / double(ease_layers + 1);
-    auto         q         = [curvature](size_t i) { return curvature * double(i) * double(i) * 0.5; };
+    // Convex bends (ramp starts and ends) take at most `curvature` of second difference, or the layer's own
+    // bend in the input where that is larger: the limit rounds the bends blending makes, not the ones the
+    // layer times already have (an alternating 30/27 s pair of infill layers would otherwise wait on every
+    // other layer, 2026-10-27). With q the sequence whose second difference at i is that bound, v - q must
+    // be concave. Each bound is fixed per layer, so both constraint sets are closed under the pointwise
+    // minimum and the smallest solution exists; alternating the two projections, each of which only raises
+    // values, reaches it.
+    const double        curvature = limit / double(ease_layers + 1);
+    const size_t        n         = v.size();
+    std::vector<double> q(n, 0.);
+    for (size_t j = 1; j + 1 < n; ++j) {
+        // Bound on the second difference at j, in the chain's units (s or log s).
+        const double bound = std::max(curvature, v[j + 1] - 2. * v[j] + v[j - 1]);
+        q[j + 1]           = 2. * q[j] - q[j - 1] + bound;
+    }
     // Progress: every round raises v (both steps are increasing and never lower a value), and v is
     // bounded by the envelope of max(t). The 2026-10-19 check against an LP found 2 rounds in every
     // case; the cap only guards a bug.
     constexpr int max_rounds = 64;
     for (int round = 0; round < max_rounds; ++round) {
         lipschitz_envelope(v, limit);
-        std::vector<double> w(v.size());
-        for (size_t i = 0; i < v.size(); ++i)
-            w[i] = v[i] - q(i);
+        std::vector<double> w(n);
+        for (size_t i = 0; i < n; ++i)
+            w[i] = v[i] - q[i];
         concave_majorant(w);
         bool changed = false;
-        for (size_t i = 0; i < v.size(); ++i) {
-            const double raised = w[i] + q(i);
+        for (size_t i = 0; i < n; ++i) {
+            const double raised = w[i] + q[i];
             // Change that counts as a raise, in the chain's units (s or log s): far below a millisecond.
             const double tolerance = 1e-9 * std::max(1., std::abs(v[i]));
             if (raised > v[i] + tolerance)

@@ -57,7 +57,8 @@ struct Settings
     double max_diff_s    = 5.;    // linear: largest difference between neighbouring layer times, s
     double max_ratio_pct = 20.;   // log: largest increase from the shorter to the longer of two neighbours, %
     // Layers over which the ramp's slope changes at its start and end: the slope changes by at most
-    // limit / (ease_layers + 1) per layer (curvature limit, convex bends only). 0 keeps sharp bends.
+    // limit / (ease_layers + 1) per layer (curvature limit, convex bends only), or by the layer's own bend in the
+    // input where that is larger: bends the layer times already have are not rounded. 0 keeps sharp bends.
     int    ease_layers   = 0;
     // First layer (1-based, counted per chain, so per object in a by-object print) whose time is
     // blended; the constraint to the layer below it is cut, and layers below it get no wait.
@@ -77,7 +78,8 @@ void set_diagnostic_sink(std::function<void(const std::string &)> sink);
 
 // The target layer times: the pointwise smallest T >= t with each neighbour pair within the limit
 // (difference D, or ratio in log space) and, with ease_layers > 0, every convex bend's second
-// difference within D / (ease_layers + 1). `links[i]` false cuts the constraints between i-1 and i
+// difference within D / (ease_layers + 1), or within the input's own bend there where that is larger.
+// `links[i]` false cuts the constraints between i-1 and i
 // (links[0] is ignored).
 std::vector<double> target_times(const std::vector<double> &t, const std::vector<bool> &links, const Settings &settings);
 

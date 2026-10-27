@@ -49,7 +49,8 @@ double added(const std::vector<double> &t, const std::vector<double> &target)
 }
 
 // The constraints, written out on their own: T >= t, neighbours within `diff` (s), convex bends
-// (second differences) at most `bend` (s), all within `tol` (s).
+// (second differences) at most `bend` (s) or the input's own bend at that layer where larger, all within
+// `tol` (s).
 bool feasible(const std::vector<double> &t, const std::vector<double> &T, double diff, double bend, double tol)
 {
     for (size_t i = 0; i < T.size(); ++i) {
@@ -57,7 +58,7 @@ bool feasible(const std::vector<double> &t, const std::vector<double> &T, double
             return false;
         if (i > 0 && std::abs(T[i] - T[i - 1]) > diff + tol)
             return false;
-        if (i > 0 && i + 1 < T.size() && T[i + 1] - 2. * T[i] + T[i - 1] > bend + tol)
+        if (i > 0 && i + 1 < T.size() && T[i + 1] - 2. * T[i] + T[i - 1] > std::max(bend, t[i + 1] - 2. * t[i] + t[i - 1]) + tol)
             return false;
     }
     return true;
@@ -195,6 +196,31 @@ TEST_CASE("Easing rounds ramp starts and ends but leaves the long layer's peak s
     // With N = 0 the same input bends at once.
     const std::vector<double> sharp = blend(spike, linear(5.));
     CHECK(added(spike, T) > added(spike, sharp));
+}
+
+TEST_CASE("Easing leaves the bends the layer times already have", "[LayerTimeBlend]")
+{
+    // Alternating 30/27 s layers (infill turning every layer): every pair is within D = 5 s, so nothing waits
+    // without easing. Each short layer is a convex bend of 6 s, over D / (N + 1) = 0.83 s at N = 5; easing
+    // bounds only the bends blending makes, so these stay. Before it bounded every bend: +255.7 s over 200
+    // layers (2026-10-27).
+    std::vector<double> jitter(200);
+    for (size_t i = 0; i < jitter.size(); ++i)
+        jitter[i] = i % 2 == 0 ? 30. : 27.;
+    CHECK_THAT(added(jitter, blend(jitter, linear(5., 5))), WithinAbs(0., 1e-9));
+    CHECK_THAT(added(jitter, blend(jitter, log_type(20., 5))), WithinAbs(0., 1e-9));
+    // One short layer within the limit of both neighbours: no wait at any N.
+    const std::vector<double> dip{ 30., 25., 30. };
+    CHECK_THAT(added(dip, blend(dip, linear(5., 5))), WithinAbs(0., 1e-9));
+    // A ramp blending makes is still rounded: the same jitter under a long layer waits more with easing.
+    std::vector<double> ramp = jitter;
+    ramp[100] = 80.;
+    const double sharp = added(ramp, blend(ramp, linear(5.)));
+    const double eased = added(ramp, blend(ramp, linear(5., 5)));
+    CHECK_THAT(sharp, WithinAbs(480., 1e-6));
+    CHECK_THAT(eased, WithinAbs(482.333, 1e-3)); // the 2026-10-27 mirror's figure
+    CHECK(eased > sharp);
+    CHECK(feasible(ramp, blend(ramp, linear(5., 5)), 5., 5. / 6., 1e-9));
 }
 
 TEST_CASE("Log blending limits the ratio of neighbouring layer times", "[LayerTimeBlend]")
