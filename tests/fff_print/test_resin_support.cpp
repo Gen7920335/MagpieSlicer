@@ -361,6 +361,9 @@ TEST_CASE("A lifted object whose bottom gets no head is refused with the elevati
         const std::string error = lifted_cube_error(2.0, 0.2, {0.8, 0.4, 0.4, 0.6});
         CAPTURE(error);
         CHECK(error.find("would print in the air") != std::string::npos);
+        // All nine bottom points are headless; the letters' five heads (numbered as branching tree leaves) once
+        // counted as heads of bottom points 0-4, giving "4 of the 9".
+        CHECK(error.find("9 of the 9") != std::string::npos);
     }
     SECTION("a higher lift fits the heads") {
         const std::string error = lifted_cube_error(3.0, 0.26, {0.8, 0.4, 0.4, 0.6});

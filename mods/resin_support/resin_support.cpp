@@ -10,6 +10,7 @@
 // Slot object.z_offset (magpie_slot_object_z_offset.h): the object elevation of the selected strategy.
 
 #include "libslic3r/AABBMesh.hpp"
+#include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/ExPolygon.hpp"
 #include "libslic3r/Geometry.hpp"
@@ -30,9 +31,11 @@
 #include <tbb/parallel_for.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -480,20 +483,61 @@ void compute_contacts(mp_ctx *ctx, const mp_support_contacts_input_v1 &in, Outpu
         // The bottom face: points within this of the mesh's lowest point, mm.
         constexpr float bottom_tolerance_mm = 0.01f;
         const float     bottom              = float(mesh.bounding_box().min.z());
+        // A head's id is not its point's index (the branching tree numbers its heads as tree leaves); a head sits at
+        // its point's position, so heads are matched to points by position.
+        std::map<std::array<float, 3>, size_t> point_at;
+        for (size_t i = 0; i < kept.size(); ++i)
+            point_at.emplace(std::array<float, 3>{ kept[i].pos.x(), kept[i].pos.y(), kept[i].pos.z() }, i);
         std::vector<bool> has_head(kept.size(), false);
         for (const resin_sla::Head &head : tree_output.heads)
-            if (head.is_valid() && size_t(head.id) < kept.size())
-                has_head[size_t(head.id)] = true;
+            if (head.is_valid())
+                if (auto it = point_at.find({ float(head.pos.x()), float(head.pos.y()), float(head.pos.z()) }); it != point_at.end())
+                    has_head[it->second] = true;
         size_t bottom_points = 0, headless = 0, first_headless = kept.size();
+        std::vector<size_t> headless_points;
         for (size_t i = 0; i < kept.size(); ++i)
             if (kept[i].pos.z() <= bottom + bottom_tolerance_mm) {
                 ++bottom_points;
                 if (!has_head[i]) {
                     ++headless;
                     first_headless = std::min(first_headless, i);
+                    headless_points.push_back(i);
                 }
             }
         if (headless > 0) {
+            // PERMANENT DIAGNOSTIC: why each bottom point has no head, by the one-point tree: it gets a head alone at
+            // this lift (the whole tree dropped it: routing), only with 30 mm more lift (no room), or not even then
+            // (the model or the surface angle); and whether it lies within 2 mm of the bottom's outline box.
+            {
+                constexpr double edge_mm = 2.;
+                const BoundingBoxf3 box = mesh.bounding_box();
+                size_t routing = 0, no_room = 0, other = 0, at_edge = 0;
+                for (size_t i : headless_points) {
+                    auto fits = [&](double elevation_mm) {
+                        resin_sla::SupportTreeConfig one_cfg = tree_cfg;
+                        one_cfg.object_elevation_mm = elevation_mm;
+                        resin_sla::SupportableMesh one(mesh.its, resin_sla::SupportPoints{ kept[i] }, one_cfg);
+                        one.zoffset = supportable.zoffset;
+                        auto [one_mesh, one_tree] = resin_sla::create_support_tree(one, controller);
+                        (void) one_mesh;
+                        return std::any_of(one_tree.heads.begin(), one_tree.heads.end(), [](const resin_sla::Head &h) { return h.is_valid(); });
+                    };
+                    if (fits(tree_cfg.object_elevation_mm))
+                        ++routing;
+                    else if (fits(tree_cfg.object_elevation_mm + 30.))
+                        ++no_room;
+                    else
+                        ++other;
+                    const double x = kept[i].pos.x(), y = kept[i].pos.y();
+                    if (std::min({ x - box.min.x(), box.max.x() - x, y - box.min.y(), box.max.y() - y }) < edge_mm)
+                        ++at_edge;
+                }
+                magpie::log(MP_LOG_WARNING, RESIN_MOD_ID,
+                            "Resin support: " + std::to_string(headless) + " of " + std::to_string(bottom_points) +
+                                " bottom points without a head: alone they get one at this lift " + std::to_string(routing) +
+                                ", only with more lift " + std::to_string(no_room) + ", not even then " + std::to_string(other) +
+                                "; within 2 mm of the outline box " + std::to_string(at_edge));
+            }
             // PERMANENT DIAGNOSTIC: the head size comes from these, read from the support flow; the refusal below
             // names only the elevation (seed 6828: its 0.58 mm support width scales to 1.16 mm on the 0.8 mm nozzle).
             magpie::log(MP_LOG_WARNING, RESIN_MOD_ID,
