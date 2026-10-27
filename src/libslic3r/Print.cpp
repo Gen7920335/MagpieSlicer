@@ -3792,6 +3792,13 @@ BoundingBox PrintObject::get_first_layer_bbox(float& a, float& layer_height, std
 std::map<ObjectID, unsigned int> getObjectExtruderMap(const Print& print) {
     std::map<ObjectID, unsigned int> objectExtruderMap;
     for (const PrintObject* object : print.objects()) {
+        // MAGPIE: a lifted object (a mod's object.z_offset) has no wall on the first layer; its brim goes around its
+        // support there and is printed by the tool brim_tool() expects (the support's), which make_brim() matches
+        // against the first layer's tools.
+        if (object->slicing_parameters().object_z_offset > 0.) {
+            objectExtruderMap.insert(std::make_pair(object->id(), brim_tool(print, *object) + 1));
+            continue;
+        }
         // BBS
         if (object->object_first_layer_wall_extruders.empty()){
             unsigned int objectFirstLayerFirstExtruder = print.config().filament_diameter.size();

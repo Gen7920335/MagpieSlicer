@@ -17,7 +17,11 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <cmath>
+#include <map>
 #include <memory>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -313,7 +317,7 @@ namespace {
 // step's warnings, one per line. The data leaves out the
 // six enum keys (extruder_type, nozzle_type, nozzle_volume_type, overhang_fan_threshold, retract_lift_enforce,
 // z_hop_types): load_from_ini crashed on each of them alone here, and none of them sizes the support heads.
-std::pair<std::string, std::string> lifted_cube(double elevation_mm, double layer_mm, const std::vector<double> &nozzles_mm)
+DynamicPrintConfig seed6828_config(double elevation_mm, double layer_mm, const std::vector<double> &nozzles_mm)
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.load_from_ini(std::string(TEST_DATA_DIR) + "/resin_support_seed6828.ini", ForwardCompatibilitySubstitutionRule::Enable);
@@ -327,6 +331,20 @@ std::pair<std::string, std::string> lifted_cube(double elevation_mm, double laye
     config.set_key_value("max_layer_height", new ConfigOptionFloats(max_layer_mm));
     config.set_key_value("layer_height", new ConfigOptionFloat(layer_mm));
     config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(layer_mm));
+    return config;
+}
+
+TriangleMesh orca_cube()
+{
+    const boost::filesystem::path cube_path = boost::filesystem::path(PROFILES_DIR) / ".." / "handy_models" / "OrcaCube_v2.drc";
+    TriangleMesh cube;
+    load_drc(cube_path.string().c_str(), &cube);
+    return cube;
+}
+
+std::pair<std::string, std::string> lifted_cube(double elevation_mm, double layer_mm, const std::vector<double> &nozzles_mm)
+{
+    const DynamicPrintConfig config = seed6828_config(elevation_mm, layer_mm, nozzles_mm);
     const boost::filesystem::path cube_path = boost::filesystem::path(PROFILES_DIR) / ".." / "handy_models" / "OrcaCube_v2.drc";
     TriangleMesh cube;
     if (!load_drc(cube_path.string().c_str(), &cube))
@@ -343,7 +361,63 @@ std::pair<std::string, std::string> lifted_cube(double elevation_mm, double laye
     return {{}, warnings};
 }
 
+// Extrusion length on the first layer of the G-code per ;TYPE: role, mm.
+std::map<std::string, double> first_layer_lengths(const std::string &gcode)
+{
+    std::map<std::string, double> lengths;
+    std::istringstream            lines(gcode);
+    std::string                   line, role;
+    std::optional<double>         first_z, z, x, y;
+    auto value = [&line](char axis) -> std::optional<double> {
+        const size_t at = line.find(std::string(" ") + axis);
+        if (at == std::string::npos)
+            return std::nullopt;
+        return std::stod(line.substr(at + 2));
+    };
+    while (std::getline(lines, line)) {
+        if (line.rfind(";Z:", 0) == 0) {
+            z = std::stod(line.substr(3));
+            if (!first_z)
+                first_z = z;
+        } else if (line.rfind(";TYPE:", 0) == 0)
+            role = line.substr(6);
+        else if (line.rfind("G1 ", 0) == 0 || line.rfind("G0 ", 0) == 0) {
+            const std::optional<double> nx = value('X'), ny = value('Y'), e = value('E');
+            const double tx = nx.value_or(x.value_or(0.)), ty = ny.value_or(y.value_or(0.));
+            if (z && first_z && *z == *first_z && x && y && e && *e > 0.)
+                lengths[role] += std::hypot(tx - *x, ty - *y);
+            if (nx) x = nx;
+            if (ny) y = ny;
+        }
+    }
+    return lengths;
+}
+
 } // namespace
+
+TEST_CASE("A brim on a lifted object goes around its support on the first layer", "[ResinSupport][Elevation][Brim][Regression]")
+{
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    // Seed 6828 lifted 2.0 mm with 0.26 mm layers: the object's own first layer is in the air; on the bed are the
+    // support's feet. Before: with a 5 mm outer brim no brim printed (the object's brim tool was its wall tool, which
+    // the support-only first layer does not use) and the first support layer shrank 569 -> 111 mm (the brim area
+    // around the object's footprint was cut out of it).
+    DynamicPrintConfig without = seed6828_config(2.0, 0.26, {0.8, 0.4, 0.4, 0.6});
+    without.set_deserialize_strict({{"brim_type", "no_brim"}});
+    DynamicPrintConfig with = seed6828_config(2.0, 0.26, {0.8, 0.4, 0.4, 0.6});
+    with.set_deserialize_strict({{"brim_type", "outer_only"}, {"brim_width", "5"}});
+    const std::map<std::string, double> plain = first_layer_lengths(Slic3r::Test::slice({orca_cube()}, without));
+    const std::map<std::string, double> brimmed = first_layer_lengths(Slic3r::Test::slice({orca_cube()}, with));
+    const double support_plain = plain.count("Support") ? plain.at("Support") : 0.;
+    const double support_brim  = brimmed.count("Support") ? brimmed.at("Support") : 0.;
+    CAPTURE(support_plain, support_brim);
+    REQUIRE(support_plain > 0.);
+    // Measured: 569 mm both; the brim 1580 mm.
+    CHECK(support_brim > 0.95 * support_plain);
+    CHECK(brimmed.count("Brim") == 1);
+    CHECK((brimmed.count("Brim") ? brimmed.at("Brim") : 0.) > 500.);
+}
 
 TEST_CASE("Support heads longer than the lift stand on the bed, and the slice says so", "[ResinSupport][Elevation][Regression]")
 {

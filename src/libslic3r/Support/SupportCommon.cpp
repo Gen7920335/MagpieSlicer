@@ -420,8 +420,10 @@ SupportGeneratorLayersPtr generate_raft_base(
     SupportGeneratorLayerStorage      &layer_storage)
 {
     // If there is brim to be generated, calculate the trimming regions.
+    // MAGPIE: not for a lifted object (a mod's object.z_offset): its first layer is in the air, its brim goes around
+    // the support's first layer (Brim.cpp), so the support under its footprint stays.
     Polygons brim;
-    if (object.has_brim()) {
+    if (object.has_brim() && slicing_params.object_z_offset <= 0.) {
         // The object does not have a raft.
         // Calculate the area covered by the brim.
         const BrimType brim_type       = object.config().brim_type;
