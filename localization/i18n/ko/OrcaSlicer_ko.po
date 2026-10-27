@@ -43462,3 +43462,15 @@ msgstr "T%1% 노즐 지름, mm (프린터 설정 > 압출기 %1%)"
 # AI Translated
 msgid "Line width of the nozzle picked above, in mm, on a printer whose nozzles differ in size. The field shows the width the nozzle prints: its own value, or else the line width setting scaled to it. A value you enter stays this nozzle's until its diameter changes."
 msgstr "노즐 크기가 서로 다른 프린터에서, 위에서 고른 노즐의 선폭(mm)입니다. 칸에는 그 노즐이 실제로 출력하는 폭이 보입니다: 노즐에 따로 넣은 값, 없으면 선폭 설정을 그 노즐에 맞춰 환산한 값. 입력한 값은 그 노즐의 지름이 바뀔 때까지 유지됩니다."
+
+# AI Translated
+#. TRN %1% is the plate number.
+#, boost-format
+msgid "The prime tower on plate %1% no longer fits where it was placed. There is no free space left on the plate for it, so it was moved onto an object."
+msgstr "플레이트 %1%의 프라임 타워가 놓인 자리에 더 이상 들어가지 않습니다. 플레이트에 남은 빈 공간이 없어 객체 위로 옮겼습니다."
+
+# AI Translated
+#. TRN %1% is the plate number.
+#, boost-format
+msgid "The prime tower on plate %1% no longer fits where it was placed, so it was moved to free space on the plate."
+msgstr "플레이트 %1%의 프라임 타워가 놓인 자리에 더 이상 들어가지 않아 플레이트의 빈 공간으로 옮겼습니다."

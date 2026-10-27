@@ -243,8 +243,11 @@ std::vector<Vec3i32> create_face_neighbors_index(ExPolicy &&ex, const indexed_tr
     std::vector<Vec3i32> neighbors(indices.size(),
                                  Vec3i32(no_value, no_value, no_value));
 
-    //for (int face_idx = 0; face_idx < indices.size(); face_idx++) {
-    execution::for_each(ex, size_t(0), indices.size(),
+    // MAGPIE: always in face order. A face also writes and checks the neighbours of later faces, so on an edge
+    // shared by three or more faces (non-manifold) the pairing depended on thread timing in parallel: the seam
+    // placer's decimated occlusion mesh, and with it the aligned seams, changed from run to run (Hilda).
+    // Manifold meshes pair the same either way.
+    execution::for_each(ex_seq, size_t(0), indices.size(),
         [&neighbors, &indices, &vertex_triangles] (size_t face_idx)
         {
             Vec3i32& neighbor = neighbors[face_idx];
