@@ -73,6 +73,16 @@ wxDEFINE_EVENT(EVT_PRESET_UPDATE_AVAILABLE_CLICKED, PresetUpdateAvailableClicked
 wxDEFINE_EVENT(EVT_PRINTER_CONFIG_UPDATE_AVAILABLE_CLICKED, PrinterConfigUpdateAvailableClickedEvent);
 
 namespace {
+// MAGPIE: drops the last whole UTF-8 character. Trimming one byte at a time cut Korean text in the middle of a
+// character and ImGui drew the stray bytes as "?" ("추가?.." for "추가합니다" in a collapsed notification).
+void pop_back_utf8_char(std::string &text)
+{
+    while (!text.empty() && (static_cast<unsigned char>(text.back()) & 0xC0) == 0x80)
+        text.pop_back();
+    if (!text.empty())
+        text.pop_back();
+}
+
 	/* // not used?
 	ImFont* add_default_font(float pixel_size)
 	{
@@ -663,7 +673,7 @@ void NotificationManager::PopNotification::bbl_render_block_notif_text(ImGuiWrap
 				// second line with "more" hypertext
 				line = m_text1.substr(m_endlines[0] + (m_text1[m_endlines[0]] == '\n' || m_text1[m_endlines[0]] == ' ' ? 1 : 0), m_endlines[1] - m_endlines[0] - (m_text1[m_endlines[0]] == '\n' || m_text1[m_endlines[0]] == ' ' ? 1 : 0));
 				while (ImGui::CalcTextSize(line.c_str()).x > m_window_width - m_window_width_offset - ImGui::CalcTextSize((".." + _u8L("More")).c_str()).x) {
-					line = line.substr(0, line.length() - 1);
+					pop_back_utf8_char(line);
 				}
 				line += "..";
 			}
@@ -725,7 +735,7 @@ void NotificationManager::PopNotification::render_text(ImGuiWrapper& imgui, cons
 				// second line with "more" hypertext
 				line = m_text1.substr(m_endlines[0] + (m_text1[m_endlines[0]] == '\n' || m_text1[m_endlines[0]] == ' ' ? 1 : 0), m_endlines[1] - m_endlines[0] - (m_text1[m_endlines[0]] == '\n' || m_text1[m_endlines[0]] == ' ' ? 1 : 0));
 				while (ImGui::CalcTextSize(line.c_str()).x > m_window_width - m_window_width_offset - ImGui::CalcTextSize((".." + _u8L("More")).c_str()).x) {
-					line = line.substr(0, line.length() - 1);
+					pop_back_utf8_char(line);
 				}
 				line += "..";
 			}
