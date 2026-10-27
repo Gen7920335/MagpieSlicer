@@ -247,8 +247,7 @@ std::vector<Vec3i32> create_face_neighbors_index(ExPolicy &&ex, const indexed_tr
     // shared by three or more faces (non-manifold) the pairing depended on thread timing in parallel: the seam
     // placer's decimated occlusion mesh, and with it the aligned seams, changed from run to run (Hilda).
     // Manifold meshes pair the same either way.
-    execution::for_each(ex_seq, size_t(0), indices.size(),
-        [&neighbors, &indices, &vertex_triangles] (size_t face_idx)
+    for (size_t face_idx = 0; face_idx < indices.size(); ++ face_idx)
         {
             Vec3i32& neighbor = neighbors[face_idx];
             const stl_triangle_vertex_indices & triangle_indices = indices[face_idx];
@@ -279,7 +278,7 @@ std::vector<Vec3i32> create_face_neighbors_index(ExPolicy &&ex, const indexed_tr
                     break;
                 }
             }
-        }, execution::max_concurrency(ex));
+        }
 
     return neighbors;
 }
