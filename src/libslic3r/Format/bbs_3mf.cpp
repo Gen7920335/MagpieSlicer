@@ -116,6 +116,7 @@ namespace pt = boost::property_tree;
 #include "NSVGUtils.hpp"
 
 #include <fast_float/fast_float.h>
+#include <charconv>
 #include "libslic3r/ProjectTask.hpp"
 
 // Slightly faster than sprintf("%.9g"), but there is an issue with the karma floating point formatter,
@@ -7222,6 +7223,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         std::string zip_filename = encode_path(filename.c_str());
         std::string extra = sub_model ? ZipUnicodePathExtraField::encode(filename, zip_filename) : "";
 #endif
+        // MAGPIE: deflate level (miniz, 0-10) of the mesh files, which are nearly all of a project's size and of its save
+        // time, and are written on the GUI thread. Measured with the CLI loading and saving a project of one 11M-triangle
+        // mesh (985 MB of XML): level 6 (miniz default) 58 s and 183 MB, level 3 33 s and 195 MB, level 2 28 s and 204 MB;
+        // the load alone is about 18 s. Every level stores the same mesh text.
+        constexpr int MODEL_FILE_DEFLATE_LEVEL = 2;
         mz_zip_writer_staged_context context;
         if (!mz_zip_writer_add_staged_open(&archive, &context, sub_model ? zip_filename.c_str() : MODEL_FILE.c_str(),
             m_zip64 ?
@@ -7232,7 +7238,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 // GH issue #6193.
                 (uint64_t(1) << 32) - 1,
 #if WRITE_ZIP_LANGUAGE_ENCODING
-            nullptr, nullptr, 0, MZ_DEFAULT_LEVEL, nullptr, 0, nullptr, 0)) {
+            nullptr, nullptr, 0, MODEL_FILE_DEFLATE_LEVEL, nullptr, 0, nullptr, 0)) {
 #else
             nullptr, nullptr, 0, MZ_DEFAULT_COMPRESSION, extra.c_str(), extra.length(), extra.c_str(), extra.length())) {
 #endif
@@ -7692,6 +7698,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             }
             // Return pointer to the end.
             return ptr;
+#elif defined(_MSC_VER)
+            // MAGPIE: the same text as sprintf("%.9g") (to_chars with a precision follows printf's %g), without the
+            // locale and format-string work; a 985 MB model wrote about 2 s faster. Other compilers keep sprintf: the
+            // floating point to_chars needs macOS 13.3.
+            return std::to_chars(buf, buf + 32, f, std::chars_format::general, 9).ptr;
 #else
             // Round-trippable float, shortest possible.
             return buf + sprintf(buf, "%.9g", f);
