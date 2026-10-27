@@ -2062,6 +2062,41 @@ TEST_CASE("Half-height nozzle validation follows the roles that use each nozzle"
     CHECK(error.string.empty() == should_pass);
 }
 
+TEST_CASE("A half-height print taller than a nozzle names the role that nozzle prints at full height", "[Print][validate][HalfLayer]")
+{
+    // H/2 halves the outer walls and support only. With a 0.16 mm layer on a 0.15 mm nozzle, the refusal said just
+    // "Layer height cannot exceed nozzle diameter", which read like the tower or brim refusals H/2 had already fixed
+    // (Gen, 2026-10-27, all four nozzles at 0.15 mm), not that the 0.15 mm nozzle printed infill at the full height.
+    // H/2 is the native half_layer mod.
+    OfficialMods mods;
+    const auto [key, role] = GENERATE(table<const char *, const char *>({ { "inner_wall_filament_id", "prints inner walls at the full 0.16 mm" },
+                                                                          { "sparse_infill_filament_id", "prints sparse infill at the full 0.16 mm" },
+                                                                          { "top_surface_filament_id", "prints top surfaces at the full 0.16 mm" } }));
+    auto config = multifilament_config(2, {
+        {"layer_height", 0.16}, {"initial_layer_print_height", 0.16},
+        {"wall_generator", "classic"}, {"wall_loops", 4},
+        {"outer_wall_filament_id", 1}, {"inner_wall_filament_id", 2},
+        {"sparse_infill_filament_id", 2}, {"internal_solid_filament_id", 2},
+        {"top_surface_filament_id", 2}, {"bottom_surface_filament_id", 2},
+        {"initial_layer_line_width", 0.}, {"line_width", 0.},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}, {"enable_prime_tower", false},
+    });
+    Slic3r::Test::half_layer_params(config, true);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.15, 0.4}); // mm
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_key_value("max_layer_height", new ConfigOptionFloats{0.4, 0.4});   // mm
+    config.set_deserialize_strict({{"outer_wall_line_width", "100%"}});
+    // The role on filament 1, the 0.15 mm nozzle; the 0.08 mm outer walls on it are fine.
+    config.set(key, 1);
+    Model model;
+    Print print;
+    build_cubes(model, print, config, 1, false);
+    const auto error = print.validate();
+    CAPTURE(key, error.string);
+    CHECK(error.string.find("nozzle 1 (0.15 mm)") != std::string::npos);
+    CHECK(error.string.find(role) != std::string::npos);
+}
+
 TEST_CASE("Half-height prints check each raft band against the nozzle that prints it", "[Print][validate][HalfLayer]")
 {
     // Support base on the 0.6 mm nozzle (raft base layers 0.75 x 0.6 = 0.45 mm), interface on the 0.4 mm nozzle

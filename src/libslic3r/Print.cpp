@@ -2083,6 +2083,29 @@ static std::string per_nozzle_line_width_error(const ConfigBase &config, const c
     return {};
 }
 
+// MAGPIE: the H/2 layer height error for one role: which nozzle prints which role at which height (mm), so a layer
+// taller than a small nozzle names the feature that needs a larger nozzle (or a lower layer) instead of reading like a
+// tower or brim refusal. width_key names the role as the checks below pass it.
+static std::string half_layer_height_error(const char *width_key, double height_mm, size_t nozzle, double nozzle_mm)
+{
+    const std::string key(width_key);
+    const std::string text =
+        // TRN %1%: layer height in mm, %2%: nozzle number, %3%: its diameter in mm. H/2 is the half-height feature.
+        key == "outer_wall_line_width" ? L("Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints outer walls at %1% mm.") :
+        // TRN %1%: layer height in mm, %2%: nozzle number, %3%: its diameter in mm. H/2 is the half-height feature.
+        key == "inner_wall_line_width" ? L("Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints inner walls at the full %1% mm, which H/2 does not split.") :
+        // TRN %1%: layer height in mm, %2%: nozzle number, %3%: its diameter in mm. H/2 is the half-height feature.
+        key == "top_surface_line_width" ? L("Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints top surfaces at the full %1% mm, which H/2 does not split.") :
+        // TRN %1%: layer height in mm, %2%: nozzle number, %3%: its diameter in mm.
+        key == "support_line_width" ? L("Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints support at %1% mm.") :
+        key == "internal_solid_infill_line_width" ?
+        // TRN %1%: layer height in mm, %2%: nozzle number, %3%: its diameter in mm. H/2 is the half-height feature.
+            L("Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints solid infill at the full %1% mm, which H/2 does not split.") :
+        // TRN %1%: layer height in mm, %2%: nozzle number, %3%: its diameter in mm. H/2 is the half-height feature.
+            L("Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints sparse infill at the full %1% mm, which H/2 does not split.");
+    return (boost::format(text) % height_mm % (nozzle + 1) % nozzle_mm).str();
+}
+
 // MAGPIE (Magpie line 1): half-height (H/2) outer walls and support print their roles at half the
 // layer height, so each role is checked against the nozzle of the filament that prints it at the
 // height it actually prints at, instead of the full layer against the smallest nozzle. Skirt, brim
@@ -2104,7 +2127,8 @@ static StringObjectException validate_half_layer_nozzles(const PrintObject &obje
         const size_t nozzle    = printing_nozzle_index(pc, filament, print.is_BBL_printer());
         const double nozzle_mm = pc.nozzle_diameter.get_at(nozzle);
         if (height_mm > nozzle_mm + EPSILON) {
-            error = {L("Layer height cannot exceed nozzle diameter."), &object, first && !object.has_raft() ? "initial_layer_print_height" : "layer_height"};
+            error = {half_layer_height_error(width_key, height_mm, nozzle, nozzle_mm), &object,
+                     first && !object.has_raft() ? "initial_layer_print_height" : "layer_height"};
             return;
         }
         ConfigOptionFloatOrPercent role_width = line_width_setting_on_nozzle(holder, width_key, nozzle);

@@ -43175,6 +43175,30 @@ msgid "Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints th
 msgstr "레이어 높이는 노즐 직경을 초과할 수 없습니다: 노즐 %2%(%3% mm)가 스커트나 브림을 %1% mm 전체 높이로 출력하며, H/2는 이를 나누지 않습니다."
 
 # AI Translated
+msgid "Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints outer walls at %1% mm."
+msgstr "레이어 높이는 노즐 직경을 초과할 수 없습니다: 노즐 %2%(%3% mm)가 외벽을 %1% mm로 출력합니다."
+
+# AI Translated
+msgid "Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints inner walls at the full %1% mm, which H/2 does not split."
+msgstr "레이어 높이는 노즐 직경을 초과할 수 없습니다: 노즐 %2%(%3% mm)가 내벽을 %1% mm 전체 높이로 출력하며, H/2는 이를 나누지 않습니다."
+
+# AI Translated
+msgid "Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints top surfaces at the full %1% mm, which H/2 does not split."
+msgstr "레이어 높이는 노즐 직경을 초과할 수 없습니다: 노즐 %2%(%3% mm)가 상단 표면을 %1% mm 전체 높이로 출력하며, H/2는 이를 나누지 않습니다."
+
+# AI Translated
+msgid "Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints support at %1% mm."
+msgstr "레이어 높이는 노즐 직경을 초과할 수 없습니다: 노즐 %2%(%3% mm)가 서포트를 %1% mm로 출력합니다."
+
+# AI Translated
+msgid "Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints solid infill at the full %1% mm, which H/2 does not split."
+msgstr "레이어 높이는 노즐 직경을 초과할 수 없습니다: 노즐 %2%(%3% mm)가 꽉찬 채우기를 %1% mm 전체 높이로 출력하며, H/2는 이를 나누지 않습니다."
+
+# AI Translated
+msgid "Layer height cannot exceed nozzle diameter: nozzle %2% (%3% mm) prints sparse infill at the full %1% mm, which H/2 does not split."
+msgstr "레이어 높이는 노즐 직경을 초과할 수 없습니다: 노즐 %2%(%3% mm)가 드문 채우기를 %1% mm 전체 높이로 출력하며, H/2는 이를 나누지 않습니다."
+
+# AI Translated
 msgid "Line width per nozzle"
 msgstr "노즐별 선 너비"
 

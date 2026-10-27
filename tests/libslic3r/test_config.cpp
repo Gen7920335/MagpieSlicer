@@ -1852,7 +1852,7 @@ TEST_CASE("Every read of a nozzle-relative line width key is in the reviewed tab
         { "src/libslic3r/PerimeterGenerator.cpp", 2 },
         { "src/libslic3r/PlaceholderParser.cpp", 4 },
         { "src/libslic3r/Preset.cpp", 11 },
-        { "src/libslic3r/Print.cpp", 37 },
+        { "src/libslic3r/Print.cpp", 42 }, // 5 name the role of an H/2 height error (half_layer_height_error), no width read
         // Two more: the preset bridge check reads bridge_line_width as a fraction of its nozzle (validate_print_config).
         { "src/libslic3r/PrintConfig.cpp", 37 },
         { "src/libslic3r/PrintObject.cpp", 13 },
