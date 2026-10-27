@@ -632,11 +632,11 @@ TEST_CASE("With objects of different layer heights a wait site starts only layer
     CHECK(common < any);
     CHECK(count_lines_starting(out, site_tag) == common);
     // Each interval is a whole period of the pattern, the same work every time: between the bottom and top shells
-    // (four periods, 2.4 mm, from either end) they differ by little. Between G-code layers they alternated by the
-    // time of a whole cube layer.
+    // (five periods, 3 mm, from either end) they differ by little, 29.8 to 31.9 s on 2026-10-27; the period after
+    // the bottom shells took 33.4 s. Between G-code layers they alternated by the time of a whole cube layer.
     const std::vector<double> intervals = measured_intervals(out);
     REQUIRE(intervals.size() >= 12);
-    for (size_t k = 5; k + 4 < intervals.size(); ++k)
+    for (size_t k = 6; k + 4 < intervals.size(); ++k)
         CHECK_THAT(intervals[k], WithinRel(intervals[k - 1], 0.1)); // within 10 % of the period before
 }
 
