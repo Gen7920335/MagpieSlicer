@@ -8057,6 +8057,10 @@ ModParamsPanel* Tab::add_mod_params_panel(wxWindow* parent, std::shared_ptr<cons
 
 void Tab::update_placed_mod_lines()
 {
+    // A mod group's conditions read Orca's settings too (enable_support for the support mods' groups): the groups
+    // follow each round, not only their own edits (GUI test: the resin group stayed with support off).
+    for (ModParamsPanel* panel : m_mod_params_panels)
+        panel->update_visibility();
     if (m_placed_mod_lines.empty())
         return;
     std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
