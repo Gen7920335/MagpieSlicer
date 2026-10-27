@@ -3700,6 +3700,28 @@ static double rest_to_rest_time(double distance, double speed, double accel)
 
 } // namespace LayerTimeBlendExport
 
+// MAGPIE: whether every object printing at print_z has a layer there, so that a wait site at print_z starts a layer
+// of each of them. With objects of different layer heights a site at every height that has some object's layer made
+// the intervals the times between G-code layers, which alternate with the layer pattern (0.2 and 0.3 mm objects: one,
+// one, one and both objects' layers) although each object's own time between its layers does not, and blending
+// them added waits on every layer (+50 % in the 2026-10-27 model). Sites only where all of them start a layer make
+// each interval a whole period of the pattern. A by-object print prints one object per layer pass.
+static bool layer_time_all_objects_at(const Print &print, coordf_t print_z)
+{
+    if (print.config().print_sequence.value == PrintSequence::ByObject)
+        return true;
+    for (const PrintObject *object : print.objects()) {
+        if (object->layers().empty())
+            continue;
+        // An object below its first layer or above its last is not printing here.
+        if (print_z < object->layers().front()->print_z - EPSILON || print_z > object->layers().back()->print_z + EPSILON)
+            continue;
+        if (object->get_layer_at_printz(print_z, EPSILON) == nullptr)
+            return false;
+    }
+    return true;
+}
+
 bool GCode::layer_time_tower_visited(const Print &print, coordf_t print_z) const
 {
     // An auxiliary tower of a G-code event mod (gcode.events tower_on_layer); the prime tower on every layer up to
@@ -8174,7 +8196,10 @@ LayerResult GCode::process_layer(
     // it falls in.
     // A full layer only: an object layer at this very height (under H/2 a half pass is a task inside the
     // frame of its layer, and a half-height support band has no object layer).
-    if (m_layer_time_planner != nullptr && object_layer != nullptr && std::abs(object_layer->print_z - print_z) < EPSILON)
+    // With objects of different layer heights, only where every object printing here starts a layer
+    // (layer_time_all_objects_at).
+    if (m_layer_time_planner != nullptr && object_layer != nullptr && std::abs(object_layer->print_z - print_z) < EPSILON &&
+        layer_time_all_objects_at(print, print_z))
         gcode += this->layer_time_wait_site(print, print_z);
 
     //BBS: set layer time fan speed after layer change gcode
