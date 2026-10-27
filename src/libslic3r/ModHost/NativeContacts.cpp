@@ -16,6 +16,7 @@
 #include "../../../mods/sdk/include/magpie_slot_support_contacts.h"
 
 #include <algorithm>
+#include <boost/format.hpp>
 #include <boost/log/trivial.hpp>
 #include <cstdint>
 #include <functional>
@@ -161,6 +162,22 @@ ExPolygons expolygons_of(const mp_expolys &in)
 }
 
 // Runs one call into the mod; a failure or a crash stops the slice naming the mod.
+// MAGPIE: a mod's message, translated by its catalog. A message may carry values after its text, each after a 0x1F
+// (unit separator) byte, which fill the translated text's %1%, %2%, ... placeholders.
+std::string message_text(const std::string &mod_id, const std::string &message)
+{
+    const size_t split = message.find('\x1f');
+    if (split == std::string::npos)
+        return mod_text(mod_id, message);
+    boost::format text(mod_text(mod_id, message.substr(0, split)));
+    for (size_t begin = split + 1; begin <= message.size();) {
+        const size_t end = std::min(message.find('\x1f', begin), message.size());
+        text % message.substr(begin, end - begin);
+        begin = end + 1;
+    }
+    return text.str();
+}
+
 void call(const PrintObject &object, const NativeEntry &entry, mp_ctx &ctx, const std::function<mp_status()> &fn)
 {
     std::string   status_message, guard_message;
@@ -173,7 +190,7 @@ void call(const PrintObject &object, const NativeEntry &entry, mp_ctx &ctx, cons
     if (rc == MP_ERR_CANCELLED || (rc != MP_OK && object.print()->canceled()))
         throw CanceledException();
     if (rc != MP_OK)
-        throw SlicingError(entry.mod->id() + ": " + (!status_message.empty() ? mod_text(entry.mod->id(), status_message) :
+        throw SlicingError(entry.mod->id() + ": " + (!status_message.empty() ? message_text(entry.mod->id(), status_message) :
                                                      !guard_message.empty()  ? guard_message :
                                                                                "support generation failed (code " + std::to_string(rc) + ")"));
     std::lock_guard<std::mutex> lock(ctx.warnings_mutex);

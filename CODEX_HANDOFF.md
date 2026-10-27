@@ -16,6 +16,14 @@
 
 ## History
 
+### 2026-10-27 Resin floating bottom refusal (branch resin-floating-bottom, worktree D:\claude\magpie-next-resin6828b) - BUILT
+
+- Resin mod: a lifted object whose bottom-face points (within 0.01 mm of the mesh bottom) get no valid head is refused, naming the least lift where the first such point gets a head (minimum_elevation_for_head: one-point create_support_tree, 0.1 mm binary search up to 30 mm). Support geometry unchanged; golden/resin6828 gate identical to golden/h2msg on every corpus. Judgment call: refusal, not warning.
+- Seed 6828 cause KNOWN: its absolute 0.58 mm support width scales to 1.16 mm on the 0.8 mm nozzle (mixed nozzle sizes), so the heads need 2.4 mm; four equal 0.8 mm nozzles need 1.7 mm (CLI). PERMANENT DIAGNOSTIC (resin_support.cpp): printable diameter, support nozzle, support line width and head front radius are logged before the refusal.
+- Not a second reading: the seed's support G-code shows 0.50-0.59 mm lines because its thin pillars go through the narrow island path (SupportCommon fill_expolygon_generate_paths: bead = min(flow width, island width / 2)); with 5 mm pillars (8 mm lift) every support layer prints 1.16 mm, the same support_material_flow the mod reads (15f976e3bf design: absolute widths are % of the reference nozzle).
+- Refusal wording names head, pillar and nozzle (a 15 mm pillar refused under 5 mm said "with this support nozzle"). Tests "Resin style accepts the full configured pillar diameter range" and "Every resin support setting survives a slicing mutation" lift their 10-15 mm pillar cases by the pillar width (15 mm needed at least 8 mm with the default tree).
+- Open, not fixed: DynamicPrintConfig::load_from_ini in fff_print_tests crashes (SIGSEGV) on each of extruder_type, nozzle_type, nozzle_volume_type, overhang_fan_threshold, retract_lift_enforce, z_hop_types alone (values written by the G-code config block). Whether the GUI's config import from G-code hits it is UNKNOWN; cause UNKNOWN (no debugger was used).
+
 ### 2026-10-27 LTB preview layer times and random-test fixes (branch ltb-preview-display, worktree D:\claude\magpie-next-bblwall) - BUILT
 
 - 15bcf8d373: the preview's layer times run from wait site to wait site (layer_time_blend_preview_times, result.layer_time_blend.sites); the G-code is unchanged.

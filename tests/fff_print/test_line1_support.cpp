@@ -205,6 +205,11 @@ TEST_CASE("Resin style accepts the full configured pillar diameter range",
             line1(config, "resin_support_tree_type", line1_name(strategy));
             line1(config, "resin_support_points_density_relative", 25);
             line1(config, pillar_key, pillar_diameter_mm);
+            // A head is as wide as the pillar, and under a lifted bottom it must fit in the lift (a bottom without
+            // heads is refused): 15 mm pillars needed at least 8 mm with the default tree. Lift those by their width.
+            if (pillar_diameter_mm >= 10.)
+                line1(config, strategy == rstBranching ? "resin_branching_support_object_elevation" : "resin_support_object_elevation",
+                      pillar_diameter_mm);
             config.set_key_value("support_interface_top_layers", new ConfigOptionInt(1));
 
             Print print;

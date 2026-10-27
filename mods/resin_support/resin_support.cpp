@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -297,6 +298,32 @@ ExPolygons expolygons_of(const mp_expolys &in)
     return out;
 }
 
+// The lowest elevation (mm, to 0.1 mm, at most 30 mm above `cfg`'s) at which the tree places a head for `point`,
+// found by building the tree for that point alone: the head placement that left it without one, so the figure is
+// the one the tree applies (head length against the room under the object). 0 when none fits up to there.
+double minimum_elevation_for_head(const TriangleMesh &mesh, const resin_sla::SupportPoint &point, resin_sla::SupportTreeConfig cfg,
+                                  double zoffset, const resin_sla::JobController &controller)
+{
+    // Elevation search step and range, mm.
+    constexpr double resolution_mm = 0.1, range_mm = 30.;
+    auto fits = [&](double elevation_mm) {
+        cfg.object_elevation_mm = elevation_mm;
+        resin_sla::SupportableMesh one(mesh.its, resin_sla::SupportPoints{ point }, cfg);
+        one.zoffset = zoffset;
+        auto [one_mesh, one_tree] = resin_sla::create_support_tree(one, controller);
+        (void) one_mesh;
+        return std::any_of(one_tree.heads.begin(), one_tree.heads.end(), [](const resin_sla::Head &h) { return h.is_valid(); });
+    };
+    double low = cfg.object_elevation_mm, high = low + range_mm;
+    if (!fits(high))
+        return 0.;
+    while (high - low > resolution_mm) {
+        const double mid = 0.5 * (low + high);
+        (fits(mid) ? high : low) = mid;
+    }
+    return std::ceil(high / resolution_mm) * resolution_mm;
+}
+
 // What compute hands back, in the C layout, owned here until release: the contacts and the tree.
 struct Output
 {
@@ -444,6 +471,51 @@ void compute_contacts(mp_ctx *ctx, const mp_support_contacts_input_v1 &in, Outpu
     controller.cancelfn      = cancel;
     auto [tree_mesh, tree_output] = resin_sla::create_support_tree(supportable, controller);
     (void) tree_mesh;
+
+    // A lifted object stands on the heads under its bottom face. A point there without a head (a head longer than the
+    // room under the object: its radii are at least half the printable diameter) leaves that part of the bottom in
+    // the air, which other points elsewhere (an overhang's) did not show (seed 6828 of the U1 random test: 9 bottom
+    // points without a head under a 2 mm lift passed with 0.2 mm layers, and none were supported with 0.26 mm).
+    if (object_lift_mm(ctx, s) > EPSILON) {
+        // The bottom face: points within this of the mesh's lowest point, mm.
+        constexpr float bottom_tolerance_mm = 0.01f;
+        const float     bottom              = float(mesh.bounding_box().min.z());
+        std::vector<bool> has_head(kept.size(), false);
+        for (const resin_sla::Head &head : tree_output.heads)
+            if (head.is_valid() && size_t(head.id) < kept.size())
+                has_head[size_t(head.id)] = true;
+        size_t bottom_points = 0, headless = 0, first_headless = kept.size();
+        for (size_t i = 0; i < kept.size(); ++i)
+            if (kept[i].pos.z() <= bottom + bottom_tolerance_mm) {
+                ++bottom_points;
+                if (!has_head[i]) {
+                    ++headless;
+                    first_headless = std::min(first_headless, i);
+                }
+            }
+        if (headless > 0) {
+            // PERMANENT DIAGNOSTIC: the head size comes from these, read from the support flow; the refusal below
+            // names only the elevation (seed 6828: its 0.58 mm support width scales to 1.16 mm on the 0.8 mm nozzle).
+            magpie::log(MP_LOG_WARNING, RESIN_MOD_ID,
+                        "Resin support: bottom points without a head; printable diameter " + std::to_string(printable_diameter) +
+                            " mm (support nozzle " + std::to_string(in.support_nozzle_diameter) + " mm, support line width " +
+                            std::to_string(in.support_line_width) + " mm), head front radius " +
+                            std::to_string(tree_cfg.head_front_radius_mm) + " mm");
+            const double needed_mm = minimum_elevation_for_head(mesh, kept[first_headless], tree_cfg, supportable.zoffset, controller);
+            // Values after the text fill its placeholders (the core translates the text, then fills them).
+            const char sep = '\x1f';
+            auto mm = [](double v) { char buf[32]; std::snprintf(buf, sizeof(buf), "%.1f", v); return std::string(buf); };
+            if (needed_mm > 0.)
+                throw std::runtime_error(std::string("The bottom of the object would print in the air: %1% of the %2% support points under it got no head, "
+                                                     "because a head does not fit in the %3% mm elevation. Raise the object elevation to at least %4% "
+                                                     "mm, or make the support head and pillar smaller or print the support with a smaller nozzle.") +
+                                         sep + std::to_string(headless) + sep + std::to_string(bottom_points) + sep +
+                                         mm(tree_cfg.object_elevation_mm) + sep + mm(needed_mm));
+            throw std::runtime_error(std::string("The bottom of the object would print in the air: %1% of the %2% support points under it got no head "
+                                                 "at the %3% mm elevation. Change the support settings or print the support with a smaller nozzle.") +
+                                     sep + std::to_string(headless) + sep + std::to_string(bottom_points) + sep + mm(tree_cfg.object_elevation_mm));
+        }
+    }
     result.tree = std::move(tree_output);
 
     // Contact demand: a printable disc around each kept head, on the head's layer. Orca's interface,

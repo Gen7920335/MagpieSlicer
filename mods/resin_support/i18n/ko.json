@@ -1,4 +1,6 @@
 {
     "Resin support does not support belt printers yet.": "레진 서포트는 아직 벨트 프린터를 지원하지 않습니다.",
-    "Resin style supports": "레진 방식 서포트"
+    "Resin style supports": "레진 방식 서포트",
+    "The bottom of the object would print in the air: %1% of the %2% support points under it got no head at the %3% mm elevation. Change the support settings or print the support with a smaller nozzle.": "물체 바닥이 공중에 출력됩니다: %3% mm 들림에서 바닥 아래 서포트 점 %2%개 중 %1%개에 헤드가 없습니다. 서포트 설정을 바꾸거나 서포트를 더 작은 노즐로 출력하세요.",
+    "The bottom of the object would print in the air: %1% of the %2% support points under it got no head, because a head does not fit in the %3% mm elevation. Raise the object elevation to at least %4% mm, or make the support head and pillar smaller or print the support with a smaller nozzle.": "물체 바닥이 공중에 출력됩니다: 바닥 아래 서포트 점 %2%개 중 %1%개에 헤드가 생기지 않았습니다. %3% mm 들림 안에 헤드가 들어가지 않기 때문입니다. 물체 들림을 %4% mm 이상으로 올리거나, 서포트 헤드와 기둥을 작게 하거나, 더 작은 노즐로 서포트를 출력하세요."
 }

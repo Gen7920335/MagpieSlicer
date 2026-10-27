@@ -12,6 +12,7 @@
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/libslic3r.h"
 
+#include "libslic3r/Format/DRC.hpp"
 #include <boost/filesystem/path.hpp>
 #include <nlohmann/json.hpp>
 
@@ -254,8 +255,14 @@ TEST_CASE("Every resin support setting survives a slicing mutation", "[ResinSupp
     }};
     std::vector<nlohmann::json> cases;
     for (const char *tree_type : {"default", "branching"})
-        for (const auto &[name, value] : mutations)
-            cases.push_back({{"resin_support.tree_type", tree_type}, {std::string("resin_support.") + tree_type + "_" + name, value}});
+        for (const auto &[name, value] : mutations) {
+            nlohmann::json values = {{"resin_support.tree_type", tree_type}, {std::string("resin_support.") + tree_type + "_" + name, value}};
+            // A head as wide as a 15 mm pillar does not fit under the default 5 mm lift (at least 8 mm with the default
+            // tree), and a bottom without heads is refused; lift it by the pillar's width.
+            if (std::string(name) == "pillar_diameter")
+                values[std::string("resin_support.") + tree_type + "_object_elevation"] = 15.;
+            cases.push_back(values);
+        }
     cases.push_back({{"resin_support.points_density", 250}});
     cases.push_back({{"resin_support.enforcers_only", true}});
     REQUIRE(cases.size() == 34);
@@ -296,4 +303,73 @@ TEST_CASE("Turning on a mod that takes the support over slices the lifted object
     print.process();
     REQUIRE(ModHost::support_generator_name(print.full_print_config(), object.config()) == "mixed");
     CHECK_THAT(object.slicing_parameters().object_print_z_min, Catch::Matchers::WithinAbs(0., 1e-9));
+}
+
+namespace {
+
+// Seed 6828 of the U1 random test: branching resin support of the 20 mm Orca cube, with that seed's whole config (its
+// four toolheads, widths, support and mod settings, as the CLI wrote them into the G-code) lifted elevation_mm, with
+// layer_mm layers and the given nozzles (mm). Returns the slicing error, empty when it slices. The data leaves out the
+// six enum keys (extruder_type, nozzle_type, nozzle_volume_type, overhang_fan_threshold, retract_lift_enforce,
+// z_hop_types): load_from_ini crashed on each of them alone here, and none of them sizes the support heads.
+std::string lifted_cube_error(double elevation_mm, double layer_mm, const std::vector<double> &nozzles_mm)
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.load_from_ini(std::string(TEST_DATA_DIR) + "/resin_support_seed6828.ini", ForwardCompatibilitySubstitutionRule::Enable);
+    nlohmann::json mod_values = nlohmann::json::parse(config.opt_string("mod_settings"));
+    mod_values["resin_support.branching_object_elevation"] = elevation_mm;
+    config.set_key_value("mod_settings", new ConfigOptionString(mod_values.dump()));
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats(nozzles_mm));
+    std::vector<double> max_layer_mm;
+    for (double nozzle_mm : nozzles_mm)
+        max_layer_mm.push_back(0.75 * nozzle_mm);
+    config.set_key_value("max_layer_height", new ConfigOptionFloats(max_layer_mm));
+    config.set_key_value("layer_height", new ConfigOptionFloat(layer_mm));
+    config.set_key_value("initial_layer_print_height", new ConfigOptionFloat(layer_mm));
+    const boost::filesystem::path cube_path = boost::filesystem::path(PROFILES_DIR) / ".." / "handy_models" / "OrcaCube_v2.drc";
+    TriangleMesh cube;
+    if (!load_drc(cube_path.string().c_str(), &cube))
+        return "cannot load " + cube_path.string();
+    Print print;
+    try {
+        init_and_process_print({cube}, print, config);
+    } catch (const std::exception &e) {
+        return e.what();
+    }
+    return {};
+}
+
+} // namespace
+
+TEST_CASE("A lifted object whose bottom gets no head is refused with the elevation it needs", "[ResinSupport][Elevation][Regression]")
+{
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    // The seed's absolute 0.58 mm support width scales to 1.16 mm on its 0.8 mm nozzle (the nozzles differ in size), so
+    // its heads need at least 2.4 mm of lift; with one nozzle size it stays 0.58 mm and 1.7 mm is enough (the warning
+    // logged before the refusal printed 1.16 mm; the CLI measured both lifts).
+    SECTION("no head fits under the bottom") {
+        // Before: "No support was generated", without what to change.
+        const std::string error = lifted_cube_error(2.0, 0.26, {0.8, 0.4, 0.4, 0.6});
+        CAPTURE(error);
+        CHECK(error.find("would print in the air") != std::string::npos);
+        CHECK(error.find("at least") != std::string::npos);
+    }
+    SECTION("support elsewhere on the bed does not hide the floating bottom") {
+        // Before: with 0.2 mm layers the letters' overhangs got pillars on the bed, so the slice passed with most of
+        // the bottom face in the air.
+        const std::string error = lifted_cube_error(2.0, 0.2, {0.8, 0.4, 0.4, 0.6});
+        CAPTURE(error);
+        CHECK(error.find("would print in the air") != std::string::npos);
+    }
+    SECTION("a higher lift fits the heads") {
+        const std::string error = lifted_cube_error(3.0, 0.26, {0.8, 0.4, 0.4, 0.6});
+        CAPTURE(error);
+        CHECK(error.empty());
+    }
+    SECTION("a smaller support nozzle fits the heads in the same lift") {
+        const std::string error = lifted_cube_error(2.0, 0.26, {0.4, 0.4, 0.4, 0.4});
+        CAPTURE(error);
+        CHECK(error.empty());
+    }
 }
