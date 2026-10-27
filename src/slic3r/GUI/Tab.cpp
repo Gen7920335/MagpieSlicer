@@ -8971,6 +8971,39 @@ void TabPrinter::set_extruder_volume_type(int extruder_id, NozzleVolumeType type
 
 }
 
+// MAGPIE: the toolhead nozzles picked in the sidebar are the printer's hardware, so they stay with the user printer
+// preset at once, the way a picked flow type stays in the app config (set_extruder_volume_type). Otherwise they were
+// only an edit: a saved project skips the unsaved-presets question on close, and the next start came back with the
+// preset's old nozzles. Only nozzle_diameter is written; the preset's other unsaved edits stay edits.
+bool TabPrinter::keep_nozzle_diameters()
+{
+    const Preset &selected = m_presets->get_selected_preset();
+    const auto   *edited_nozzles = m_presets->get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
+    if (!selected.is_user() || selected.is_external || edited_nozzles == nullptr)
+        return false;
+    const auto *saved_nozzles = selected.config.option<ConfigOptionFloats>("nozzle_diameter");
+    if (saved_nozzles != nullptr && saved_nozzles->values == edited_nozzles->values)
+        return true;
+
+    const DynamicPrintConfig edits = m_presets->get_edited_preset().config;
+    Preset                   to_save = selected;
+    to_save.config.option<ConfigOptionFloats>("nozzle_diameter", true)->values = edited_nozzles->values;
+    const std::string name = selected.name;
+    // Selects the saved preset again, which resets the edited copy to it.
+    m_presets->save_current_preset(name, false, false, &to_save);
+    if (Preset *saved = m_presets->find_preset(name, false, true)) {
+        saved->sync_info = "update";
+        saved->save_info();
+    }
+    m_presets->get_edited_preset().config.apply(edits);
+    BOOST_LOG_TRIVIAL(info) << "Printer preset " << name << " keeps the nozzle diameters " << edited_nozzles->serialize();
+
+    reload_config();
+    update_tab_ui();
+    update_dirty();
+    return true;
+}
+
 // Return a callback to create a TabPrinter widget to edit bed shape
 wxSizer* TabPrinter::create_bed_shape_widget(wxWindow* parent)
 {

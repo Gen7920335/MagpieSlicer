@@ -1976,6 +1976,8 @@ void Sidebar::priv::set_row_nozzle_diameter(size_t extruder, double diameter_mm)
     BOOST_LOG_TRIVIAL(info) << "Sidebar: nozzle diameter of T" << extruder + 1 << " set to " << diameter_mm << " mm";
     // Dirties the preset and updates the printer tab, the plater and this card (Tab::load_config).
     printer_tab->load_config(new_conf);
+    // The toolhead's nozzles stay with a user printer preset across restarts (a system one cannot be overwritten).
+    printer_tab->keep_nozzle_diameters();
     // The nozzles whose diameter changed start from the line width settings scaled to their new size.
     if (auto* print_tab = dynamic_cast<TabPrint*>(wxGetApp().get_tab(Preset::TYPE_PRINT))) {
         // One nozzle for all extruders on a single extruder multi-material printer: all of them changed.
