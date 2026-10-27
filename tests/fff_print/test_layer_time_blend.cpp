@@ -26,6 +26,7 @@
 using namespace Slic3r;
 using namespace Slic3r::Test;
 using Catch::Matchers::WithinAbs;
+using Catch::Matchers::WithinRel;
 
 namespace {
 
@@ -590,6 +591,48 @@ TEST_CASE("Temperature waits inside the print count without blending", "[LayerTi
     // An M109 that only confirms the temperature already reached adds nothing.
     const std::string reached = "G90\nM83\nG1 X0 Y0 F600\nM109 S200\n" + layer_change + "G1 X100 F600\nM109 S200\nG1 X0 F600\n";
     CHECK_THAT(estimated_time(reached, false), WithinAbs(moves_only, 0.5));
+}
+
+// Two 10 mm cubes, 6 mm tall, one at 0.3 mm layers and one at 0.2 mm: G-code layers follow the pattern of both
+// heights, so their times alternate with it although each cube's own time between its layers does not. A site
+// starts only a layer where both cubes start one, every 0.6 mm, so each interval is a whole period of the pattern.
+TEST_CASE("With objects of different layer heights a wait site starts only layers every object starts", "[LayerTimeBlend]")
+{
+    // A limit no pair reaches: no waits, the intervals as sliced.
+    DynamicPrintConfig config = blend_config("blend", 1e6);
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    Print print;
+    Model model;
+    std::vector<TriangleMesh> meshes;
+    meshes.push_back(make_cube(10., 10., 6.));
+    meshes.push_back(make_cube(10., 10., 6.));
+    const std::vector<std::vector<ConfigBase::SetDeserializeItem>> per_object = { {}, { { "layer_height", "0.2" } } };
+    init_print(std::move(meshes), print, model, config, &per_object);
+    const std::string out = gcode(print);
+
+    // The heights both cubes have a layer at, from the sliced objects.
+    REQUIRE(print.objects().size() == 2);
+    size_t common = 0, any = 0;
+    std::set<long long> heights; // print_z, um
+    for (const PrintObject *object : print.objects())
+        for (const Layer *layer : object->layers())
+            heights.insert(std::llround(layer->print_z * 1000.));
+    for (long long z : heights) {
+        ++any;
+        bool all = true;
+        for (const PrintObject *object : print.objects())
+            all = all && object->get_layer_at_printz(double(z) / 1000., EPSILON) != nullptr;
+        common += all;
+    }
+    CHECK(common < any);
+    CHECK(count_lines_starting(out, site_tag) == common);
+    // Each interval is a whole period of the pattern, the same work every time: away from the first and last
+    // layers they differ by little. Between G-code layers they alternated by the time of a whole cube layer.
+    const std::vector<double> intervals = measured_intervals(out);
+    REQUIRE(intervals.size() >= 5);
+    for (size_t k = 2; k + 2 < intervals.size(); ++k)
+        CHECK_THAT(intervals[k], WithinRel(intervals[k - 1], 0.1)); // within 10 % of the period before
 }
 
 TEST_CASE("Under H/2 a wait site starts each full layer only", "[LayerTimeBlend]")

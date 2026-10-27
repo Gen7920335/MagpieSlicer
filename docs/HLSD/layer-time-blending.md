@@ -31,6 +31,16 @@ input, so both constraint sets are closed under the pointwise minimum and the sm
 still exists; the planner alternates the two-pass envelope with the upper concave hull of `T - q`,
 where `q`'s second difference is each layer's bound, until nothing rises.
 
+With `exception_cost` c > 0 a pair of neighbours may break the limit where that is cheaper: the
+planner first finds the least of `sum(T) + c * sum(max(0, |T[i] - T[i-1]| - D))` over `T >= t`
+(exactly, by dynamic programming over the chain's convex piecewise linear costs), gives each pair the
+jump that solution takes as its own limit, and blends under those limits, so a single long layer stops
+spreading waits over the layers around it when that saves more than c seconds of waits per second over
+the limit (log: the same in log seconds). 0 keeps the limit everywhere. Of the ways to save print time
+compared on 2026-10-27 (an isolated-layer exemption, limits over windows of layers, limiting only
+drops), this one gives the least waiting for any amount the limit is broken by, and keeps the limit in
+both directions, since a long layer after a short one changes the cooling as much as the reverse.
+
 A chain of layers starts at the first layer and at the first layer of each object of a by-object
 print. Layers below `start_layer` (2 by default, counted per chain) get no wait and do not limit
 the layer above them. `wait_cap` limits each wait (off by default). The waits are not capped
@@ -41,7 +51,7 @@ long layer and the range.
 ## Where the time comes from
 
 The export marks a wait site (`;MAGPIE_WAIT_SITE`) at the start of every full layer: one with an
-object layer at the layer's own height, after the layer change G-code and before the layer's fan
+object layer at the layer's own height for every object printing there, after the layer change G-code and before the layer's fan
 change. A support-only layer and an H/2 half pass fold into the interval they fall in. After the
 G-code is written:
 
@@ -110,4 +120,6 @@ equal cooling, only closer to it.
 
 - The times are the estimator's; machine limits that differ from the firmware's shift them, mostly
   in proportion.
-- Objects with different layer heights on one plate are blended by G-code layer.
+- With objects of different layer heights on one plate a site starts only the layers every object
+  printing there starts, so an interval is a whole period of their layer pattern; the times between
+  an object's own layers inside a period are not blended.
