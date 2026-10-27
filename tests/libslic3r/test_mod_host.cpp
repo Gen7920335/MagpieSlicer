@@ -869,3 +869,42 @@ TEST_CASE("A parameter merges into one of Orca's options", "[ModHost]")
         "params": {"g": {"type": "int", "default": 1, "ui": {"merge_into": "wall_loops", "merge_when": "nope > 1"}}}})"),
                       ContainsSubstring("neither a mod parameter nor a setting"));
 }
+
+TEST_CASE("The official mods' support groups show only while the print has support", "[ModHost]")
+{
+    // Gen 2026-10-27: with support off, the resin, Cura, mixed and low temperature interface groups stayed on the
+    // support page. Toggle test: with support and raft off, changing any of their settings leaves the G-code alone.
+    std::vector<std::string> errors;
+    const boost::filesystem::path root = boost::filesystem::path(std::string(TEST_DATA_DIR)).parent_path().parent_path();
+    const ModSet set = ModSet::load_dirs({ root / "mods" }, errors);
+    // Every mod switch on, every other parameter at its default.
+    std::map<std::string, ExprValue> params;
+    for (const Mod &mod : set.mods())
+        for (const ModParam &p : mod.params)
+            params[mod.id + "." + p.name] = std::holds_alternative<bool>(p.default_value) ? ExprValue(true) : p.default_value;
+    auto lookup = [&params](bool support) -> ExprLookup {
+        return [&params, support](const std::string &name, std::optional<size_t>) -> std::optional<ExprValue> {
+            if (name == "enable_support")
+                return ExprValue(support);
+            if (name == "raft_layers" || name == "enforce_support_layers")
+                return ExprValue(0.);
+            if (auto it = params.find(name); it != params.end())
+                return it->second;
+            return std::nullopt;
+        };
+    };
+    std::map<std::string, size_t> shown_with_support;
+    for (const Mod &mod : set.mods())
+        for (const ModParam &p : mod.params) {
+            if (p.ui.page != "Support" || p.ui.group.empty())
+                continue;
+            CAPTURE(mod.id, p.name);
+            CHECK_FALSE(param_visible(p, lookup(false)));
+            if (param_visible(p, lookup(true)))
+                ++shown_with_support[mod.id];
+        }
+    for (const char *id : { "resin_support", "cura_support", "mixed_support", "low_temp_interface" }) {
+        CAPTURE(id);
+        CHECK(shown_with_support[id] > 0);
+    }
+}

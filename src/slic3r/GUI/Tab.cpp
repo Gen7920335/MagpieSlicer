@@ -2,6 +2,8 @@
 #include "Tab.hpp"
 #include "ModParamsPanel.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
+#include "libslic3r/ModHost/NativeContacts.hpp"
+#include "libslic3r/ModHost/SlotChoice.hpp"
 #include "PresetHints.hpp"
 #include "libslic3r/IMEXHelpers.hpp"
 #include "libslic3r/PresetBundle.hpp"
@@ -1120,6 +1122,8 @@ void Tab::update_changed_ui()
             || m_type == Preset::TYPE_SLA_MATERIAL || m_type == Preset::TYPE_MODEL);
     auto dirty_options = m_presets->current_dirty_options(deep_compare);
     auto nonsys_options = m_presets->current_different_from_parent_options(deep_compare);
+    // MAGPIE: the merged settings' lines are widget lines too (update_merged_modified).
+    update_merged_modified();
     // MAGPIE: the mods' support type dropdown is a widget line (no option), which the loop below cannot colour.
     if (m_support_menu != nullptr) {
         const bool modified = std::find(dirty_options.begin(), dirty_options.end(), "support_type") != dirty_options.end();
@@ -1904,10 +1908,17 @@ void Tab::end_line_round()
         return;
     for (const auto& [key, toggle] : m_line_round) {
         const bool show = toggle.line.value_or(true) && toggle.field.value_or(true);
-        for (const PageShp& page : m_pages)
-            if (page)
-                if (Line* line = page->get_line(key.first, key.second))
-                    line->toggle_visible = show;
+        for (const PageShp& page : m_pages) {
+            if (!page)
+                continue;
+            if (Line* line = page->get_line(key.first, key.second))
+                line->toggle_visible = show;
+            // A widget line standing in for the option (the mods' support type dropdown) follows it.
+            for (ConfigOptionsGroupShp group : page->m_optgroups)
+                for (Line& line : const_cast<std::vector<Line>&>(group->get_lines()))
+                    if (line.get_options().empty() && !line.magpie_key.empty() && line.magpie_key == "menu:" + key.first)
+                        line.toggle_visible = show;
+        }
     }
     m_line_round.clear();
     update_placed_mod_lines();
@@ -8096,14 +8107,24 @@ void Tab::update_placed_mod_lines()
     }
 }
 
-const ModHost::ModParam* Tab::active_merged_param(const MergedSetting& merged, std::string* key) const
+const ModHost::ModParam* Tab::active_merged_param(const MergedSetting& merged, const DynamicPrintConfig& full, std::string* key) const
 {
     std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
-    if (wxGetApp().preset_bundle == nullptr)
-        return nullptr;
-    const DynamicPrintConfig full = wxGetApp().preset_bundle->full_config();
-    const ModHost::ExprLookup lookup = [&full](const std::string& name, std::optional<size_t> index) -> std::optional<ModHost::ExprValue> {
-        return index ? std::nullopt : ModHost::param_or_setting_value(full, name);
+    // A support.contacts implementation (resin support) builds normal support whatever support_type says
+    // (NativeContacts::generate), so the parameters pick as for normal support. Toggle test, resin on a tree type:
+    // support_extras.normal_wall_loops changes the G-code on five models, tree_wall_loops on none.
+    bool contacts = false;
+    try {
+        const std::string generator = ModHost::support_generator_name(full, full);
+        contacts = !generator.empty() && ModHost::NativeContacts::find(generator) != nullptr;
+    } catch (const std::exception&) {
+    }
+    const ModHost::ExprLookup lookup = [&full, contacts](const std::string& name, std::optional<size_t> index) -> std::optional<ModHost::ExprValue> {
+        if (index)
+            return std::nullopt;
+        if (contacts && name == "support_type")
+            return ModHost::ExprValue(std::string("normal(auto)"));
+        return ModHost::param_or_setting_value(full, name);
     };
     for (const std::string& k : merged.params)
         if (const ModHost::ModParam* p = ModParamsPanel::find_param(mods.get(), k)) {
@@ -8165,67 +8186,135 @@ wxSizer* Tab::create_merged_setting(wxWindow* parent, size_t index)
             m_merged_settings[index].control = nullptr;
         event.Skip();
     });
+    // Orca's bullet, the revert arrow while the value differs from the saved preset's (update_merged_modified).
+    merged.revert   = new ScalableButton(parent, wxID_ANY, "dot");
+    merged.modified = false;
+    merged.revert->SetBackgroundColour(parent->GetBackgroundColour());
+    merged.revert->Bind(wxEVT_BUTTON, [this, index](wxCommandEvent&) { revert_merged(index); });
+    merged.revert->Bind(wxEVT_DESTROY, [this, index](wxWindowDestroyEvent& event) {
+        if (index < m_merged_settings.size() && event.GetEventObject() == m_merged_settings[index].revert)
+            m_merged_settings[index].revert = nullptr;
+        event.Skip();
+    });
+    sizer->Add(merged.revert, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, parent->FromDIP(4));
     sizer->Add(merged.control, 0, wxALIGN_CENTER_VERTICAL);
     load_merged_settings();
     return sizer;
+}
+
+Tab::MergedValue Tab::merged_value(const MergedSetting& merged, const DynamicPrintConfig& print) const
+{
+    MergedValue          out;
+    const std::string    text   = ModParamsPanel::stored_json(print, "process");
+    const nlohmann::json stored = nlohmann::json::parse(text.empty() ? std::string("{}") : text, nullptr, false);
+    const ConfigOptionDef* def  = print_config_def.get(merged.option);
+    if (def != nullptr && def->type == coEnum) {
+        // A merged parameter holding a value of its own shows it; else Orca's value.
+        for (size_t i = 0; i < merged.entries.size() && out.selection == wxNOT_FOUND; ++i) {
+            const auto& [k, v] = merged.entries[i];
+            if (!k.empty() && stored.is_object())
+                if (auto it = stored.find(k); it != stored.end() && it->is_string() && it->get<std::string>() == v)
+                    out.selection = int(i);
+        }
+        if (out.selection == wxNOT_FOUND && print.has(merged.option)) {
+            const std::string value = print.opt_serialize(merged.option);
+            for (size_t i = 0; i < merged.entries.size(); ++i)
+                if (merged.entries[i].first.empty() && merged.entries[i].second == value)
+                    out.selection = int(i);
+        }
+        return out;
+    }
+    if (wxGetApp().preset_bundle == nullptr)
+        return out;
+    // The other presets being edited, with this print preset.
+    DynamicPrintConfig full = wxGetApp().preset_bundle->full_config();
+    full.apply(print, true);
+    std::string              key;
+    const ModHost::ModParam* p = active_merged_param(merged, full, &key);
+    std::optional<double>    own;
+    if (p != nullptr && stored.is_object())
+        if (auto it = stored.find(key); it != stored.end() && it->is_number())
+            own = it->get<double>();
+    const double keep = p != nullptr && std::holds_alternative<double>(p->default_value) ? std::get<double>(p->default_value) : -1.;
+    if (own && *own != keep) {
+        out.text = wxString::Format("%d", int(*own));
+    } else if (p != nullptr && p->ui.merge_orca) {
+        try {
+            const ModHost::ExprValue v = p->ui.merge_orca->evaluate(
+                [&full](const std::string& name, std::optional<size_t> index) -> std::optional<ModHost::ExprValue> {
+                    return index ? std::nullopt : ModHost::param_or_setting_value(full, name);
+                });
+            if (const double* d = std::get_if<double>(&v))
+                out.text = wxString::Format("%d", int(*d));
+        } catch (const ModHost::ExprError&) {
+        }
+    }
+    if (out.text.empty() && print.has(merged.option))
+        out.text = wxString::FromUTF8(print.opt_serialize(merged.option));
+    return out;
 }
 
 void Tab::load_merged_settings()
 {
     if (m_config == nullptr || m_merged_settings.empty())
         return;
-    std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
-    const std::string    text   = ModParamsPanel::stored_json(*m_config, "process");
-    const nlohmann::json stored = nlohmann::json::parse(text.empty() ? std::string("{}") : text, nullptr, false);
     for (MergedSetting& merged : m_merged_settings) {
         if (merged.control == nullptr)
             continue;
+        const MergedValue value = merged_value(merged, *m_config);
         if (auto* choice = dynamic_cast<::ComboBox*>(merged.control)) {
-            int selection = wxNOT_FOUND;
-            // A merged parameter holding a value of its own shows it; else Orca's value.
-            for (size_t i = 0; i < merged.entries.size() && selection == wxNOT_FOUND; ++i) {
-                const auto& [k, v] = merged.entries[i];
-                if (!k.empty() && stored.is_object())
-                    if (auto it = stored.find(k); it != stored.end() && it->is_string() && it->get<std::string>() == v)
-                        selection = int(i);
-            }
-            if (selection == wxNOT_FOUND && m_config->has(merged.option)) {
-                const std::string value = m_config->opt_serialize(merged.option);
-                for (size_t i = 0; i < merged.entries.size(); ++i)
-                    if (merged.entries[i].first.empty() && merged.entries[i].second == value)
-                        selection = int(i);
-            }
-            if (choice->GetSelection() != selection)
-                choice->SetSelection(selection);
+            if (choice->GetSelection() != value.selection)
+                choice->SetSelection(value.selection);
         } else if (auto* input = dynamic_cast<::TextInput*>(merged.control)) {
-            std::string              key;
-            const ModHost::ModParam* p = active_merged_param(merged, &key);
-            wxString                 shown;
-            std::optional<double>    own;
-            if (p != nullptr && stored.is_object())
-                if (auto it = stored.find(key); it != stored.end() && it->is_number())
-                    own = it->get<double>();
-            const double keep = p != nullptr && std::holds_alternative<double>(p->default_value) ? std::get<double>(p->default_value) : -1.;
-            if (own && *own != keep) {
-                shown = wxString::Format("%d", int(*own));
-            } else if (p != nullptr && p->ui.merge_orca && wxGetApp().preset_bundle != nullptr) {
-                const DynamicPrintConfig full = wxGetApp().preset_bundle->full_config();
-                try {
-                    const ModHost::ExprValue v = p->ui.merge_orca->evaluate(
-                        [&full](const std::string& name, std::optional<size_t> index) -> std::optional<ModHost::ExprValue> {
-                            return index ? std::nullopt : ModHost::param_or_setting_value(full, name);
-                        });
-                    if (const double* d = std::get_if<double>(&v))
-                        shown = wxString::Format("%d", int(*d));
-                } catch (const ModHost::ExprError&) {
-                }
-            }
-            if (shown.empty() && m_config->has(merged.option))
-                shown = wxString::FromUTF8(m_config->opt_serialize(merged.option));
-            if (input->GetTextCtrl()->GetValue() != shown)
-                input->GetTextCtrl()->ChangeValue(shown);
+            if (input->GetTextCtrl()->GetValue() != value.text)
+                input->GetTextCtrl()->ChangeValue(value.text);
         }
     }
+    update_merged_modified();
+}
+
+void Tab::update_merged_modified()
+{
+    if (m_config == nullptr || m_presets == nullptr)
+        return;
+    const DynamicPrintConfig& saved = m_presets->get_selected_preset().config;
+    for (MergedSetting& merged : m_merged_settings) {
+        if (merged.control == nullptr || merged.revert == nullptr)
+            continue;
+        const bool modified = !(merged_value(merged, *m_config) == merged_value(merged, saved));
+        if (modified == merged.modified)
+            continue;
+        merged.modified = modified;
+        merged.revert->SetBitmap_(modified ? "undo" : "dot");
+        merged.revert->SetToolTip(modified ? _L("Click to drop current modifications and reset to saved value.") : wxString());
+        for (PageShp page : m_pages)
+            for (ConfigOptionsGroupShp group : page->m_optgroups)
+                for (Line& l : const_cast<std::vector<Line>&>(group->get_lines()))
+                    if (l.get_options().empty() && l.magpie_key == "merge:" + merged.option) {
+                        l.set_label_colour(modified ? &wxGetApp().get_label_clr_modified() : &wxGetApp().get_label_clr_default());
+                        if (group->custom_ctrl)
+                            group->custom_ctrl->Refresh();
+                    }
+    }
+}
+
+void Tab::revert_merged(size_t index)
+{
+    if (index >= m_merged_settings.size() || m_config == nullptr || m_presets == nullptr)
+        return;
+    const MergedSetting&      merged = m_merged_settings[index];
+    const DynamicPrintConfig& saved  = m_presets->get_selected_preset().config;
+    const std::string         text   = ModParamsPanel::stored_json(saved, "process");
+    const nlohmann::json      stored = nlohmann::json::parse(text.empty() ? std::string("{}") : text, nullptr, false);
+    std::vector<std::pair<std::string, std::string>> values;
+    for (const std::string& k : merged.params) {
+        std::string value; // none saved: the default
+        if (stored.is_object())
+            if (auto it = stored.find(k); it != stored.end())
+                value = it->dump();
+        values.emplace_back(k, value);
+    }
+    write_merged(merged.option, saved.has(merged.option) ? saved.opt_serialize(merged.option) : std::string(), values);
 }
 
 void Tab::on_merged_setting_changed(size_t index)
@@ -8249,7 +8338,7 @@ void Tab::on_merged_setting_changed(size_t index)
         write_merged(merged.option, k.empty() ? v : std::string(), values);
     } else if (auto* input = dynamic_cast<::TextInput*>(merged.control)) {
         std::string key;
-        if (active_merged_param(merged, &key) == nullptr)
+        if (wxGetApp().preset_bundle == nullptr || active_merged_param(merged, wxGetApp().preset_bundle->full_config(), &key) == nullptr)
             return;
         long v = 0;
         if (!input->GetTextCtrl()->GetValue().ToLong(&v)) {
@@ -8510,6 +8599,8 @@ void Tab::add_support_type_line(ConfigOptionsGroupShp optgroup)
     const ConfigOptionDef *def = print_config_def.get("support_type");
     Line line{ def->label, def->tooltip };
     line.label_path = "support_settings_support#type";
+    // Shows and hides with Orca's support_type (end_line_round).
+    line.magpie_key = "menu:support_type";
     line.widget = [this](wxWindow* parent) -> wxSizer* {
         const std::string language = into_u8(wxGetApp().current_language_code_safe());
         m_support_menu = new ::ComboBox(parent, wxID_ANY, wxEmptyString, wxDefaultPosition,

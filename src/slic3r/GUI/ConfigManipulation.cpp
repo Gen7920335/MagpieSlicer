@@ -1058,32 +1058,40 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     bool support_is_tree = config->opt_bool("enable_support") && is_tree(support_type);
     bool support_is_organic = support_is_tree && (support_style == smsTreeOrganic || support_style == smsDefault);
     bool support_is_normal_tree = support_is_tree && !support_is_organic;
+    // MAGPIE: resin support (a mod) finds its own contact points and builds normal support whatever the type
+    // (NativeContacts). Toggle test on five models, raft 0 and 2, resin on: the threshold angle and overlap, the
+    // support expansion, the maximum bridge length, the critical regions only switch, the tree style and every tree
+    // branch setting leave the G-code alone; the tree wall count and build plate only do not (shown).
+    const std::string support_generator   = ModHost::support_generator_name(*config, *config);
+    const bool        resin_support       = support_generator == "resin";
+    toggle_line("support_threshold_angle", !resin_support);
+    toggle_line("support_expansion", !resin_support);
+    toggle_line("support_style", !(resin_support && support_is_tree));
 
     // hide settings that are not used by tree supports
-    toggle_line("support_threshold_overlap", !support_is_tree); // ORCA: tree supports do not use Threshold Overlap
+    toggle_line("support_threshold_overlap", !support_is_tree && !resin_support); // ORCA: tree supports do not use Threshold Overlap
     // settings specific to normal trees
     for (auto el : {"tree_support_branch_angle", "tree_support_branch_distance", "tree_support_branch_diameter", "tree_support_auto_brim", "tree_support_brim_width"})
-        toggle_line(el, support_is_normal_tree);
+        toggle_line(el, support_is_normal_tree && !resin_support);
     // settings specific to organic trees
     for (auto el : {"tree_support_branch_angle_organic", "tree_support_branch_distance_organic", "tree_support_branch_diameter_organic", "tree_support_angle_slow", "tree_support_tip_diameter", "tree_support_top_rate", "tree_support_branch_diameter_angle"})
-        toggle_line(el, support_is_organic);
+        toggle_line(el, support_is_organic && !resin_support);
     // ORCA: Independent support layer height is not compatible with organic tree supports,
     // as they rely on the support layers being the same as the object layers to determine where to place branches.
     toggle_line("independent_support_layer_height", have_support_material && !support_is_organic);
 
     toggle_field("tree_support_brim_width", support_is_tree && !config->opt_bool("tree_support_auto_brim"));
     // tree support use max_bridge_length instead of bridge_no_support
-    toggle_line("max_bridge_length", support_is_tree);
+    toggle_line("max_bridge_length", support_is_tree && !resin_support);
     // MAGPIE: Cura and resin support (mods) find the overhangs themselves; Orca's bridge and small overhang filters do
     // nothing there (toggle test: the same G-code on two models, and the code paths never run).
-    const std::string support_generator   = ModHost::support_generator_name(*config, *config);
-    const bool        mod_finds_overhangs = support_generator == "cura" || support_generator == "resin";
+    const bool        mod_finds_overhangs = support_generator == "cura" || resin_support;
     toggle_line("bridge_no_support", !support_is_tree && !mod_finds_overhangs);
     toggle_line("support_remove_small_overhang", have_support_material && !mod_finds_overhangs);
     // MAGPIE: settings read only for support (toggle test: the same G-code with support and raft off).
     toggle_field("support_line_width", have_support_material);
     toggle_field("tree_support_wall_count", have_support_material);
-    toggle_line("support_critical_regions_only", is_auto(support_type) && support_is_tree);
+    toggle_line("support_critical_regions_only", is_auto(support_type) && support_is_tree && !resin_support);
 
     for (auto el : { "support_interface_filament",
         "support_interface_loop_pattern", "support_bottom_interface_spacing" })

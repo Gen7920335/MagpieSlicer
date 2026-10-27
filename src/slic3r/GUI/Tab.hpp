@@ -530,15 +530,31 @@ protected:
 		std::string              option;    // Orca's option key
 		std::vector<std::string> params;    // "<mod id>.<name>" merged into it
 		wxWindow*                control = nullptr;
+		// Orca's bullet, the revert arrow while the value differs from the saved preset's (update_merged_modified).
+		ScalableButton*          revert = nullptr;
+		bool                     modified = false;
 		// A dropdown's entries: ("", Orca's value) or (parameter key, its value).
 		std::vector<std::pair<std::string, std::string>> entries;
+	};
+	// What a merged setting's control shows under one print preset: a dropdown's entry (wxNOT_FOUND for none), or
+	// a number's text.
+	struct MergedValue {
+		int      selection = -1;
+		wxString text;
+		bool     operator==(const MergedValue& other) const { return selection == other.selection && text == other.text; }
 	};
 	std::vector<MergedSetting> m_merged_settings;
 	wxSizer*		create_merged_setting(wxWindow* parent, size_t index);
 	void			load_merged_settings();
 	void			on_merged_setting_changed(size_t index);
-	// The parameter of `merged` whose merge_when holds for the presets being edited (the first; nullptr if none).
-	const ModHost::ModParam* active_merged_param(const MergedSetting& merged, std::string* key) const;
+	MergedValue		merged_value(const MergedSetting& merged, const DynamicPrintConfig& print) const;
+	// The merged lines' label colour and revert arrow: the value shown against the saved preset's, as the mod rows'
+	// (ModParamsPanel::update_modified).
+	void			update_merged_modified();
+	// Back to the saved preset's values: its merged parameters and Orca's option.
+	void			revert_merged(size_t index);
+	// The parameter of `merged` whose merge_when holds under `full` (the first; nullptr if none).
+	const ModHost::ModParam* active_merged_param(const MergedSetting& merged, const DynamicPrintConfig& full, std::string* key) const;
 	// Writes `values` ("<mod id>.<name>" -> JSON value, or null for the default) into this tab's mod value key and
 	// `option_value` (serialized) into Orca's option `option` when not empty, then reports the changes as the fields do.
 	void			write_merged(const std::string& option, const std::string& option_value, const std::vector<std::pair<std::string, std::string>>& values);
