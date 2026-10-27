@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -25,14 +26,124 @@ void diagnostic(const std::string &text)
 // keeps log() finite for an empty interval.
 constexpr double min_log_time_s = 1e-3;
 
-// Pointwise smallest v' >= v with |v'[i] - v'[i-1]| <= limit: the upper envelope of cones of slope
-// `limit` standing on every point, found by one pass each way.
-void lipschitz_envelope(std::vector<double> &v, double limit)
+// Pointwise smallest v' >= v with |v'[i] - v'[i-1]| <= limits[i] (limits[0] unused): the upper envelope of
+// cones standing on every point, found by one pass each way.
+void lipschitz_envelope(std::vector<double> &v, const std::vector<double> &limits)
 {
     for (size_t i = 1; i < v.size(); ++i)
-        v[i] = std::max(v[i], v[i - 1] - limit);
+        v[i] = std::max(v[i], v[i - 1] - limits[i]);
     for (size_t i = v.size() - 1; i-- > 0;)
-        v[i] = std::max(v[i], v[i + 1] - limit);
+        v[i] = std::max(v[i], v[i + 1] - limits[i + 1]);
+}
+
+// The neighbour limits the exception cost allows: limits[i] for the pair (i-1, i), at least `limit`.
+// They come from the solution of
+//     minimise sum(v) + cost * sum(max(0, |v[i] - v[i-1]| - limit))   subject to v >= t,
+// a chain whose every stage is a convex piecewise linear function of the layer's value, solved exactly by
+// dynamic programming over those functions. Each pair keeps the jump that solution takes; the two-pass
+// envelope under these limits is then no higher than the solution anywhere and breaks no limit by more,
+// so it has the same cost, and easing still applies on top. In the chain's units (s or log s).
+std::vector<double> exception_limits(const std::vector<double> &t, double limit, double cost)
+{
+    const size_t        n = t.size();
+    std::vector<double> limits(n, limit);
+    if (n < 2)
+        return limits;
+    // f, the least cost of layers 0..i as a function of v[i]: points (x, y) from its smallest x on, where it
+    // starts (no smaller x is allowed), and the slope after the last point.
+    struct Point { double x, y; };
+    std::vector<Point> f{ { t[0], t[0] } };
+    double             tail = 1.;
+    // Per stage, what backtracking needs of the stage before: its smallest and largest minimiser, the point
+    // past which its slope exceeds -cost, and the one from which it reaches cost (infinite: never).
+    struct Stage { double min_lo, min_hi, rise_from, steep_from; };
+    std::vector<Stage> stages;
+    stages.reserve(n - 1);
+    std::vector<double> slope; // slope right of each point of f
+    std::vector<Point>  h;
+    for (size_t i = 1; i < n; ++i) {
+        const size_t k = f.size();
+        slope.resize(k);
+        for (size_t j = 0; j + 1 < k; ++j)
+            slope[j] = (f[j + 1].y - f[j].y) / (f[j + 1].x - f[j].x);
+        slope[k - 1] = tail;
+        size_t lo = 0;
+        while (lo < k && slope[lo] < 0.)
+            ++lo;
+        lo = std::min(lo, k - 1);
+        size_t hi = lo;
+        while (hi + 1 < k && slope[hi] == 0.)
+            ++hi;
+        size_t rise = 0;
+        while (rise < lo && slope[rise] <= -cost)
+            ++rise;
+        size_t steep = hi;
+        while (steep < k && slope[steep] < cost)
+            ++steep;
+        stages.push_back({ f[lo].x, f[hi].x, f[rise].x, steep < k ? f[steep].x : std::numeric_limits<double>::infinity() });
+        // h(x) = min over y of f(y) + cost * max(0, |x - y| - limit): the part of f left of its minimum moves
+        // left by `limit`, the part right of it moves right, and slopes beyond +-cost are cut to +-cost.
+        h.clear();
+        for (size_t j = rise; j <= lo; ++j)
+            h.push_back({ f[j].x - limit, f[j].y });
+        for (size_t j = hi; j <= std::min(steep, k - 1); ++j)
+            h.push_back({ f[j].x + limit, f[j].y });
+        const double h_tail = steep < k ? cost : tail;
+        // From layer i's own time on, then + v[i].
+        const double from = t[i];
+        f.clear();
+        if (from <= h.front().x) {
+            f.push_back({ from, h.front().y - cost * (from - h.front().x) });
+            for (const Point &p : h)
+                if (p.x > from)
+                    f.push_back(p);
+        } else {
+            size_t j = 0;
+            while (j + 1 < h.size() && h[j + 1].x <= from)
+                ++j;
+            const double s = j + 1 < h.size() ? (h[j + 1].y - h[j].y) / (h[j + 1].x - h[j].x) : h_tail;
+            f.push_back({ from, h[j].y + s * (from - h[j].x) });
+            for (size_t m = j + 1; m < h.size(); ++m)
+                if (h[m].x > from)
+                    f.push_back(h[m]);
+        }
+        // Points closer than this are one, in the chain's units: far below a millisecond.
+        constexpr double same_x = 1e-12;
+        size_t           kept   = 0;
+        for (size_t j = 0; j < f.size(); ++j) {
+            if (kept > 0 && f[j].x - f[kept - 1].x < same_x) {
+                f[kept - 1].y = std::min(f[kept - 1].y, f[j].y);
+                continue;
+            }
+            f[kept++] = f[j];
+        }
+        f.resize(kept);
+        for (Point &p : f)
+            p.y += p.x;
+        tail = h_tail + 1.;
+    }
+    // The smallest minimiser of the last stage, then back through the stages.
+    std::vector<double> v(n);
+    {
+        const size_t k = f.size();
+        size_t       lo = 0;
+        while (lo + 1 < k && (f[lo + 1].y - f[lo].y) / (f[lo + 1].x - f[lo].x) < 0.)
+            ++lo;
+        v[n - 1] = f[lo].x;
+    }
+    for (size_t i = n - 1; i > 0; --i) {
+        const Stage &s = stages[i - 1];
+        const double x = v[i];
+        if (x < s.min_lo - limit)
+            v[i - 1] = std::max(x + limit, s.rise_from);
+        else if (x > s.min_hi + limit)
+            v[i - 1] = std::min(x - limit, s.steep_from);
+        else
+            v[i - 1] = std::max(s.min_lo, x - limit);
+    }
+    for (size_t i = 1; i < n; ++i)
+        limits[i] = std::max(limit, std::abs(v[i] - v[i - 1]));
+    return limits;
 }
 
 // The smallest concave sequence >= w (its upper hull, evaluated at every index).
@@ -62,12 +173,13 @@ void concave_majorant(std::vector<double> &w)
 }
 
 // One chain of linked layers, in the space the limit applies to (seconds, or log seconds).
-std::vector<double> blend_chain(std::vector<double> v, double limit, int ease_layers)
+// `limits[i]` is the limit between i-1 and i (at least `limit`, more where an exception is allowed).
+std::vector<double> blend_chain(std::vector<double> v, double limit, const std::vector<double> &limits, int ease_layers)
 {
     if (v.size() < 2 || !(limit >= 0.))
         return v;
     if (ease_layers <= 0) {
-        lipschitz_envelope(v, limit);
+        lipschitz_envelope(v, limits);
         return v;
     }
     // Convex bends (ramp starts and ends) take at most `curvature` of second difference, or the layer's own
@@ -90,7 +202,7 @@ std::vector<double> blend_chain(std::vector<double> v, double limit, int ease_la
     // case; the cap only guards a bug.
     constexpr int max_rounds = 64;
     for (int round = 0; round < max_rounds; ++round) {
-        lipschitz_envelope(v, limit);
+        lipschitz_envelope(v, limits);
         std::vector<double> w(n);
         for (size_t i = 0; i < n; ++i)
             w[i] = v[i] - q[i];
@@ -110,7 +222,7 @@ std::vector<double> blend_chain(std::vector<double> v, double limit, int ease_la
     // PERMANENT DIAGNOSTIC: the alternation did not settle, which the closedness argument rules out.
     diagnostic("Layer time blending: easing did not converge in " + std::to_string(max_rounds) + " rounds over " +
                std::to_string(v.size()) + " layers");
-    lipschitz_envelope(v, limit);
+    lipschitz_envelope(v, limits);
     return v;
 }
 
@@ -129,7 +241,9 @@ std::vector<double> target_times(const std::vector<double> &t, const std::vector
         if (settings.log)
             for (double &x : chain)
                 x = std::log(std::max(x, min_log_time_s));
-        chain = blend_chain(std::move(chain), limit, settings.ease_layers);
+        const std::vector<double> limits = settings.exception_cost > 0. ? exception_limits(chain, limit, settings.exception_cost) :
+                                                                          std::vector<double>(chain.size(), limit);
+        chain = blend_chain(std::move(chain), limit, limits, settings.ease_layers);
         for (size_t i = 0; i < chain.size(); ++i)
             out[begin + i] = std::max(t[begin + i], settings.log ? std::exp(chain[i]) : chain[i]);
         begin = end;

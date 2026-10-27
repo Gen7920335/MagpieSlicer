@@ -64,6 +64,10 @@ struct Settings
     // blended; the constraint to the layer below it is cut, and layers below it get no wait.
     int    start_layer   = 2;
     double wait_cap_s    = 0.;    // largest single wait, s; 0 = no cap
+    // Exceptions to the limit: a pair of neighbours may break it where that saves at least this much wait per
+    // unit it breaks it by (s per s; log: log s per log s). The waits are then the least of
+    // sum(T) + exception_cost * sum(excess over the limit). 0 = no exceptions.
+    double exception_cost = 0.;
     // Whether waits may park: a wait at least park_min_s long (s) and at least the site's park trip parks
     // the head instead of waiting in place. Only sites with a park trip can park.
     bool   park          = false;

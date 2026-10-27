@@ -6,7 +6,7 @@
     // marked, written and re-estimated by the core.
     "id": "layer_time_blend",
     "name": "Layer time blending", "name_ko": "레이어 타임 블렌딩",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "api": { "major": 1, "min_minor": 0 },
     "binary": "layer_time_blend",
     // Picked while blending is on. The settings are what the core's export reads: where it waits, the tower, the park
@@ -19,8 +19,8 @@
     "params": {
         "blend_type":     { "invalidates": ["psGCodeExport"], "type": "string", "default": "off",
                             "options": [ { "value": "off",    "label": "Off",    "label_ko": "끔" },
-                                         { "value": "linear", "label": "Linear", "label_ko": "선형" },
-                                         { "value": "log",    "label": "Log",    "label_ko": "로그" } ],
+                                         { "value": "log",    "label": "Log (recommended)", "label_ko": "로그 (추천)" },
+                                         { "value": "linear", "label": "Linear", "label_ko": "선형" } ],
                             "label": "Layer time blending", "label_ko": "레이어 타임 블렌딩", "ui": { "page": "Speed", "group": "Layer time blending" } },
         "max_diff":       { "invalidates": ["psGCodeExport"], "type": "float", "default": 5,  "unit": "s", "visible": "layer_time_blend.blend_type == \"linear\"",
                             "label": "Maximum layer time difference", "label_ko": "최대 레이어 시간 차이", "ui": { "page": "Speed", "group": "Layer time blending" } },
@@ -32,6 +32,10 @@
                             "label": "First blended layer", "label_ko": "블렌딩 시작 레이어", "ui": { "page": "Speed", "group": "Layer time blending" } },
         "wait_cap":       { "invalidates": ["psGCodeExport"], "type": "float", "default": 0,  "unit": "s", "visible": "layer_time_blend.blend_type != \"off\"",
                             "label": "Maximum wait per layer (0 = no limit)", "label_ko": "레이어당 최대 대기 (0 = 제한 없음)", "ui": { "page": "Speed", "group": "Layer time blending" } },
+        // A long layer then need not spread waits over the layers around it: where breaking the limit by 1 s saves at
+        // least this many seconds of waits, the planner breaks it (log: the same in ratios). 0 never breaks it.
+        "exception_cost": { "invalidates": ["psGCodeExport"], "type": "float", "default": 0, "visible": "layer_time_blend.blend_type != \"off\"",
+                            "label": "Break the limit where it saves this many seconds of waits per second (0 = never)", "label_ko": "한도를 1초 넘길 때 이만큼 대기가 줄면 넘김 (초, 0 = 넘기지 않음)", "ui": { "page": "Speed", "group": "Layer time blending" } },
         "warn_total_pct": { "invalidates": ["psGCodeExport"], "type": "float", "default": 15, "unit": "%", "visible": "layer_time_blend.blend_type != \"off\"",
                             "label": "Warn when waits exceed this share of the print time", "label_ko": "대기 합계가 출력 시간의 이 비율을 넘으면 경고", "ui": { "page": "Speed", "group": "Layer time blending" } },
         "warn_single":    { "invalidates": ["psGCodeExport"], "type": "float", "default": 60, "unit": "s", "visible": "layer_time_blend.blend_type != \"off\"",

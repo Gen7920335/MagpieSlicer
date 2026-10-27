@@ -45,6 +45,7 @@ LayerTimeBlend::Settings settings_from(mp_ctx *ctx)
     s.ease_layers    = required_i64(ctx, "ease_layers");
     s.start_layer    = required_i64(ctx, "start_layer");
     s.wait_cap_s     = required_f64(ctx, "wait_cap");
+    s.exception_cost = required_f64(ctx, "exception_cost");
     s.warn_total_pct = required_f64(ctx, "warn_total_pct");
     s.warn_single_s  = required_f64(ctx, "warn_single");
     const std::string wait_at = required_str(ctx, "wait_at");
@@ -116,4 +117,4 @@ int32_t magpie::mod_init(const MagpieHostApi &host, MagpieRegistrar &registrar)
 
 void magpie::mod_shutdown() { LayerTimeBlend::set_diagnostic_sink({}); }
 
-MAGPIE_MOD_DEFINE(LTB_MOD_ID, "1.3.0")
+MAGPIE_MOD_DEFINE(LTB_MOD_ID, "1.4.0")
