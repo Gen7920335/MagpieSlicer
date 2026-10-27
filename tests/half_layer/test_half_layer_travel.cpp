@@ -813,6 +813,9 @@ TEST_CASE("G-code short travel applies the logical parent lift with either toggl
         {"z_hop", configured_hop_mm}, {"retraction_minimum_travel", 1000.}, {"reduce_crossing_wall", false},
         {"travel_speed", 120.}, {"initial_layer_travel_speed", 30.}, {"retract_lift_above", 100.}});
     Slic3r::Test::half_layer_params(config, bool(toggles & 1), bool(toggles & 2));
+    // H/2 support bands an object with support only (PrintObject::update_layer_bands).
+    if (toggles & 2)
+        config.set_deserialize_strict({{"enable_support", true}});
     Print print;
     Model model;
     init_print({cube(5.)}, print, model, config);

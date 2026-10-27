@@ -838,7 +838,7 @@ TEST_CASE("A parameter merges into one of Orca's options", "[ModHost]")
     // Gen 2026-10-27: an Orca option and a mod's parameter for the same thing show as one setting.
     const ModSet mods = build_one(R"json({"id": "demo", "version": "1",
         "params": {
-            "pattern": {"type": "string", "default": "", "options": ["", "triangles"],
+            "pattern": {"type": "string", "default": "", "options": [{"value": "", "label": "Orca's"}, "triangles"],
                         "ui": {"merge_into": "support_interface_pattern"}},
             "walls":   {"type": "int", "default": -1,
                         "ui": {"merge_into": "tree_support_wall_count", "merge_when": "support_type == \"normal(auto)\"",

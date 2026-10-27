@@ -1089,8 +1089,10 @@ TEST_CASE("Sliced half-height paths produce a complete material-resolved executi
 TEST_CASE("Support half bands retain classified volume contact separation and logical interface", "[HalfLayer][SupportBands]")
 {
     auto config = DynamicPrintConfig::full_print_config();
+    // Support on, so H/2 support bands the object (PrintObject::update_layer_bands); the cube has no overhang, so
+    // no support layer is generated and the test builds its own.
     config.set_deserialize_strict({{"layer_height", 0.2}, {"initial_layer_print_height", 0.2},
-        {"enable_support", false}, {"support_interface_top_layers", 2}});
+        {"enable_support", true}, {"support_interface_top_layers", 2}});
     Slic3r::Test::half_layer_params(config, false, true);
     Print print;
     Model model;
