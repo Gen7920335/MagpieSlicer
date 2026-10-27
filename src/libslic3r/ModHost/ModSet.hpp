@@ -408,8 +408,10 @@ public:
     // sliced and add no step. Step names as in mod_step_names(); "none" is never returned.
     std::set<std::string> invalidated_steps(const std::string &old_json, const std::string &new_json) const;
 
-private:
+    // Reads a parameter from `sources` (value_of()) or a setting from sources.print.
     ExprLookup slot_lookup(const ValueSources &sources) const;
+
+private:
 
     // Indices rather than pointers, so a ModSet stays valid when copied or moved.
     using Ref = std::pair<size_t, size_t>; // (mod, rule or param)
@@ -434,6 +436,9 @@ void load_active_mods_from_data_dir();
 // stored in `config` (mod_settings / printer_mod_settings), else the parameter's default. Nothing
 // when no active mod declares the parameter or the stored value has the wrong type.
 std::optional<ExprValue> param_value(const DynamicPrintConfig &config, const std::string &key);
+// A parameter's value as param_value(), or else the value of the setting of that name in `config` (a "visible"
+// condition may read either).
+std::optional<ExprValue> param_or_setting_value(const DynamicPrintConfig &config, const std::string &key);
 // The first active mod (in load order) with support painting channels whose gui paint_when holds under `config`,
 // or nullptr. A condition that cannot be evaluated does not hold.
 const Mod *active_paint_channel_mod(const ModSet &mods, const DynamicPrintConfig &config);

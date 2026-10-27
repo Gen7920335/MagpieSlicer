@@ -3580,6 +3580,8 @@ void TabPrint::update_description_lines()
 void TabPrint::toggle_options()
 {
     if (!m_active_page) return;
+    // MAGPIE: the mod rows placed after options follow them (and their own conditions) once they are toggled.
+    ScopeGuard placed_rows([this] { update_placed_mod_lines(); });
     // MAGPIE: the support type dropdown follows enable_support / raft_layers like Orca's field.
     load_support_menu();
     // BBS: whether the preset is Bambu Lab printer
@@ -5166,6 +5168,8 @@ void TabFilament::toggle_options()
     const unsigned int variant_index = selected_variant_index();
     if (!m_active_page)
         return;
+    // MAGPIE: the mod rows placed after options follow them (and their own conditions) once they are toggled.
+    ScopeGuard placed_rows([this] { update_placed_mod_lines(); });
     bool is_BBL_printer = false;
     if (m_preset_bundle) {
         is_BBL_printer = wxGetApp().preset_bundle->is_bbl_vendor();
@@ -6747,6 +6751,8 @@ void TabPrinter::toggle_options()
 {
     if (!m_active_page || m_presets->get_edited_preset().printer_technology() == ptSLA)
         return;
+    // MAGPIE: the mod rows placed after options follow them (and their own conditions) once they are toggled.
+    ScopeGuard placed_rows([this] { update_placed_mod_lines(); });
 
     auto nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
 
@@ -7976,6 +7982,47 @@ ModParamsPanel* Tab::add_mod_params_panel(wxWindow* parent, std::shared_ptr<cons
     return panel;
 }
 
+void Tab::update_placed_mod_lines()
+{
+    if (m_placed_mod_lines.empty())
+        return;
+    std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
+    std::optional<DynamicPrintConfig>      full;
+    const ModHost::ExprLookup lookup = [&full](const std::string& name, std::optional<size_t> index) -> std::optional<ModHost::ExprValue> {
+        if (index || wxGetApp().preset_bundle == nullptr)
+            return std::nullopt;
+        if (!full)
+            full = wxGetApp().preset_bundle->full_config();
+        return ModHost::param_or_setting_value(*full, name);
+    };
+    bool changed = false;
+    for (const auto& [key, anchor] : m_placed_mod_lines) {
+        const ModHost::ModParam* param = ModParamsPanel::find_param(mods.get(), key);
+        for (PageShp page : m_pages) {
+            const Line* anchor_line = page ? page->get_line(anchor) : nullptr;
+            if (anchor_line == nullptr)
+                continue;
+            bool show = anchor_line->toggle_visible;
+            // Orca greys out a setting whose parent is off (toggle_field): the row placed after it hides then.
+            if (show && page.get() == m_active_page)
+                if (Field* field = page->get_field(anchor); field != nullptr && field->getWindow() != nullptr && !field->getWindow()->IsEnabled())
+                    show = false;
+            if (show && param != nullptr)
+                show = ModHost::param_visible(*param, lookup);
+            for (ConfigOptionsGroupShp group : page->m_optgroups)
+                for (Line& line : const_cast<std::vector<Line>&>(group->get_lines()))
+                    if (line.get_options().empty() && line.label_tooltip == wxString::FromUTF8(key) && line.toggle_visible != show) {
+                        line.toggle_visible = show;
+                        changed = true;
+                    }
+        }
+    }
+    if (changed && m_active_page) {
+        m_active_page->update_visibility(m_mode, true);
+        m_page_view->GetParent()->Layout();
+    }
+}
+
 void Tab::add_mods_page(const std::string& scope)
 {
     // Mod parameters are per preset; the per-object tabs have no Mods page yet.
@@ -8042,6 +8089,8 @@ void Tab::add_mods_page(const std::string& scope)
                     };
                     if ((placed = group->insert_line_after(p->ui.after, line, rows_after[p->ui.after]))) {
                         ++rows_after[p->ui.after];
+                        if (std::find(m_placed_mod_lines.begin(), m_placed_mod_lines.end(), std::make_pair(key, p->ui.after)) == m_placed_mod_lines.end())
+                            m_placed_mod_lines.emplace_back(key, p->ui.after);
                         break;
                     }
                 }

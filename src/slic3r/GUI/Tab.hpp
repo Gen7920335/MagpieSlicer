@@ -519,6 +519,10 @@ protected:
 	                                     const std::vector<std::string>& keys, bool labels);
 	// Every live panel of mod parameters on this tab: the Mods page and the placed rows and groups.
 	std::vector<ModParamsPanel*> m_mod_params_panels;
+	// MAGPIE: the rows placed after an option's line, as (parameter key, option key). Such a row shows only while
+	// that option's line shows and its field is enabled, and its own "visible" condition holds.
+	std::vector<std::pair<std::string, std::string>> m_placed_mod_lines;
+	void			update_placed_mod_lines();
 	// MAGPIE: the support type dropdown with the loaded support mods' entries (ModHost/SupportMenu.hpp), in place
 	// of the support_type field when a mod adds one; null otherwise.
 	void			add_support_type_line(ConfigOptionsGroupShp optgroup);

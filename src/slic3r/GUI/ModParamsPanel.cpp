@@ -515,7 +515,7 @@ void ModParamsPanel::update_visibility()
                 return std::nullopt;
             others = wxGetApp().preset_bundle->full_config();
         }
-        return ModHost::param_value(*others, name);
+        return ModHost::param_or_setting_value(*others, name);
     };
     bool changed = false;
     for (const Row &row : m_rows) {

@@ -876,13 +876,13 @@ ModSet ModSet::build(std::vector<Mod> mods)
             if (ids.count(other))
                 mod_fail(mod.id, "conflicts with mod '" + other + "'; the two do not load together");
 
-    // A visibility condition reads parameters only: the settings tab has no full print config.
+    // A visibility condition reads parameters and settings (the tabs evaluate it on the presets being edited).
     for (const Mod &mod : set.m_mods)
         for (const ModParam &p : mod.params)
             if (p.visible)
                 for (const std::string &name : p.visible->names())
-                    if (set.m_params.count(name) == 0)
-                        mod_fail(mod.id, "param '" + p.name + "' visible: \"" + name + "\" is not a mod parameter");
+                    if (set.m_params.count(name) == 0 && print_config_def.get(name) == nullptr)
+                        mod_fail(mod.id, "param '" + p.name + "' visible: \"" + name + "\" is neither a mod parameter nor a setting");
 
     // Check every rule, and group the rules by the setting they write.
     std::map<std::string, std::vector<Ref>> by_target;
@@ -1443,6 +1443,18 @@ std::optional<ExprValue> param_value(const DynamicPrintConfig &config, const std
     ModSet::ValueSources sources;
     sources.print = &config;
     return mods->value_of(key, sources);
+}
+
+std::optional<ExprValue> param_or_setting_value(const DynamicPrintConfig &config, const std::string &key)
+{
+    std::shared_ptr<const ModSet> mods = active_mods();
+    if (!mods)
+        return std::nullopt;
+    ModSet::ValueSources sources;
+    sources.print = &config;
+    if (const ModParam *p = mods->find_param(key); p != nullptr && p->scope == "filament")
+        return std::nullopt;
+    return mods->slot_lookup(sources)(key, std::nullopt);
 }
 
 const Mod *active_paint_channel_mod(const ModSet &mods, const DynamicPrintConfig &config)
