@@ -407,8 +407,12 @@ public:
     void calib_temp(const Calib_Params& params);
     void calib_max_vol_speed(const Calib_Params& params);
     void calib_retraction(const Calib_Params& params);
-    // MAGPIE: LESIC ring (Magpie line 1).
-    void calib_lesic(const Calib_Params& params);
+    // MAGPIE: the project of a calibration a mod declares (calibration.project slot): `settings` (key, value) of the
+    // form's setting fields written into the presets being edited, the mod's project built from them and `fields`, a
+    // new project with its objects and settings. False, with the reason shown, when the mod refuses or fails.
+    bool calib_mod(const std::string& mod_id, const std::string& calibration, const wxString& name,
+                   const std::vector<std::pair<std::string, std::string>>& fields,
+                   const std::vector<std::pair<std::string, std::string>>& settings);
     void calib_VFA(const Calib_Params& params);
     void calib_input_shaping_freq(const Calib_Params& params);
     void calib_input_shaping_damp(const Calib_Params& params);

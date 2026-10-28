@@ -1,5 +1,6 @@
 //#include "slic3r/Utils/Serial.hpp"
 #include "Tab.hpp"
+#include "libslic3r/ModHost/MergedSettings.hpp"
 #include "ModParamsPanel.hpp"
 #include "libslic3r/ModHost/ModSet.hpp"
 #include "libslic3r/ModHost/NativeContacts.hpp"
@@ -8111,6 +8112,19 @@ void Tab::update_placed_mod_lines()
     }
 }
 
+// A merged setting's dropdown as MergedSettings.hpp describes it.
+static ModHost::MergedChoices merged_choices_of(const std::vector<std::string>& params,
+                                                const std::vector<std::pair<std::string, std::string>>& entries,
+                                                const std::map<std::pair<std::string, std::string>, int>& aliases)
+{
+    ModHost::MergedChoices choices;
+    choices.params  = params;
+    choices.aliases = aliases;
+    for (const auto& [param, value] : entries)
+        choices.entries.push_back({ param, value, std::string(), {} });
+    return choices;
+}
+
 const ModHost::ModParam* Tab::active_merged_param(const MergedSetting& merged, const DynamicPrintConfig& full, std::string* key) const
 {
     std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
@@ -8162,33 +8176,21 @@ wxSizer* Tab::create_merged_setting(wxWindow* line_parent, size_t index)
     std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
     const std::string      language = into_u8(wxGetApp().current_language_code_safe());
     if (def != nullptr && def->type == coEnum) {
-        // Orca's choices, then each merged string parameter's own (its "" keeps Orca's value).
         auto* choice = new ::ComboBox(parent, wxID_ANY, wxEmptyString, wxDefaultPosition,
                                       wxSize(Field::def_width_wider() * wxGetApp().em_unit(), -1), 0, nullptr, wxCB_READONLY);
+        // Orca's choices, then each merged string parameter's own (its "" keeps Orca's value), as the calibration
+        // forms list them (MergedSettings.hpp).
         merged.entries.clear();
         merged.aliases.clear();
-        for (size_t i = 0; i < def->enum_values.size(); ++i) {
-            choice->Append(_(wxString::FromUTF8(i < def->enum_labels.size() ? def->enum_labels[i] : def->enum_values[i])));
-            merged.entries.emplace_back(std::string(), def->enum_values[i]);
+        if (mods) {
+            const ModHost::MergedChoices choices = ModHost::merged_choices(*mods, *def, merged.params);
+            for (const ModHost::MergedChoice& e : choices.entries) {
+                choice->Append(e.param.empty() ? _(wxString::FromUTF8(e.label)) :
+                                                 wxString::FromUTF8(ModHost::localized_text(e.labels, language, e.label)));
+                merged.entries.emplace_back(e.param, e.value);
+            }
+            merged.aliases = choices.aliases;
         }
-        for (const std::string& k : merged.params)
-            if (const ModHost::ModParam* p = ModParamsPanel::find_param(mods.get(), k); p != nullptr && p->type == "string")
-                for (const ModHost::ModParamOption& o : p->options) {
-                    if (o.value.empty())
-                        continue;
-                    // An option with Orca's value and name is Orca's choice (toggle test, support_extras' concentric
-                    // interface: the same G-code as Orca's on six cases): listed once, as Orca's.
-                    const auto orca = std::find(def->enum_values.begin(), def->enum_values.end(), o.value);
-                    if (orca != def->enum_values.end()) {
-                        const size_t i = size_t(orca - def->enum_values.begin());
-                        if (i < def->enum_labels.size() && def->enum_labels[i] == o.label) {
-                            merged.aliases[{ k, o.value }] = int(i);
-                            continue;
-                        }
-                    }
-                    choice->Append(wxString::FromUTF8(ModHost::localized_text(o.labels, language, o.label.empty() ? o.value : o.label)));
-                    merged.entries.emplace_back(k, o.value);
-                }
         choice->Bind(wxEVT_COMBOBOX, [this, index](wxCommandEvent&) { on_merged_setting_changed(index); });
         merged.control = choice;
     } else {
@@ -8233,23 +8235,7 @@ Tab::MergedValue Tab::merged_value(const MergedSetting& merged, const DynamicPri
     const nlohmann::json stored = nlohmann::json::parse(text.empty() ? std::string("{}") : text, nullptr, false);
     const ConfigOptionDef* def  = print_config_def.get(merged.option);
     if (def != nullptr && def->type == coEnum) {
-        // A merged parameter holding a value of its own shows it; else Orca's value.
-        for (size_t i = 0; i < merged.entries.size() && out.selection == wxNOT_FOUND; ++i) {
-            const auto& [k, v] = merged.entries[i];
-            if (!k.empty() && stored.is_object())
-                if (auto it = stored.find(k); it != stored.end() && it->is_string() && it->get<std::string>() == v)
-                    out.selection = int(i);
-        }
-        for (const auto& [option, index] : merged.aliases)
-            if (out.selection == wxNOT_FOUND && stored.is_object())
-                if (auto it = stored.find(option.first); it != stored.end() && it->is_string() && it->get<std::string>() == option.second)
-                    out.selection = index;
-        if (out.selection == wxNOT_FOUND && print.has(merged.option)) {
-            const std::string value = print.opt_serialize(merged.option);
-            for (size_t i = 0; i < merged.entries.size(); ++i)
-                if (merged.entries[i].first.empty() && merged.entries[i].second == value)
-                    out.selection = int(i);
-        }
+        out.selection = ModHost::merged_selection(merged_choices_of(merged.params, merged.entries, merged.aliases), text, print, merged.option);
         return out;
     }
     if (wxGetApp().preset_bundle == nullptr)
@@ -8354,16 +8340,8 @@ void Tab::on_merged_setting_changed(size_t index)
         const int sel = choice->GetSelection();
         if (sel < 0 || size_t(sel) >= merged.entries.size())
             return;
-        const std::string k = merged.entries[size_t(sel)].first;
-        const std::string v = merged.entries[size_t(sel)].second;
-        // Orca's value: the merged parameters back to their default (Orca's); a parameter's value: that one.
-        std::vector<std::pair<std::string, std::string>> values;
-        if (k.empty())
-            for (const std::string& p : merged.params)
-                values.emplace_back(p, std::string());
-        else
-            values.emplace_back(k, nlohmann::json(v).dump());
-        write_merged(merged.option, k.empty() ? v : std::string(), values);
+        const ModHost::MergedWrite write = ModHost::merged_write(merged_choices_of(merged.params, merged.entries, merged.aliases), size_t(sel));
+        write_merged(merged.option, write.option_value, write.values);
     } else if (auto* input = dynamic_cast<::TextInput*>(merged.control)) {
         std::string key;
         if (wxGetApp().preset_bundle == nullptr || active_merged_param(merged, wxGetApp().preset_bundle->full_config(), &key) == nullptr)

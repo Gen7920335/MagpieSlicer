@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <functional>
 #include <regex>
@@ -400,6 +401,122 @@ bool is_package_relative_path(const std::string &path)
     std::vector<std::string> parts;
     boost::split(parts, path, [](char c) { return c == '/'; });
     return std::none_of(parts.begin(), parts.end(), [](const std::string &p) { return p.empty() || p == "." || p == ".."; });
+}
+
+// The "requires", "groups" and "form" of each calibration in "gui"."calibrations" (parsed by parse_gui_items).
+void parse_calibration_forms(const json &gui, std::vector<ModGuiItem> &calibrations, const std::string &where)
+{
+    auto list = gui.find("calibrations");
+    if (list == gui.end())
+        return;
+    for (size_t index = 0; index < calibrations.size() && index < list->size(); ++index) {
+        const json        &j    = (*list)[index];
+        ModGuiItem        &item = calibrations[index];
+        const std::string  w    = where + " calibration \"" + item.id + "\"";
+        if (auto req = j.find("requires"); req != j.end()) {
+            if (!req->is_array())
+                throw ModError(w + ": \"requires\" must be a list of mod ids");
+            for (const json &id : *req) {
+                if (!id.is_string() || id.get<std::string>().empty())
+                    throw ModError(w + ": \"requires\" must be a list of mod ids");
+                item.required_mods.push_back(id.get<std::string>());
+            }
+        }
+        std::set<std::string> groups;
+        if (auto gs = j.find("groups"); gs != j.end()) {
+            if (!gs->is_array())
+                throw ModError(w + ": \"groups\" must be a list");
+            for (const json &g : *gs) {
+                ModCalibrationGroup group;
+                group.id        = g.is_object() ? optional_string(g, "id") : std::string();
+                group.label     = g.is_object() ? optional_string(g, "label") : std::string();
+                group.labels    = g.is_object() ? translations(g, "label_") : std::map<std::string, std::string>();
+                group.collapsed = g.is_object() && g.value("collapsed", false);
+                if (!is_identifier(group.id) || !groups.insert(group.id).second)
+                    throw ModError(w + ": each group needs an \"id\" of a-z, 0-9 and _, once");
+                item.groups.push_back(std::move(group));
+            }
+        }
+        auto form = j.find("form");
+        if (form == j.end())
+            continue;
+        if (!form->is_array())
+            throw ModError(w + ": \"form\" must be a list of fields");
+        std::set<std::string> ids;
+        for (const json &f : *form) {
+            if (!f.is_object())
+                throw ModError(w + ": each \"form\" field must be an object");
+            ModCalibrationField field;
+            field.id            = optional_string(f, "id");
+            field.kind          = optional_string(f, "type");
+            field.label         = optional_string(f, "label");
+            field.labels        = translations(f, "label_");
+            field.unit          = optional_string(f, "unit");
+            field.units_of      = optional_string(f, "units_of");
+            field.default_value = optional_string(f, "default");
+            field.bind          = optional_string(f, "bind");
+            field.group         = optional_string(f, "group");
+            const std::string fw = w + " field \"" + field.id + "\"";
+            if (!is_identifier(field.id) || !ids.insert(field.id).second)
+                throw ModError(w + ": each form field needs an \"id\" of a-z, 0-9 and _, once");
+            if (field.kind != "float" && field.kind != "int" && field.kind != "choice" && field.kind != "setting")
+                throw ModError(fw + ": \"type\" must be float, int, choice or setting");
+            if (field.kind == "setting" && field.bind.empty())
+                throw ModError(fw + ": a setting field needs \"bind\"");
+            if (!field.group.empty() && groups.count(field.group) == 0)
+                throw ModError(fw + ": \"group\" names no group of the calibration");
+            for (const char *bound : { "min", "max" })
+                if (auto b = f.find(bound); b != f.end()) {
+                    if (!b->is_number())
+                        throw ModError(fw + ": \"" + bound + "\" must be a number");
+                    (std::strcmp(bound, "min") == 0 ? field.min : field.max) = b->get<double>();
+                }
+            if (auto units = f.find("units"); units != f.end()) {
+                if (!units->is_object() || field.units_of.empty())
+                    throw ModError(fw + ": \"units\" is an object of units by the value of the field \"units_of\"");
+                for (auto &[value, unit] : units->items())
+                    if (unit.is_string())
+                        field.units[value] = unit.get<std::string>();
+            }
+            if (auto opts = f.find("options"); opts != f.end()) {
+                if (field.kind != "choice" || !opts->is_array())
+                    throw ModError(fw + ": \"options\" is a list, for a choice field only");
+                for (const json &o : *opts) {
+                    ModCalibrationOption option;
+                    option.value  = o.is_object() ? optional_string(o, "value") : std::string();
+                    option.label  = o.is_object() ? optional_string(o, "label") : std::string();
+                    option.labels = o.is_object() ? translations(o, "label_") : std::map<std::string, std::string>();
+                    if (option.value.empty())
+                        throw ModError(fw + ": each option needs a \"value\"");
+                    if (auto sets = o.find("sets"); sets != o.end()) {
+                        if (!sets->is_object())
+                            throw ModError(fw + ": an option's \"sets\" is an object of field values");
+                        for (auto &[id, value] : sets->items())
+                            option.sets.emplace_back(id, value.is_string() ? value.get<std::string>() : value.dump());
+                    }
+                    field.options.push_back(std::move(option));
+                }
+            }
+            if (field.kind == "choice" && field.options.empty())
+                throw ModError(fw + ": a choice field needs \"options\"");
+            if (std::string text = optional_string(f, "visible"); !text.empty())
+                field.visible = parse_expr(text, fw + " visible");
+            item.form.push_back(std::move(field));
+        }
+        // What the fields refer to by id must be fields of the form.
+        for (const ModCalibrationField &field : item.form) {
+            if (!field.units_of.empty() && ids.count(field.units_of) == 0)
+                throw ModError(w + " field \"" + field.id + "\": \"units_of\" names no field");
+            if (field.visible)
+                for (const std::string &name : field.visible->names())
+                    if (ids.count(name) == 0)
+                        throw ModError(w + " field \"" + field.id + "\" visible: \"" + name + "\" is no field of the form");
+            for (const ModCalibrationOption &o : field.options)
+                for (const auto &[id, value] : o.sets)
+                    if (ids.count(id) == 0)
+                        throw ModError(w + " field \"" + field.id + "\": option \"" + o.value + "\" sets \"" + id + "\", no field of the form");
+        }
+    }
 }
 
 ModGuiPrinter parse_gui_printer(const json &printer, const std::string &where)
@@ -839,6 +956,7 @@ Mod ModSet::parse_mod(const std::string &json_text)
         mod.gui.aux_towers     = parse_gui_items(*it, "aux_towers", where, false);
         mod.gui.legends        = parse_gui_items(*it, "legends", where, false);
         mod.gui.calibrations   = parse_gui_items(*it, "calibrations", where, false);
+        parse_calibration_forms(*it, mod.gui.calibrations, where);
         if (auto op = it->find("object_params"); op != it->end()) {
             if (!op->is_array())
                 mod_fail(mod.id, "\"gui\".object_params must be a list of parameter names");

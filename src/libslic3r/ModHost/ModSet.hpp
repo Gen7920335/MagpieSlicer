@@ -181,6 +181,49 @@ struct ModDependency
     std::string min_version;
 };
 
+// One choice of a calibration form's dropdown, and the other fields choosing it fills in (field id -> value).
+struct ModCalibrationOption
+{
+    std::string                                      value;
+    std::string                                      label;
+    std::map<std::string, std::string>               labels; // "label_<language>"
+    std::vector<std::pair<std::string, std::string>> sets;
+};
+
+// One field of a calibration's form ("gui"."calibrations"[]."form"; ModCalibrationDialog draws it). Every field's
+// value reaches the mod's calibration.project slot as text.
+struct ModCalibrationField
+{
+    std::string                        id;
+    // "float", "int", "choice" (options), or "setting": a setting of the presets being edited, `bind` an Orca option
+    // or a parameter "<mod id>.<name>", shown as the settings tab shows it (with the choices mods merge into it) and
+    // written into the presets while its field is visible.
+    std::string                        kind;
+    std::string                        label;
+    std::map<std::string, std::string> labels;
+    std::string                        unit;
+    // A unit that follows the value of the choice field `units_of` (value -> unit), for an axis' start and end.
+    std::string                        units_of;
+    std::map<std::string, std::string> units;
+    std::string                        default_value;
+    std::optional<double>              min, max; // float and int fields
+    std::vector<ModCalibrationOption>  options;  // choice fields
+    std::string                        bind;     // setting fields
+    std::string                        group;    // a group of the calibration ("groups"), "" for the main list
+    // Shown, and for a setting field written, while this holds; it reads the form's fields by id (a number when the
+    // text is one, else the text).
+    std::optional<Expr>                visible;
+};
+
+// A group of a calibration's form under a header the user folds open.
+struct ModCalibrationGroup
+{
+    std::string                        id;
+    std::string                        label;
+    std::map<std::string, std::string> labels;
+    bool                               collapsed = false;
+};
+
 // Declarative GUI ("gui" in the manifest). The core GUI draws each item; a mod never runs wx code.
 struct ModGuiItem
 {
@@ -191,6 +234,10 @@ struct ModGuiItem
     std::string                        unit;   // legends
     std::string                        description;              // calibrations: the menu entry's help text
     std::map<std::string, std::string> descriptions;             // "description_<language>"
+    // calibrations: the mods that must be loaded for the menu entry ("requires"), the form and its groups.
+    std::vector<std::string>           required_mods;
+    std::vector<ModCalibrationField>   form;
+    std::vector<ModCalibrationGroup>   groups;
 };
 
 // The printer panel ("gui"."printer") of a mod that fills the printer.agent slot. ModPrinterDialog draws it; the

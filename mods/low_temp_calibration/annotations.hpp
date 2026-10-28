@@ -3,7 +3,8 @@
 // LESIC ring annotations (Magpie line 1): the bottom label, ring value labels and the inner brim printed on the first
 // layer of the LESIC calibration ring, as G-code line segments. Moved from the core (GCode/LesicAnnotations.hpp)
 // with its arithmetic unchanged; vec2.hpp stands in for the core's Vec2d, the calibration's values and the settings
-// the label reads come through the gcode.events writer (lesic.cpp).
+// the label reads come through the gcode.events writer (low_temp_calibration.cpp, which moved here from the lesic
+// mod). The interface grid draws its row and column values with the same glyphs.
 
 #include "vec2.hpp"
 

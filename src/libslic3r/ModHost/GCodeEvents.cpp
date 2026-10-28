@@ -382,7 +382,7 @@ std::string calibration_name(const Print &print)
     case CalibMode::Calib_Input_shaping_freq: return "input_shaping_freq";
     case CalibMode::Calib_Input_shaping_damp: return "input_shaping_damp";
     case CalibMode::Calib_Cornering: return "cornering";
-    case CalibMode::Calib_LESIC: return "lesic";
+    case CalibMode::Calib_Mod: return print.calib_params().mod_calibration;
     }
     return "unknown";
 }
@@ -392,6 +392,12 @@ bool calibration_value(const Print &print, const char *name, double &out)
     if (name == nullptr)
         return false;
     const Calib_Params &p = print.calib_params();
+    // A mod's calibration: the values its project set, before the core's own.
+    if (p.mode == CalibMode::Calib_Mod)
+        if (auto it = p.mod_values.find(name); it != p.mod_values.end()) {
+            out = it->second;
+            return true;
+        }
     const std::pair<const char *, double> values[] = {
         {"extruder_id", double(p.extruder_id)},
         {"start", p.start},
@@ -405,15 +411,6 @@ bool calibration_value(const Print &print, const char *name, double &out)
         {"test_model", double(p.test_model)},
         {"vfa_layer_height", p.vfa_layer_height},
         {"nozzle_based_resize", p.nozzle_based_resize ? 1. : 0.},
-        {"mvs_start", p.mvs_start},
-        {"mvs_end", p.mvs_end},
-        {"lesic_layers_per_temp", double(p.lesic_layers_per_temp)},
-        {"lesic_center_x", p.lesic_center_x},
-        {"lesic_center_y", p.lesic_center_y},
-        {"lesic_circle_diameter", p.lesic_circle_diameter},
-        {"lesic_line_width", p.lesic_line_width},
-        {"lesic_layer_height", p.lesic_layer_height},
-        {"lesic_small_bed", p.lesic_small_bed ? 1. : 0.},
     };
     for (const auto &[n, v] : values)
         if (std::strcmp(n, name) == 0) {

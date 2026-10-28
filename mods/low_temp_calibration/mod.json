@@ -1,0 +1,102 @@
+{
+    // Low temperature interface calibrations (Magpie): the LESIC ring (temperature bands by volumetric speed around a
+    // ring, from Magpie line 1) and the one-touch interface grid (a cube, the support interface only, a lid and a
+    // handle, one specimen per pair of values of two settings, Gen 2026-10-28). The application's Calibration menu
+    // shows each with the form declared here; this mod builds the project (calibration.project slot) and prints the
+    // calibrations' marks (gcode.events). The grid's interfaces print at their low temperature through
+    // low_temp_interface. No parameters.
+    "id": "low_temp_calibration",
+    "name": "Low temperature interface calibration", "name_ko": "저온 접점 캘리브레이션",
+    "version": "1.0.0",
+    "api": { "major": 1, "min_minor": 1 },
+    "binary": "low_temp_calibration",
+    "slots": [ { "slot": "gcode.events", "version": 1, "impl": "low_temp_calibration" },
+               { "slot": "calibration.project", "version": 1, "impl": "low_temp_calibration" } ],
+    "thread_safe": true,
+    "gui": { "calibrations": [
+        { "id": "lesic", "label": "LESIC", "label_ko": "LESIC",
+          "description": "Low-temperature support interface calibration", "description_ko": "저온 서포트 접점 보정",
+          "form": [
+            { "id": "start", "type": "float", "label": "Start temperature: ", "unit": "C", "default": "210" },
+            { "id": "end", "type": "float", "label": "End temperature: ", "unit": "C", "default": "165" },
+            { "id": "step", "type": "float", "label": "Temperature step: ", "unit": "C", "default": "1" },
+            { "id": "layers_per_temp", "type": "int", "label": "Layers per temperature: ", "unit": "layers", "default": "10" },
+            { "id": "mvs_start", "type": "float", "label": "Start MVS: ", "unit": "mm3/s", "default": "8" },
+            { "id": "mvs_end", "type": "float", "label": "End MVS: ", "unit": "mm3/s", "default": "24" }
+          ] },
+        { "id": "grid", "requires": ["low_temp_interface"],
+          "label": "Low-temperature interface one-touch calibration", "label_ko": "저온인터페이스 원터치 캘리브레이션",
+          "description": "Specimens of a cube, the support interface and a lid, for two settings at once",
+          "description_ko": "큐브, 서포트 접점, 뚜껑으로 된 시편을 두 설정의 조합마다 출력",
+          "groups": [ { "id": "fixed", "label": "Fixed values", "label_ko": "고정값", "collapsed": true } ],
+          "form": [
+            { "id": "combination", "type": "choice", "label": "Combination", "label_ko": "조합", "default": "temperature_top_z",
+              "options": [
+                { "value": "temperature_top_z", "label": "Recommended: interface temperature x top Z distance", "label_ko": "추천: 접점 온도 × 윗 Z 간격",
+                  "sets": { "x_axis": "temperature", "x_start": "210", "x_end": "170", "x_count": "5",
+                            "y_axis": "top_z_distance", "y_start": "0", "y_end": "0.2", "y_count": "5" } },
+                { "value": "temperature_layers", "label": "Interface temperature x top interface layers", "label_ko": "접점 온도 × 윗 접점 층수",
+                  "sets": { "x_axis": "temperature", "x_start": "210", "x_end": "170", "x_count": "5",
+                            "y_axis": "top_interface_layers", "y_start": "1", "y_end": "5", "y_count": "5" } },
+                { "value": "temperature_spacing", "label": "Interface temperature x interface spacing", "label_ko": "접점 온도 × 접점 선 간격",
+                  "sets": { "x_axis": "temperature", "x_start": "210", "x_end": "170", "x_count": "5",
+                            "y_axis": "interface_spacing", "y_start": "0", "y_end": "0.8", "y_count": "5" } },
+                { "value": "top_z_layers", "label": "Top Z distance x top interface layers", "label_ko": "윗 Z 간격 × 윗 접점 층수",
+                  "sets": { "x_axis": "top_z_distance", "x_start": "0", "x_end": "0.2", "x_count": "5",
+                            "y_axis": "top_interface_layers", "y_start": "1", "y_end": "5", "y_count": "5" } },
+                { "value": "custom", "label": "Choose yourself", "label_ko": "직접 고르기" }
+              ] },
+            { "id": "x_axis", "type": "choice", "label": "Horizontal axis", "label_ko": "가로 축", "default": "temperature",
+              "options": [
+                { "value": "temperature", "label": "Interface temperature", "label_ko": "접점 온도" },
+                { "value": "top_z_distance", "label": "Top Z distance", "label_ko": "윗 Z 간격" },
+                { "value": "bottom_z_distance", "label": "Bottom Z distance", "label_ko": "바닥 Z 간격" },
+                { "value": "top_interface_layers", "label": "Top interface layers", "label_ko": "윗 접점 층수" },
+                { "value": "bottom_interface_layers", "label": "Bottom interface layers", "label_ko": "바닥 접점 층수" },
+                { "value": "interface_spacing", "label": "Interface spacing", "label_ko": "접점 선 간격" }
+              ] },
+            { "id": "x_start", "type": "float", "label": "Start", "label_ko": "시작", "default": "210", "units_of": "x_axis",
+              "units": { "temperature": "°C", "top_z_distance": "mm", "bottom_z_distance": "mm", "top_interface_layers": "layers",
+                         "bottom_interface_layers": "layers", "interface_spacing": "mm" } },
+            { "id": "x_end", "type": "float", "label": "End", "label_ko": "끝", "default": "170", "units_of": "x_axis",
+              "units": { "temperature": "°C", "top_z_distance": "mm", "bottom_z_distance": "mm", "top_interface_layers": "layers",
+                         "bottom_interface_layers": "layers", "interface_spacing": "mm" } },
+            { "id": "x_count", "type": "int", "label": "Cells", "label_ko": "칸 수", "default": "5", "min": 1, "max": 10 },
+            { "id": "y_axis", "type": "choice", "label": "Vertical axis", "label_ko": "세로 축", "default": "top_z_distance",
+              "options": [
+                { "value": "none", "label": "None", "label_ko": "없음" },
+                { "value": "temperature", "label": "Interface temperature", "label_ko": "접점 온도" },
+                { "value": "top_z_distance", "label": "Top Z distance", "label_ko": "윗 Z 간격" },
+                { "value": "bottom_z_distance", "label": "Bottom Z distance", "label_ko": "바닥 Z 간격" },
+                { "value": "top_interface_layers", "label": "Top interface layers", "label_ko": "윗 접점 층수" },
+                { "value": "bottom_interface_layers", "label": "Bottom interface layers", "label_ko": "바닥 접점 층수" },
+                { "value": "interface_spacing", "label": "Interface spacing", "label_ko": "접점 선 간격" }
+              ] },
+            { "id": "y_start", "type": "float", "label": "Start", "label_ko": "시작", "default": "0", "units_of": "y_axis", "visible": "y_axis != \"none\"",
+              "units": { "temperature": "°C", "top_z_distance": "mm", "bottom_z_distance": "mm", "top_interface_layers": "layers",
+                         "bottom_interface_layers": "layers", "interface_spacing": "mm" } },
+            { "id": "y_end", "type": "float", "label": "End", "label_ko": "끝", "default": "0.2", "units_of": "y_axis", "visible": "y_axis != \"none\"",
+              "units": { "temperature": "°C", "top_z_distance": "mm", "bottom_z_distance": "mm", "top_interface_layers": "layers",
+                         "bottom_interface_layers": "layers", "interface_spacing": "mm" } },
+            { "id": "y_count", "type": "int", "label": "Cells", "label_ko": "칸 수", "default": "5", "min": 1, "max": 10, "visible": "y_axis != \"none\"" },
+            { "id": "pattern", "type": "setting", "bind": "support_interface_pattern", "group": "fixed" },
+            { "id": "temperature", "type": "setting", "bind": "low_temp_interface.temperature", "group": "fixed",
+              "visible": "x_axis != \"temperature\" and y_axis != \"temperature\"" },
+            { "id": "top_z_distance", "type": "setting", "bind": "support_top_z_distance", "group": "fixed",
+              "visible": "x_axis != \"top_z_distance\" and y_axis != \"top_z_distance\"" },
+            { "id": "bottom_z_distance", "type": "setting", "bind": "support_bottom_z_distance", "group": "fixed",
+              "visible": "x_axis != \"bottom_z_distance\" and y_axis != \"bottom_z_distance\"" },
+            { "id": "top_interface_layers", "type": "setting", "bind": "support_interface_top_layers", "group": "fixed",
+              "visible": "x_axis != \"top_interface_layers\" and y_axis != \"top_interface_layers\"" },
+            { "id": "bottom_interface_layers", "type": "setting", "bind": "support_interface_bottom_layers", "group": "fixed",
+              "visible": "x_axis != \"bottom_interface_layers\" and y_axis != \"bottom_interface_layers\"" },
+            { "id": "interface_spacing", "type": "setting", "bind": "support_interface_spacing", "group": "fixed",
+              "visible": "x_axis != \"interface_spacing\" and y_axis != \"interface_spacing\"" },
+            { "id": "heating_time", "type": "setting", "bind": "low_temp_interface.heating_time", "group": "fixed" },
+            { "id": "aux_fan", "type": "setting", "bind": "low_temp_interface.aux_fan", "group": "fixed" },
+            { "id": "aux_fan_speed", "type": "setting", "bind": "low_temp_interface.aux_fan_speed", "group": "fixed", "visible": "aux_fan" },
+            { "id": "brush", "type": "setting", "bind": "low_temp_interface.brush", "group": "fixed" },
+            { "id": "tower", "type": "setting", "bind": "low_temp_interface.tower", "group": "fixed" }
+          ] }
+    ] }
+}

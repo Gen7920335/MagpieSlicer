@@ -147,6 +147,10 @@ set(lisbslic3r_sources
     ModHost/LayerBands.hpp
     ModHost/ObjectZOffset.cpp
     ModHost/ObjectZOffset.hpp
+    ModHost/CalibrationProject.cpp
+    ModHost/CalibrationProject.hpp
+    ModHost/MergedSettings.cpp
+    ModHost/MergedSettings.hpp
     ModHost/ParamGraph.cpp
     ModHost/SlotChoice.cpp
     ModHost/SupportMenu.cpp

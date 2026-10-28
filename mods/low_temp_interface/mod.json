@@ -3,17 +3,19 @@
     // lower temperature, so they stick less to the model. The support prints after the object on each layer, the
     // nozzle waits for the interface temperature (or cools while printing a temperature drop tower), and the next other
     // extrusion heats back. Optional nozzle cooling with the auxiliary fan and brushing on a nozzle brush. A native mod
-    // on the gcode.events slot; the defaults change nothing.
+    // on the gcode.events slot; the defaults change nothing. The interface temperature can differ per object (the
+    // calibration grid of low_temp_calibration sets one per specimen); the temperature drop tower is sized for the
+    // print's value.
     "id": "low_temp_interface",
     "name": "Low temperature support interface", "name_ko": "저온 서포트 접점",
-    "version": "2.0.1",
+    "version": "2.1.0",
     "api": { "major": 1, "min_minor": 1 },
     "binary": "low_temp_interface",
     "slots": [ { "slot": "gcode.events", "version": 1, "impl": "low_temp_interface" } ],
     "thread_safe": true,
     "params": {
         "enable":          { "invalidates": ["psWipeTower"], "type": "bool",  "default": false, "label": "Low temperature support interface", "label_ko": "저온 서포트 접점", "ui": { "page": "Support", "group": "Low-temperature support interface", "group_after": "Filament for Supports" }, "visible": "enable_support or raft_layers > 0" },
-        "temperature":     { "invalidates": ["psWipeTower"], "type": "int",   "default": 170,   "unit": "degC", "label": "Support interface temperature", "label_ko": "서포트 접점 온도", "ui": { "page": "Support", "group": "Low-temperature support interface", "group_after": "Filament for Supports" }, "visible": "(enable_support or raft_layers > 0) and low_temp_interface.enable" },
+        "temperature":     { "invalidates": ["psWipeTower"], "type": "int",   "scope": "object",   "default": 170,   "unit": "degC", "label": "Support interface temperature", "label_ko": "서포트 접점 온도", "ui": { "page": "Support", "group": "Low-temperature support interface", "group_after": "Filament for Supports" }, "visible": "(enable_support or raft_layers > 0) and low_temp_interface.enable" },
         "heating_time":    { "invalidates": ["psWipeTower"], "type": "float", "default": 5,     "unit": "s",    "label": "Heating time before the model resumes", "label_ko": "모델 출력 재개 전 가열 시간", "ui": { "page": "Support", "group": "Low-temperature support interface", "group_after": "Filament for Supports" }, "visible": "(enable_support or raft_layers > 0) and low_temp_interface.enable" },
         "aux_fan":         { "invalidates": ["psWipeTower"], "type": "bool",  "default": false, "label": "Cool the nozzle with the auxiliary fan (air duct adapter required)", "label_ko": "보조 팬으로 노즐 냉각 (에어 덕트 어댑터 필요)", "ui": { "page": "Support", "group": "Low-temperature support interface", "group_after": "Filament for Supports" }, "visible": "(enable_support or raft_layers > 0) and low_temp_interface.enable" },
         "aux_fan_speed":   { "invalidates": ["psWipeTower"], "type": "int",   "default": 100,   "unit": "%",    "label": "Auxiliary fan speed", "label_ko": "보조 팬 속도", "ui": { "page": "Support", "group": "Low-temperature support interface", "group_after": "Filament for Supports" }, "visible": "(enable_support or raft_layers > 0) and low_temp_interface.enable and low_temp_interface.aux_fan" },

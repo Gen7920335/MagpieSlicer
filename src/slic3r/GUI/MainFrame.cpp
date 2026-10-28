@@ -1,4 +1,5 @@
 #include "MainFrame.hpp"
+#include "ModCalibrationDialog.hpp"
 
 #include <wx/event.h>
 #include "slic3r/GUI/Event.hpp"
@@ -3649,7 +3650,7 @@ void MainFrame::init_menubar_as_editor()
         [this](wxCommandEvent&) { run_calibration(CalibKind::MaxVolumetric); }, "", nullptr,
         [this]() {return m_plater->is_view3D_shown();; }, this);
 
-    // MAGPIE: calibrations the loaded mods declare (the LESIC ring of the lesic mod).
+    // MAGPIE: calibrations the loaded mods declare (LESIC and the interface grid of low_temp_calibration).
     append_mod_calibrations(m_topbar->GetCalibMenu());
 
     // Pressure Advance
@@ -3757,7 +3758,7 @@ void MainFrame::init_menubar_as_editor()
         [this](wxCommandEvent&) { run_calibration(CalibKind::MaxVolumetric); }, "", nullptr,
         [this]() {return m_plater->is_view3D_shown();; }, this);
 
-    // MAGPIE: calibrations the loaded mods declare (the LESIC ring of the lesic mod).
+    // MAGPIE: calibrations the loaded mods declare (LESIC and the interface grid of low_temp_calibration).
     append_mod_calibrations(calib_menu);
 
     // Pressure Advance
@@ -3846,9 +3847,10 @@ void MainFrame::set_max_recent_count(int max)
     }
 }
 
-// MAGPIE: a mod declares its calibrations in its manifest ("gui"."calibrations"); the application draws a menu
-// entry for each one it has a dialog for, so a calibration whose mod is off or not installed has no entry. The
-// dialog and the model stay in the application (a mod never runs GUI code); the mod prints the calibration.
+// MAGPIE: a mod declares its calibrations in its manifest ("gui"."calibrations"), each with its form; the application
+// draws a menu entry and the form (ModCalibrationDialog) for each one whose mod and required mods are loaded, so a
+// calibration whose mod is off or not installed has no entry. A mod never runs GUI code: the form's values go to its
+// calibration.project slot, which builds the project.
 void MainFrame::append_mod_calibrations(wxMenu *menu)
 {
     const std::shared_ptr<const ModHost::ModSet> mods = ModHost::active_mods();
@@ -3857,17 +3859,24 @@ void MainFrame::append_mod_calibrations(wxMenu *menu)
     const std::string language = into_u8(wxGetApp().current_language_code_safe());
     for (const ModHost::Mod &mod : mods->mods())
         for (const ModHost::ModGuiItem &item : mod.gui.calibrations) {
-            std::function<void()> open;
-            if (mod.id == "lesic" && item.id == "lesic")
-                open = [this]() {
-                    if (!m_lesic_calib_dlg)
-                        m_lesic_calib_dlg = new LESIC_Calibration_Dlg((wxWindow*)this, wxID_ANY, m_plater);
-                    m_lesic_calib_dlg->ShowModal();
-                };
-            if (!open) {
-                BOOST_LOG_TRIVIAL(warning) << "Mod " << mod.id << " declares the calibration \"" << item.id << "\", which this application has no dialog for";
+            const bool loaded = std::all_of(item.required_mods.begin(), item.required_mods.end(),
+                                            [&mods](const std::string &id) { return mods->find_mod(id) != nullptr; });
+            if (!loaded || item.form.empty())
                 continue;
-            }
+            const std::string mod_id = mod.id, item_id = item.id;
+            auto open = [this, mod_id, item_id]() {
+                // The mods as they are when the entry is chosen.
+                const std::shared_ptr<const ModHost::ModSet> now = ModHost::active_mods();
+                const ModHost::Mod *m = now ? now->find_mod(mod_id) : nullptr;
+                if (m == nullptr)
+                    return;
+                for (const ModHost::ModGuiItem &c : m->gui.calibrations)
+                    if (c.id == item_id) {
+                        ModCalibrationDialog dlg(this, m_plater, *m, c);
+                        dlg.ShowModal();
+                        return;
+                    }
+            };
             append_menu_item(menu, wxID_ANY, from_u8(ModHost::localized_text(item.labels, language, item.label.empty() ? item.id : item.label)),
                 from_u8(ModHost::localized_text(item.descriptions, language, item.description)),
                 [open](wxCommandEvent&) { open(); }, "", nullptr,

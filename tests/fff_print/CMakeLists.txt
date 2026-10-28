@@ -33,9 +33,9 @@ add_executable(${_TEST_NAME}_tests
 	test_multi_nozzle_walls.cpp
 	test_line_widths.cpp
 	test_layer_time_blend.cpp
+	test_low_temp_calibration.cpp
 	test_low_temp_interface.cpp
 	test_snapmaker_u1_start.cpp
-	test_lesic.cpp
 	test_line1_support.cpp
 	test_line1_orca_fixes.cpp
 	test_resin_support.cpp

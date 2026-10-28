@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <map>
 #include <string>
 #include <vector>
 #include <utility>
@@ -35,8 +36,8 @@ enum class CalibMode : int {
     Calib_Input_shaping_freq,
     Calib_Input_shaping_damp,
     Calib_Cornering,
-    // MAGPIE: LESIC ring (Magpie line 1).
-    Calib_LESIC
+    // MAGPIE: a calibration a mod declares (calibration.project slot); Calib_Params::mod_calibration names it.
+    Calib_Mod
 };
 
 enum class CalibState { Start = 0, Preset, Calibration, CoarseSave, FineCalibration, Save, Finish };
@@ -58,69 +59,13 @@ struct Calib_Params
     // Scale the calibration model to the nozzle diameter and set the layer height accordingly (temp tower / VFA).
     // When false the 0.4 mm / 0.2 mm reference model is printed as-is.
     bool nozzle_based_resize = true;
-    // MAGPIE: LESIC ring (Magpie line 1). Volumetric speed range around the ring, mm3/s, and the ring layout
-    // Plater::calib_lesic resolved for the G-code annotations.
-    double    mvs_start = 8.0;
-    double    mvs_end = 24.0;
-    int       lesic_layers_per_temp = 10;
-    double    lesic_center_x = 0.0;
-    double    lesic_center_y = 0.0;
-    double    lesic_circle_diameter = 0.0;
-    double    lesic_line_width = 0.0;
-    double    lesic_layer_height = 0.0;
-    bool      lesic_small_bed = false;
+    // MAGPIE: Calib_Mod: the calibration, "<mod id>.<calibration id>", and the values its project set for the mod's
+    // G-code side (ModHost::CalibrationProject).
+    std::string                   mod_calibration;
+    std::map<std::string, double> mod_values;
 
     CalibMode mode;
 };
-
-// MAGPIE: LESIC ring layout (Magpie line 1).
-struct LesicCalibrationLayout
-{
-    double circle_diameter = 0.0; // mm
-    double line_width = 0.0;      // mm
-    double layer_height = 0.0;    // mm
-    double model_height = 0.0;    // mm
-    int    temperature_bands = 0;
-    bool   small_bed = false;
-};
-
-inline int lesic_temperature_band_count(double start, double end, double step)
-{
-    const double positive_step = std::abs(step);
-    const double span = std::abs(start - end);
-    if (positive_step <= 0.0 || span < positive_step)
-        return 0;
-
-    // 1e-9 degC absorbs the rounding of a span that is a whole number of steps.
-    return static_cast<int>(std::ceil(span / positive_step - 1e-9)) + 1;
-}
-
-inline double lesic_temperature_for_band(double start, double end, double step, int band)
-{
-    const double offset = std::max(0, band) * std::abs(step);
-    return start >= end ? std::max(end, start - offset) : std::min(end, start + offset);
-}
-
-inline LesicCalibrationLayout make_lesic_calibration_layout(
-    double bed_width,
-    double bed_depth,
-    double nozzle_diameter,
-    const Calib_Params &params)
-{
-    LesicCalibrationLayout layout;
-    // Bed sizes in mm: the ring keeps 10 mm from each edge; beds under 200 mm get the compact labels.
-    const double minimum_bed_size = std::max(1.0, std::min(bed_width, bed_depth));
-    const double valid_nozzle = nozzle_diameter > 0.0 ? nozzle_diameter : 0.4;
-
-    layout.circle_diameter = std::max(1.0, minimum_bed_size - 20.0);
-    layout.line_width = valid_nozzle * 1.2;
-    layout.layer_height = valid_nozzle * 0.6;
-    layout.temperature_bands = lesic_temperature_band_count(params.start, params.end, params.step);
-    layout.model_height =
-        layout.layer_height * std::max(1, params.lesic_layers_per_temp) * layout.temperature_bands;
-    layout.small_bed = minimum_bed_size < 200.0;
-    return layout;
-}
 
 // Number of printed layers per speed block in the VFA tower. The base model has 5 mm blocks designed
 // for a 0.2 mm layer height (0.4 mm nozzle), i.e. 25 layers per block.

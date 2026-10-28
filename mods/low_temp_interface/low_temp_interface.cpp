@@ -25,7 +25,7 @@
 
 #define LTI_MOD_ID "low_temp_interface"
 
-MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.0.1")
+MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.1.0")
 
 namespace lti {
 
@@ -126,6 +126,10 @@ struct State
     // the tower off and on between layers.
     std::optional<bool> tower_enabled_cache;
     bool                brim_printed = false;
+    // The interface grid of low_temp_calibration: specimens print one after another, so an object's support end
+    // waits for the next path (finish_deferred) instead of heating back at once.
+    bool calibration_grid = false;
+    bool finish_deferred  = false;
     std::vector<Vec2>   plate_path;
     double              left = 0., rear = 0., size = 0., spacing = 0.; // mm
 };
@@ -136,6 +140,15 @@ void text(const State &s, const char *t) { s.w->text(s.w->w, t); }
 bool enabled(const State &s, mp_ctx *ctx)
 {
     return s.p.enable && config_int(ctx, "support_interface_filament") == 0 && s.w->filament(s.w->w) >= 0;
+}
+
+// The interface temperature of the object in ctx, degC: its own value (an object-scope parameter, the calibration
+// grid's specimens), else the print's.
+int object_temperature(const State &s, mp_ctx *ctx)
+{
+    if (auto v = magpie::param_i64(ctx, "temperature"))
+        return int(*v);
+    return s.p.temperature;
 }
 
 bool has_configured_wiper(const Params &p)
@@ -492,7 +505,7 @@ void start(State &s, mp_ctx *ctx, int target_temperature)
     if (config_count(ctx, normal_key) == 0)
         return;
     const int normal_temperature    = int(config_at(ctx, normal_key, filament_id).value_or(0.));      // degC
-    const int interface_temperature = target_temperature > 0 ? target_temperature : s.p.temperature;    // degC
+    const int interface_temperature = target_temperature > 0 ? target_temperature : object_temperature(s, ctx); // degC
 
     if (interface_temperature > 0 && interface_temperature != normal_temperature) {
         text(s, "; low-temperature support interface begin\n");
@@ -568,6 +581,7 @@ void start(State &s, mp_ctx *ctx, int target_temperature)
 
 void finish(State &s)
 {
+    s.finish_deferred = false;
     if (!s.active)
         return;
     if (s.normal > 0 && s.normal != s.target) {
@@ -590,12 +604,27 @@ void on_path(State &s, mp_ctx *ctx, mp_gcode_event_v1 &ev)
 {
     const int  sublayer_temperature = ev.tagged_temperature; // degC, 0 = none
     const bool interface_role       = ev.role == MP_ROLE_SUPPORT_INTERFACE || (ev.role == MP_ROLE_IRONING && ev.in_support != 0);
+    if (s.finish_deferred) {
+        s.finish_deferred = false;
+        if (s.active && interface_role && enabled(s, ctx) && s.w->filament(s.w->w) == s.filament) {
+            // The calibration grid's next specimen: from the last specimen's interface temperature straight to this
+            // one's, waiting for it (cooling too, Marlin M109 R), with no heating back in between.
+            const int target = sublayer_temperature > 0 ? sublayer_temperature : object_temperature(s, ctx);
+            if (target > 0 && target != s.target) {
+                s.w->set_temperature(s.w->w, target, 1, s.filament, target < s.target ? MP_TEMP_WAIT_COOLING : 0);
+                s.target = target;
+            }
+            ev.owns_temperature = 1;
+            return;
+        }
+        finish(s);
+    }
     if (interface_role && enabled(s, ctx)) {
         if (!s.active)
             start(s, ctx, sublayer_temperature);
         else {
             // Between sublayer and contact interface the target changes without another cooling wait.
-            const int     target   = sublayer_temperature > 0 ? sublayer_temperature : s.p.temperature;
+            const int     target   = sublayer_temperature > 0 ? sublayer_temperature : object_temperature(s, ctx);
             const int32_t filament = s.w->filament(s.w->w);
             if (target > 0 && target != s.target && filament >= 0) {
                 s.w->set_temperature(s.w->w, target, 0, filament, 0);
@@ -626,13 +655,16 @@ void on_layer_end(State &s, mp_ctx *ctx)
 
 // -- Slot functions --
 
-mp_status open(void *, mp_ctx *ctx, const mp_gcode_export_v1 *, const mp_gcode_writer_v1 *writer, void **state, uint32_t *flags)
+mp_status open(void *, mp_ctx *ctx, const mp_gcode_export_v1 *info, const mp_gcode_writer_v1 *writer, void **state, uint32_t *flags)
 {
     return magpie::guarded([&] {
         *state = nullptr;
         auto s = std::make_unique<State>();
         s->w   = writer;
         s->p   = read_params(ctx);
+        // Only the calibration grid keeps the low temperature from one specimen's support to the next (Gen 2026-10-28).
+        s->calibration_grid = info != nullptr && info->calibration != nullptr &&
+                              std::string(info->calibration) == "low_temp_calibration.grid";
         if (!s->p.enable)
             return;
         *flags = MP_GCODE_WANTS_PATHS | MP_GCODE_CHANGES_TEMPERATURE | MP_GCODE_USED;
@@ -653,6 +685,11 @@ mp_status event(void *, void *state, mp_ctx *ctx, mp_gcode_event_v1 *ev)
                 finish(s);
             break;
         case MP_GCODE_EV_SUPPORT_END:
+            if (s.calibration_grid && s.active)
+                s.finish_deferred = true;
+            else
+                finish(s);
+            break;
         case MP_GCODE_EV_OBJECTS_END: finish(s); break;
         case MP_GCODE_EV_LAYER_END: on_layer_end(s, ctx); break;
         default: break;

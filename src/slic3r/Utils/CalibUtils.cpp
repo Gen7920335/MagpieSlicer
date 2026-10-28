@@ -276,8 +276,8 @@ std::string get_calib_mode_name(CalibMode cali_mode, int stage)
         return "input_shaping_damp_calib_mode";
     case CalibMode::Calib_Cornering:
         return "cornering_calib_mode";
-    case CalibMode::Calib_LESIC:
-        return "lesic_calib_mode";
+    case CalibMode::Calib_Mod:
+        return "mod_calib_mode";
     default:
         assert(false);
         return "";
@@ -429,8 +429,8 @@ CalibMode CalibUtils::get_calib_mode_by_name(const std::string name, int& cali_s
         return CalibMode::Calib_Input_shaping_damp;
     else if (name == "cornering_calib_mode")
         return CalibMode::Calib_Cornering;
-    else if (name == "lesic_calib_mode")
-        return CalibMode::Calib_LESIC;
+    else if (name == "mod_calib_mode")
+        return CalibMode::Calib_Mod;
     return CalibMode::Calib_None;
 }
 

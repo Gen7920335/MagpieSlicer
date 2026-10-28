@@ -1863,7 +1863,7 @@ TEST_CASE("Every read of a nozzle-relative line width key is in the reviewed tab
         { "src/libslic3r/Support/TreeSupport3D.cpp", 15 },
         { "src/libslic3r/Support/TreeSupportCommon.hpp", 3 },
         { "src/libslic3r/calib.cpp", 6 },
-        { "src/libslic3r/calib.hpp", 2 },
+        { "src/libslic3r/calib.hpp", 1 },
     };
     const boost::filesystem::path root = boost::filesystem::path(std::string(TEST_DATA_DIR)).parent_path().parent_path();
     const std::vector<std::string> &keys = nozzle_relative_line_width_keys();

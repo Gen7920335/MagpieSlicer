@@ -70,15 +70,16 @@ TEST_CASE("Every official mod is shown in Korean", "[ModHost][OfficialMods]")
     }
 }
 
-TEST_CASE("The LESIC calibration is declared by its mod", "[ModHost][OfficialMods]")
+TEST_CASE("The low temperature interface calibrations are declared by their mod with their forms", "[ModHost][OfficialMods]")
 {
     const std::vector<ModHost::Mod> mods = official_mods();
     std::vector<std::string>        calibrations;
     for (const ModHost::Mod &mod : mods)
         for (const ModHost::ModGuiItem &item : mod.gui.calibrations)
-            calibrations.push_back(mod.id + "." + item.id);
-    // The application has a dialog for this one entry (MainFrame::append_mod_calibrations).
-    CHECK(calibrations == std::vector<std::string>{ "lesic.lesic" });
+            if (!item.form.empty())
+                calibrations.push_back(mod.id + "." + item.id);
+    // The application draws a form for each (MainFrame::append_mod_calibrations, ModCalibrationDialog).
+    CHECK(calibrations == std::vector<std::string>{ "low_temp_calibration.lesic", "low_temp_calibration.grid" });
 }
 
 TEST_CASE("A mod's message catalogs keep the placeholders of the texts they translate", "[ModHost][OfficialMods]")
@@ -108,7 +109,7 @@ TEST_CASE("A mod's texts are shown in the message language from its own catalog"
     CHECK(korean != text);
     CHECK(korean.find("G28") != std::string::npos);
     // Only the mod's own catalog: another mod's text, or a text the catalog lacks, is the application's translation.
-    CHECK(ModHost::mod_text("lesic", text) == text);
+    CHECK(ModHost::mod_text("low_temp_calibration", text) == text);
     CHECK(ModHost::mod_text("snapmaker_u1", "not in the catalog") == "not in the catalog");
     ModHost::set_message_language("ko");
     CHECK(ModHost::mod_text("snapmaker_u1", text) == korean);

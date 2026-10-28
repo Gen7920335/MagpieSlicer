@@ -499,7 +499,6 @@ public:
     Input_Shaping_Freq_Test_Dlg* m_IS_freq_calib_dlg{ nullptr };
     Input_Shaping_Damp_Test_Dlg* m_IS_damp_calib_dlg{ nullptr };
     Cornering_Test_Dlg* m_cornering_calib_dlg{ nullptr };
-    LESIC_Calibration_Dlg* m_lesic_calib_dlg{ nullptr };
     // MAGPIE: the Calibration menu entries of the loaded mods' "gui"."calibrations".
     void append_mod_calibrations(wxMenu *menu);
 

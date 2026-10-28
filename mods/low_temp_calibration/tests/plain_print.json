@@ -1,0 +1,18 @@
+{
+    "description": "LESIC and the interface grid print only in their calibrations, which the application's Calibration menu starts: a normal print with the mod loaded has none of their G-code.",
+    "args": [
+        "--load-settings",
+        "presets/machine.json",
+        "overhang.obj"
+    ],
+    "contains": [
+        ";TYPE:Outer wall"
+    ],
+    "not_contains": [
+        "; LESIC",
+        "lesic_",
+        "low temperature interface grid",
+        "ltc_",
+        "; mods: low_temp_calibration"
+    ]
+}
