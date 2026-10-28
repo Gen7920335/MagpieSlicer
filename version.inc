@@ -22,7 +22,7 @@ math(EXPR MAGPIE_WINDOWS_BUILD_VERSION
 # Betas of one release otherwise share every version field, so Add/Remove Programs,
 # file properties and the installer name could not tell them apart. The G-code
 # producer version and the OTA/update version keep the plain release number.
-set(MAGPIE_PRERELEASE_LABEL "dev")
+set(MAGPIE_PRERELEASE_LABEL "")
 if(MAGPIE_PRERELEASE_LABEL)
     set(MAGPIE_PACKAGE_VERSION "${MAGPIE_RELEASE_VERSION}-${MAGPIE_PRERELEASE_LABEL}")
 else()

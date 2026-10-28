@@ -10,7 +10,7 @@ An FFF 3D printer slicer that adds its features to OrcaSlicer as **mods**
 
 </div>
 
-> This is the second-generation line and is still in development. Always check the preview and the generated G-code before sending a print to a real machine.
+> This is the second-generation line (2.5.0.2.0). Always check the preview and the generated G-code before sending a print to a real machine.
 
 ## About
 
