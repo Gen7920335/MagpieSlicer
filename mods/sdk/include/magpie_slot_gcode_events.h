@@ -328,6 +328,9 @@ typedef struct mp_gcode_events_v1 {
     /* 1: an auxiliary tower prints with the support filament at full layer height for these settings,
      * whatever else decides it (the line width checks cover it). */
     mp_status (*tower_requested)(void *user, mp_ctx *ctx, int32_t *out);
+    /* 1: the layer with this layer_index (0 = the first) prints its objects in the reverse of the object list
+     * (print_order as_obj_list only; other orders ignore it). A table without this member reverses nothing. */
+    mp_status (*reverse_object_order)(void *user, void *state, mp_ctx *ctx, int32_t layer_index, int32_t *out);
 } mp_gcode_events_v1;
 
 #ifdef __cplusplus

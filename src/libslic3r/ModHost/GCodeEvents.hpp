@@ -58,6 +58,8 @@ public:
     bool support_last();
     // Whether some implementation prints an auxiliary tower on the layer at print_z (mm).
     bool tower_on_layer(double print_z);
+    // Whether some implementation prints the objects of the layer `layer_index` in the reverse of the object list.
+    bool reverse_object_order(int32_t layer_index);
     // Per-point speeds (mm/s) the first implementation that changes them gives, or nothing.
     bool path_speeds(const mp_gcode_speed_query_v1 &query, std::vector<double> &speeds);
     // Runs the start G-code filters on `text` at `phase`; their notes are appended to `notes`.

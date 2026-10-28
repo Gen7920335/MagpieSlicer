@@ -6,7 +6,7 @@
     // calibrations' marks (gcode.events). The grid's interfaces print at their low temperature through
     // low_temp_interface. No parameters. The grid's fixed values start from the presets' settings, except a bottom
     // interface of 2 layers touching the cube (bottom Z distance 0), so the gap holds the interface only (Gen
-    // 2026-10-29).
+    // 2026-10-29). Bottom interface layers and bottom Z distance are fixed values only, not axes (Gen 2026-10-29).
     "id": "low_temp_calibration",
     "name": "Low temperature interface calibration", "name_ko": "저온 접점 캘리브레이션",
     "version": "1.0.0",
@@ -52,9 +52,7 @@
               "options": [
                 { "value": "temperature", "label": "Interface temperature", "label_ko": "접점 온도" },
                 { "value": "top_z_distance", "label": "Top Z distance", "label_ko": "윗 Z 간격" },
-                { "value": "bottom_z_distance", "label": "Bottom Z distance", "label_ko": "바닥 Z 간격" },
                 { "value": "top_interface_layers", "label": "Top interface layers", "label_ko": "윗 접점 층수" },
-                { "value": "bottom_interface_layers", "label": "Bottom interface layers", "label_ko": "바닥 접점 층수" },
                 { "value": "interface_spacing", "label": "Interface spacing", "label_ko": "접점 선 간격" }
               ] },
             { "id": "x_start", "type": "float", "label": "Start", "label_ko": "시작", "default": "210", "units_of": "x_axis",
@@ -69,9 +67,7 @@
                 { "value": "none", "label": "None", "label_ko": "없음" },
                 { "value": "temperature", "label": "Interface temperature", "label_ko": "접점 온도" },
                 { "value": "top_z_distance", "label": "Top Z distance", "label_ko": "윗 Z 간격" },
-                { "value": "bottom_z_distance", "label": "Bottom Z distance", "label_ko": "바닥 Z 간격" },
                 { "value": "top_interface_layers", "label": "Top interface layers", "label_ko": "윗 접점 층수" },
-                { "value": "bottom_interface_layers", "label": "Bottom interface layers", "label_ko": "바닥 접점 층수" },
                 { "value": "interface_spacing", "label": "Interface spacing", "label_ko": "접점 선 간격" }
               ] },
             { "id": "y_start", "type": "float", "label": "Start", "label_ko": "시작", "default": "0", "units_of": "y_axis", "visible": "y_axis != \"none\"",

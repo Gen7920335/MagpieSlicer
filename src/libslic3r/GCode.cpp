@@ -8828,6 +8828,10 @@ LayerResult GCode::process_layer(
         // replaced it with its physical components. Its geometry is still keyed under the slot in
         // by_extruder though, and the sublayer emitter looks the plan up by slot id, so append the
         // slots here. Appending rather than merging leaves the flush-optimized order untouched.
+        // MAGPIE: a G-code event mod may print this layer's objects in the reverse of the object list
+        // (gcode.events reverse_object_order), for example a calibration alternating its order layer by layer.
+        const bool reverse_object_list = print.config().print_order == PrintOrder::AsObjectList && single_object_instance_idx == size_t(-1) &&
+            m_gcode_events && !m_gcode_events->empty() && m_gcode_events->reverse_object_order(int32_t(m_layer_index));
         std::vector<unsigned int> plan_filaments = layer_tools.extruders;
         for (const auto &grp : layer_tools.mixed_sub_layer_groups)
             if (std::find(plan_filaments.begin(), plan_filaments.end(), grp.mixed_slot_0based) == plan_filaments.end())
@@ -8842,6 +8846,11 @@ LayerResult GCode::process_layer(
             if (!island_level_ordering) {
                 // One visit per instance, printing all of its islands.
                 filament_plan.first = sort_print_object_instances(objects_by_extruder_it->second, layers, ordering, single_object_instance_idx);
+                if (reverse_object_list) {
+                    // InstanceToPrint holds references, so the list is rebuilt in reverse rather than its elements swapped.
+                    std::vector<InstanceToPrint> reversed(filament_plan.first.rbegin(), filament_plan.first.rend());
+                    filament_plan.first.swap(reversed);
+                }
                 filament_plan.second.reserve(filament_plan.first.size());
                 for (size_t i = 0; i < filament_plan.first.size(); ++i)
                     filament_plan.second.push_back({i, {}, true});

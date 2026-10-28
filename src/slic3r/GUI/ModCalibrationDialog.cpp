@@ -53,7 +53,6 @@ struct ModCalibrationDialog::Group
     wxStaticText *header = nullptr;
     wxString      label;
     bool          open   = true;
-    wxSizer      *sizer  = nullptr;
 };
 
 // One form field: its manifest entry and its control.
@@ -133,10 +132,10 @@ ModCalibrationDialog::ModCalibrationDialog(wxWindow *parent, Plater *plater, con
     settings_sizer->AddSpacer(FromDIP(5));
     const wxSize ctrl_size = FromDIP(wxSize(220, -1));
 
-    // The main fields, then each group under its header.
-    auto *main_grid = new wxFlexGridSizer(3, FromDIP(2), FromDIP(4));
-    settings_sizer->Add(main_grid, 0, wxLEFT, FromDIP(3));
-    std::map<std::string, wxFlexGridSizer *> group_grids;
+    // One table for every row, so labels, fields and units line up in the same columns throughout: the main fields,
+    // then each group's header and its fields, their labels indented.
+    auto *grid = new wxFlexGridSizer(3, FromDIP(2), FromDIP(4));
+    settings_sizer->Add(grid, 0, wxLEFT, FromDIP(3));
     for (const ModHost::ModCalibrationGroup &g : m_calibration.groups) {
         auto group    = std::make_unique<Group>();
         group->id     = g.id;
@@ -150,11 +149,6 @@ ModCalibrationDialog::ModCalibrationDialog(wxWindow *parent, Plater *plater, con
             raw->open = !raw->open;
             on_changed();
         });
-        auto *grid    = new wxFlexGridSizer(3, FromDIP(2), FromDIP(4));
-        group->sizer  = grid;
-        group_grids[g.id] = grid;
-        settings_sizer->Add(group->header, 0, wxLEFT | wxTOP, FromDIP(6));
-        settings_sizer->Add(grid, 0, wxLEFT, FromDIP(15));
         m_groups.push_back(std::move(group));
     }
 
@@ -232,10 +226,6 @@ ModCalibrationDialog::ModCalibrationDialog(wxWindow *parent, Plater *plater, con
         if (field->orca != nullptr && !field->orca->tooltip.empty())
             field->ctrl->SetToolTip(_(field->orca->tooltip));
 
-        wxFlexGridSizer *grid = field->group != nullptr ? group_grids[field->group->id] : main_grid;
-        grid->Add(field->label, 0, wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(2));
-        grid->Add(field->ctrl, 0, wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(2));
-        grid->Add(field->unit, 0, wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(2));
 
         const ModHost::ModCalibrationField *def = &f;
         if (auto *choice = dynamic_cast<::ComboBox *>(field->ctrl))
@@ -263,6 +253,26 @@ ModCalibrationDialog::ModCalibrationDialog(wxWindow *parent, Plater *plater, con
                 e.Skip();
             });
         m_fields.push_back(std::move(field));
+    }
+
+    auto add_row = [this, grid](const Field &field) {
+        grid->Add(field.label, 0, wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(2));
+        grid->Add(field.ctrl, 0, wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(2));
+        grid->Add(field.unit, 0, wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(2));
+    };
+    for (const auto &field : m_fields)
+        if (field->group == nullptr)
+            add_row(*field);
+    for (const auto &group : m_groups) {
+        grid->Add(group->header, 0, wxTOP | wxBOTTOM | wxALIGN_CENTER_VERTICAL, FromDIP(4));
+        grid->AddSpacer(0);
+        grid->AddSpacer(0);
+        for (const auto &field : m_fields)
+            if (field->group == group.get()) {
+                grid->Add(field->label, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(15));
+                grid->Add(field->ctrl, 0, wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(2));
+                grid->Add(field->unit, 0, wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(2));
+            }
     }
 
     m_summary  = new wxStaticText(this, wxID_ANY, wxEmptyString);

@@ -466,8 +466,8 @@ using lesic::report;
 
 // -- The grid: specimens and their layout --
 
-// Specimen and grid sizes, mm (Gen 2026-10-28): a 10 x 10 x 5 cube, a 10 x 10 x 3 lid, a 5 mm diameter handle
-// 10 mm tall, 5 mm between specimens.
+// Specimen and grid sizes, mm (Gen 2026-10-28): a 10 x 10 x 5 cube (its top on the nearest layer boundary, cube_top),
+// a 10 x 10 x 3 lid, a 5 mm diameter handle 10 mm tall, 5 mm between specimens.
 constexpr double SPECIMEN_SIZE   = 10.;
 constexpr double CUBE_HEIGHT     = 5.;
 constexpr double LID_HEIGHT      = 3.;
@@ -490,15 +490,17 @@ struct Axis
     const char *prefix;   // in the specimen's name
     bool        integer;  // a count of layers
     double      minimum;  // the smallest value the setting takes (degC, mm or layers)
+    bool        axis;     // an axis may vary it; otherwise only a fixed value
 };
 
+// The bottom of the interface is a fixed value only, not an axis (Gen 2026-10-29).
 const Axis AXES[] = {
-    { "temperature", "low_temp_interface.temperature", "T", true, 1. },
-    { "top_z_distance", "support_top_z_distance", "Z", false, 0. },
-    { "bottom_z_distance", "support_bottom_z_distance", "B", false, 0. },
-    { "top_interface_layers", "support_interface_top_layers", "L", true, 1. },
-    { "bottom_interface_layers", "support_interface_bottom_layers", "BL", true, 0. },
-    { "interface_spacing", "support_interface_spacing", "S", false, 0. },
+    { "temperature", "low_temp_interface.temperature", "T", true, 1., true },
+    { "top_z_distance", "support_top_z_distance", "Z", false, 0., true },
+    { "bottom_z_distance", "support_bottom_z_distance", "B", false, 0., false },
+    { "top_interface_layers", "support_interface_top_layers", "L", true, 1., true },
+    { "bottom_interface_layers", "support_interface_bottom_layers", "BL", true, 0., false },
+    { "interface_spacing", "support_interface_spacing", "S", false, 0., true },
 };
 
 const Axis *find_axis(const std::string &id)
@@ -525,6 +527,8 @@ std::optional<AxisValues> axis_values(const mp_calib_field_v1 *fields, uint32_t 
         return out;
     }
     out.axis = find_axis(id);
+    if (out.axis != nullptr && !out.axis->axis)
+        out.axis = nullptr;
     const std::optional<double> start = field_number(fields, n, (name + "_start").c_str());
     const std::optional<double> end   = field_number(fields, n, (name + "_end").c_str());
     const std::optional<double> count = field_number(fields, n, (name + "_count").c_str());
@@ -625,6 +629,98 @@ double gap_height(mp_ctx *ctx, const Grid &g, int i, int j)
     return bottom_z + (top_layers + bottom_layers) * layer_height + top_z;
 }
 
+// -- The grid: layers of the lid --
+
+// One layer of a specimen, mm above the bed.
+struct LayerSpan
+{
+    double bottom, top;
+};
+
+// Two print_z within this distance are one layer boundary, mm.
+constexpr double Z_EPSILON = 1e-6;
+
+// The layer boundaries every specimen shares: the first layer, then one layer height after another (mm).
+struct LayerGrid
+{
+    double first_layer, layer_height;
+    explicit LayerGrid(mp_ctx *ctx)
+    {
+        layer_height = config_f64(ctx, "layer_height").value_or(0.2);
+        first_layer  = config_f64(ctx, "initial_layer_print_height").value_or(layer_height);
+    }
+    // The highest boundary at or below z.
+    double below(double z) const { return first_layer + std::floor((z - first_layer) / layer_height + Z_EPSILON) * layer_height; }
+    // The boundary nearest z.
+    double nearest(double z) const { return first_layer + std::round((z - first_layer) / layer_height) * layer_height; }
+};
+
+// The cube's top: the shared boundary nearest its nominal height, so the cube's last layer ends exactly there and the
+// gap above is measured from what prints (Gen 2026-10-29; 5.05 mm with a 0.25 mm first layer and 0.2 mm layers).
+double cube_top(mp_ctx *ctx)
+{
+    const LayerGrid grid(ctx);
+    return grid.layer_height > 0. ? std::max(grid.first_layer, grid.nearest(CUBE_HEIGHT)) : CUBE_HEIGHT;
+}
+
+// The specimen's own layers from below the lid's bottom (Gen 2026-10-29): the lid starts exactly at its gap, its
+// first two layers have the layer height, the third and fourth are as thick as brings the fourth's top back onto
+// the layers every specimen shares, from the fifth on all specimens print together. Empty when the lid's bottom is a
+// shared layer boundary already; nothing either when no correction fits the printer's layer heights (`fits` false).
+std::vector<LayerSpan> lid_layers(mp_ctx *ctx, double lid_bottom, bool *fits = nullptr)
+{
+    if (fits != nullptr)
+        *fits = true;
+    const LayerGrid grid(ctx);
+    const double    layer_height = grid.layer_height;
+    const double    first_layer  = grid.first_layer;
+    // As Slicing's min_layer_height_from_nozzle / max_layer_height_from_nozzle for the first nozzle, which prints
+    // the specimens and their support (0 is 0.07 mm, at least 0.01 mm; a maximum of 0 is 3/4 of the nozzle), and
+    // never past the layer height itself (generate_object_layers asserts both).
+    const double min_setting  = config_at(ctx, "min_layer_height", 0).value_or(0.);
+    const double max_setting  = config_at(ctx, "max_layer_height", 0).value_or(0.);
+    const double min_height   = std::min(min_setting == 0. ? 0.07 : std::max(0.01, min_setting), layer_height);
+    const double max_height   = std::max(std::max(min_height, max_setting == 0. ? 0.75 * config_at(ctx, "nozzle_diameter", 0).value_or(0.4) : max_setting),
+                                         layer_height);
+    if (!(layer_height > 0.) || lid_bottom <= first_layer + layer_height)
+        return {};
+    auto grid_below = [&grid](double z) { return grid.below(z); };
+
+    std::vector<LayerSpan> out;
+    const double below = grid_below(lid_bottom);
+    const double rest  = lid_bottom - below; // mm of the gap above the last shared boundary
+    if (rest < Z_EPSILON)
+        return {};
+    if (rest >= min_height - Z_EPSILON)
+        out.push_back({ below, lid_bottom });
+    else {
+        // Too thin for a layer: the layer below takes it, as two layers of half the sum.
+        const double half = 0.5 * (layer_height + rest);
+        out.push_back({ below - layer_height, below - layer_height + half });
+        out.push_back({ below - layer_height + half, lid_bottom });
+    }
+    out.push_back({ lid_bottom, lid_bottom + layer_height });
+    out.push_back({ lid_bottom + layer_height, lid_bottom + 2. * layer_height });
+    // The third and fourth layers end on a shared boundary: of the boundaries 1 to 4 layer heights above the
+    // second's top, the one whose two layers are nearest the layer height within the printer's limits.
+    const double second_top = lid_bottom + 2. * layer_height;
+    const double base       = grid_below(second_top);
+    double       best       = 0.;
+    for (int k = 1; k <= 4; ++k) {
+        const double h = 0.5 * (base + k * layer_height - second_top);
+        if (h >= min_height - Z_EPSILON && h <= max_height + Z_EPSILON && (best == 0. || std::abs(h - layer_height) < std::abs(best - layer_height)))
+            best = h;
+    }
+    if (best == 0.) {
+        if (fits != nullptr)
+            *fits = false;
+        return {};
+    }
+    out.push_back({ second_top, second_top + best });
+    out.push_back({ second_top + best, second_top + 2. * best });
+    return out;
+}
+
 std::string cell_name(const Grid &g, int i, int j)
 {
     std::string name;
@@ -642,8 +738,9 @@ std::string cell_name(const Grid &g, int i, int j)
     return name;
 }
 
-// Cells in print order: the hottest interface first (each layer then only cools from one specimen to the next,
-// Gen 2026-10-28), rows alternating direction, so neighbours follow each other.
+// Cells in the object list: the hottest interface first, rows alternating direction, so neighbours follow each
+// other. Every other layer prints them in reverse (reverse_object_order), so a layer starts at the temperature the
+// last one ended at (Gen 2026-10-29).
 std::vector<std::pair<int, int>> print_order(const Grid &g)
 {
     std::vector<std::pair<int, int>> cells;
@@ -698,6 +795,13 @@ void grid_check(mp_ctx *ctx, const mp_calib_field_v1 *fields, uint32_t n, const 
             const bool touches = cell_setting(g, "bottom_z_distance", i, j) == 0. || cell_setting(g, "top_z_distance", i, j) == 0.;
             base_layer = base_layer || bottom_layers < 1. || !touches;
         }
+    bool fits = true;
+    for (int i = 0; i < g.nx() && fits; ++i)
+        for (int j = 0; j < g.ny() && fits; ++j)
+            lid_layers(ctx, cube_top(ctx) + gap_height(ctx, g, i, j), &fits);
+    if (!fits)
+        report(project, MP_CALIB_REPORT_WARNING,
+               "Some lids cannot get back onto the shared layers within the printer's layer heights; those specimens keep Orca's layers.");
     if (base_layer)
         report(project, MP_CALIB_REPORT_WARNING,
                "Some specimens print a support base layer under the interface: for the interface only, use bottom interface layers and a bottom Z distance of 0.");
@@ -742,18 +846,22 @@ void grid_build(mp_ctx *ctx, const mp_calib_field_v1 *fields, uint32_t n, const 
     if (cell_value(g, *find_axis("temperature"), 0, 0))
         print("low_temp_interface.temperature", number(coldest));
 
+    const double cube = cube_top(ctx);
     for (const auto &[i, j] : print_order(g)) {
         const auto [x0, y0] = cell_corner(bed, g, i, j);
         const double  gap   = gap_height(ctx, g, i, j);
         const int32_t obj   = project.add_object(project.p, cell_name(g, i, j).c_str());
-        project.add_box(project.p, obj, MP_CALIB_PART, x0, y0, 0., SPECIMEN_SIZE, SPECIMEN_SIZE, CUBE_HEIGHT);
-        project.add_box(project.p, obj, MP_CALIB_PART, x0, y0, CUBE_HEIGHT + gap, SPECIMEN_SIZE, SPECIMEN_SIZE, LID_HEIGHT);
+        project.add_box(project.p, obj, MP_CALIB_PART, x0, y0, 0., SPECIMEN_SIZE, SPECIMEN_SIZE, cube);
+        project.add_box(project.p, obj, MP_CALIB_PART, x0, y0, cube + gap, SPECIMEN_SIZE, SPECIMEN_SIZE, LID_HEIGHT);
         // 64 corners around the handle.
-        project.add_cylinder(project.p, obj, MP_CALIB_PART, x0 + 0.5 * SPECIMEN_SIZE, y0 + 0.5 * SPECIMEN_SIZE, CUBE_HEIGHT + gap + LID_HEIGHT,
+        project.add_cylinder(project.p, obj, MP_CALIB_PART, x0 + 0.5 * SPECIMEN_SIZE, y0 + 0.5 * SPECIMEN_SIZE, cube + gap + LID_HEIGHT,
                              0.5 * HANDLE_DIAMETER, HANDLE_HEIGHT, 2. * M_PI / 64.);
         // The enforcer fills the gap and reaches 1 mm into the cube and the lid, so the lid's whole underside is an
         // overhang to support.
-        project.add_box(project.p, obj, MP_CALIB_SUPPORT_ENFORCER, x0, y0, CUBE_HEIGHT - 1., SPECIMEN_SIZE, SPECIMEN_SIZE, gap + 2.);
+        project.add_box(project.p, obj, MP_CALIB_SUPPORT_ENFORCER, x0, y0, cube - 1., SPECIMEN_SIZE, SPECIMEN_SIZE, gap + 2.);
+        // A height range per layer, so each layer begins where the last one ends.
+        for (const LayerSpan &layer : lid_layers(ctx, cube + gap))
+            project.add_layer_range(project.p, obj, layer.bottom, layer.top, layer.top - layer.bottom);
         for (const AxisValues *a : { &g.x, &g.y })
             if (a->axis != nullptr) {
                 const double v = *cell_value(g, *a->axis, i, j);
@@ -938,6 +1046,12 @@ mp_status tower_on_layer(void *, void *, mp_ctx *, double, int32_t *out)
     return {MP_OK, nullptr};
 }
 
+mp_status reverse_object_order(void *, void *state, mp_ctx *, int32_t layer_index, int32_t *out)
+{
+    *out = static_cast<const State *>(state)->kind == Kind::Grid && layer_index % 2 == 1 ? 1 : 0;
+    return {MP_OK, nullptr};
+}
+
 mp_status path_speeds(void *, void *state, mp_ctx *, const mp_gcode_speed_query_v1 *query, double *speeds, int32_t *changed)
 {
     return magpie::guarded([&] {
@@ -967,7 +1081,7 @@ mp_status tower_requested(void *, mp_ctx *, int32_t *out)
 }
 
 const mp_gcode_events_v1 events_table = {sizeof(mp_gcode_events_v1), open, event, support_last, tower_on_layer, path_speeds, start_gcode,
-                                         close, validate, tower_preview, tower_requested};
+                                         close, validate, tower_preview, tower_requested, reverse_object_order};
 
 mp_status check(void *, mp_ctx *ctx, const char *calibration, const mp_calib_field_v1 *fields, uint32_t n, const mp_calib_project_v1 *project)
 {

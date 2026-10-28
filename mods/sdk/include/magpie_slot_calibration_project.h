@@ -79,6 +79,10 @@ typedef struct mp_calib_project_v1 {
     int32_t  (*set_option)(void *p, int32_t preset, const char *key, const char *value);
     /* A value of the calibration, read back by name at G-code export. */
     int32_t  (*set_value)(void *p, const char *name, double value);
+    /* The object's layers from min_z to max_z (mm above the bed) are layer_height thick: a height range of the
+     * object (Orca's height range modifier). Ranges of one object must not overlap. Layers begin at min_z only when
+     * a layer ends there, so a mod that places layers gives every layer of a stretch its own range. */
+    int32_t  (*add_layer_range)(void *p, int32_t object, double min_z, double max_z, double layer_height);
 } mp_calib_project_v1;
 
 typedef struct mp_calibration_project_v1 {

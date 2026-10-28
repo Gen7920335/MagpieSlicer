@@ -4,6 +4,7 @@
 #include <catch2/catch_all.hpp>
 
 #include "libslic3r/GCodeReader.hpp"
+#include "libslic3r/Layer.hpp"
 #include "libslic3r/ModHost/CalibrationProject.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/calib.hpp"
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <limits>
 #include <regex>
 #include <set>
 #include <string>
@@ -236,7 +238,7 @@ TEST_CASE("The interface grid lays out one specimen per pair of values, hottest 
           std::string::npos);
 }
 
-TEST_CASE("The interface grid cools from one specimen to the next without heating back between them", "[LowTemperatureCalibration]")
+TEST_CASE("The interface grid goes from one specimen to the next without heating back, alternating the order by layer", "[LowTemperatureCalibration]")
 {
     OfficialMods      mods;
     const std::string output =
@@ -246,15 +248,21 @@ TEST_CASE("The interface grid cools from one specimen to the next without heatin
     CHECK(output.find("low temperature interface grid values") != std::string::npos);
 
     int interface_layers = 0;
-    for (const LayerTrace &layer : trace_layers(output)) {
+    const std::vector<LayerTrace> layers = trace_layers(output);
+    for (size_t index = 0; index < layers.size(); ++index) {
+        const LayerTrace &layer = layers[index];
         // No support body anywhere: not in the gap, and no ring around the cube from the bed up (the grid's 2 mm
         // support_object_xy_distance; Orca's 0.35 mm left one on every layer).
         CHECK(std::count(layer.roles.begin(), layer.roles.end(), "Support") == 0);
         if (std::count(layer.roles.begin(), layer.roles.end(), "Support interface") == 0)
             continue;
         ++interface_layers;
-        // Each specimen's interface after a wait for its temperature, coldest last, then one heating back.
-        const std::vector<std::string> expected{ "M109 R200", "M109 R190", "M109 R180", "M104 S220" };
+        // Each specimen's interface after a wait for its temperature (R waits for cooling too, S for heating only),
+        // then one heating back: hottest first on the first layer and every other one from there, coldest first on
+        // the others (Gen 2026-10-29).
+        const std::vector<std::string> expected = index % 2 == 0 ?
+            std::vector<std::string>{ "M109 R200", "M109 R190", "M109 R180", "M104 S220" } :
+            std::vector<std::string>{ "M109 R180", "M109 S190", "M109 S200", "M104 S220" };
         CHECK(layer.temperatures == expected);
         CHECK(layer.dwells == 1);
     }
@@ -292,6 +300,9 @@ TEST_CASE("The interface grid refuses grids the bed cannot hold and equal axes",
     CHECK_FALSE(ModHost::check_calibration(MOD, "grid", small, grid_fields("temperature", 210., 170., 10, "top_z_distance", 0., 0.2, 10)).ok());
     CHECK_FALSE(ModHost::check_calibration(MOD, "grid", config, grid_fields("temperature", 210., 170., 5, "temperature", 200., 190., 2)).ok());
     CHECK_FALSE(ModHost::check_calibration(MOD, "grid", config, grid_fields("temperature", 210., 170., 11, "none", 0., 0., 1)).ok());
+    // The bottom of the interface is a fixed value only, not an axis.
+    CHECK_FALSE(ModHost::check_calibration(MOD, "grid", config, grid_fields("bottom_z_distance", 0., 0.2, 3, "none", 0., 0., 1)).ok());
+    CHECK_FALSE(ModHost::check_calibration(MOD, "grid", config, grid_fields("temperature", 210., 190., 3, "bottom_interface_layers", 0., 2., 3)).ok());
     // A bottom gap leaves a support base layer under the interface: a warning.
     ModHost::CalibrationFields gapped = grid_fields("temperature", 210., 190., 3, "none", 0., 0., 1);
     for (auto &[id, value] : gapped)
@@ -303,4 +314,91 @@ TEST_CASE("The interface grid refuses grids the bed cannot hold and equal axes",
     const ModHost::CalibrationCheck cold = ModHost::check_calibration(MOD, "grid", config, grid_fields("temperature", 180., 160., 3, "none", 0., 0., 1));
     CHECK(cold.ok());
     CHECK_FALSE(cold.warnings.empty());
+}
+
+TEST_CASE("Each lid starts its gap above the cube's last layer and is back on the shared layers from its fifth layer", "[LowTemperatureCalibration]")
+{
+    OfficialMods mods;
+    // A 0.25 mm first layer puts the shared boundaries at 0.25 + 0.2 k mm, so the 5 mm cube ends on the nearest one,
+    // 5.05 mm; top Z gaps of 0 to 0.2 mm by 0.05 mm put the lids' undersides at 5.05 + (2 + 2) * 0.2 + top Z = 5.85 to
+    // 6.05 mm, on a shared boundary only at 5.85 and 6.05 mm.
+    const double first_layer = 0.25, layer_height = 0.2;
+    DynamicPrintConfig config = grid_config();
+    // The corrected third and fourth layers stay within these, mm.
+    const double min_height = 0.07, max_height = 0.3;
+    config.set_deserialize_strict({ { "initial_layer_print_height", first_layer }, { "min_layer_height", min_height }, { "max_layer_height", max_height } });
+    ModHost::CalibrationProject project =
+        ModHost::build_calibration(MOD, "grid", config, grid_fields("top_z_distance", 0., 0.2, 5, "none", 0., 0., 1));
+    ModHost::apply_calibration_options(project, config, config, config);
+    Print print;
+    for (ModelObject *object : project.model.objects)
+        print.auto_assign_extruders(object);
+    print.apply(project.model, config);
+    print.validate();
+    print.process();
+
+    auto on_grid = [&](double z) {
+        const double k = (z - first_layer) / layer_height;
+        return std::abs(k - std::round(k)) < 1e-6;
+    };
+    REQUIRE(print.objects().size() == 5);
+    double rejoined = 0.;                    // mm
+    std::vector<std::vector<double>> tops;   // per object, the print_z of every layer
+    for (const PrintObject *object : print.objects()) {
+        const std::string &name = object->model_object()->name;
+        const double top_z      = std::stod(name.substr(name.find('Z') + 1));
+        const double cube_top   = 5.05;
+        const double lid_bottom = cube_top + (2 + 2) * 0.2 + top_z;
+        std::vector<double> zs;
+        size_t first_lid = size_t(-1);
+        bool   cube_ends = false; // a layer of the cube ends at cube_top
+        for (const Layer *layer : object->layers()) {
+            zs.push_back(layer->print_z);
+            if (std::abs(layer->print_z - cube_top) < 1e-6 && !layer->lslices.empty())
+                cube_ends = true;
+            if (first_lid == size_t(-1) && std::abs(layer->bottom_z() - lid_bottom) < 1e-6)
+                first_lid = zs.size() - 1;
+        }
+        INFO(name);
+        // The cube's last layer ends at its top, and the gap is measured from there: the lid's first layer begins
+        // exactly the gap above it; its first two are layer_height thick.
+        CHECK(cube_ends);
+        CHECK_THAT(object->model_object()->instance_bounding_box(0).size().z(),
+                   Catch::Matchers::WithinAbs(cube_top + (2 + 2) * 0.2 + top_z + 3. + 10., 1e-6));
+        REQUIRE(first_lid != size_t(-1));
+        REQUIRE(first_lid + 4 < object->layers().size());
+        CHECK_THAT(object->layers()[first_lid]->height, Catch::Matchers::WithinAbs(layer_height, 1e-6));
+        CHECK_THAT(object->layers()[first_lid + 1]->height, Catch::Matchers::WithinAbs(layer_height, 1e-6));
+        // The fourth ends on a shared boundary, and from there every layer is one.
+        const double fourth_top = object->layers()[first_lid + 3]->print_z;
+        CHECK(on_grid(fourth_top));
+        for (size_t l : { first_lid + 2, first_lid + 3 }) {
+            CHECK(object->layers()[l]->height >= min_height - 1e-6);
+            CHECK(object->layers()[l]->height <= max_height + 1e-6);
+        }
+        for (size_t l = first_lid + 3; l < object->layers().size(); ++l)
+            CHECK(on_grid(object->layers()[l]->print_z));
+        rejoined = std::max(rejoined, fourth_top);
+        tops.push_back(zs);
+    }
+    // Above the last lid to rejoin and below the lowest specimen's top (the specimens' heights differ by their gaps),
+    // every specimen prints the same layers.
+    double lowest_top = std::numeric_limits<double>::max();
+    for (const std::vector<double> &zs : tops)
+        lowest_top = std::min(lowest_top, zs.back() - layer_height);
+    auto between = [&](const std::vector<double> &zs) {
+        std::vector<double> out;
+        for (double z : zs)
+            if (z > rejoined + 1e-6 && z < lowest_top - 1e-6)
+                out.push_back(z);
+        return out;
+    };
+    const std::vector<double> reference = between(tops.front());
+    REQUIRE(reference.size() > 10);
+    for (const std::vector<double> &zs : tops) {
+        const std::vector<double> above = between(zs);
+        REQUIRE(above.size() == reference.size());
+        for (size_t k = 0; k < above.size(); ++k)
+            CHECK_THAT(above[k], Catch::Matchers::WithinAbs(reference[k], 1e-6));
+    }
 }

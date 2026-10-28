@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -42,7 +43,17 @@ namespace {
 
 const mp_gcode_events_v1 &table_of(const NativeEntry &entry) { return *static_cast<const mp_gcode_events_v1 *>(entry.table); }
 
-bool usable(const NativeEntry &entry) { return entry.version >= MP_GCODE_EVENTS_VERSION && entry.table_size >= sizeof(mp_gcode_events_v1); }
+// The table up to tower_requested, which every implementation has; later members are optional.
+constexpr size_t BASE_TABLE_SIZE = offsetof(mp_gcode_events_v1, reverse_object_order);
+
+bool usable(const NativeEntry &entry) { return entry.version >= MP_GCODE_EVENTS_VERSION && entry.table_size >= BASE_TABLE_SIZE; }
+
+// Whether the implementation's table reaches reverse_object_order and sets it.
+bool has_reverse_object_order(const NativeEntry &entry)
+{
+    return entry.table_size >= offsetof(mp_gcode_events_v1, reverse_object_order) + sizeof(mp_gcode_events_v1::reverse_object_order) &&
+           table_of(entry).reverse_object_order != nullptr;
+}
 
 // The slicing warnings a call left in ctx: errors stop the slice, warnings reach the print's active step.
 void flush_warnings(Print &print, const NativeEntry &entry, mp_ctx &ctx)
@@ -217,6 +228,21 @@ bool GCodeEvents::tower_on_layer(double print_z)
         tower |= out != 0;
     }
     return tower;
+}
+
+bool GCodeEvents::reverse_object_order(int32_t layer_index)
+{
+    bool reverse = false;
+    for (const std::unique_ptr<Open> &open : m_open) {
+        if (!has_reverse_object_order(*open->entry))
+            continue;
+        int32_t out = 0;
+        this->call(*open, "reverse_object_order", [&](mp_ctx &ctx) {
+            return table_of(*open->entry).reverse_object_order(open->entry->user, open->state, &ctx, layer_index, &out);
+        });
+        reverse |= out != 0;
+    }
+    return reverse;
 }
 
 bool GCodeEvents::path_speeds(const mp_gcode_speed_query_v1 &query, std::vector<double> &speeds)

@@ -8,6 +8,7 @@
     "Interface temperatures below %1% °C can stop at the firmware's cold extrusion limit.": "접점 온도가 %1% °C보다 낮으면 펌웨어의 저온 압출 제한에 걸려 멈출 수 있습니다.",
     "Some interface temperatures are not below the filament's %1% °C; those specimens print without cooling.": "일부 접점 온도가 필라멘트 온도 %1% °C보다 낮지 않습니다. 그 시편은 냉각 없이 출력됩니다.",
     "Some specimens print a support base layer under the interface: for the interface only, use bottom interface layers and a bottom Z distance of 0.": "일부 시편은 접점 아래에 서포트 바닥 레이어가 출력됩니다. 접점만 넣으려면 바닥 접점 층수를 1 이상, 바닥 Z 간격을 0으로 두세요.",
+    "Some lids cannot get back onto the shared layers within the printer's layer heights; those specimens keep Orca's layers.": "일부 뚜껑은 프린터의 레이어 높이 범위 안에서 공통 레이어로 돌아올 수 없습니다. 그 시편은 Orca 레이어를 그대로 씁니다.",
     "Grid %1% x %2% mm, %3% specimens": "격자 %1% × %2% mm, 시편 %3%개",
     "Unknown calibration": "알 수 없는 캘리브레이션",
     "layers": "레이어"

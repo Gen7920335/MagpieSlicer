@@ -129,6 +129,7 @@ struct Builder
     std::vector<std::vector<Vec3d>>                    centers;
     std::vector<std::vector<ModelVolumeType>>          types;
     std::vector<std::vector<std::pair<std::string, std::string>>> object_options;
+    std::vector<t_layer_config_ranges>                 layer_ranges;
     std::string                        error; // the first refused call
 
     void refuse(const std::string &message)
@@ -183,6 +184,7 @@ struct Builder
         b.centers.emplace_back();
         b.types.emplace_back();
         b.object_options.emplace_back();
+        b.layer_ranges.emplace_back();
         ModelObject *object = b.project.model.add_object();
         object->name        = name != nullptr ? name : "";
         return int32_t(b.parts.size() - 1);
@@ -213,6 +215,30 @@ struct Builder
             return MP_ERR_ARGUMENT;
         }
         b.object_options[size_t(object)].emplace_back(key, value);
+        return MP_OK;
+    }
+    static int32_t add_layer_range(void *p, int32_t object, double min_z, double max_z, double layer_height)
+    {
+        Builder &b = of(p);
+        if (object < 0 || size_t(object) >= b.layer_ranges.size()) {
+            b.refuse("a height range of an object the calibration did not add");
+            return MP_ERR_ARGUMENT;
+        }
+        if (!(min_z >= 0. && max_z > min_z && layer_height > 0.) || !std::isfinite(min_z + max_z + layer_height)) {
+            b.refuse("a height range without a positive height and layer height");
+            return MP_ERR_ARGUMENT;
+        }
+        t_layer_config_ranges &ranges = b.layer_ranges[size_t(object)];
+        for (const auto &[range, config] : ranges)
+            if (min_z < range.second - EPSILON && range.first < max_z - EPSILON) {
+                b.refuse("overlapping height ranges of an object");
+                return MP_ERR_ARGUMENT;
+            }
+        // As ObjectList::get_default_layer_config makes a range: its layer height, the object's extruder (0).
+        ModelConfig config;
+        config.set_key_value("layer_height", new ConfigOptionFloat(layer_height));
+        config.set_key_value("extruder", new ConfigOptionInt(0));
+        ranges[{ min_z, max_z }] = std::move(config);
         return MP_OK;
     }
     static int32_t set_option(void *p, int32_t preset, const char *key, const char *value)
@@ -260,6 +286,7 @@ std::string call(const std::string &mod_id, const std::string &calibration, cons
     project.set_object_option = &Builder::set_object_option;
     project.set_option        = &Builder::set_option;
     project.set_value         = &Builder::set_value;
+    project.add_layer_range   = &Builder::add_layer_range;
     const auto &table = *static_cast<const mp_calibration_project_v1 *>(entry->table);
     mp_ctx      ctx;
     ctx.mod          = entry->mod;
@@ -333,6 +360,8 @@ CalibrationProject build_calibration(const std::string &mod_id, const std::strin
         object->instances[0]->set_assemble_transformation(object->instances[0]->get_transformation());
         for (const auto &[key, value] : builder.object_options[i])
             set_calibration_object_option(*object, key, value);
+        // The object stands on the bed, so heights above the bed are the object's own.
+        object->layer_config_ranges = builder.layer_ranges[i];
     }
     return std::move(project);
 }
