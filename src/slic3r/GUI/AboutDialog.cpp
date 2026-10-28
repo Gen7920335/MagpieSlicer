@@ -336,8 +336,28 @@ AboutDialog::AboutDialog()
 
     copyright_ver_sizer->Add(html_text, 0, wxALL , 0);
 
-    // No website line: the address that stood here was Orca's.
-    m_html = nullptr;
+    m_html = new wxHtmlWindow(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxHW_SCROLLBAR_NEVER /*NEVER*/);
+      {
+          wxFont font = get_default_font(this);
+          const int fs = font.GetPointSize()-1;
+          int size[] = {fs,fs,fs,fs,fs,fs,fs};
+          m_html->SetFonts(font.GetFaceName(), font.GetFaceName(), size);
+          m_html->SetMinSize(wxSize(FromDIP(-1), FromDIP(16)));
+          m_html->SetBorders(2);
+          wxColour   bgr_clr = GetBackgroundColour();
+          const auto bgr_clr_str = encode_color(ColorRGB(bgr_clr.Red(), bgr_clr.Green(), bgr_clr.Blue()));
+          const auto text = from_u8(
+              (boost::format(
+              "<html>"
+              "<body bgcolor= \"" + bgr_clr_str + "\" >"
+              "<p style=\"text-align:left\"><a style=\"color:#009789\" href=\"https://github.com/Gen7920335/MagpieSlicer\">https://github.com/Gen7920335/MagpieSlicer</ a></p>"
+              "</body>"
+              "</html>")
+            ).str());
+          m_html->SetPage(text);
+          copyright_ver_sizer->Add(m_html, 0, wxEXPAND, 0);
+          m_html->Bind(wxEVT_HTML_LINK_CLICKED, &AboutDialog::onLinkClicked, this);
+      }
     //Add "Portions copyright" button
     Button* button_portions = new Button(this,_L("License Info"));
     button_portions->SetStyle(ButtonStyle::Regular, ButtonType::Window);

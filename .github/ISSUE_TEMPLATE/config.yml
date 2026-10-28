@@ -1,8 +1,11 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Community Support (Discord channel)
-    url: https://discord.gg/P4VE9UY9gJ
-    about: Please ask and answer support "how do I?"questions here.
-  - name: Discussion Forum
-    url: https://github.com/OrcaSlicer/OrcaSlicer/discussions
-    about: Please raise ideas and feature suggestions here.
+  - name: Magpie Slicer discussions
+    url: https://github.com/Gen7920335/MagpieSlicer/discussions
+    about: Ask "how do I?" questions and suggest ideas here.
+  - name: Mods and the mod SDK
+    url: https://github.com/Gen7920335/magpie-mods
+    about: Questions and issues about writing or installing mods.
+  - name: OrcaSlicer
+    url: https://github.com/OrcaSlicer/OrcaSlicer
+    about: A problem that also happens in OrcaSlicer with every Magpie mod off belongs to OrcaSlicer.

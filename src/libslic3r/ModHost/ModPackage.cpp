@@ -24,7 +24,7 @@ using json   = nlohmann::json;
 
 namespace {
 
-// The application's own keys. Their private halves are kept off the repository (D:\claude\magpie-mod-keys on the
+// The application's own keys. Their private halves are kept off the repository (on the
 // maintainer's machine); `--mod-sign` signs a package with one. "magpie-official-2026" signs Magpie's own mods,
 // "magpie-verified-2026" the third-party mods Gen reviewed (the verified tag).
 const TrustedKey builtin_keys[] = {
