@@ -229,6 +229,21 @@ detail-nozzle overhang width.
   support_type (a widget line, Tab::end_line_round).
 - Output: none; the G-code is unchanged (golden gate).
 
+## Update check reads Magpie's releases and compares five-field versions
+
+- Wrong: the update check asked OrcaSlicer's server and compared versions with Orca's `Semver`. The current
+  version came from `SoftFever_VERSION` ("2.5.0-modified.2.0"), which does not match the check's pattern, so
+  it was invalid and every release found looked newer (ASSUMED from reading the code; not observed in the app).
+  `semver_parse` also folds a fourth field into the patch and rejects a fifth, so Magpie tags
+  (`v2.5.0.2.1`) could not be ordered, and the skip-version setting compared versions as text.
+- Change: the default URL is `https://api.github.com/repos/Gen7920335/MagpieSlicer/releases` (AppConfig.cpp),
+  with no install-id query sent to GitHub. `GUI_App::check_new_version_sf` and the skip-version check compare
+  `MagpieReleaseVersion` (libslic3r/MagpieReleaseVersion.hpp) against `MAGPIE_PACKAGE_VERSION`; draft releases
+  are ignored. A `version_check_url` set in the app config still overrides the URL.
+- Tests: "Magpie release tags parse with five numeric fields and a label", "Magpie release versions order by
+  every numeric field, then by label" (test_magpie_release_version.cpp). The GUI path itself is not covered by a
+  test.
+
 ## Known Orca bugs not patched
 
 - The Type-1 tower (`WipeTower::set_extruder`) takes one line width for every tool from the nozzle of the last

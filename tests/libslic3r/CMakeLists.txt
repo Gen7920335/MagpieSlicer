@@ -32,6 +32,7 @@ add_executable(${_TEST_NAME}_tests
     test_mod_printer_manifest.cpp
     test_layer_time_blend.cpp
     test_mod_index.cpp
+    test_magpie_release_version.cpp
     test_legacy_settings.cpp
     test_line1_orca_fixes.cpp
     test_snapmaker_u1_start.cpp

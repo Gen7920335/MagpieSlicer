@@ -7,6 +7,8 @@
 #define SLIC3R_VERSION "@SLIC3R_VERSION@"
 #define SoftFever_VERSION "@SoftFever_VERSION@"
 #define SLIC3R_DISPLAY_VERSION "@SLIC3R_DISPLAY_VERSION@"
+// MAGPIE: the release version with its pre-release label (2.5.0.2.1-beta.1), as release tags name it.
+#define MAGPIE_PACKAGE_VERSION "@MAGPIE_PACKAGE_VERSION@"
 #define SLIC3R_BUILD_ID "@SLIC3R_BUILD_ID@"
 //#define SLIC3R_RC_VERSION "@SLIC3R_VERSION@"
 #define BBL_INTERNAL_TESTING @BBL_INTERNAL_TESTING@

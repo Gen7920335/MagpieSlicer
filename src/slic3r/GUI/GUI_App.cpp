@@ -48,6 +48,7 @@
 #include <filesystem>
 #include <ctime>
 #include "libslic3r/AppConfig.hpp"
+#include "libslic3r/MagpieReleaseVersion.hpp"
 #include <ios>
 #include <chrono>
 #include <functional>
@@ -3491,7 +3492,11 @@ bool GUI_App::on_init_inner()
                 bool skip_this_version = false;
                 if (!skip_version_str.empty()) {
                     BOOST_LOG_TRIVIAL(info) << "new version = " << version_info.version_str << ", skip version = " << skip_version_str;
-                    if (version_info.version_str <= skip_version_str) {
+                    // MAGPIE: compare as release versions; text order puts 2.5.0.2.10 before 2.5.0.2.9.
+                    const auto new_version  = Slic3r::MagpieReleaseVersion::parse(version_info.version_str);
+                    const auto skip_version = Slic3r::MagpieReleaseVersion::parse(skip_version_str);
+                    if (new_version && skip_version ? Slic3r::compare(*new_version, *skip_version) <= 0
+                                                    : version_info.version_str <= skip_version_str) {
                         skip_this_version = true;
                     } else {
                         app_config->set("skip_version", "");
@@ -6625,7 +6630,10 @@ void GUI_App::check_new_version_sf(bool show_tips, int by_user)
         detect_updater_os_info()
     };
 
-    const std::string query_string = build_updater_query(query);
+    // MAGPIE: the default check reads GitHub's release list, which needs no install id or platform
+    // query; the query is sent only to an updater server named in the settings.
+    const bool        github_releases = version_check_url.find("api.github.com/") != std::string::npos;
+    const std::string query_string    = github_releases ? std::string() : build_updater_query(query);
     if (!query_string.empty()) {
         const bool has_query = version_check_url.find('?') != std::string::npos;
         if (!has_query)
@@ -6661,12 +6669,13 @@ void GUI_App::check_new_version_sf(bool show_tips, int by_user)
             std::stringstream           json_stream(body);
             boost::property_tree::read_json(json_stream, root);
 
-            std::regex matcher("[0-9]+\\.[0-9]+(\\.[0-9]+)*(-[A-Za-z0-9]+)?(\\+[A-Za-z0-9]+)?");
-            Semver    current_version = get_version(SoftFever_VERSION, matcher);
-            Semver    best_pre(0, 0, 0);
-            Semver    best_release(0, 0, 0);
-            bool      best_pre_valid = false;
-            bool      best_release_valid = false;
+            // MAGPIE: release tags carry five numeric fields (v2.5.0.2.1-beta.1); Orca's Semver drops the
+            // fifth, and SoftFever_VERSION ("2.5.0-modified.2.0") did not match Orca's pattern at all, so
+            // every release looked newer. Compare Magpie release versions with the package version instead.
+            using Slic3r::MagpieReleaseVersion;
+            const std::optional<MagpieReleaseVersion> current_version = MagpieReleaseVersion::parse(MAGPIE_PACKAGE_VERSION);
+            std::optional<MagpieReleaseVersion> best_pre;
+            std::optional<MagpieReleaseVersion> best_release;
             std::string best_pre_url;
             std::string best_release_url;
             std::string best_release_content;
@@ -6676,13 +6685,11 @@ void GUI_App::check_new_version_sf(bool show_tips, int by_user)
                 auto tag_opt = node.get_optional<std::string>("tag_name");
                 if (!tag_opt)
                     return;
+                if (node.get_optional<bool>("draft").get_value_or(false))
+                    return;
 
-                std::string tag = *tag_opt;
-                if (!tag.empty() && tag.front() == 'v')
-                    tag.erase(0, 1);
-
-                Semver tag_version = get_version(tag, matcher);
-                if (!tag_version.valid())
+                const std::optional<MagpieReleaseVersion> tag_version = MagpieReleaseVersion::parse(*tag_opt);
+                if (!tag_version)
                     return;
 
                 const bool is_prerelease = node.get_optional<bool>("prerelease").get_value_or(false);
@@ -6690,18 +6697,16 @@ void GUI_App::check_new_version_sf(bool show_tips, int by_user)
                 const std::string body_copy = node.get_optional<std::string>("body").get_value_or(std::string());
 
                 if (is_prerelease) {
-                    if (!best_pre_valid || best_pre < tag_version) {
-                        best_pre        = tag_version;
-                        best_pre_url    = html_url;
+                    if (!best_pre || Slic3r::compare(*best_pre, *tag_version) < 0) {
+                        best_pre         = tag_version;
+                        best_pre_url     = html_url;
                         best_pre_content = body_copy;
-                        best_pre_valid  = true;
                     }
                 } else {
-                    if (!best_release_valid || best_release < tag_version) {
+                    if (!best_release || Slic3r::compare(*best_release, *tag_version) < 0) {
                         best_release         = tag_version;
                         best_release_url     = html_url;
                         best_release_content = body_copy;
-                        best_release_valid   = true;
                     }
                 }
             };
@@ -6713,42 +6718,40 @@ void GUI_App::check_new_version_sf(bool show_tips, int by_user)
                     consider_release(child.second);
             }
 
-            if (!best_release_valid && !best_pre_valid) {
+            if (!best_release && !best_pre) {
                 if (by_user != 0)
                     this->no_new_version();
                 return;
             }
 
-            if (best_pre_valid && best_release_valid && best_pre < best_release) {
-                best_pre        = best_release;
-                best_pre_url    = best_release_url;
+            if (best_pre && best_release && Slic3r::compare(*best_pre, *best_release) < 0) {
+                best_pre         = best_release;
+                best_pre_url     = best_release_url;
                 best_pre_content = best_release_content;
-                best_pre_valid  = true;
             }
 
-            const bool        prefer_release = check_stable_only || !best_pre_valid;
-            const Semver&     chosen_version = prefer_release ? best_release : best_pre;
-            const bool        chosen_valid   = prefer_release ? best_release_valid : best_pre_valid;
+            const bool prefer_release = check_stable_only || !best_pre;
+            const std::optional<MagpieReleaseVersion> &chosen_version = prefer_release ? best_release : best_pre;
 
-            if (!chosen_valid) {
+            if (!chosen_version) {
                 if (by_user != 0)
                     this->no_new_version();
                 return;
             }
 
-            if (current_version.valid() && chosen_version <= current_version) {
+            if (current_version && Slic3r::compare(*chosen_version, *current_version) <= 0) {
                 if (by_user != 0)
                     this->no_new_version();
                 return;
             }
 
             version_info.url           = prefer_release ? best_release_url : best_pre_url;
-            version_info.version_str   = prefer_release ? best_release.to_string_sf() : best_pre.to_string_sf();
+            version_info.version_str   = chosen_version->to_string();
             version_info.description   = prefer_release ? best_release_content : best_pre_content;
             version_info.force_upgrade = false;
 
             wxCommandEvent* evt = new wxCommandEvent(EVT_SLIC3R_VERSION_ONLINE);
-            evt->SetString((prefer_release ? best_release : best_pre).to_string());
+            evt->SetString(chosen_version->to_string());
             GUI::wxGetApp().QueueEvent(evt);
           } catch (...) {}
         });
