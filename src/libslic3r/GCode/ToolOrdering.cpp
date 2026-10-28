@@ -1669,8 +1669,13 @@ void ToolOrdering::fill_wipe_tower_partitions(const PrintConfig &config, coordf_
             }
             LayerTools lt_new(0.5 * (lt.print_z + lt_next.print_z));
             lt_new.has_wipe_tower = true;
-            if (!lt_next.extruders.empty())
-                lt_new.extruders.push_back(lt_next.extruders.front());
+            // MAGPIE: the tower changes to the tool the next layer starts with, which under H/2 is its execution
+            // frame's first visit, not Orca's first extruder (seed 11438 of the random test: the inserted 2.04 mm
+            // layer planned T3 -> T0 while the 2.16 mm frame starts on T3, so the G-code asked for T1 where the tower
+            // expected T0 and the export stopped with "toolchange it didn't expect").
+            const std::vector<unsigned int> next_sequence = execution_filaments(lt_next);
+            if (!next_sequence.empty())
+                lt_new.extruders.push_back(next_sequence.front());
             else if (!lt.extruders.empty())
                 lt_new.extruders.push_back(lt.extruders.back());
             lt_new.wipe_tower_partitions = lt_next.wipe_tower_partitions;

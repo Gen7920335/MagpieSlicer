@@ -16,6 +16,11 @@
 
 ## History
 
+### 2026-10-28 Random GUI test fixes (branches cli-warnings-utf8, tcr-mismatch-11438, worktree D:\claude\magpie-next-bblwall) - BUILT
+
+- 82c0d1ded6: CLI g_slicing_warnings under a mutex (seed 9024: heap corruption when two objects' support steps warn at once inside Print::process's tbb::parallel_for; probe with the push held open: no lock -> two callbacks inside, one warning lost; lock -> one at a time). Collapsed notifications trim whole UTF-8 characters (Korean showed "?" where a character was cut).
+- Seed 11438 (H/2 support + multi-nozzle walls + 0.8 mm support nozzle + prime tower): the gap-splitting pass of ToolOrdering inserted a tower-only layer at 2.04 mm with Orca's first extruder of the next layer (T0) while the 2.16 mm H/2 execution frame starts on T3, so the G-code asked for T1 where the tower expected T0 ("toolchange it didn't expect"). The inserted layer now takes execution_filaments(next).front(), as the raft-gap insertion does for seed 557. KNOWN by toggle: that one line moves the 2.04 layer's extruder 0 -> 3 and the slice passes. PERMANENT DIAGNOSTIC (GCode.cpp toolchange_mismatch_message): the mismatch error names the asked tool, the tower's planned change, the tower layer and the printed layer z. Repro list golden/rand/repro.py (9024, 11438).
+
 ### 2026-10-27 Settings follow-up after the GUI check (branch settings-fixes2, worktree D:\claude\magpie-next-resin6828b) - BUILT
 
 - GUI check of settings-visibility (test app, test datadir golden\rsv\gdd; report D:\claude\reports\gui_settings_check) found: the support mod groups stayed with support off, the mods' support type dropdown greyed instead of hiding, merged fields had no modified colour/revert, Orca support options shown under resin that it ignores.
@@ -29,7 +34,9 @@
 
 ### 2026-10-27 Settings merge and hide-when-parent-off (branch settings-visibility, worktree D:\claude\magpie-next-resin6828b) - BUILT
 
-- Audit (exhaustive, mechanical): D:\claudeeports\SETTINGS_DUP_VISIBILITY_AUDIT_KO.md, data/scripts D:\claudeeportsudit (toggle.py slices a child changed with its parent off; same G-code = safe to hide).
+- Audit (exhaustive, mechanical): D:\claude
+eports\SETTINGS_DUP_VISIBILITY_AUDIT_KO.md, data/scripts D:\claude
+eportsudit (toggle.py slices a child changed with its parent off; same G-code = safe to hide).
 - Merged settings: ModParamUi merge_into / merge_when / merge_orca; Tab::create_merged_setting puts one control in the Orca option's place (its line hidden). support_interface_pattern + support_extras.interface_pattern (triangles); tree_support_wall_count + support_extras.normal_wall_loops / tree_wall_loops (one field, the selected support type's count). Stored keys unchanged.
 - Grey -> hide: Tab::begin_line_round/end_line_round (last toggle_line and last toggle_option of a round both count); keep_greyed_out() lists the printer-capability ones. New rules in ConfigManipulation/Tab (support_remove_small_overhang, support_line_width, wipe_tower_filament, slow_down_min_speed, filament tower interface; bridge_no_support and support_remove_small_overhang hidden for Cura/resin).
 - Mod "visible" is a parameter-level key; it was written inside "ui" for low_temp_interface, multi_nozzle_walls, support_extras, half_layer and did nothing; moved. A condition may read settings (ModSet::slot_lookup, param_or_setting_value).
@@ -59,9 +66,11 @@
 
 ### 2026-10-24 U1 random-settings test fixes (branch rand-fixes from toolhead-ui 7e3ad3ce54, worktree D:\claude\magpie-next-bblwall) - BUILT
 
-- Gen asked to fix every bug the random test found (report D:\claude\goldenand\REPORT_KO.md, B1-B11, U1, U2), build, then keep running test rounds. Causes were found with probe builds (removed) before the fixes.
+- Gen asked to fix every bug the random test found (report D:\claude\golden
+and\REPORT_KO.md, B1-B11, U1, U2), build, then keep running test rounds. Causes were found with probe builds (removed) before the fixes.
 - Fixed: B8 snug + tree contact layers null deref (SupportCommon); B10 inner wall filament listed for a plan's large walls with one wall loop (ToolOrdering append_planner_wall_filaments); B1 H/2 profile for the single-wall-top full pass (PerimeterGenerator full_pass_params); B1 zero-width gap fill run (VariableWidth); B2 planned walls' overhang flow on the printing nozzle (PerimeterGenerator planned_overhang_flow); B3 H/2 raft bands checked per printing nozzle (Print validate_half_layer_nozzles); B6 tree raft interface flow; B5/B7/U2 surface fill role ignores its gap fill (ToolOrdering surface_fill_role, extruder() and collect_extruders); U1 classic gap fill width capped on the printing nozzle when nozzles differ; B4 banded event layers with nothing to print carry no tower layer (ToolOrdering fill_wipe_tower_partitions); B11 generated tower check/refit include the combined skirt (Print).
-- Verified: ctest 2986/2989 (3 JPEG, deps), 12 new tests each fail with the fix off; gate D:\claude\goldenfix (gates.sh, cmp.py vs golden/thui/b4) 181/197 identical, mods off identical, the 16 others intended (H/2 second wall width, detail overhang width); --mod-test 10/10. Test edit: "Wipe tower temperature-wait park is regenerated when the tower moves" now sets skirt_loops 0 (its edge tower's skirt left the bed).
+- Verified: ctest 2986/2989 (3 JPEG, deps), 12 new tests each fail with the fix off; gate D:\claude\golden
+fix (gates.sh, cmp.py vs golden/thui/b4) 181/197 identical, mods off identical, the 16 others intended (H/2 second wall width, detail overhang width); --mod-test 10/10. Test edit: "Wipe tower temperature-wait park is regenerated when the tower moves" now sets skirt_loops 0 (its edge tower's skirt left the bed).
 - Not pushed. ORCA_PATCHES.md "Fixes from the U1 random-settings test".
 
 
