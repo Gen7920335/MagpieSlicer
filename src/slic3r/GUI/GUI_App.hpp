@@ -602,6 +602,7 @@ public:
 
     void            check_update(bool show_tips, int by_user);
     void            check_new_version(bool show_tips = false, int by_user = 0);
+    void            check_new_version_sf(bool show_tips = false, int by_user = 0);
     // Offers to migrate user filament presets made against an older release that lost printers their parent
     // listed then. At startup it asks on every start that finds such presets, unless the user chose not to be
     // reminded; while the user presets sync with the cloud, it waits until they have been pulled. by_user also

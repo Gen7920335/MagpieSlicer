@@ -48,6 +48,7 @@
 #include <filesystem>
 #include <ctime>
 #include "libslic3r/AppConfig.hpp"
+#include "libslic3r/MagpieReleaseVersion.hpp"
 #include <ios>
 #include <chrono>
 #include <functional>
@@ -3447,7 +3448,11 @@ bool GUI_App::on_init_inner()
                 bool skip_this_version = false;
                 if (!skip_version_str.empty()) {
                     BOOST_LOG_TRIVIAL(info) << "new version = " << version_info.version_str << ", skip version = " << skip_version_str;
-                    if (version_info.version_str <= skip_version_str) {
+                    // MAGPIE: compare as release versions; text order puts 2.5.0.2.10 before 2.5.0.2.9.
+                    const auto new_version  = Slic3r::MagpieReleaseVersion::parse(version_info.version_str);
+                    const auto skip_version = Slic3r::MagpieReleaseVersion::parse(skip_version_str);
+                    if (new_version && skip_version ? Slic3r::compare(*new_version, *skip_version) <= 0
+                                                    : version_info.version_str <= skip_version_str) {
                         skip_this_version = true;
                     } else {
                         app_config->set("skip_version", "");
@@ -6256,7 +6261,7 @@ void GUI_App::check_update(bool show_tips, int by_user)
 
 void GUI_App::check_new_version(bool show_tips, int by_user)
 {
-    return; // not used: Magpie has no online version check
+    return; // not used: Magpie's check is check_new_version_sf
     std::string platform = "windows";
 
 #ifdef __WINDOWS__
@@ -6328,6 +6333,131 @@ Semver get_version(const std::string& str, const std::regex& regexp) {
         }
     }
     return Semver::invalid();
+}
+
+// MAGPIE: Magpie Slicer's release list on GitHub, read by the update check.
+static const char* const MAGPIE_RELEASES_URL = "https://api.github.com/repos/Gen7920335/MagpieSlicer/releases";
+
+void GUI_App::check_new_version_sf(bool show_tips, int by_user)
+{
+    (void)show_tips;
+    AppConfig* app_config = wxGetApp().app_config;
+    bool       check_stable_only = app_config->get_bool("check_stable_update_only");
+
+    // MAGPIE: new versions are Magpie Slicer's GitHub releases. GitHub's release list needs no install
+    // id, platform query or request signature, so none is sent.
+    auto http = Http::get(MAGPIE_RELEASES_URL);
+    http.header("accept", "application/vnd.github.v3+json")
+        .timeout_connect(5)
+        .timeout_max(10)
+        .on_error([&](std::string body, std::string error, unsigned http_status) {
+          (void)body;
+          BOOST_LOG_TRIVIAL(error) << format("Error getting: `%1%`: HTTP %2%, %3%", "check_new_version_sf", http_status,
+                                             error);
+        })
+        .on_complete([this, by_user, check_stable_only](std::string body, unsigned http_status) {
+          if (http_status != 200)
+            return;
+          try {
+            boost::trim(body);
+            if (body.empty()) {
+                if (by_user != 0)
+                    this->no_new_version();
+                return;
+            }
+
+            boost::property_tree::ptree root;
+            std::stringstream           json_stream(body);
+            boost::property_tree::read_json(json_stream, root);
+
+            // MAGPIE: release tags carry five numeric fields (v2.5.0.2.1-beta.1); Orca's Semver drops the
+            // fifth, and SoftFever_VERSION ("2.5.0-modified.2.0") did not match Orca's pattern at all, so
+            // every release looked newer. Compare Magpie release versions with the package version instead.
+            using Slic3r::MagpieReleaseVersion;
+            const std::optional<MagpieReleaseVersion> current_version = MagpieReleaseVersion::parse(MAGPIE_PACKAGE_VERSION);
+            std::optional<MagpieReleaseVersion> best_pre;
+            std::optional<MagpieReleaseVersion> best_release;
+            std::string best_pre_url;
+            std::string best_release_url;
+            std::string best_release_content;
+            std::string best_pre_content;
+
+            auto consider_release = [&](const boost::property_tree::ptree& node) {
+                auto tag_opt = node.get_optional<std::string>("tag_name");
+                if (!tag_opt)
+                    return;
+                if (node.get_optional<bool>("draft").get_value_or(false))
+                    return;
+
+                const std::optional<MagpieReleaseVersion> tag_version = MagpieReleaseVersion::parse(*tag_opt);
+                if (!tag_version)
+                    return;
+
+                const bool is_prerelease = node.get_optional<bool>("prerelease").get_value_or(false);
+                const std::string html_url = node.get_optional<std::string>("html_url").get_value_or(std::string());
+                const std::string body_copy = node.get_optional<std::string>("body").get_value_or(std::string());
+
+                if (is_prerelease) {
+                    if (!best_pre || Slic3r::compare(*best_pre, *tag_version) < 0) {
+                        best_pre         = tag_version;
+                        best_pre_url     = html_url;
+                        best_pre_content = body_copy;
+                    }
+                } else {
+                    if (!best_release || Slic3r::compare(*best_release, *tag_version) < 0) {
+                        best_release         = tag_version;
+                        best_release_url     = html_url;
+                        best_release_content = body_copy;
+                    }
+                }
+            };
+
+            if (root.get_optional<std::string>("tag_name")) {
+                consider_release(root);
+            } else {
+                for (const auto& child : root)
+                    consider_release(child.second);
+            }
+
+            if (!best_release && !best_pre) {
+                if (by_user != 0)
+                    this->no_new_version();
+                return;
+            }
+
+            if (best_pre && best_release && Slic3r::compare(*best_pre, *best_release) < 0) {
+                best_pre         = best_release;
+                best_pre_url     = best_release_url;
+                best_pre_content = best_release_content;
+            }
+
+            const bool prefer_release = check_stable_only || !best_pre;
+            const std::optional<MagpieReleaseVersion> &chosen_version = prefer_release ? best_release : best_pre;
+
+            if (!chosen_version) {
+                if (by_user != 0)
+                    this->no_new_version();
+                return;
+            }
+
+            if (current_version && Slic3r::compare(*chosen_version, *current_version) <= 0) {
+                if (by_user != 0)
+                    this->no_new_version();
+                return;
+            }
+
+            version_info.url           = prefer_release ? best_release_url : best_pre_url;
+            version_info.version_str   = chosen_version->to_string();
+            version_info.description   = prefer_release ? best_release_content : best_pre_content;
+            version_info.force_upgrade = false;
+
+            wxCommandEvent* evt = new wxCommandEvent(EVT_SLIC3R_VERSION_ONLINE);
+            evt->SetString(chosen_version->to_string());
+            GUI::wxGetApp().QueueEvent(evt);
+          } catch (...) {}
+        });
+
+    http.perform();
 }
 
 // return true if handled

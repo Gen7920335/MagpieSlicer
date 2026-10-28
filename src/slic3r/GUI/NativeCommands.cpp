@@ -609,6 +609,10 @@ std::vector<NativeCommand> build_command_catalog()
         }
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
+    add_with_icon("help_check_updates", L("Check for Updates"), L("Help"), "refresh", [](const std::string&) {
+        wxGetApp().check_new_version_sf(true, 1);
+        return AppActionRunResult{AppActionRunResult::Level::Success};
+    });
     add_with_icon("help_about", L("About OrcaSlicer"), L("Help"), "MagpieSlicer_gradient_circle", [](const std::string&) {
         Slic3r::GUI::about();
         return AppActionRunResult{AppActionRunResult::Level::Success};
