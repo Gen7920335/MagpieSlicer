@@ -198,24 +198,7 @@ std::vector<PluginCapabilityId> capabilities_in_use(Preset::Type type, const Pre
     return result;
 }
 
-static std::string resolve_cloud_base_url()
-{
-    std::string cloud_base_url = "https://cloud.orcaslicer.com";
-    if (auto agent = GUI::wxGetApp().getAgent()) {
-        if (auto orca_agent = std::dynamic_pointer_cast<OrcaCloudServiceAgent>(agent->get_cloud_agent())) {
-            if (!orca_agent->get_cloud_base_url().empty())
-                cloud_base_url = orca_agent->get_cloud_base_url();
-        }
-    }
-    return cloud_base_url;
-}
-
 std::string create_full_ref(const PluginCapabilityRef& ref) { return ref.name + ';' + ref.uuid + ';' + ref.capability_name; }
-
-std::string resolve_recovery_url(const PluginCapabilityRef& ref)
-{
-    return resolve_cloud_base_url() + "/app/plugins/plugin-hub?search=" + Http::url_encode(ref.name);
-}
 
 // {present, enabled}; {false, false} when the plugin is not loaded or does not provide the capability.
 static std::pair<bool, bool> loaded_capability_state(const std::string& plugin_key, const PluginCapabilityRef& ref)
@@ -298,14 +281,13 @@ void refresh_missing_plugins(Preset::Type type, const ConfigOptionStrings* manif
 
         if (!installed) {
             // Not on disk — needs download/install.
-            std::string recovery_url = ref->uuid.empty() ? resolve_recovery_url(*ref) : std::string();
-            missing_set.emplace(entry, MissingPlugin{*ref, std::move(recovery_url), std::move(opt), type, PluginCapabilityType::Unknown});
+            missing_set.emplace(entry, MissingPlugin{*ref, std::move(opt), type, PluginCapabilityType::Unknown});
         } else if (!loaded || cap_present) {
             // Installed but not loaded yet (optimistic), or loaded but capability disabled — activatable.
-            inactive_set.emplace(entry, MissingPlugin{*ref, std::string(), std::move(opt), type, PluginCapabilityType::Unknown});
+            inactive_set.emplace(entry, MissingPlugin{*ref, std::move(opt), type, PluginCapabilityType::Unknown});
         } else {
-            // Loaded but the capability is absent — activation cannot fix it; offer a browse/update link.
-            broken_set.emplace(entry, MissingPlugin{*ref, resolve_recovery_url(*ref), std::move(opt), type, PluginCapabilityType::Unknown});
+            // Loaded but the capability is absent — activation cannot fix it.
+            broken_set.emplace(entry, MissingPlugin{*ref, std::move(opt), type, PluginCapabilityType::Unknown});
         }
     }
 }
@@ -479,17 +461,6 @@ void resolve_inactive_plugins(const std::vector<std::string>& refs)
                 plater->revalidate_current_plate_if_plugins_missing();
         });
     }).detach();
-}
-
-void open_missing_plugins_on_cloud(const std::vector<std::string>& local_refs)
-{
-    if (local_refs.size() == 1) {
-        if (const auto ref = parse_capability_ref(local_refs.front())) {
-            wxLaunchDefaultBrowser(GUI::from_u8(resolve_recovery_url(*ref)), wxBROWSER_NEW_WINDOW);
-            return;
-        }
-    }
-    wxLaunchDefaultBrowser(GUI::from_u8(resolve_cloud_base_url() + "/app/plugins/plugin-hub"), wxBROWSER_NEW_WINDOW);
 }
 
 } // namespace Slic3r

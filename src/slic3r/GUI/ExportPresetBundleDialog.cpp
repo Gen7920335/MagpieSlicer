@@ -72,7 +72,6 @@ nlohmann::json ExportPresetBundleDialog::localized_strings() const
         {"process", _u8L("Process")},
         {"all", _u8L("All")},
         {"no_items", _u8L("No items")},
-        {"export_cloud", _u8L("Export to OrcaCloud")},
         {"export_folder", _u8L("Export to folder")},
         {"close", _u8L("Close")},
     };

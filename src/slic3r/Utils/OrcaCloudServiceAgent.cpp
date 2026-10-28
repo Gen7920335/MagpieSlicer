@@ -84,11 +84,9 @@ using json = nlohmann::json;
 namespace Slic3r {
 
 namespace {
-constexpr const char* ORCA_DEFAULT_API_URL   = "https://api.orcaslicer.com";
-constexpr const char* ORCA_DEFAULT_AUTH_URL  = "https://auth.orcaslicer.com";
-constexpr const char* ORCA_DEFAULT_CLOUD_URL = "https://cloud.orcaslicer.com";
-// Orca: This is a public key with no secret, used to identify the client application to the backend.
-constexpr const char* ORCA_DEFAULT_PUB_KEY = "sb_publishable_lvVe_whOi80SU9BPSxM1kA_tbt9AbR_";
+// Magpie has no OrcaCloud account. The agent stays as the cloud provider object that non-Bambu
+// printers hang off, but it has no server: every base URL is empty, nothing reads an override
+// from the config, and each network entry point below returns before building a request.
 
 constexpr const char* ORCA_HEALTH_PATH = "/api/v1/health";
 constexpr const char* ORCA_SYNC_PULL_PATH = "/api/v1/sync/pull";
@@ -114,10 +112,6 @@ constexpr const char* ORCA_CLOUD_LOGIN_PATH = "/orcaslicer-login";
 // user. The cloud pane reloads the returned token into the webview (see build_web_session_*).
 constexpr const char* ORCA_WEB_SESSION_HANDOFF_PATH = "/api/v1/account/web-session-handoff";
 
-constexpr const char* CONFIG_ORCA_API_URL   = "orca_api_url";
-constexpr const char* CONFIG_ORCA_AUTH_URL  = "orca_auth_url";
-constexpr const char* CONFIG_ORCA_CLOUD_URL = "orca_cloud_url";
-constexpr const char* CONFIG_ORCA_PUB_KEY   = "orca_pub_key";
 
 constexpr const char* SECRET_STORE_SERVICE = "OrcaSlicer/Auth";
 constexpr const char* SECRET_STORE_USER    = "orca_refresh_token";
@@ -515,11 +509,7 @@ bool aes256gcm_decrypt(const std::string& b64_payload, const std::vector<unsigne
 
 OrcaCloudServiceAgent::OrcaCloudServiceAgent(std::string log_dir)
     : log_dir(std::move(log_dir))
-    , api_base_url(ORCA_DEFAULT_API_URL)
-    , auth_base_url(ORCA_DEFAULT_AUTH_URL)
-    , cloud_base_url(ORCA_DEFAULT_CLOUD_URL)
 {
-    auth_headers["apikey"]    = ORCA_DEFAULT_PUB_KEY;
     pkce_bundle.loopback_port = choose_loopback_port();
     update_redirect_uri();
     regenerate_pkce();
@@ -559,26 +549,6 @@ void OrcaCloudServiceAgent::configure_urls(AppConfig* app_config)
 
     // Read token storage preference
     m_use_encrypted_token_file = app_config->get_bool(SETTING_USE_ENCRYPTED_TOKEN_FILE);
-
-    std::string api_url = app_config->get(CONFIG_ORCA_API_URL);
-    if (!api_url.empty()) {
-        api_base_url = api_url;
-    }
-
-    std::string auth_url = app_config->get(CONFIG_ORCA_AUTH_URL);
-    if (!auth_url.empty()) {
-        auth_base_url = auth_url;
-    }
-
-    std::string cloud_url = app_config->get(CONFIG_ORCA_CLOUD_URL);
-    if (!cloud_url.empty()) {
-        cloud_base_url = cloud_url;
-    }
-
-    std::string pub_key = app_config->get(CONFIG_ORCA_PUB_KEY);
-    if (!pub_key.empty()) {
-        auth_headers["apikey"] = pub_key;
-    }
 }
 
 void OrcaCloudServiceAgent::set_api_base_url(const std::string& url) { api_base_url = url; }
@@ -666,6 +636,11 @@ static bool parse_stored_secret(const std::string& secret, std::string& out_refr
 int OrcaCloudServiceAgent::start()
 {
     regenerate_pkce();
+
+    // No OrcaCloud server: a session stored by an earlier Orca install is left on disk untouched
+    // and never restored, so no refresh request goes out and the user is never signed in.
+    if (auth_base_url.empty())
+        return BAMBU_NETWORK_SUCCESS;
 
     // Attempt silent sign-in from stored refresh token
     std::string stored_secret;
@@ -976,6 +951,17 @@ bool OrcaCloudServiceAgent::run_health_check(const std::atomic_bool* cancel)
 {
     if (cancel && cancel->load())
         return false;
+
+    // No OrcaCloud server to ask. The receivers get the same notification an unreachable server
+    // gives, without the HTTP error report: they only re-select the machine and refresh its list.
+    if (api_base_url.empty()) {
+        {
+            std::lock_guard<std::recursive_mutex> lock(state_mutex);
+            is_connected = false;
+        }
+        invoke_server_connected_callback(-1, 0);
+        return false;
+    }
 
     HttpResult res;
     try {
@@ -2210,6 +2196,11 @@ bool OrcaCloudServiceAgent::resolve_unauthorized(HttpResult& res,
 
 int OrcaCloudServiceAgent::http_get(const std::string& path, std::string* response_body, unsigned int* http_code)
 {
+    if (api_base_url.empty()) {
+        if (http_code)
+            *http_code = 0;
+        return BAMBU_NETWORK_ERR_CONNECT_FAILED;
+    }
     std::string url = api_base_url + path;
     BOOST_LOG_TRIVIAL(trace) << "OrcaCloudServiceAgent: GET " << url;
 
@@ -2270,6 +2261,11 @@ int OrcaCloudServiceAgent::http_get(const std::string& path, std::string* respon
 
 int OrcaCloudServiceAgent::http_post(const std::string& path, const std::string& body, std::string* response_body, unsigned int* http_code)
 {
+    if (api_base_url.empty()) {
+        if (http_code)
+            *http_code = 0;
+        return BAMBU_NETWORK_ERR_CONNECT_FAILED;
+    }
     std::string url = api_base_url + path;
     BOOST_LOG_TRIVIAL(trace) << "OrcaCloudServiceAgent: POST " << url;
 
@@ -2335,6 +2331,11 @@ int OrcaCloudServiceAgent::http_post(const std::string& path, const std::string&
 
 int OrcaCloudServiceAgent::http_put(const std::string& path, const std::string& body, std::string* response_body, unsigned int* http_code)
 {
+    if (api_base_url.empty()) {
+        if (http_code)
+            *http_code = 0;
+        return BAMBU_NETWORK_ERR_CONNECT_FAILED;
+    }
     std::string url = api_base_url + path;
     BOOST_LOG_TRIVIAL(trace) << "OrcaCloudServiceAgent: PUT " << url;
 
@@ -2397,6 +2398,11 @@ int OrcaCloudServiceAgent::http_put(const std::string& path, const std::string& 
 
 int OrcaCloudServiceAgent::http_delete(const std::string& path, std::string* response_body, unsigned int* http_code)
 {
+    if (api_base_url.empty()) {
+        if (http_code)
+            *http_code = 0;
+        return BAMBU_NETWORK_ERR_CONNECT_FAILED;
+    }
     std::string url = api_base_url + path;
     BOOST_LOG_TRIVIAL(trace) << "OrcaCloudServiceAgent: DELETE " << url;
 
@@ -2459,6 +2465,11 @@ bool OrcaCloudServiceAgent::http_post_token(const std::string& body,
                                             unsigned int* http_code,
                                             const std::string& custom_url)
 {
+    if (auth_base_url.empty()) {
+        if (http_code)
+            *http_code = 0;
+        return false;
+    }
     std::map<std::string, std::string> headers_copy;
     std::string url;
     {
@@ -2539,6 +2550,11 @@ bool OrcaCloudServiceAgent::http_post_auth(const std::string& path,
                                            std::string* response_body,
                                            unsigned int* http_code)
 {
+    if (auth_base_url.empty()) {
+        if (http_code)
+            *http_code = 0;
+        return false;
+    }
     std::string url = auth_base_url + path + "?scope=local";
     std::string token;
     std::map<std::string, std::string> headers_copy;
@@ -3107,6 +3123,8 @@ int OrcaCloudServiceAgent::request_web_session_handoff(std::string& token_hash, 
     token_hash.clear();
     error_code.clear();
     http_code = 0;
+    if (api_base_url.empty())
+        return BAMBU_NETWORK_ERR_CONNECT_FAILED;
 
     const std::string url = api_base_url + ORCA_WEB_SESSION_HANDOFF_PATH;
     BOOST_LOG_TRIVIAL(trace) << "OrcaCloudServiceAgent: POST " << ORCA_WEB_SESSION_HANDOFF_PATH;

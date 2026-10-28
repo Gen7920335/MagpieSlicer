@@ -58,10 +58,6 @@ using namespace nlohmann;
 
 namespace Slic3r {
 
-static const std::string VERSION_CHECK_URL = "https://check-version.orcaslicer.com/latest";
-static const std::string PROFILE_UPDATE_URL = "https://check-version.orcaslicer.com/profile";
-
-constexpr const char* CONFIG_ORCA_UPDATER_URL = "orca_updater_url";
 
 static const std::string MODELS_STR = "models";
 
@@ -711,11 +707,6 @@ void AppConfig::set_defaults()
     {
         // false = legacy behavior using print hosts
         set_bool("use_printer_agents", false);
-    }
-
-    if (get("enable_ota").empty())
-    {
-        set_bool("enable_ota", false);
     }
 
     // Remove legacy window positions/sizes
@@ -1905,20 +1896,6 @@ std::string AppConfig::config_path()
 #endif
 
     return path;
-}
-
-std::string AppConfig::version_check_url() const
-{
-    auto from_settings = get("version_check_url");
-    return from_settings.empty() ? VERSION_CHECK_URL : from_settings;
-}
-
-std::string AppConfig::profile_update_url() const
-{
-    std::string orca_updater_url = get(CONFIG_ORCA_UPDATER_URL);
-    if (orca_updater_url.empty())
-        return PROFILE_UPDATE_URL;
-    return orca_updater_url;
 }
 
 bool AppConfig::exists()

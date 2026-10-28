@@ -23,23 +23,7 @@
 <div id="LeftBoard">
 	<div id="LoginArea">
 
-		<!-- Orca Cloud account -->
-		<div id="OrcaAccount" class="AccountRow" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false"
-			 onClick="OnAccountRowClick('orca')">
-			<span class="AccountAvatar">
-				<img id="UserAvatarIcon" class="AccountAvatarImg" alt="" onerror="OnAvatarLoadError(this)" />
-			</span>
-			<span class="AccountText">
-				<span id="UserName" class="AccountName"></span>
-				<span class="AccountSecondary">Orca Cloud</span>
-			</span>
-			<span class="AccountSignIn" data-i18n="login">Login</span>
-			<svg class="AccountChevron" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-				<path d="M3 4.75L6 7.75L9 4.75" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-			</svg>
-		</div>
-
-		<!-- Bambu Cloud, a secondary provider folded away under the main account -->
+		<!-- Bambu Cloud, folded away; Magpie has no OrcaCloud account row -->
 		<div id="BambuCloudSection">
 			<div id="BambuCloudHeader" tabindex="0" role="button" aria-expanded="false" aria-controls="BambuCloudBody"
 				 onClick="ToggleBambuSection()">
@@ -89,10 +73,6 @@
 	    <div menu="recent" class="BtnItem BtnItemSelected" onClick="GotoMenu('recent')">
 			<div class="BtnIcon "><img class="LeftIcon" src="img/i2.png" /></div>
 			<div data-i18n="recent">Recent</div> 
-		</div>
-	    <div class="BtnItem BtnShortcut" onClick="GotoCloud()">
-			<div class="BtnIcon "><img class="ShortcutBrandIcon" src="../image/logo.png" /></div>
-			<div>OrcaCloud</div>
 		</div>
 
 	</div>

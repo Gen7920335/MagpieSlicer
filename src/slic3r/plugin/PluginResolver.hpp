@@ -17,7 +17,6 @@ namespace Slic3r {
 struct MissingPlugin
 {
     PluginCapabilityRef ref;  // parsed "name;uuid;capability"
-    std::string recovery_url; // OrcaCloud search URL (local plugins only)
     std::string opt;
     Preset::Type opt_type;
     PluginCapabilityType type{PluginCapabilityType::Unknown};
@@ -67,11 +66,8 @@ void resolve_missing_plugins(const std::vector<std::string>& refs,
 // notification (or reclassifying the ref as broken if the plugin does not provide the capability).
 void resolve_inactive_plugins(const std::vector<std::string>& refs);
 
-// Opens the OrcaCloud plugin hub (a search when there is exactly one ref, the hub otherwise).
-void open_missing_plugins_on_cloud(const std::vector<std::string>& local_refs);
 
 std::string create_full_ref(const PluginCapabilityRef& ref);
-std::string resolve_recovery_url(const PluginCapabilityRef& ref);
 
 // The capabilities `preset`'s "plugins" manifest declares AND that one of its plugin-backed options
 // (ConfigOptionDef::is_plugin_backed) currently references: a manifest entry nobody points at is not

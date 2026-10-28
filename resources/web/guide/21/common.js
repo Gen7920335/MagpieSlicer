@@ -37,34 +37,6 @@ function HandleStudio( pVal )
 	{
 		HandleModelList(pVal['response']);
 	}
-	else if(strCmd=='check_new_printers_result')
-	{
-		let button = document.getElementById("CheckNewPrintersBtn");
-		if (button) {
-			button.style.pointerEvents = "auto";
-			button.style.opacity = "1";
-		}
-
-		let noticeBar = document.getElementById("NoticeBar");
-		let noticeText = document.getElementById("NoticeText");
-		let hasError = pVal.hasOwnProperty("error");
-		noticeBar.classList.toggle("notice-error", hasError);
-		if (hasError) {
-			noticeBar.textContent = T("error", "Error");
-			noticeText.textContent = pVal["error"];
-		} else if (pVal["vendors"] && pVal["vendors"].length > 0) {
-			noticeBar.textContent = T("new_printers_found", "New printers found");
-			noticeText.textContent = T("new_vendors_installed", "New printer vendors installed: %s", pVal["vendors"].join(", "));
-		} else if (pVal["declined"]) {
-			noticeBar.textContent = T("information", "Information");
-			noticeText.textContent = T("vendors_declined", "New printer vendors were found, but installation was cancelled.");
-		} else {
-			noticeBar.textContent = T("information", "Information");
-			noticeText.textContent = T("no_new_printers", "No new printers found.");
-		}
-
-		ShowNotice(1);
-	}
 }
 
 function HandleModelList( pVal )

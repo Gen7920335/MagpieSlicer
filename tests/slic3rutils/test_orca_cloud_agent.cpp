@@ -2,6 +2,7 @@
 #include <boost/filesystem/operations.hpp>
 #include <catch2/catch_all.hpp>
 
+#include <boost/algorithm/string/join.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/io_context.hpp>
@@ -15,6 +16,7 @@
 #include <boost/filesystem/fstream.hpp>
 #include <boost/system/error_code.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -565,4 +567,71 @@ TEST_CASE_METHOD(HealthCheckFixture, "A token request made while start() refresh
         if (boost::starts_with(request.request_line, "POST /auth/v1/token"))
             ++token_posts;
     CHECK(token_posts == 1);
+}
+
+// Magpie has no OrcaCloud server. An agent built without test URLs must not sign in from a stored
+// session, must not reach any server and must report the health check as unreachable without an
+// HTTP error.
+TEST_CASE("An agent with no OrcaCloud server stays signed out and offline", "[OrcaCloudServiceAgent]")
+{
+    ScopedTemporaryDir dir{"orca-no-server"};
+    auto               agent = make_file_backed_agent(dir.path());
+    CHECK(agent->get_cloud_base_url().empty());
+
+    // A session an earlier install saved is left on disk and not restored.
+    agent->persist_user_secret(flat_session_json({{"refresh_token", "stored-refresh-token"}}).dump());
+    auto restarted = make_file_backed_agent(dir.path());
+    REQUIRE(restarted->start() == BAMBU_NETWORK_SUCCESS);
+    CHECK_FALSE(restarted->is_user_login());
+    CHECK(fs::exists(secret_file(dir.path())));
+
+    CallbackLog log;
+    restarted->set_on_server_connected_fn([&log](CloudEvent, int return_code, int reason_code) { log.add_connected(return_code, reason_code); });
+    restarted->set_on_http_error_fn([&log](CloudEvent, unsigned http_code, std::string) { log.add_http_error(http_code); });
+    CHECK(restarted->connect_server() == BAMBU_NETWORK_ERR_CONNECTION_TO_SERVER_FAILED);
+    CHECK_FALSE(restarted->is_server_connected());
+
+    std::lock_guard<std::mutex> lock(log.mutex);
+    CHECK(log.connected == std::vector<std::pair<int, int>>{{-1, 0}});
+    CHECK(log.http_errors.empty());
+}
+
+// Magpie talks to no Orca service: no update or profile feed, no OrcaCloud API, login or site, no
+// Orca issue tracker, release page or channel, and no fixed upstream executable name. The scan
+// covers the application sources and the bundled web pages (third-party scripts excluded); the
+// wiki manual links are allowed. Each needle below was present before Magpie removed it.
+TEST_CASE("Application sources name no Orca service endpoint", "[OrcaCloudServiceAgent]")
+{
+    const fs::path root = fs::path(PROFILES_DIR).parent_path().parent_path();
+    const std::vector<std::string> needles = {
+        "check-version.orcaslicer.com", "api.orcaslicer.com",  "auth.orcaslicer.com",
+        "cloud.orcaslicer.com",         "OrcaSlicer/OrcaSlicer/issues/new",
+        "OrcaSlicer/OrcaSlicer/commit/", "SoftFever/OrcaSlicer", "@OfficialOrcaSlicer",
+        "\"orca-slicer.exe\"",
+    };
+    const std::vector<std::string> extensions = {".cpp", ".hpp", ".h", ".js", ".html"};
+
+    std::vector<std::string> hits;
+    for (const fs::path& dir : {root / "src", root / "resources" / "web"}) {
+        REQUIRE(fs::is_directory(dir));
+        for (fs::recursive_directory_iterator it(dir), end; it != end; ++it) {
+            if (it->path().filename() == "include" && it->path().parent_path().filename() == "web") {
+                it.disable_recursion_pending(); // bundled third-party scripts
+                continue;
+            }
+            if (!fs::is_regular_file(it->path()))
+                continue;
+            const std::string ext = it->path().extension().string();
+            if (std::find(extensions.begin(), extensions.end(), ext) == extensions.end())
+                continue;
+            fs::ifstream in(it->path());
+            std::string  line;
+            for (int line_no = 1; std::getline(in, line); ++line_no)
+                for (const std::string& needle : needles)
+                    if (line.find(needle) != std::string::npos)
+                        hits.push_back(it->path().string() + ":" + std::to_string(line_no) + " " + needle);
+        }
+    }
+    INFO(boost::algorithm::join(hits, "\n"));
+    CHECK(hits.empty());
 }

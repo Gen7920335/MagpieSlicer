@@ -1,9 +1,5 @@
 const pluginsById = new Map();
 const pluginInstallActions = {
-  "explore": {
-    label: T("install_plugin", "Install plugin"),
-    command: "open_plugin_hub"
-  },
   "install-local": {
     label: T("install_local_plugin", "Install local plugin"),
     command: "install_local_plugin"
@@ -18,7 +14,7 @@ let searchExpandOverride = new Map();
 let selectedPluginId = "";
 let contextPluginId = "";
 let activeDetailTab = "plugin-info";
-let selectedInstallAction = "explore";
+let selectedInstallAction = "install-local";
 // Config tab: the capability whose config is shown. Name and type together address it natively.
 let selectedCapabilityName = "";
 let selectedCapabilityType = "";
@@ -192,7 +188,7 @@ function StoreSplitRatio(ratio) {
 
 function NormalizeInstallAction(action) {
   const normalized = String(action || "");
-  return pluginInstallActions[normalized] ? normalized : "explore";
+  return pluginInstallActions[normalized] ? normalized : "install-local";
 }
 
 function SetSelectedInstallAction(action, notifyNative = false) {
@@ -653,7 +649,8 @@ function LabelCell(plugin, isExpanded = false, capabilityCount = 0, nameRanges =
   const labelCell = document.createElement("span");
   labelCell.className = "label-cell";
 
-  const hasCloudLink = plugin.source === "mine" || plugin.source === "subscribed" || plugin.source === "orphaned";
+  // No OrcaCloud page to link to: the label stays plain text for every source.
+  const hasCloudLink = false;
   const pluginLabelText = plugin.label || plugin.name || plugin.plugin_id || "";
   const canExpand = capabilityCount > 0;
 
@@ -1237,20 +1234,6 @@ function RenderDescription(plugin) {
     return;
   }
 
-  const isCloud = plugin && (plugin.source === "mine" || plugin.source === "subscribed" || plugin.source === "orphaned");
-  if (isCloud && String(plugin?.sharing_token || "")) {
-    const link = document.createElement("a");
-    link.href = "#";
-    link.className = "plugin-cloud-link";
-    link.title = T("open_in_browser", "Open this plugin in your browser");
-    link.addEventListener("click", (event) => {
-      event.preventDefault();
-      sendOpenPluginOnCloud(String(plugin.plugin_key || ""));
-    });
-    AppendTemplate(node, T("view_on_cloud", "View on OrcaCloud <a>here</a>"), link);
-    return;
-  }
-
   node.textContent = T("no_description", "No description available");
 }
 
@@ -1441,22 +1424,6 @@ function OnPluginListClick(event) {
     return;
   }
 
-  const cloudLink = event.target.closest(".plugin-cloud-link");
-  if (cloudLink) {
-    event.preventDefault();
-    event.stopPropagation();
-
-    const block = cloudLink.closest(".plugin-block");
-    if (!block)
-      return;
-
-    selectedPluginId = String(block.dataset.pluginKey || "");
-    RenderPlugins();
-    RenderDetails();
-    sendOpenPluginOnCloud(selectedPluginId);
-    return;
-  }
-
   const checkbox = event.target.closest("input[type='checkbox']");
   if (checkbox || event.target.closest(".plugin-checkbox"))
     return;
@@ -1519,18 +1486,6 @@ function RunScriptPlugin(pluginId, capabilityName = "") {
     plugin_key: pluginId,
     capability_name: String(capability.name || "")
   });
-}
-
-function sendOpenPluginOnCloud(pluginId) {
-  const plugin = pluginsById.get(String(pluginId || ""));
-  if (!plugin) return;
-
-  const tSend = {
-    sequence_id: Math.round(Date.now() / 1000),
-    command: "open_plugin_on_cloud",
-    sharing_token: String(plugin.sharing_token || "")
-  };
-  SendWXMessage(JSON.stringify(tSend));
 }
 
 function OnPluginContextMenu(event) {

@@ -321,8 +321,6 @@ void PresetBundleDialog::on_script_message(const nlohmann::json& j)
             DeleteBundle(id);
         else if (action == "unsubscribe_bundle")
             UnsubscribeBundle(id);
-    } else if (strCmd == "open_bundle_on_cloud") {
-        OpenBundleOnCloud(j.value("bundle_id", ""));
     }
 }
 
@@ -423,18 +421,4 @@ void PresetBundleDialog::UnsubscribeBundle(const std::string& id)
     wxGetApp().mainframe->update_side_preset_ui();
 }
 
-void PresetBundleDialog::OpenBundleOnCloud(const std::string& id)
-{
-    if (id.empty())
-        return;
-
-    if (!wxGetApp().getAgent())
-        return;
-
-    auto orca_agent = std::dynamic_pointer_cast<OrcaCloudServiceAgent>(wxGetApp().getAgent()->get_cloud_agent());
-    if (!orca_agent)
-        return;
-
-    wxLaunchDefaultBrowser(wxString::FromUTF8(orca_agent->get_bundle_url(id)));
-}
 }} // namespace Slic3r::GUI

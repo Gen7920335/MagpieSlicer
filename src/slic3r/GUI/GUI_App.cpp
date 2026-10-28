@@ -343,23 +343,6 @@ static std::shared_ptr<OrcaCloudServiceAgent> get_orca_cloud_agent(NetworkAgent*
     return agent ? std::dynamic_pointer_cast<OrcaCloudServiceAgent>(agent->get_cloud_agent()) : nullptr;
 }
 
-// Full {web} page URL for a same-site OrcaCloud path, or empty when it cannot be built. An already
-// open cloud pane is navigated straight to it, without re-running the session handoff.
-static wxString cloud_page_url(NetworkAgent* agent, const std::string& path)
-{
-    if (path.empty())
-        return {};
-    auto orca = get_orca_cloud_agent(agent);
-    if (!orca)
-        return {};
-    std::string base = orca->get_cloud_base_url();
-    while (!base.empty() && base.back() == '/')
-        base.pop_back();
-    if (base.empty())
-        return {};
-    return from_u8(base + path);
-}
-
 void start_ping_test()
 {
     return;
@@ -1170,33 +1153,6 @@ void GUI_App::post_init()
               // this->check_privacy_version(0);
               request_user_handle(0, cloud_provider);
             }
-        });
-    }
-
-    // Orca: notify users upgrading from a pre-2.4.0 version that profile syncing
-    // moved from Bambu Cloud to Orca Cloud.
-    if (is_editor() && m_last_config_version && m_last_config_version->valid()
-        && *m_last_config_version < Semver(2, 4, 0)) {
-        CallAfter([] {
-            const wxString wiki_url = "https://www.orcaslicer.com/wiki/user_profiles/user_profiles.html#profiles-missing-after-updating-from-bambu-cloud";
-            MessageDialog dlg(nullptr,
-                _L("Since version 2.4.0, Magpie Slicer syncs user profiles through Orca Cloud instead of Bambu Cloud.\n\n"
-                   "To migrate your existing profiles, log in to Orca Cloud and they will be transferred automatically. "
-                   "To learn more about how OrcaSlicer stores and syncs your profiles, or to migrate your presets manually, check out our wiki.\n\n"
-                   "If you did not use Bambu Cloud to sync profiles, this change does not affect you and you can safely ignore this message."),
-                _L("Profile syncing change"),
-                wxOK,
-                "",
-                _L("Learn more"),
-                [wiki_url](const wxString &) { wxLaunchDefaultBrowser(wiki_url); });
-            // Hack: the "Learn more" link renders the message in a wxHtmlWindow whose
-            // height is underestimated for multi-paragraph text, leaving a scrollbar.
-            // The html sits in a proportion-1 sizer chain, so grow the dialog (never
-            // shrink it below its content width) to give the text enough room.
-            const wxSize sz = dlg.GetSize();
-            dlg.SetSize(std::max(sz.x, dlg.FromDIP(280)), std::max(sz.y, dlg.FromDIP(200)));
-            dlg.CenterOnParent();
-            dlg.ShowModal();
         });
     }
 
@@ -5141,6 +5097,10 @@ void GUI_App::ShowDownNetPluginDlg() {
 
 void GUI_App::ShowUserLogin(bool show, const std::string& provider)
 {
+    // Magpie has no OrcaCloud account, so no login page opens for it, whichever path asks.
+    if (show && provider == ORCA_CLOUD_PROVIDER)
+        return;
+
     // Show user Login Dialog for specified cloud
     if (show) {
         try {
@@ -5796,18 +5756,8 @@ std::string GUI_App::handle_web_request(std::string cmd)
 
 void GUI_App::open_orca_cloud(const std::string& next)
 {
-    // Remembered so a login while the pane is open re-seeds the same page rather than the default.
-    m_cloud_open_path = next;
-    // Deferred: set_cloud_mode() may create the second native webview, so this must not run inside
-    // the caller's frame (a webview script-message callback or an ImGui frame).
-    CallAfter([this]() {
-        if (mainframe != nullptr)
-            mainframe->select_tab(TAB_ID_HOME);
-        // The Home page is built lazily, so the tab switch may not have created it yet: ensure() builds
-        // it if needed, matching what showing the tab does, rather than dropping the open request.
-        if (WebViewPanel* home = WebViewPanel::ensure())
-            home->set_cloud_mode(true, cloud_webview_handoff(m_cloud_open_path), cloud_page_url(m_agent, m_cloud_open_path));
-    });
+    // Magpie has no OrcaCloud: the cloud pane is never opened.
+    (void)next;
 }
 
 void GUI_App::handle_script_message(std::string msg, const std::string& provider)
@@ -6306,7 +6256,7 @@ void GUI_App::check_update(bool show_tips, int by_user)
 
 void GUI_App::check_new_version(bool show_tips, int by_user)
 {
-    return; // orca: not used, see check_new_version_sf
+    return; // not used: Magpie has no online version check
     std::string platform = "windows";
 
 #ifdef __WINDOWS__
@@ -6378,382 +6328,6 @@ Semver get_version(const std::string& str, const std::regex& regexp) {
         }
     }
     return Semver::invalid();
-}
-
-namespace
-{
-
-struct UpdaterQuery
-{
-    std::string iid;
-    std::string version;
-    std::string os;
-    std::string arch;
-    std::string os_info;
-};
-
-std::string detect_updater_os_info()
-{
-    wxString description = wxPlatformInfo::Get().GetOperatingSystemDescription();
-#if defined(__LINUX__) || defined(__linux__)
-    wxLinuxDistributionInfo distro = wxGetLinuxDistributionInfo();
-    if (!distro.Id.empty()) {
-        wxString normalized = distro.Id;
-        if (!distro.Release.empty())
-            normalized << " " << distro.Release;
-        normalized.Trim(true);
-        normalized.Trim(false);
-        if (!normalized.empty())
-            description = normalized;
-    }
-#endif
-    if (description.empty())
-        description = wxGetOsDescription();
-
-    //Orca: workaround: wxGetOsVersion can't recognize Windows 11
-    // For Windows, use actual version numbers to properly detect Windows 11
-    // Windows 11 starts at build 22000
-#if defined(_WIN32)
-    int major = 0, minor = 0, micro = 0;
-    wxGetOsVersion(&major, &minor, &micro);
-    if (micro >= 22000) {
-        // replace Windows 10 with Windows 11
-        description.Replace("Windows 10", "Windows 11");
-    }
-#endif
-    std::string os_info = description.ToStdString();
-    boost::replace_all(os_info, "\r", " ");
-    boost::replace_all(os_info, "\n", " ");
-    boost::algorithm::trim(os_info);
-    if (os_info.size() > 120)
-        os_info.resize(120);
-    boost::algorithm::to_lower(os_info);
-    return os_info;
-}
-
-std::string detect_updater_version()
-{
-    return SoftFever_VERSION;
-}
-
-std::string detect_updater_iid(AppConfig* config)
-{
-    if (config == nullptr)
-        return {};
-    return instance_id::ensure(*config);
-}
-
-std::string encode_uri_component(const std::string& value)
-{
-    static constexpr const char* hex = "0123456789ABCDEF";
-    std::string out;
-    out.reserve(value.size());
-    for (unsigned char ch : value) {
-        if ((ch >= 'A' && ch <= 'Z') ||
-            (ch >= 'a' && ch <= 'z') ||
-            (ch >= '0' && ch <= '9') ||
-            ch == '-' || ch == '_' || ch == '.' || ch == '~' ||
-            ch == '!' || ch == '*' || ch == '(' || ch == ')' || ch == '\'') {
-            out.push_back(static_cast<char>(ch));
-        } else {
-            out.push_back('%');
-            out.push_back(hex[(ch >> 4) & 0xF]);
-            out.push_back(hex[ch & 0xF]);
-        }
-    }
-    return out;
-}
-
-std::string build_updater_query(const UpdaterQuery& query)
-{
-    std::vector<std::pair<std::string, std::string>> params;
-
-    auto add_param = [&params](const char* key, const std::string& value) {
-        if (!value.empty())
-            params.emplace_back(key, encode_uri_component(value));
-    };
-
-    add_param("iid", query.iid);
-    add_param("v", query.version);
-    add_param("os", query.os);
-    add_param("arch", query.arch);
-    add_param("os_info", query.os_info);
-
-    std::sort(params.begin(), params.end(), [](const auto& lhs, const auto& rhs) {
-        return lhs.first < rhs.first;
-    });
-
-    if (params.empty())
-        return {};
-
-    std::string encoded;
-    for (size_t idx = 0; idx < params.size(); ++idx) {
-        if (idx > 0)
-            encoded.push_back('&');
-        encoded += params[idx].first;
-        encoded.push_back('=');
-        encoded += params[idx].second;
-    }
-    return encoded;
-}
-
-std::string base64url_encode(const unsigned char* data, std::size_t length)
-{
-    std::string encoded;
-    encoded.resize(boost::beast::detail::base64::encoded_size(length));
-    encoded.resize(boost::beast::detail::base64::encode(encoded.data(), data, length));
-    std::replace(encoded.begin(), encoded.end(), '+', '-');
-    std::replace(encoded.begin(), encoded.end(), '/', '_');
-    while (!encoded.empty() && encoded.back() == '=')
-        encoded.pop_back();
-    return encoded;
-}
-
-std::optional<std::vector<unsigned char>> load_signature_key()
-{
-#if ORCA_UPDATER_SIG_KEY_AVAILABLE
-    std::string key = ORCA_UPDATER_SIG_KEY_B64;
-    boost::algorithm::trim(key);
-    if (key.empty())
-        return std::nullopt;
-
-    key.erase(std::remove_if(key.begin(), key.end(), [](unsigned char ch) { return std::isspace(ch); }), key.end());
-    std::replace(key.begin(), key.end(), '-', '+');
-    std::replace(key.begin(), key.end(), '_', '/');
-    while (key.size() % 4 != 0)
-        key.push_back('=');
-
-    std::string decoded;
-    decoded.resize(boost::beast::detail::base64::decoded_size(key.size()));
-    auto decode_result = boost::beast::detail::base64::decode(decoded.data(), key.data(), key.size());
-    if (!decode_result.second)
-        return std::nullopt;
-    decoded.resize(decode_result.first);
-
-    return std::vector<unsigned char>(decoded.begin(), decoded.end());
-#else
-    return std::nullopt;
-#endif
-}
-
-const std::optional<std::vector<unsigned char>>& get_signature_key()
-{
-    static std::optional<std::vector<unsigned char>> cached;
-    static bool loaded = false;
-    if (!loaded) {
-        cached = load_signature_key();
-        loaded = true;
-    }
-    return cached;
-}
-
-std::string extract_path_from_url(const std::string& url)
-{
-    if (url.empty())
-        return "/latest";
-
-    std::string path;
-    const auto scheme_pos = url.find("://");
-    if (scheme_pos != std::string::npos) {
-        const auto path_pos = url.find('/', scheme_pos + 3);
-        if (path_pos != std::string::npos)
-            path = url.substr(path_pos);
-        else
-            path = "/";
-    } else {
-        path = url;
-    }
-
-    const auto fragment_pos = path.find('#');
-    if (fragment_pos != std::string::npos)
-        path = path.substr(0, fragment_pos);
-
-    const auto query_pos = path.find('?');
-    if (query_pos != std::string::npos)
-        path = path.substr(0, query_pos);
-
-    if (path.empty())
-        path = "/";
-    return path;
-}
-
-void maybe_attach_updater_signature(Http& http, const std::string& canonical_query, const std::string& request_url)
-{
-    if (canonical_query.empty())
-        return;
-
-    const auto& key = get_signature_key();
-    if (!key || key->empty())
-        return;
-
-    const auto now   = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
-    const std::string timestamp = std::to_string(now.time_since_epoch().count());
-    const std::string path      = extract_path_from_url(request_url);
-
-    std::string string_to_sign = "GET\n";
-    string_to_sign += path;
-    string_to_sign += "\n";
-    string_to_sign += canonical_query;
-    string_to_sign += "\n";
-    string_to_sign += timestamp;
-
-    unsigned int digest_length = 0;
-    unsigned char digest[EVP_MAX_MD_SIZE] = {};
-    if (HMAC(EVP_sha256(), key->data(), static_cast<int>(key->size()),
-             reinterpret_cast<const unsigned char*>(string_to_sign.data()),
-             string_to_sign.size(), digest, &digest_length) == nullptr || digest_length == 0)
-        return;
-
-    const std::string signature = base64url_encode(digest, digest_length);
-    http.header("X-Orca-Ts", timestamp);
-    http.header("X-Orca-Sig", "v1:" + signature);
-}
-
-} // namespace
-
-void GUI_App::check_new_version_sf(bool show_tips, int by_user)
-{
-    AppConfig* app_config = wxGetApp().app_config;
-    bool       check_stable_only = app_config->get_bool("check_stable_update_only");
-    auto version_check_url = app_config->version_check_url();
-
-    UpdaterQuery query{
-        detect_updater_iid(app_config),
-        detect_updater_version(),
-        platform_os_type(),
-        platform_architecture(),
-        detect_updater_os_info()
-    };
-
-    const std::string query_string = build_updater_query(query);
-    if (!query_string.empty()) {
-        const bool has_query = version_check_url.find('?') != std::string::npos;
-        if (!has_query)
-            version_check_url.push_back('?');
-        else if (!version_check_url.empty() && version_check_url.back() != '&' && version_check_url.back() != '?')
-            version_check_url.push_back('&');
-        version_check_url += query_string;
-    }
-
-    auto http = Http::get(version_check_url);
-    maybe_attach_updater_signature(http, query_string, version_check_url);
-
-    http.header("accept", "application/vnd.github.v3+json")
-        .timeout_connect(5)
-        .timeout_max(10)
-        .on_error([&](std::string body, std::string error, unsigned http_status) {
-          (void)body;
-          BOOST_LOG_TRIVIAL(error) << format("Error getting: `%1%`: HTTP %2%, %3%", "check_new_version_sf", http_status,
-                                             error);
-        })
-        .on_complete([this, by_user, check_stable_only](std::string body, unsigned http_status) {
-          if (http_status != 200)
-            return;
-          try {
-            boost::trim(body);
-            if (body.empty()) {
-                if (by_user != 0)
-                    this->no_new_version();
-                return;
-            }
-
-            boost::property_tree::ptree root;
-            std::stringstream           json_stream(body);
-            boost::property_tree::read_json(json_stream, root);
-
-            std::regex matcher("[0-9]+\\.[0-9]+(\\.[0-9]+)*(-[A-Za-z0-9]+)?(\\+[A-Za-z0-9]+)?");
-            Semver    current_version = get_version(SoftFever_VERSION, matcher);
-            Semver    best_pre(0, 0, 0);
-            Semver    best_release(0, 0, 0);
-            bool      best_pre_valid = false;
-            bool      best_release_valid = false;
-            std::string best_pre_url;
-            std::string best_release_url;
-            std::string best_release_content;
-            std::string best_pre_content;
-
-            auto consider_release = [&](const boost::property_tree::ptree& node) {
-                auto tag_opt = node.get_optional<std::string>("tag_name");
-                if (!tag_opt)
-                    return;
-
-                std::string tag = *tag_opt;
-                if (!tag.empty() && tag.front() == 'v')
-                    tag.erase(0, 1);
-
-                Semver tag_version = get_version(tag, matcher);
-                if (!tag_version.valid())
-                    return;
-
-                const bool is_prerelease = node.get_optional<bool>("prerelease").get_value_or(false);
-                const std::string html_url = node.get_optional<std::string>("html_url").get_value_or(std::string());
-                const std::string body_copy = node.get_optional<std::string>("body").get_value_or(std::string());
-
-                if (is_prerelease) {
-                    if (!best_pre_valid || best_pre < tag_version) {
-                        best_pre        = tag_version;
-                        best_pre_url    = html_url;
-                        best_pre_content = body_copy;
-                        best_pre_valid  = true;
-                    }
-                } else {
-                    if (!best_release_valid || best_release < tag_version) {
-                        best_release         = tag_version;
-                        best_release_url     = html_url;
-                        best_release_content = body_copy;
-                        best_release_valid   = true;
-                    }
-                }
-            };
-
-            if (root.get_optional<std::string>("tag_name")) {
-                consider_release(root);
-            } else {
-                for (const auto& child : root)
-                    consider_release(child.second);
-            }
-
-            if (!best_release_valid && !best_pre_valid) {
-                if (by_user != 0)
-                    this->no_new_version();
-                return;
-            }
-
-            if (best_pre_valid && best_release_valid && best_pre < best_release) {
-                best_pre        = best_release;
-                best_pre_url    = best_release_url;
-                best_pre_content = best_release_content;
-                best_pre_valid  = true;
-            }
-
-            const bool        prefer_release = check_stable_only || !best_pre_valid;
-            const Semver&     chosen_version = prefer_release ? best_release : best_pre;
-            const bool        chosen_valid   = prefer_release ? best_release_valid : best_pre_valid;
-
-            if (!chosen_valid) {
-                if (by_user != 0)
-                    this->no_new_version();
-                return;
-            }
-
-            if (current_version.valid() && chosen_version <= current_version) {
-                if (by_user != 0)
-                    this->no_new_version();
-                return;
-            }
-
-            version_info.url           = prefer_release ? best_release_url : best_pre_url;
-            version_info.version_str   = prefer_release ? best_release.to_string_sf() : best_pre.to_string_sf();
-            version_info.description   = prefer_release ? best_release_content : best_pre_content;
-            version_info.force_upgrade = false;
-
-            wxCommandEvent* evt = new wxCommandEvent(EVT_SLIC3R_VERSION_ONLINE);
-            evt->SetString((prefer_release ? best_release : best_pre).to_string());
-            GUI::wxGetApp().QueueEvent(evt);
-          } catch (...) {}
-        });
-
-    http.perform();
 }
 
 // return true if handled

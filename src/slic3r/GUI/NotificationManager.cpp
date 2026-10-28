@@ -2551,8 +2551,9 @@ void NotificationManager::PluginMissingNotification::render_text(ImGuiWrapper& i
 
     const size_t action_row = body_start_row + m_body.size() + (m_body.empty() ? 0 : 1);
 	const float action_y = starting_y + action_row * shift_y;
-	render_hyperlink_action(imgui, x_offset, action_y, m_resolve_label, "##plugin_missing_resolve",
-		[this] { if (m_resolve_callback && m_resolve_callback(m_evt_handler)) close(); });
+	if (!m_resolve_label.empty())
+		render_hyperlink_action(imgui, x_offset, action_y, m_resolve_label, "##plugin_missing_resolve",
+			[this] { if (m_resolve_callback && m_resolve_callback(m_evt_handler)) close(); });
 }
 
 void NotificationManager::PluginMissingNotification::bbl_render_block_notif_text(ImGuiWrapper& imgui,

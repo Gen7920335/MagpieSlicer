@@ -36,22 +36,6 @@ function ConfirmSelect()
 	}
 }
 
-function CheckForNewPrinters()
-{
-	var tSend={};
-	tSend['sequence_id']=Math.round(new Date() / 1000);
-	tSend['command']="check_for_new_printers";
-	tSend['data']={};
-
-	var button = document.getElementById("CheckNewPrintersBtn");
-	if (button) {
-		button.style.pointerEvents = "none";
-		button.style.opacity = "0.6";
-	}
-
-	SendWXMessage( JSON.stringify(tSend) );
-}
-
 function CreateNewPrinter()
 {
 	var tSend={};

@@ -58,7 +58,6 @@ public:
     void OpenFolder(const std::string& id);
     void DeleteBundle(const std::string& id);
     void UnsubscribeBundle(const std::string& id);
-    void OpenBundleOnCloud(const std::string& id);
 
     void OnPresetBundlePage();
 

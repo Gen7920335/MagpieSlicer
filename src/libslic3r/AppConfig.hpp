@@ -360,13 +360,6 @@ public:
 	bool 				legacy_datadir() const { return m_legacy_datadir; }
 	void 				set_legacy_datadir(bool value) { m_legacy_datadir = value; }
 
-	// Get the Slic3r version check url.
-	// This returns a hardcoded string unless it is overriden by "version_check_url" in the ini file.
-	std::string 		version_check_url() const;
-
-	// Get the Orca profile update url.
-	std::string 		profile_update_url() const;
-
 	// Returns the original Slic3r version found in the ini file before it was overwritten
 	// by the current version
 	Semver 				orig_version() const { return m_orig_version; }

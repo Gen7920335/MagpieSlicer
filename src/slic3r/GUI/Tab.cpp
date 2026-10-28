@@ -2726,12 +2726,6 @@ void Tab::on_presets_changed()
     // Check if printer agent needs switching
     if (m_type == Preset::TYPE_PRINTER) {
         wxGetApp().switch_printer_agent();
-
-        // Trigger per-vendor preset update check
-        const Preset& printer_preset = m_preset_bundle->printers.get_edited_preset();
-        if (printer_preset.vendor) {
-            wxGetApp().get_preset_updater()->check_vendor_update(printer_preset.vendor->id);
-        }
     }
 
     bool is_bbl_vendor_preset = m_preset_bundle->is_bbl_vendor();

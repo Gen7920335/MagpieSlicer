@@ -279,7 +279,6 @@ function BindClearIcons()
 function BindBottomButtons()
 {
     var backBtn = document.getElementById("back_btn");
-    var exportCloud = document.getElementById("export_cloud_btn")
     var exportLocal = document.getElementById("export_local_btn");
     var closeBtn = document.getElementById("close_btn");
 

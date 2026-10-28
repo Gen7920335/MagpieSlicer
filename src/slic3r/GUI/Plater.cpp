@@ -13275,25 +13275,6 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
             wxGetApp().plater()->sidebar().auto_calc_flushing_volumes(idx);
 #endif
 
-        // Show shared profiles notification for the newly selected printer
-        if (wxGetApp().app_config->get_bool("show_shared_profiles_notification"))
-        {
-            std::string printer_name = wxGetApp().preset_bundle->printers.get_selected_preset_base().name;
-            std::string encoded_name = Http::url_encode(printer_name);
-
-            std::string cloud_url;
-            if (auto agent = wxGetApp().getAgent()) {
-                if (auto orca_agent = std::dynamic_pointer_cast<OrcaCloudServiceAgent>(agent->get_cloud_agent())) {
-                    cloud_url = orca_agent->get_cloud_base_url();
-                }
-            }
-            if (cloud_url.empty())
-                cloud_url = "https://cloud.orcaslicer.com";
-
-            std::string explore_url = cloud_url + "/app/bundles/explore?printers=" + encoded_name;
-
-            wxGetApp().plater()->get_notification_manager()->push_shared_profiles_notification(explore_url);
-        }
     }
 
 #ifdef __WXMSW__
@@ -23241,27 +23222,21 @@ bool Plater::refresh_missing_plugin_block(bool* block_toggled)
 
     const std::vector<MissingPlugin> missing_cloud = get_missing_cloud_plugins();
     const std::vector<MissingPlugin> missing_local = get_missing_local_plugins();
-    const std::vector<std::string> missing_cloud_refs = missing_refs(missing_cloud);
-    const std::vector<std::string> missing_local_refs = missing_refs(missing_local);
 
+    // No resolve action on the missing ones: installing came from OrcaCloud, which Magpie does not
+    // use. The user resolves them by installing the plugin or by changing the setting that needs it.
     update(NotificationType::OrcaCloudPluginMissingError, missing_cloud,
            &p->m_cloud_missing_shown_sig,
            _u8L("OrcaCloud plugins required by the current preset are not installed:"),
-           _u8L("Install Plugins"),
-           [this, missing_cloud_refs](wxEvtHandler*) { install_missing_cloud_plugins(missing_cloud_refs); return false; });
-    // "Find on OrcaCloud" is only a suggestion: it opens the browser but cannot resolve the missing
-    // plugin in-session, so it never closes the notification or unblocks slicing. The user resolves a
-    // local plugin by installing it or by changing the setting that needs it.
+           std::string(), {});
     update(NotificationType::OrcaLocalPluginMissingError, missing_local,
            &p->m_local_missing_shown_sig,
            _u8L("Local plugins required by the current preset are missing:"),
-           _u8L("Find on OrcaCloud"),
-           [missing_local_refs](wxEvtHandler*) { open_missing_plugins_on_cloud(missing_local_refs); return false; });
+           std::string(), {});
 
     const std::vector<MissingPlugin> inactive      = get_inactive_plugins();
     const std::vector<MissingPlugin> broken        = get_broken_plugins();
     const std::vector<std::string>   inactive_refs = missing_refs(inactive);
-    const std::vector<std::string>   broken_refs   = missing_refs(broken);
 
     update(NotificationType::OrcaPluginInactiveError, inactive,
            &p->m_inactive_shown_sig,
@@ -23271,8 +23246,7 @@ bool Plater::refresh_missing_plugin_block(bool* block_toggled)
     update(NotificationType::OrcaPluginCapabilityUnavailableError, broken,
            &p->m_broken_shown_sig,
            _u8L("The installed plugin does not provide the required capability — it may be outdated:"),
-           _u8L("Find on OrcaCloud"),
-           [broken_refs](wxEvtHandler*) { open_missing_plugins_on_cloud(broken_refs); return false; });
+           std::string(), {});
 
     const bool blocked = has_missing_plugins() || has_inactive_plugins() || has_broken_plugins();
     if (block_toggled)

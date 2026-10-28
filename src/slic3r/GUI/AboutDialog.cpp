@@ -336,28 +336,8 @@ AboutDialog::AboutDialog()
 
     copyright_ver_sizer->Add(html_text, 0, wxALL , 0);
 
-    m_html = new wxHtmlWindow(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxHW_SCROLLBAR_NEVER /*NEVER*/);
-      {
-          wxFont font = get_default_font(this);
-          const int fs = font.GetPointSize()-1;
-          int size[] = {fs,fs,fs,fs,fs,fs,fs};
-          m_html->SetFonts(font.GetFaceName(), font.GetFaceName(), size);
-          m_html->SetMinSize(wxSize(FromDIP(-1), FromDIP(16)));
-          m_html->SetBorders(2);
-          wxColour   bgr_clr = GetBackgroundColour();
-          const auto bgr_clr_str = encode_color(ColorRGB(bgr_clr.Red(), bgr_clr.Green(), bgr_clr.Blue()));
-          const auto text = from_u8(
-              (boost::format(
-              "<html>"
-              "<body bgcolor= \"" + bgr_clr_str + "\" >"
-              "<p style=\"text-align:left\"><a style=\"color:#009789\" href=\"https://www.orcaslicer.com\">https://www.orcaslicer.com</ a></p>"
-              "</body>"
-              "</html>")
-            ).str());
-          m_html->SetPage(text);
-          copyright_ver_sizer->Add(m_html, 0, wxEXPAND, 0);
-          m_html->Bind(wxEVT_HTML_LINK_CLICKED, &AboutDialog::onLinkClicked, this);
-      }
+    // No website line: the address that stood here was Orca's.
+    m_html = nullptr;
     //Add "Portions copyright" button
     Button* button_portions = new Button(this,_L("License Info"));
     button_portions->SetStyle(ButtonStyle::Regular, ButtonType::Window);
@@ -388,14 +368,17 @@ void AboutDialog::on_dpi_changed(const wxRect &suggested_rect)
     const wxFont& font = GetFont();
     const int fs = font.GetPointSize() - 1;
     int font_size[] = { fs, fs, fs, fs, fs, fs, fs };
-    m_html->SetFonts(font.GetFaceName(), font.GetFaceName(), font_size);
+    if (m_html)
+        m_html->SetFonts(font.GetFaceName(), font.GetFaceName(), font_size);
 
     const int& em = em_unit();
 
     msw_buttons_rescale(this, em, { wxID_CLOSE, m_copy_rights_btn_id });
 
-    m_html->SetMinSize(wxSize(-1, 16 * em));
-    m_html->Refresh();
+    if (m_html) {
+        m_html->SetMinSize(wxSize(-1, 16 * em));
+        m_html->Refresh();
+    }
 
     const wxSize& size = wxSize(65 * em, 30 * em);
 

@@ -7470,8 +7470,8 @@ msgid "Please confirm if the printer is connected."
 msgstr "프린터가 연결되어 있는지 확인하세요."
 
 # AI Translated
-msgid "Sign in to OrcaCloud to view the camera."
-msgstr "카메라를 보려면 OrcaCloud에 로그인하십시오."
+msgid "The camera is not available for this printer."
+msgstr "이 프린터에서는 카메라를 사용할 수 없습니다."
 
 msgid "Initializing..."
 msgstr "초기화 중..."
@@ -11106,8 +11106,8 @@ msgid "Enable Bambu Cloud"
 msgstr "Bambu Cloud 활성화"
 
 # AI Translated
-msgid "Allow logging into Bambu Cloud alongside Orca Cloud. When enabled, a Bambu login section appears on the homepage."
-msgstr "Orca Cloud와 함께 Bambu Cloud에도 로그인할 수 있도록 허용합니다. 활성화하면 홈 화면에 Bambu 로그인 영역이 표시됩니다."
+msgid "Allow logging into Bambu Cloud. When enabled, a Bambu login section appears on the homepage."
+msgstr "Bambu Cloud에 로그인할 수 있도록 허용합니다. 활성화하면 홈 화면에 Bambu 로그인 영역이 표시됩니다."
 
 # AI Translated
 msgid "Update & sync"
@@ -13942,8 +13942,8 @@ msgstr "하나 이상의 필라멘트를 선택해야 합니다."
 msgid "Do you want to use the default filament?"
 msgstr "기본 필라멘트를 사용하시겠습니까?"
 
-msgid "This disables all cloud features, including Orca Cloud profile syncing. Users who prefer to work entirely offline can enable this option."
-msgstr "이 옵션은 Orca Cloud 프로필 동기화를 포함한 모든 클라우드 기능을 비활성화합니다. 완전히 오프라인으로 작업하려는 사용자는 이 옵션을 활성화할 수 있습니다."
+msgid "This disables all cloud features. Users who prefer to work entirely offline can enable this option."
+msgstr "이 옵션은 모든 클라우드 기능을 비활성화합니다. 완전히 오프라인으로 작업하려는 사용자는 이 옵션을 활성화할 수 있습니다."
 
 msgid "Note: When Stealth Mode is enabled, your user profiles will not be backed up to Orca Cloud."
 msgstr "참고: 스텔스 모드를 활성화하면 사용자 프로필이 Orca Cloud에 백업되지 않습니다."

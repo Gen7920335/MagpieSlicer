@@ -55,7 +55,7 @@ namespace {
 const wxString kDeletePluginTitle            = _L("Delete Plugin");
 const wxString kUnsubscribeTitle             = _L("Unsubscribe");
 const wxString kOverwritePluginTitle         = _L("Overwrite Plugin");
-std::string s_selected_plugin_install_action = "explore";
+std::string s_selected_plugin_install_action = "install-local";
 
 struct PluginContextAction
 {
@@ -464,24 +464,6 @@ void refresh_plugin_metadata_blocking(bool fetch_cloud)
     });
 }
 
-void open_plugin_hub()
-{
-    std::string cloud_base_url = "https://cloud.orcaslicer.com";
-
-    if (wxGetApp().getAgent()) {
-        auto orca_agent = std::dynamic_pointer_cast<OrcaCloudServiceAgent>(wxGetApp().getAgent()->get_cloud_agent());
-        if (orca_agent && !orca_agent->get_cloud_base_url().empty())
-            cloud_base_url = orca_agent->get_cloud_base_url();
-    }
-
-    while (!cloud_base_url.empty() && cloud_base_url.back() == '/')
-        cloud_base_url.pop_back();
-    if (cloud_base_url.empty())
-        cloud_base_url = "https://cloud.orcaslicer.com";
-
-    wxLaunchDefaultBrowser(wxString::FromUTF8(cloud_base_url + "/app/plugins/plugin-hub"));
-}
-
 bool install_local_plugin_package(const boost::filesystem::path& package_file, wxWindow* parent, wxString& message)
 {
     message.clear();
@@ -659,7 +641,6 @@ nlohmann::json PluginsDialog::localized_strings() const
         {"config_no_capabilities", _u8L("This plugin exposes no capabilities")},
         {"config_activate", _u8L("Activate this plugin to configure its capabilities")},
         {"invalid_json", _u8L("Invalid JSON")},
-        {"view_on_cloud", _u8L("View on OrcaCloud <a>here</a>")},
         {"status_activated", _u8L("Activated")},
         {"status_loading", _u8L("Loading")},
         {"status_error", _u8L("Error")},
@@ -752,10 +733,6 @@ void PluginsDialog::handle_web_command(const nlohmann::json& payload)
         m_open_terminal_dlg_fn();
     } else if (command == "update_plugin") {
         update_plugin(payload.value("plugin_key", ""));
-    } else if (command == "open_plugin_on_cloud") {
-        open_plugin_on_cloud(payload.value("sharing_token", ""));
-    } else if (command == "open_plugin_hub") {
-        open_plugin_hub();
     } else if (command == "set_plugin_sort") {
         set_plugin_sort(payload.value("sort_key", ""), payload.value("sort_order", ""));
     } else if (command == "get_capability_config" || command == "save_capability_config" || command == "restore_capability_config") {
@@ -775,7 +752,7 @@ void PluginsDialog::handle_web_command(const nlohmann::json& payload)
         save_capability_config(id, payload.contains("config") ? payload.at("config") : nlohmann::json::object());
     } else if (command == "set_plugin_install_action") {
         const std::string action = payload.value("action", "");
-        if (action == "explore" || action == "install-local")
+        if (action == "install-local")
             s_selected_plugin_install_action = action;
     }
 }
@@ -1252,22 +1229,6 @@ void PluginsDialog::open_plugin_folder(const PluginDescriptor& plugin)
     desktop_open_any_folder(plugin_folder.string());
 }
 
-void PluginsDialog::open_plugin_on_cloud(const std::string& sharing_token)
-{
-    if (sharing_token.empty())
-        return;
-
-    if (!wxGetApp().getAgent())
-        return;
-
-    auto orca_agent = std::dynamic_pointer_cast<OrcaCloudServiceAgent>(wxGetApp().getAgent()->get_cloud_agent());
-    if (!orca_agent)
-        return;
-
-    wxLaunchDefaultBrowser(wxString::FromUTF8(orca_agent->get_cloud_base_url() + "/p/" + sharing_token));
-}
-
-void PluginsDialog::open_plugin_hub() { Slic3r::GUI::open_plugin_hub(); }
 
 void PluginsDialog::delete_local_plugin(const PluginDescriptor& plugin)
 {

@@ -4510,7 +4510,6 @@ void GLGizmoTextureDisplacement::render_texture_library_popup(const ImVec2 &pane
     std::optional<TextureLibraryEntry> chosen;
     std::optional<TextureLibraryEntry> to_remove;
     bool                               import_clicked = false;
-    bool                               download_clicked = false;
     int                                loads_left       = PICKER_LOADS_PER_FRAME;
     bool                               loads_deferred   = false;
 
@@ -4735,7 +4734,9 @@ void GLGizmoTextureDisplacement::render_texture_library_popup(const ImVec2 &pane
         subscribed_count += sections[i].entries.size();
 
     const std::string subscribed_title = _u8L("Texture libraries");
-    if (section_header("subscribed:", subscribed_title, subscribed_count, 0.f, {}, subscribed_title)) {
+    // Shown only when an installed plugin adds texture packs; the empty section's only content was a
+    // link to OrcaCloud's plugin hub.
+    if (subscribed_count > 0 && section_header("subscribed:", subscribed_title, subscribed_count, 0.f, {}, subscribed_title)) {
         for (size_t i = 1; i + 1 < sections.size(); ++i) {
             const Section &pack = sections[i];
             const auto [name, attribution] = split_pack_title(pack.title);
@@ -4745,13 +4746,6 @@ void GLGizmoTextureDisplacement::render_texture_library_popup(const ImVec2 &pane
             const int    count  = grid(origin, pack.entries, false);
             end_grid(origin, count);
         }
-
-        ImGui::Dummy(ImVec2(0.f, spacing));
-        const std::string download_label = _u8L("Explore more texture libraries");
-        if (ImGui::Button(download_label.c_str(), ImVec2(grid_w, frame_h)))
-            download_clicked = true;
-        if (ImGui::IsItemHovered())
-            panel_tooltip(_u8L("Opens OrcaCloud in the Home page to browse for plugins."));
     }
 
     const Section &user = sections.back();
@@ -4779,15 +4773,11 @@ void GLGizmoTextureDisplacement::render_texture_library_popup(const ImVec2 &pane
     ImGui::EndChild();
     pop_slim_scrollbar_style();
 
-    if (chosen || import_clicked || close_clicked || download_clicked)
+    if (chosen || import_clicked || close_clicked)
         ImGui::CloseCurrentPopup();
     m_tooltip_anchor_min = prev_anchor_min;
     m_tooltip_anchor_max = prev_anchor_max;
     ImGui::EndPopup();
-    // The OrcaCloud plugin hub filtered to resource textures; the pane's session handoff redirects here.
-    if (download_clicked)
-        wxGetApp().open_orca_cloud("/app/plugins/plugin-hub?types=resource-textures");
-
     // Only once the loop over the library is done: importing, picking (which reorders the recently used)
     // and removing all change the library the loop was iterating.
     if (chosen)

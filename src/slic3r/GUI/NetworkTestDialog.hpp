@@ -42,7 +42,7 @@ namespace GUI {
 
 enum TestJob {
 	TEST_BING_JOB = 0,
-	TEST_ORCA_JOB = 1,
+	TEST_ORCA_JOB = 1, // unused slot: the Orca GitHub test was removed
 	TEST_PING_JOB,
 	TEST_JOB_MAX
 };
@@ -60,9 +60,6 @@ protected:
 	wxStaticText* txt_sys_info_value;
 	wxStaticText* txt_dns_info_title;
 	wxStaticText* txt_dns_info_value;
-	Button*     btn_link;
-	wxStaticText* text_link_title;
-	wxStaticText* text_link_val;
 	Button*     btn_bing;
 	wxStaticText* text_bing_title;
 	wxStaticText* text_bing_val;
@@ -99,7 +96,6 @@ public:
 	void start_all_job();
 	void start_all_job_sequence();
 	void start_test_bing_thread();
-	void start_test_github_thread();
 	void start_test_ping_thread();
 
 	void start_test_url(TestJob job, wxString name, wxString url);

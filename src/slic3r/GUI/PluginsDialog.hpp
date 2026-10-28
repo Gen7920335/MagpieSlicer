@@ -48,9 +48,6 @@ namespace GUI {
 // thread. Used by PluginsDialog (behind its progress dialog) and GUI_App::refresh_plugins().
 void refresh_plugin_metadata_blocking(bool fetch_cloud);
 
-// Opens the Cloud plugin hub in the default browser. No dialog needed.
-void open_plugin_hub();
-
 // Synchronously installs a local plugin package (.py/.whl). Runs on the UI thread but keeps it
 // responsive by performing the install on a worker behind a modal progress dialog. `parent` owns
 // the overwrite prompt and the progress dialog. On success `message` carries the localized
@@ -235,8 +232,6 @@ public:
     void update_plugin_dialog_ui();
 
 private:
-    void open_plugin_on_cloud(const std::string& sharing_token);
-    void open_plugin_hub();
     void on_script_message(const nlohmann::json& payload) override;
     nlohmann::json localized_strings() const override;
     // Runs one web command on a clean main-loop stack; see on_script_message.

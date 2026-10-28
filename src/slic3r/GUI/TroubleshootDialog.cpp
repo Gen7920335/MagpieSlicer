@@ -188,13 +188,8 @@ TroubleshootDialog::TroubleshootDialog()
     version->SetFont(version_font);
     version->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#363636")));
 
-    auto build = new Button(this, wxString(build_commit_label));
-    build->SetStyle(ButtonStyle::Regular, ButtonType::Window);
-    auto hash_url = "https://github.com/OrcaSlicer/OrcaSlicer/commit/" + wxString(build_commit_hash);
-    build->SetToolTip(hash_url);
-    build->Bind(wxEVT_BUTTON, [hash_url](wxCommandEvent &e) {
-         wxLaunchDefaultBrowser(hash_url);
-    });
+    // The build commit is Magpie's, which Orca's repository does not have, so it is shown without a link.
+    auto build = new Label(this, wxString(build_commit_label), wxALIGN_CENTRE_HORIZONTAL);
 
     // SYSTEM INFO
     auto sys_info_lines = [this](bool show_sys) {
@@ -300,30 +295,6 @@ TroubleshootDialog::TroubleshootDialog()
     info_desc_sizer->Add(info_desc_2, 0, wxEXPAND | wxBOTTOM, FromDIP(8));
     info_desc_sizer->Add(info_desc_3, 0, wxEXPAND);
 
-    auto link_report  = new HyperLink(this, _L("Report issue") + " ");
-    link_report->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent &e) {
-        auto encodeStr = [](const wxString& text) {
-            wxString out;
-            const wxScopedCharBuffer utf8 = text.utf8_str();
-            for (const unsigned char* p = (const unsigned char*)utf8.data(); *p; ++p) {
-                unsigned char c = *p;
-                if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
-                    out += (wxChar)c;
-                else
-                    out += wxString::Format(wxT("%%%02X"), c);
-            }
-            return out;
-        };
-
-        wxString url = "https://github.com/OrcaSlicer/OrcaSlicer/issues/new?template=bug_report.yml";
-        wxString os = GetOStype();
-        if(!os.IsEmpty())
-            url += "&os_type=%22" + os +"%22";
-        url += "&version="     + encodeStr(wxString(SoftFever_VERSION));
-        url += "&os_version="  + encodeStr(GetOSinfo());
-        wxLaunchDefaultBrowser(url);
-    });
-
     auto pack_btn = new Button(this, _L("Pack") + "...");
     pack_btn->SetStyle(ButtonStyle::Regular, ButtonType::Parameter);
     pack_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
@@ -400,7 +371,6 @@ TroubleshootDialog::TroubleshootDialog()
     wxBoxSizer *right_sizer  = new wxBoxSizer(wxVERTICAL);
 
     wxBoxSizer *pack_btn_sizer = new wxBoxSizer(wxHORIZONTAL);
-    pack_btn_sizer->Add(link_report                   , 0, wxRIGHT, FromDIP(5));
     pack_btn_sizer->AddStretchSpacer();
     pack_btn_sizer->Add(pack_btn);
 

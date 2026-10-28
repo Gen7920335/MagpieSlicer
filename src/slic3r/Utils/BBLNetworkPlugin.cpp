@@ -389,11 +389,12 @@ std::string BBLNetworkPlugin::get_libpath_in_current_directory(const std::string
     std::string file_name_string(size_needed, 0);
     ::WideCharToMultiByte(0, 0, file_name, wcslen(file_name), file_name_string.data(), size_needed, nullptr, nullptr);
 
-    std::size_t found = file_name_string.find("orca-slicer.exe");
-    if (found == (file_name_string.size() - 16)) {
-        lib_path = library_name + ".dll";
-        lib_path = file_name_string.replace(found, 16, lib_path);
-    }
+    // The library beside the running executable, whatever the build named it (a fixed upstream file
+    // name never matched a Magpie build). Empty when there is none, so the caller reports it missing.
+    const boost::filesystem::path beside_exe = boost::filesystem::path(file_name_string).parent_path() / (library_name + ".dll");
+    boost::system::error_code ec;
+    if (boost::filesystem::exists(beside_exe, ec))
+        lib_path = beside_exe.string();
 #else
     (void)library_name;
 #endif

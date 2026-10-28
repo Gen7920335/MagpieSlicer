@@ -60,9 +60,6 @@ namespace GUI {
 
     #define LOGIN_INFO_UPDATE_TIMER_ID 10002
 
-// OrcaCloud is a native pane of its own: the site refuses to be framed
-// (x-frame-options: DENY / CSP frame-ancestors 'none').
-static const char *const kCloudUrl = "https://cloud.orcaslicer.com";
 // #LeftBoard in resources/web/homepage/css/home.css is a 262px column plus a 1px right
 // border; the homepage keeps that width as the nav column while the cloud pane is open.
 static const int kLeftNavWidth = 263;
@@ -344,7 +341,7 @@ void WebViewPanel::create_cloud_browser()
 
 // The scheme://host[:port] origin of an http(s) URL, lower-cased and with the default port
 // dropped, or empty for any other scheme or a malformed URL. Comparing origins (not a string
-// prefix) is what keeps a lookalike host such as "https://cloud.orcaslicer.com.evil.com" out.
+// prefix) is what keeps a lookalike host such as "https://cloud.example.com.evil.com" out.
 static wxString http_origin_of(const wxString& url)
 {
     const wxURI uri(url);
@@ -540,12 +537,13 @@ void WebViewPanel::cloud_signed_out(const wxString& signout_url)
 void WebViewPanel::set_cloud_mode(bool on, const wxString& url, const wxString& page_url)
 {
     if (on) {
-        // load_cloud_url records the origin from whatever it loads, including the plain cloud
-        // fallback used when `url` is empty.
+        // load_cloud_url records the origin from whatever it loads. There is no default cloud site
+        // (Magpie has no OrcaCloud), so an empty `url` loads nothing.
         if (!m_cloud_browser) {
             create_cloud_browser();
             m_cloud_seed_url = url;
-            schedule_cloud_load(url.empty() ? wxString(kCloudUrl) : url);
+            if (!url.empty())
+                schedule_cloud_load(url);
         } else if (!page_url.empty()) {
             // The pane already holds a session, so an explicit page loads straight in; the handoff is
             // only needed to establish one, not to reach an ordinary page.
@@ -585,7 +583,6 @@ void WebViewPanel::reset_browser()
         m_cloud_browser->Destroy();
         m_cloud_browser = nullptr;
         create_cloud_browser();
-        schedule_cloud_load(wxString(kCloudUrl));
         m_cloud_browser->Show(cloud_on);
         // The rebuilt pane holds no seed, so the next open loads the Start URL again.
         m_cloud_seed_url.clear();

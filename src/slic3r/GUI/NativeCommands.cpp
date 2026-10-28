@@ -521,12 +521,6 @@ std::vector<NativeCommand> build_command_catalog()
         wxGetApp().open_presetbundledialog();
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
-    add_with_icon("sync_presets", L("Sync Presets"), L("Presets"), "printer_sync_ok", [](const std::string&) {
-        if (!wxGetApp().is_user_login())
-            return AppActionRunResult{AppActionRunResult::Level::Info, _L("Sign in to sync presets.")};
-        wxGetApp().restart_sync_user_preset();
-        return AppActionRunResult{AppActionRunResult::Level::Success};
-    });
 
     // ---- Import ----
     add_with_icon("import_file", L("Import 3MF/STL/STEP/SVG/OBJ/AMF"), L("Import"), "menu_open", [](const std::string&) {
@@ -615,20 +609,12 @@ std::vector<NativeCommand> build_command_catalog()
         }
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
-    add_with_icon("help_check_updates", L("Check for Updates"), L("Help"), "refresh", [](const std::string&) {
-        wxGetApp().check_new_version_sf(true, 1);
-        return AppActionRunResult{AppActionRunResult::Level::Success};
-    });
     add_with_icon("help_about", L("About OrcaSlicer"), L("Help"), "MagpieSlicer_gradient_circle", [](const std::string&) {
         Slic3r::GUI::about();
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
     add_with_icon("open_wiki", L("Open Wiki"), L("Help"), "link_wiki_img", [](const std::string&) {
         wxLaunchDefaultBrowser("https://www.orcaslicer.com/wiki/", wxBROWSER_NEW_WINDOW);
-        return AppActionRunResult{AppActionRunResult::Level::Success};
-    });
-    add("open_youtube", L("Open YouTube Channel"), L("Help"), [](const std::string&) {
-        wxLaunchDefaultBrowser("https://www.youtube.com/@OfficialOrcaSlicer/videos", wxBROWSER_NEW_WINDOW);
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
 
@@ -639,10 +625,6 @@ std::vector<NativeCommand> build_command_catalog()
     });
     add("refresh_plugins", L("Refresh Plugins"), L("Plugins"), [](const std::string&) {
         wxGetApp().refresh_plugins();
-        return AppActionRunResult{AppActionRunResult::Level::Success};
-    });
-    add("install_plugin", L("Install Plugin"), L("Plugins"), [](const std::string&) {
-        open_plugin_hub();
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
     add("install_local_plugin", L("Install Local Plugin"), L("Plugins"), [](const std::string&) {

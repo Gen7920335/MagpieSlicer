@@ -43,10 +43,14 @@ enum class NewSlicerInstanceType {
 static void start_new_slicer_or_gcodeviewer(const NewSlicerInstanceType instance_type, const std::vector<wxString> paths_to_open, bool single_instance)
 {
 #ifdef _WIN32
-	wxString path;
-	wxFileName::SplitPath(wxStandardPaths::Get().GetExecutablePath(), &path, nullptr, nullptr, wxPATH_NATIVE);
-	path += "\\";
-	path += (instance_type == NewSlicerInstanceType::Slicer) ? "orca-slicer.exe" : "bambu-gcodeviewer.exe";
+	// A new slicer is this same executable, whatever the build named it; a fixed upstream file name
+	// does not exist in a Magpie build, so the spawn failed.
+	wxString path = wxStandardPaths::Get().GetExecutablePath();
+	if (instance_type == NewSlicerInstanceType::GCodeViewer) {
+		wxFileName::SplitPath(wxStandardPaths::Get().GetExecutablePath(), &path, nullptr, nullptr, wxPATH_NATIVE);
+		path += "\\";
+		path += "bambu-gcodeviewer.exe";
+	}
 	std::vector<const wchar_t*> args;
 	args.reserve(4);
 	args.emplace_back(path.wc_str());
@@ -109,7 +113,8 @@ static void start_new_slicer_or_gcodeviewer(const NewSlicerInstanceType instance
 		std::string my_path;
 		if (args.empty()) {
 			// Binary path was not set to the AppImage in the Linux specific block above, call the application directly.
-			my_path = (bin_path.parent_path() / ((instance_type == NewSlicerInstanceType::Slicer) ? "orca-slicer" : "bambu-gcodeviewer")).string();
+			// A new slicer is this same executable, whatever the build named it.
+			my_path = (instance_type == NewSlicerInstanceType::Slicer) ? bin_path.string() : (bin_path.parent_path() / "bambu-gcodeviewer").string();
 			args.emplace_back(my_path.c_str());
 		}
 		std::string to_open;
