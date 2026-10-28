@@ -2,7 +2,7 @@
 
 <img alt="Magpie Slicer logo" src="resources/images/MagpieSlicer.png" width="150">
 
-# Magpie Slicer Next
+# Magpie Slicer
 
 An FFF 3D printer slicer that adds its features to OrcaSlicer as **mods**
 
@@ -10,17 +10,17 @@ An FFF 3D printer slicer that adds its features to OrcaSlicer as **mods**
 
 </div>
 
-> This is the second-generation line (2.5.0.2.0). Always check the preview and the generated G-code before sending a print to a real machine.
+> Always check the preview and the generated G-code before sending a print to a real machine.
 
 ## About
 
-Magpie Slicer Next is based on [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer) nightly. The first generation (2.5.0.0.x, up to Beta 7) patched its features into Orca's slicing code; in this line every Magpie feature is a native mod that the app loads and that can be turned on and off one by one.
+Magpie Slicer is based on [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer) nightly. Earlier versions (2.5.0.0.x, up to Beta 7) patched its features into Orca's slicing code; in this version every Magpie feature is a native mod that the app loads and that can be turned on and off one by one.
 
 - **With every mod off it slices the way Orca does.** Only Orca bug fixes that are safe for output and real use always apply. Comparison runs against Orca on the same settings (`scripts/magpie/golden`) check this.
 - **Mod settings beside Orca's:** each mod's settings are shown next to the related group on Orca's settings pages.
-- **Separate install:** app key `MagpieSlicerNext`, executable `magpie-slicer-next`, install name "Magpie Slicer Next". It shares no data folder or file associations with OrcaSlicer or the first generation. `orcaslicer://` links are still handled.
+- **Installs apart from OrcaSlicer:** it shares no data folder or file associations with OrcaSlicer. `orcaslicer://` links are still handled.
 - **Orca user preset import:** on first start it copies the user presets from OrcaSlicer's data folder once (existing files are never overwritten). File > Import > "Import OrcaSlicer user presets" runs it again.
-- **First-generation settings migrate:** opening a first-generation project or preset moves its Magpie-only settings to the matching mod settings.
+- **Settings from earlier versions migrate:** opening a project or preset moves its Magpie-only settings to the matching mod settings.
 - **Korean translation** of the app and of every mod's names and settings.
 
 ## Bundled mods
@@ -63,9 +63,9 @@ Versioning: [docs/MAGPIE_VERSIONING.md](docs/MAGPIE_VERSIONING.md). Changes stil
 
 ## License and credits
 
-Magpie Slicer Next is distributed under the **GNU Affero General Public License v3.0** ([LICENSE.txt](LICENSE.txt)). If you distribute a modified version or offer it over a network, its source must be published under the same license. It comes with no warranty.
+Magpie Slicer is distributed under the **GNU Affero General Public License v3.0** ([LICENSE.txt](LICENSE.txt)). If you distribute a modified version or offer it over a network, its source must be published under the same license. It comes with no warranty.
 
-Magpie Slicer Next builds on the work of:
+Magpie Slicer builds on the work of:
 
 - [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer): SoftFever and the OrcaSlicer contributors (AGPL-3.0). Most of the code in this repository.
 - [Bambu Studio](https://github.com/bambulab/BambuStudio): Bambu Lab (AGPL-3.0), which OrcaSlicer is based on.
@@ -73,6 +73,6 @@ Magpie Slicer Next builds on the work of:
 - [Slic3r](https://github.com/slic3r/Slic3r): Alessandro Ranellucci and contributors (AGPL-3.0).
 - [CuraEngine](https://github.com/Ultimaker/CuraEngine): UltiMaker (AGPL-3.0); the Cura support mod ports CuraEngine's support code.
 
-Copyright notices in the original files are kept. Licenses of the bundled libraries are listed in the app under About > Copyrights. "OrcaSlicer", "Bambu Studio", "PrusaSlicer" and "Cura" are names of their owners; Magpie Slicer Next is not made or endorsed by those projects.
+Copyright notices in the original files are kept. Licenses of the bundled libraries are listed in the app under About > Copyrights. "OrcaSlicer", "Bambu Studio", "PrusaSlicer" and "Cura" are names of their owners; Magpie Slicer is not made or endorsed by those projects.
 
 The mod SDK headers and template are also available under the MIT license in [magpie-mods](https://github.com/Gen7920335/magpie-mods), so mods built with the SDK can use any license.

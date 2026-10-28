@@ -2,7 +2,7 @@
 
 <img alt="Magpie Slicer logo" src="resources/images/MagpieSlicer.png" width="150">
 
-# Magpie Slicer Next
+# Magpie Slicer
 
 OrcaSlicer 위에 기능을 **모드(mod)** 로 얹은 FFF 3D 프린터 슬라이서
 
@@ -10,17 +10,17 @@ OrcaSlicer 위에 기능을 **모드(mod)** 로 얹은 FFF 3D 프린터 슬라�
 
 </div>
 
-> 2세대 라인(2.5.0.2.0)입니다. 실제 장비로 보내기 전에 미리보기와 생성된 G-code를 꼭 확인하십시오.
+> 실제 장비로 보내기 전에 미리보기와 생성된 G-code를 꼭 확인하십시오.
 
 ## 소개
 
-Magpie Slicer Next는 [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer) 나이틀리를 바탕으로 한 슬라이서입니다. Orca의 슬라이스 코드를 직접 고쳐 기능을 넣던 1세대(2.5.0.0.x, Beta 7까지)와 달리, Magpie 기능은 앱이 불러오는 네이티브 모드로 들어 있고 하나씩 켜고 끌 수 있습니다.
+Magpie Slicer는 [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer) 나이틀리를 바탕으로 한 슬라이서입니다. Orca의 슬라이스 코드를 직접 고쳐 기능을 넣던 이전 버전(2.5.0.0.x, Beta 7까지)과 달리, Magpie 기능은 앱이 불러오는 네이티브 모드로 들어 있고 하나씩 켜고 끌 수 있습니다.
 
 - **모드를 모두 끄면 Orca와 같은 방식으로 슬라이스합니다.** 출력과 실사용에 문제가 없는 Orca 버그 수정만 항상 적용됩니다. 같은 설정에서 Orca와 G-code를 비교하는 시험(`scripts/magpie/golden`)으로 이를 확인합니다.
 - **Orca 설정 옆에 모드 설정:** 각 모드의 설정은 Orca 설정 페이지의 관련 그룹 옆에 함께 표시됩니다.
-- **따로 설치:** 앱 키 `MagpieSlicerNext`, 실행 파일 `magpie-slicer-next`, 설치 이름 "Magpie Slicer Next". 설정 폴더와 파일 연결을 OrcaSlicer·1세대와 공유하지 않습니다. `orcaslicer://` 링크는 그대로 처리합니다.
+- **OrcaSlicer와 따로 설치:** 설정 폴더와 파일 연결을 OrcaSlicer와 공유하지 않습니다. `orcaslicer://` 링크는 그대로 처리합니다.
 - **Orca 사용자 사전 설정 가져오기:** 처음 실행할 때 OrcaSlicer 데이터 폴더의 사용자 사전 설정을 한 번 복사합니다(이미 있는 파일은 덮어쓰지 않음). 파일 > 가져오기 > "OrcaSlicer 사용자 사전 설정 가져오기"로 다시 실행할 수 있습니다.
-- **1세대 설정 이전:** 1세대 프로젝트·사전 설정을 열면 Magpie 전용 설정이 해당 모드 설정으로 옮겨집니다.
+- **이전 버전 설정 이전:** 이전 버전 프로젝트·사전 설정을 열면 Magpie 전용 설정이 해당 모드 설정으로 옮겨집니다.
 - **한국어 번역:** 앱과 모드 이름·설정이 모두 한국어로 번역되어 있습니다.
 
 ## 기본 모드
@@ -65,9 +65,9 @@ build_win.bat -s --tests
 
 ## 라이선스와 크레딧
 
-Magpie Slicer Next는 **GNU Affero General Public License v3.0**([LICENSE.txt](LICENSE.txt))으로 배포됩니다. 이 프로그램을 고쳐 배포하거나 네트워크로 제공하면 그 소스도 같은 라이선스로 공개해야 합니다. 이 프로그램에는 어떠한 보증도 없습니다.
+Magpie Slicer는 **GNU Affero General Public License v3.0**([LICENSE.txt](LICENSE.txt))으로 배포됩니다. 이 프로그램을 고쳐 배포하거나 네트워크로 제공하면 그 소스도 같은 라이선스로 공개해야 합니다. 이 프로그램에는 어떠한 보증도 없습니다.
 
-Magpie Slicer Next는 다음 프로젝트의 작업 위에 있습니다.
+Magpie Slicer는 다음 프로젝트의 작업 위에 있습니다.
 
 - [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer): SoftFever와 OrcaSlicer 기여자들 (AGPL-3.0). 이 저장소의 대부분의 코드입니다.
 - [Bambu Studio](https://github.com/bambulab/BambuStudio): Bambu Lab (AGPL-3.0). OrcaSlicer의 바탕입니다.
@@ -75,6 +75,6 @@ Magpie Slicer Next는 다음 프로젝트의 작업 위에 있습니다.
 - [Slic3r](https://github.com/slic3r/Slic3r): Alessandro Ranellucci와 기여자들 (AGPL-3.0).
 - [CuraEngine](https://github.com/Ultimaker/CuraEngine): UltiMaker (AGPL-3.0). Cura 서포트 모드가 CuraEngine의 서포트 코드를 옮겨 왔습니다.
 
-각 원본 파일의 저작권 표기는 그대로 유지됩니다. 사용한 라이브러리의 라이선스는 앱의 정보 > 저작권 창에 있습니다. "OrcaSlicer", "Bambu Studio", "PrusaSlicer", "Cura"는 각 소유자의 이름이며, Magpie Slicer Next는 이들 프로젝트가 만들거나 보증하는 제품이 아닙니다.
+각 원본 파일의 저작권 표기는 그대로 유지됩니다. 사용한 라이브러리의 라이선스는 앱의 정보 > 저작권 창에 있습니다. "OrcaSlicer", "Bambu Studio", "PrusaSlicer", "Cura"는 각 소유자의 이름이며, Magpie Slicer는 이들 프로젝트가 만들거나 보증하는 제품이 아닙니다.
 
 모드 SDK의 헤더와 템플릿은 [magpie-mods](https://github.com/Gen7920335/magpie-mods)에서 MIT 라이선스로도 제공되므로, SDK로 만든 모드는 원하는 라이선스로 배포할 수 있습니다.
