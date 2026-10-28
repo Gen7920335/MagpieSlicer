@@ -536,7 +536,7 @@ bool valid_secret_key(const char *key)
 
 wxString secret_service(const std::string &mod_id, const char *key)
 {
-    return wxString::FromUTF8(("MagpieSlicerNext/mod/" + mod_id + "/" + key).c_str());
+    return wxString::FromUTF8(("MagpieSlicer/mod/" + mod_id + "/" + key).c_str());
 }
 
 // The store operations by mod id, shared by the service (the calling mod) and the printer panel (put_secret).

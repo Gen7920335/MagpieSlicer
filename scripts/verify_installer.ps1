@@ -23,7 +23,7 @@ if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
     $InstallerPath = @("build\installer") |
         ForEach-Object { Join-Path $root $_ } |
         Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
-        ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter "MagpieSlicerNext_Windows_Installer_*_x64.exe" } |
+        ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter "MagpieSlicer_Windows_Installer_*_x64.exe" } |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1 -ExpandProperty FullName
 }
@@ -34,7 +34,7 @@ $registeredInstalls = @()
 foreach ($hive in @([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryHive]::CurrentUser)) {
     foreach ($view in @([Microsoft.Win32.RegistryView]::Registry32, [Microsoft.Win32.RegistryView]::Registry64)) {
         $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, $view)
-        $key = $base.OpenSubKey("Software\Microsoft\Windows\CurrentVersion\Uninstall\MagpieSlicerNext")
+        $key = $base.OpenSubKey("Software\Microsoft\Windows\CurrentVersion\Uninstall\MagpieSlicer")
         if ($null -ne $key) {
             $uninstaller = [string]$key.GetValue("UninstallString")
             if (-not [string]::IsNullOrWhiteSpace($uninstaller)) {
@@ -97,8 +97,8 @@ if ($installerProcess.ExitCode -ne 0) {
 
 # Every check below runs inside this try so a failed check still removes the test install.
 try {
-$installedExe = Join-Path $installRoot "magpie-slicer-next.exe"
-$installedDll = Join-Path $installRoot "MagpieSlicerNext.dll"
+$installedExe = Join-Path $installRoot "magpie-slicer.exe"
+$installedDll = Join-Path $installRoot "MagpieSlicer.dll"
 $installedResources = Join-Path $installRoot "resources"
 $installedGuide = Join-Path $installedResources "web\guide\0\index.html"
 foreach ($required in @($installedExe, $installedDll, $installedResources, $installedGuide)) {

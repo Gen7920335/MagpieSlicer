@@ -25,7 +25,7 @@ that change values) against vanilla with the same values set in the process pres
 the list of keys the user changed, which a mod rule rightly does not add to.
 
 On Windows pass the console binary that accepts CLI arguments (for example
-build/src/Release/magpie-slicer-next.exe, or orca-slicer.exe for the vanilla build).
+build/src/Release/magpie-slicer.exe, or orca-slicer.exe for the vanilla build).
 """
 import argparse
 import hashlib

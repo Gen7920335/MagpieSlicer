@@ -1,47 +1,17 @@
 # Security Policy
 
-At OrcaSlicer, we are committed to maintaining the security of our ecosystem. Our policy is to ensure that we do not introduce vulnerabilities and that any security issues are addressed promptly and responsibly. We appreciate your help in improving the security of OrcaSlicer and thank you for your responsible disclosure.
-Reporting Security Bugs
+## Reporting a vulnerability
 
-## To report a security bug, please follow these guidelines:
+Please report security problems in Magpie Slicer privately through GitHub:
+**Security > Report a vulnerability** on <https://github.com/Gen7920335/MagpieSlicer>
+(private vulnerability reporting). Do not open a public issue for them.
 
-  * Email Security Bugs:
-        Send an email to the lead maintainer at softfeverever@gmail.com.
-        Include the word "SECURITY" in the subject line of your email.
+Useful reports include the affected version, the steps or file that trigger the problem, and its impact.
+This applies in particular to:
 
-  * Response Times:
-        The lead maintainer will acknowledge receipt of your email within one week (7 days).
-        A detailed response will follow within 48 hours, outlining the next steps for handling your report.
-        After the initial reply, the security team will keep you informed about the progress toward a fix and any announcements.
+- the mod loader, mod signatures and the trust tags (official, verified, unverified);
+- mod packages and the mod index used by "Get Mods";
+- network access granted to mods and printer connections.
 
-  * Information and Collaboration:
-        We may request additional information or guidance as we work on addressing the issue.
-
-  * Handling the Report:
-        OrcaSlicer will confirm the problem and determine the affected versions.
-        We will audit the code to find any similar issues and prepare fixes for all releases still under maintenance.
-        Fixes will be released as quickly as possible.
-
-  * Third-Party Modules:
-        Report security issues in third-party modules to the respective maintainer of those modules.
-
-## Security Disclosure Guidelines
-
-When disclosing a vulnerability, please follow these steps to ensure your report is clear and actionable:
-
-  * Provide Detailed Information:
-        Scope: Clearly define the scope of the vulnerability.
-        Potential Impact: Let us know who could be affected by this exploit.
-        Reproduction Steps: Document detailed steps to reproduce the vulnerability.
-
-    Reference OWASP Guidelines:
-        Follow the <a href="https://cheatsheetseries.owasp.org/cheatsheets/Vulnerability_Disclosure_Cheat_Sheet.html">OWASP Vulnerability Disclosure Cheat Sheet</a> for best practices in vulnerability disclosure.
-
-## Security Recommendations
-
-To enhance security when using OrcaSlicer, we recommend following these steps:
-
-  * SEE SOMETHING: If you notice anything suspicious or have concerns, please report it.
-  * SAY SOMETHING: If you have any doubts or need assistance, do not hesitate to contact us.
-
-### Thank you for your commitment to the security of OrcaSlicer. Your efforts help us maintain a safe and reliable ecosystem.
+A problem that also happens in OrcaSlicer with every Magpie mod off should be reported to OrcaSlicer as well,
+following its [security policy](https://github.com/OrcaSlicer/OrcaSlicer/security/policy).

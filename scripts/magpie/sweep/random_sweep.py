@@ -12,7 +12,7 @@ re-slices every fourth case to check determinism, and checks every G-code:
 - no NaN or infinite numbers;
 - extrusion amounts (relative E) per move stay below 50 mm of filament.
 
-    python random_sweep.py --cli <magpie-slicer-next.exe> --datadir <golden datadir> \
+    python random_sweep.py --cli <magpie-slicer.exe> --datadir <golden datadir> \
         --external-models <dir with tee.stl> --out <dir> --count 204 --seed 1
 """
 import argparse
