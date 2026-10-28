@@ -17,12 +17,14 @@
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/PrintConfig.hpp"
 
+#include <wx/display.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 #include <wx/tglbtn.h>
 #include <wx/valtext.h>
 
+#include <algorithm>
 #include <optional>
 
 namespace Slic3r {
@@ -392,6 +394,16 @@ void ModCalibrationDialog::on_changed()
     Layout();
     GetSizer()->SetSizeHints(this);
     Fit();
+    // A group folded open makes the dialog taller: keep it, its OK button included, on its display.
+    const int display = wxDisplay::GetFromWindow(this);
+    if (display != wxNOT_FOUND) {
+        const wxRect area = wxDisplay(unsigned(display)).GetClientArea();
+        wxRect       rect = GetScreenRect();
+        rect.x = std::max(area.x, std::min(rect.x, area.GetRight() - rect.width));
+        rect.y = std::max(area.y, std::min(rect.y, area.GetBottom() - rect.height));
+        if (rect.GetPosition() != GetScreenRect().GetPosition())
+            Move(rect.GetPosition());
+    }
 }
 
 void ModCalibrationDialog::on_ok()
