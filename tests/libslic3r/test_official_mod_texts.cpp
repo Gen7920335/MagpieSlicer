@@ -80,6 +80,20 @@ TEST_CASE("The low temperature interface calibrations are declared by their mod 
                 calibrations.push_back(mod.id + "." + item.id);
     // The application draws a form for each (MainFrame::append_mod_calibrations, ModCalibrationDialog).
     CHECK(calibrations == std::vector<std::string>{ "low_temp_calibration.lesic", "low_temp_calibration.grid" });
+    // The grid's bottom interface starts at 2 layers touching the cube, whatever the presets say, so the gap holds the
+    // interface only (Gen 2026-10-29); the other fixed values start from the presets.
+    for (const ModHost::Mod &mod : mods)
+        for (const ModHost::ModGuiItem &item : mod.gui.calibrations)
+            if (item.id == "grid")
+                for (const ModHost::ModCalibrationField &f : item.form) {
+                    CAPTURE(f.id);
+                    if (f.id == "bottom_interface_layers")
+                        CHECK(f.default_value == "2");
+                    else if (f.id == "bottom_z_distance")
+                        CHECK(f.default_value == "0");
+                    else if (f.kind == "setting")
+                        CHECK(f.default_value.empty());
+                }
 }
 
 TEST_CASE("A mod's message catalogs keep the placeholders of the texts they translate", "[ModHost][OfficialMods]")

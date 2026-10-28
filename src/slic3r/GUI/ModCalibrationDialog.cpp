@@ -171,7 +171,8 @@ ModCalibrationDialog::ModCalibrationDialog(wxWindow *parent, Plater *plater, con
                 if (field->orca != nullptr) {
                     label = _(field->orca->label);
                     unit  = _(field->orca->sidetext);
-                    if (full.has(f.bind))
+                    // A setting field shows the preset's value, unless the calibration gives a value of its own.
+                    if (full.has(f.bind) && f.default_value.empty())
                         initial = full.opt_serialize(f.bind);
                 }
             } else if (mods) {
@@ -179,7 +180,7 @@ ModCalibrationDialog::ModCalibrationDialog(wxWindow *parent, Plater *plater, con
                 label        = ModParamsPanel::param_label(mods.get(), f.bind);
                 if (field->param != nullptr) {
                     unit = from_u8(field->param->unit);
-                    if (std::optional<ModHost::ExprValue> v = ModHost::param_value(full, f.bind)) {
+                    if (std::optional<ModHost::ExprValue> v = ModHost::param_value(full, f.bind); v && f.default_value.empty()) {
                         if (const bool *b = std::get_if<bool>(&*v))
                             initial = *b ? "1" : "0";
                         else

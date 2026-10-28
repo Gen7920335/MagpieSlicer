@@ -4,7 +4,9 @@
     // handle, one specimen per pair of values of two settings, Gen 2026-10-28). The application's Calibration menu
     // shows each with the form declared here; this mod builds the project (calibration.project slot) and prints the
     // calibrations' marks (gcode.events). The grid's interfaces print at their low temperature through
-    // low_temp_interface. No parameters.
+    // low_temp_interface. No parameters. The grid's fixed values start from the presets' settings, except a bottom
+    // interface of 2 layers touching the cube (bottom Z distance 0), so the gap holds the interface only (Gen
+    // 2026-10-29).
     "id": "low_temp_calibration",
     "name": "Low temperature interface calibration", "name_ko": "저온 접점 캘리브레이션",
     "version": "1.0.0",
@@ -84,11 +86,11 @@
               "visible": "x_axis != \"temperature\" and y_axis != \"temperature\"" },
             { "id": "top_z_distance", "type": "setting", "bind": "support_top_z_distance", "group": "fixed",
               "visible": "x_axis != \"top_z_distance\" and y_axis != \"top_z_distance\"" },
-            { "id": "bottom_z_distance", "type": "setting", "bind": "support_bottom_z_distance", "group": "fixed",
+            { "id": "bottom_z_distance", "type": "setting", "bind": "support_bottom_z_distance", "group": "fixed", "default": "0",
               "visible": "x_axis != \"bottom_z_distance\" and y_axis != \"bottom_z_distance\"" },
             { "id": "top_interface_layers", "type": "setting", "bind": "support_interface_top_layers", "group": "fixed",
               "visible": "x_axis != \"top_interface_layers\" and y_axis != \"top_interface_layers\"" },
-            { "id": "bottom_interface_layers", "type": "setting", "bind": "support_interface_bottom_layers", "group": "fixed",
+            { "id": "bottom_interface_layers", "type": "setting", "bind": "support_interface_bottom_layers", "group": "fixed", "default": "2",
               "visible": "x_axis != \"bottom_interface_layers\" and y_axis != \"bottom_interface_layers\"" },
             { "id": "interface_spacing", "type": "setting", "bind": "support_interface_spacing", "group": "fixed",
               "visible": "x_axis != \"interface_spacing\" and y_axis != \"interface_spacing\"" },
