@@ -330,7 +330,9 @@ inline void rebuild_half_layer_visits(HalfLayerExecutionPlan &plan)
 // object: 11 tool changes on a layer of two cubes in the U1 random test (seed 11026) against 7 grouped, and a tower
 // larger than the footprint estimate. Each object instance keeps its own task order (body before interface, no-sort
 // roots, the region grouping of append_half_layer_model_tasks); only runs of different objects are interleaved, which
-// never overlap. A block holding a task that requires the upper pass before it (ironing) is left as it is.
+// never overlap. Ironing needs the upper pass before it: an ironing task moved forward only narrows where the scheduler
+// may insert the upper pass, and the boundary right after the lower block always stays allowed. Ironing ends each
+// region's tasks, so with one region per object it moves later, not earlier (seed 9430: core T2-T0-T2-T0 per cube).
 inline void group_half_layer_tasks_across_objects(std::vector<HalfLayerExecutionTask> &tasks)
 {
     if (tasks.size() < 2)
@@ -338,8 +340,6 @@ inline void group_half_layer_tasks_across_objects(std::vector<HalfLayerExecution
     std::vector<std::pair<const PrintObject *, size_t>> owners;
     std::vector<std::vector<size_t>> streams;
     for (size_t i = 0; i < tasks.size(); ++i) {
-        if (tasks[i].requires_upper_before)
-            return;
         const std::pair<const PrintObject *, size_t> owner{tasks[i].object, tasks[i].instance_id};
         const auto it = std::find(owners.begin(), owners.end(), owner);
         if (it == owners.end()) {

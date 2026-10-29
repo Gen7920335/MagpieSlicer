@@ -3272,9 +3272,13 @@ TEST_CASE("The tower estimate of a banded print reserves the tool changes its fr
 // against 7). Grouping runs across objects gives two cubes the tool changes of one.
 TEST_CASE("A banded layer changes tool as often for two objects as for one", "[HalfLayer][ExecutionTower][TowerPlacement]")
 {
-    auto most_visits = [](size_t cubes) {
+    // Ironing needs the upper pass before it; the top layers that iron are grouped too (seed 9430).
+    const bool ironing = GENERATE(false, true);
+    auto most_visits = [ironing](size_t cubes) {
         auto config = multifilament_config(2);
         config.set_key_value("filament_map", new ConfigOptionInts{1, 1});
+        if (ironing)
+            config.set_deserialize_strict({{"ironing_type", "top"}});
         config.set_deserialize_strict({{"single_extruder_multi_material", true},
             {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"},
             {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"wall_loops", 2},
@@ -3302,7 +3306,7 @@ TEST_CASE("A banded layer changes tool as often for two objects as for one", "[H
     };
     const size_t one = most_visits(1);
     const size_t two = most_visits(2);
-    CAPTURE(one, two);
+    CAPTURE(ironing, one, two);
     REQUIRE(one >= 2);
     CHECK(two == one);
 }
