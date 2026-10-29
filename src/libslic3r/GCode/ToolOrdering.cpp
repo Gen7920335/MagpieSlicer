@@ -10,6 +10,7 @@
 #include "HalfLayerSources.hpp"
 #include "HalfLayerSupportSources.hpp"
 #include "ClipperUtils.hpp"
+#include "libslic3r/ModHost/GCodeEvents.hpp"
 #include "libslic3r/ModHost/SlotChoice.hpp"
 #include "libslic3r/ModHost/WallPlanner.hpp"
 #include "LineWidths.hpp"
@@ -550,9 +551,94 @@ static const LayerBandScheduler &print_band_scheduler(const Print &print)
     return none;
 }
 
+// Objects whose support prints after their other extrusions on each layer (gcode.events support_last; the low
+// temperature interface), asked once per plan.
+using SupportLastObjects = std::set<const PrintObject *>;
+
+static SupportLastObjects support_last_objects(const std::vector<const PrintObject *> &objects)
+{
+    SupportLastObjects out;
+    for (const PrintObject *object : objects)
+        if (object->layer_bands().active() && ModHost::gcode_events_support_last_planned(*object))
+            out.insert(object);
+    return out;
+}
+
+// MAGPIE: a frame's support of objects that print it last, out of `prefix`, so the layer's interfaces print in one
+// run and the temperature the support_last mod sets changes once (low temperature interface random test: seeds 2,
+// 27, 106 and 221 cooled and reheated twice a layer, once per plane). Z only rises. The lower plane (at or under the
+// object's lower outer-wall pass, or under the frame's top without one) prints after that pass, body then
+// interface; the upper plane's interface follows at once and its body prints after the core. Without a lower-plane
+// interface the upper plane keeps the contract order after the core: body, then interface. A plane holding several
+// physical layers of one object keeps its stored order, which Z needs; when that order ends on an interface the upper
+// plane's interface still follows it (seed 27, independent support layer heights: two coolings on layers 72 and 83).
+static void split_support_last_tasks(const SupportLastObjects &objects, double frame_print_z,
+    std::vector<HalfLayerExecutionTask> &prefix, const std::vector<HalfLayerExecutionTask> &lower,
+    std::vector<HalfLayerExecutionTask> &tail, std::vector<HalfLayerExecutionTask> &suffix)
+{
+    if (objects.empty())
+        return;
+    // Physical Z tolerance, mm, matching fixed-point geometry precision.
+    constexpr double z_tolerance_mm = 0.000001;
+    std::map<const PrintObject *, double> lower_top_mm;
+    for (const HalfLayerExecutionTask &task : lower)
+        if (task.physical_layer != nullptr) {
+            const auto [it, inserted] = lower_top_mm.emplace(task.object, task.physical_layer->print_z);
+            if (!inserted)
+                it->second = std::max(it->second, task.physical_layer->print_z);
+        }
+    std::vector<HalfLayerExecutionTask> kept, lower_plane, upper_plane;
+    for (HalfLayerExecutionTask &task : prefix) {
+        if (objects.count(task.object) == 0 || task.physical_layer == nullptr) {
+            kept.push_back(std::move(task));
+            continue;
+        }
+        const auto it = lower_top_mm.find(task.object);
+        const double z_mm = task.physical_layer->print_z;
+        const bool upper = it != lower_top_mm.end() ? z_mm > it->second + z_tolerance_mm :
+            z_mm > frame_print_z - z_tolerance_mm;
+        (upper ? upper_plane : lower_plane).push_back(std::move(task));
+    }
+    prefix = std::move(kept);
+    // Body and interface of one plane, each in stored order (an object with several physical layers there: all body).
+    auto split = [z_tolerance_mm](std::vector<HalfLayerExecutionTask> &tasks, std::vector<HalfLayerExecutionTask> &body,
+                                  std::vector<HalfLayerExecutionTask> &interface) {
+        std::map<const PrintObject *, double> z_by_object;
+        std::set<const PrintObject *> several_layers;
+        for (const HalfLayerExecutionTask &task : tasks) {
+            const auto [it, inserted] = z_by_object.emplace(task.object, task.physical_layer->print_z);
+            if (!inserted && std::abs(it->second - task.physical_layer->print_z) > z_tolerance_mm)
+                several_layers.insert(task.object);
+        }
+        for (HalfLayerExecutionTask &task : tasks)
+            (task.wipe_root_kind == HalfLayerWipeRootKind::SupportInterface && several_layers.count(task.object) == 0 ?
+                interface : body).push_back(std::move(task));
+        group_half_layer_tasks_across_objects(body);
+        group_half_layer_tasks_across_objects(interface);
+    };
+    std::vector<HalfLayerExecutionTask> lower_body, lower_interface, upper_body, upper_interface;
+    split(lower_plane, lower_body, lower_interface);
+    split(upper_plane, upper_body, upper_interface);
+    auto append = [](std::vector<HalfLayerExecutionTask> &to, std::vector<HalfLayerExecutionTask> &from) {
+        to.insert(to.end(), std::make_move_iterator(from.begin()), std::make_move_iterator(from.end()));
+    };
+    const bool lower_ends_cold = !lower_interface.empty() ||
+        (!lower_body.empty() && lower_body.back().wipe_root_kind == HalfLayerWipeRootKind::SupportInterface);
+    append(tail, lower_body);
+    if (lower_ends_cold) {
+        append(tail, lower_interface);
+        append(tail, upper_interface);
+        append(suffix, upper_body);
+    } else {
+        append(suffix, upper_body);
+        append(suffix, upper_interface);
+    }
+}
+
 static void finalize_half_layer_frame(const LayerBandScheduler &scheduler, const PrintConfig &print_config, LayerTools &tools, HalfLayerPrintExecutionPlan &print_plan,
     unsigned int incoming_filament,
     HalfLayerWipeIntoContext &wipe_context,
+    const SupportLastObjects &support_last,
     std::vector<HalfLayerExecutionTask> prefix,
     std::vector<HalfLayerExecutionTask> lower,
     std::vector<HalfLayerExecutionTask> core,
@@ -562,6 +648,8 @@ static void finalize_half_layer_frame(const LayerBandScheduler &scheduler, const
         tools.half_layer_frame_index = size_t(-1);
         return;
     }
+    std::vector<HalfLayerExecutionTask> tail, suffix;
+    split_support_last_tasks(support_last, tools.print_z, prefix, lower, tail, suffix);
     // Support whose physical band ends above an object's lower outer-wall pass belongs to the upper
     // plane. Printing it before the lower pass put the nozzle back down beside 0.1 mm taller support
     // and left one outer-wall gap holding all support time (3.3 s / 26 s on the overhang fixture).
@@ -603,8 +691,8 @@ static void finalize_half_layer_frame(const LayerBandScheduler &scheduler, const
     HalfLayerExecutionFrame frame;
     frame.print_z = tools.print_z;
     std::vector<HalfLayerExecutionTask *> provisional_stream;
-    provisional_stream.reserve(prefix.size() + lower.size() + core.size() + upper.size());
-    for (auto *tasks : {&prefix, &lower, &core, &upper})
+    provisional_stream.reserve(prefix.size() + lower.size() + tail.size() + core.size() + upper.size() + suffix.size());
+    for (auto *tasks : {&prefix, &lower, &tail, &core, &upper, &suffix})
         for (HalfLayerExecutionTask &task : *tasks)
             provisional_stream.push_back(&task);
     const size_t wipe_reservation_count = reserve_half_layer_cross_material_wipe(
@@ -613,10 +701,11 @@ static void finalize_half_layer_frame(const LayerBandScheduler &scheduler, const
             retarget_half_layer_task_material(task, destination_filament);
         });
     const HalfLayerExecutionTask *first_task = !prefix.empty() ? &prefix.front() :
-        !lower.empty() ? &lower.front() : !core.empty() ? &core.front() : &upper.front();
+        !lower.empty() ? &lower.front() : !tail.empty() ? &tail.front() : !core.empty() ? &core.front() :
+        !upper.empty() ? &upper.front() : &suffix.front();
     const double initial_seconds = half_layer_initial_entry_seconds(incoming_filament, *first_task);
     frame.plan = schedule_half_layer_execution(scheduler, std::move(prefix), std::move(lower), std::move(core),
-        std::move(upper), initial_seconds);
+        std::move(upper), initial_seconds, std::move(tail), std::move(suffix));
     reconcile_half_layer_cross_material_wipe(frame.plan,
         wipe_context.loaded_filament_by_tool, wipe_reservation_count, incoming_filament);
     for (unsigned int filament : tools.extruders) {
@@ -728,6 +817,7 @@ void ToolOrdering::build_half_layer_execution(const Print &print)
             break;
         }
     HalfLayerWipeIntoContext wipe_context = half_layer_wipe_into_context(print.config(), incoming);
+    const SupportLastObjects support_last = support_last_objects({print.objects().begin(), print.objects().end()});
     for (size_t frame_index = 0; frame_index < m_layer_tools.size(); ++frame_index) {
         LayerTools &tools = m_layer_tools[frame_index];
         std::vector<HalfLayerExecutionTask> prefix, lower, core, upper;
@@ -739,7 +829,7 @@ void ToolOrdering::build_half_layer_execution(const Print &print)
             for (size_t instance_id = 0; instance_id < assignment.object->instances().size(); ++instance_id)
                 append_half_layer_model_tasks(*assignment.object, assignment.parent_index, tools, instance_id,
                     lower, core, upper);
-        finalize_half_layer_frame(print_band_scheduler(print), print.config(), tools, *print_plan, incoming, wipe_context, std::move(prefix), std::move(lower),
+        finalize_half_layer_frame(print_band_scheduler(print), print.config(), tools, *print_plan, incoming, wipe_context, support_last, std::move(prefix), std::move(lower),
             std::move(core), std::move(upper));
         const HalfLayerExecutionFrame *frame = tools.half_layer_frame_index == size_t(-1) ? nullptr :
             &print_plan->frames[tools.half_layer_frame_index];
@@ -798,6 +888,7 @@ void ToolOrdering::build_half_layer_execution(const PrintObject &object)
             break;
         }
     HalfLayerWipeIntoContext wipe_context = half_layer_wipe_into_context(object.print()->config(), incoming);
+    const SupportLastObjects support_last = support_last_objects({&object});
     for (size_t frame_index = 0; frame_index < m_layer_tools.size(); ++frame_index) {
         LayerTools &tools = m_layer_tools[frame_index];
         std::vector<HalfLayerExecutionTask> prefix, lower, core, upper;
@@ -808,7 +899,7 @@ void ToolOrdering::build_half_layer_execution(const PrintObject &object)
         for (size_t parent_index : model_by_frame[frame_index])
             for (size_t instance_id = first_instance; instance_id < end_instance; ++instance_id)
                 append_half_layer_model_tasks(object, parent_index, tools, instance_id, lower, core, upper);
-        finalize_half_layer_frame(object.layer_bands().scheduler, object.print()->config(), tools, *print_plan, incoming, wipe_context, std::move(prefix), std::move(lower),
+        finalize_half_layer_frame(object.layer_bands().scheduler, object.print()->config(), tools, *print_plan, incoming, wipe_context, support_last, std::move(prefix), std::move(lower),
             std::move(core), std::move(upper));
         const HalfLayerExecutionFrame *frame = tools.half_layer_frame_index == size_t(-1) ? nullptr :
             &print_plan->frames[tools.half_layer_frame_index];

@@ -37,7 +37,9 @@ Polygon estimate_wipe_tower_first_layer_outline(const ConfigBase &config, WipeTo
 // MAGPIE: how often one layer can visit each filament. A layer of a banded object (layer.bands slot, H/2) is printed
 // as an execution frame (ToolOrdering::finalize_half_layer_frame): the support below the lower outer-wall pass, the
 // lower pass, the support above it, the core, and the upper pass inserted inside the core, each block one run per
-// filament across objects (group_half_layer_tasks_across_objects). The tower takes a tool change for every visit, so
+// filament across objects (group_half_layer_tasks_across_objects). Support that prints last (gcode.events support_last,
+// the low temperature interface) leaves those places for runs after the lower pass and after the core, which visit a
+// filament no more often. The tower takes a tool change for every visit, so
 // a filament printing support and core is visited before the lower pass, for the upper support, and on both sides of
 // the upper pass: four times a layer. Three was short: seed 11026 of the U1 random test (two cubes, before the
 // grouping) visited filament 0 five times on one layer and the generated tower, 87 x 89 mm, outgrew the 81.7 mm box.

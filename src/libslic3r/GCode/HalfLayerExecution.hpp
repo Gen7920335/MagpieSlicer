@@ -750,13 +750,18 @@ inline double half_layer_initial_entry_seconds(unsigned int incoming_filament,
 // Inputs are already dependency-ordered by the geometry/routing owner. Only the
 // complete upper pass is inserted; every within-group order stays unchanged.
 // Core boundaries are legal by construction (whole-loop/path completion).
+// `tail` prints right after the lower pass and `suffix` after the core; the upper
+// pass goes neither before the tail's end nor after the suffix's start (a support
+// that prints last, gcode.events support_last, keeps its interfaces in one run).
 inline HalfLayerExecutionPlan schedule_half_layer_execution(
     const LayerBandScheduler &choose_insertion,
     std::vector<HalfLayerExecutionTask> prefix,
     std::vector<HalfLayerExecutionTask> lower,
     std::vector<HalfLayerExecutionTask> core,
     std::vector<HalfLayerExecutionTask> upper,
-    double initial_seconds = 0.)
+    double initial_seconds = 0.,
+    std::vector<HalfLayerExecutionTask> tail = {},
+    std::vector<HalfLayerExecutionTask> suffix = {})
 {
     auto validate = [](const auto &tasks) {
         for (const auto &task : tasks)
@@ -769,7 +774,9 @@ inline HalfLayerExecutionPlan schedule_half_layer_execution(
     validate(lower);
     validate(core);
     validate(upper);
-    for (auto *tasks : {&prefix, &lower, &core, &upper})
+    validate(tail);
+    validate(suffix);
+    for (auto *tasks : {&prefix, &lower, &tail, &core, &upper, &suffix})
         for (HalfLayerExecutionTask &task : *tasks)
             initialize_half_layer_normal_owner(task);
     if (!std::isfinite(initial_seconds) || initial_seconds < 0.)
@@ -779,10 +786,15 @@ inline HalfLayerExecutionPlan schedule_half_layer_execution(
     out.lower_begin = prefix.size();
     out.lower_end = prefix.size() + lower.size();
     std::vector<HalfLayerExecutionTask> base;
-    base.reserve(prefix.size() + lower.size() + core.size());
+    base.reserve(prefix.size() + lower.size() + tail.size() + core.size() + suffix.size());
     base.insert(base.end(), prefix.begin(), prefix.end());
     base.insert(base.end(), lower.begin(), lower.end());
+    base.insert(base.end(), tail.begin(), tail.end());
     base.insert(base.end(), core.begin(), core.end());
+    base.insert(base.end(), suffix.begin(), suffix.end());
+    // Task indices into base: the first the upper pass may precede, and the suffix's start.
+    const size_t tail_end = out.lower_end + tail.size();
+    const size_t suffix_begin = base.size() - suffix.size();
     std::vector<double> elapsed(base.size() + 1, initial_seconds);
     for (size_t i = 0; i < base.size(); ++i)
         elapsed[i + 1] = elapsed[i] + base[i].extrusion_seconds +
@@ -794,21 +806,24 @@ inline HalfLayerExecutionPlan schedule_half_layer_execution(
             upper_seconds += upper[i].extrusion_seconds +
                 (i == 0 ? 0. : half_layer_transition_seconds(upper[i - 1], upper[i]));
         std::vector<HalfLayerInsertionBoundary> boundaries;
-        boundaries.reserve(core.size() + 1);
+        boundaries.reserve(base.size() - out.lower_end + 1);
         bool precedence_allowed = true;
         for (size_t i = out.lower_end; i <= base.size(); ++i) {
-            if (i > out.lower_end && base[i - 1].requires_upper_before)
+            if (i > tail_end && base[i - 1].requires_upper_before)
                 precedence_allowed = false;
             // overrides_key identifies the original island/support root. A
             // root may contain no-sort children whose relative adjacency is a
-            // dependency; never insert the delayed wall inside that root.
+            // dependency; never insert the delayed wall inside that root. The
+            // tail's end and the suffix's start are group edges the caller made.
             const bool complete_block = i == out.lower_end || i == base.size() ||
+                i == tail_end || i == suffix_begin ||
                 base[i - 1].overrides_key == nullptr || base[i].overrides_key == nullptr ||
                 base[i - 1].overrides_key != base[i].overrides_key;
+            const bool in_range = i >= tail_end && i <= suffix_begin;
             const double approach = half_layer_transition_seconds(base[i - 1], upper.front());
             const double departure = i == base.size() ? 0. : half_layer_transition_seconds(upper.back(), base[i]);
             const double replaced = i == base.size() ? 0. : half_layer_transition_seconds(base[i - 1], base[i]);
-            boundaries.push_back({elapsed[i], approach, departure, replaced, precedence_allowed && complete_block});
+            boundaries.push_back({elapsed[i], approach, departure, replaced, precedence_allowed && complete_block && in_range});
         }
         double first_start_seconds = elapsed[prefix.size()];
         if (!prefix.empty())

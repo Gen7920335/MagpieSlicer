@@ -1407,3 +1407,62 @@ TEST_CASE("An interface of its own filament prints at the low temperature too", 
     CHECK(cold == regions);
     CHECK(heated_back >= regions);
 }
+
+TEST_CASE("An H/2 layer cools once for the interfaces of both planes", "[LowTemperatureInterface][HalfLayer]")
+{
+    // H/2 prints a layer as two planes (z - h/2, z). Each plane printed its support before its model, so a layer
+    // whose interface spans both planes cooled and reheated twice (low temperature interface random test, seeds 2,
+    // 27, 106, 221). With the support printed last the lower plane's interface runs on into the upper plane's: one
+    // cooling a layer, Z only rising inside it, and no model extrusion while the nozzle is cold.
+    // Independent support layer heights put several physical support layers in one plane (seed 27).
+    const bool         independent_heights = GENERATE(false, true);
+    OfficialMods       mods;
+    DynamicPrintConfig config = low_temperature_config(true);
+    config.set_deserialize_strict({ { "support_interface_top_layers", 3 }, { "layer_height", 0.2 },
+                                    { "independent_support_layer_height", independent_heights } });
+    half_layer_params(config, true, true);
+    const std::string gcode = slice({ TestMesh::overhang }, config);
+    REQUIRE(gcode.find(begin_marker) != std::string::npos);
+
+    const std::string role_tag = ";TYPE:";
+    size_t      layers_with_interface = 0, runs_over_two_planes = 0;
+    int         begins_on_layer       = 0;
+    bool        cold                  = false;
+    double      z_mm                  = 0.;
+    std::string role;
+    std::vector<double> run_z_mm; // Z of every cold extrusion of the current run, mm
+    std::istringstream  stream(gcode);
+    for (std::string line; std::getline(stream, line);) {
+        if (line == ";LAYER_CHANGE") {
+            CHECK(begins_on_layer <= 1);
+            layers_with_interface += begins_on_layer > 0 ? 1 : 0;
+            begins_on_layer = 0;
+        } else if (line.rfind(role_tag, 0) == 0)
+            role = line.substr(role_tag.size());
+        else if (line.find(begin_marker) != std::string::npos) {
+            ++begins_on_layer;
+            cold = true;
+            run_z_mm.clear();
+        } else if (line.find(end_marker) != std::string::npos) {
+            cold = false;
+            // Physical Z tolerance, mm.
+            constexpr double z_tolerance_mm = 1e-4;
+            if (!run_z_mm.empty() && *std::max_element(run_z_mm.begin(), run_z_mm.end()) -
+                                             *std::min_element(run_z_mm.begin(), run_z_mm.end()) > z_tolerance_mm)
+                ++runs_over_two_planes;
+            CHECK(std::is_sorted(run_z_mm.begin(), run_z_mm.end()));
+        } else if (line.rfind("G1 ", 0) == 0) {
+            if (const auto z = gcode_word(line, 'Z'))
+                z_mm = *z;
+            const auto e = gcode_word(line, 'E');
+            if (cold && e && *e > 0. && (gcode_word(line, 'X') || gcode_word(line, 'Y'))) {
+                CHECK((role == "Support interface" || role == "Ironing" || role == "Prime tower"));
+                run_z_mm.push_back(z_mm);
+            }
+        }
+    }
+    CHECK(begins_on_layer <= 1);
+    CHECK(layers_with_interface > 0);
+    // The fixture really has interfaces in both planes of a layer: some cold run spans two Z.
+    CHECK(runs_over_two_planes > 0);
+}

@@ -53,6 +53,7 @@ This document contains conditional project-specific contracts. Read or search on
 # 5. Low-Temperature Interface Contract
 
 - Normal order is: model, support body, cooling/temperature transition, interface, reheating, next layer.
+- H/2 layers (two planes, Z only rises) cool once per layer: lower outer-wall pass, lower support body, cooling, lower interface, upper interface, reheating, the rest of the model with the upper outer-wall pass, upper support body. Without a lower-plane interface the upper plane keeps the normal order after the model. The upper outer-wall pass may then start later than its time midpoint (Gen 2026-10-29).
 - The temperature-drop tower remains visible and movable before slicing.
 - Do not automatically move the tower around the model.
 - Use a five-line brim and the configured temperature-delta length rule.

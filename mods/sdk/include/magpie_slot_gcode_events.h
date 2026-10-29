@@ -331,6 +331,10 @@ typedef struct mp_gcode_events_v1 {
     /* 1: the layer with this layer_index (0 = the first) prints its objects in the reverse of the object list
      * (print_order as_obj_list only; other orders ignore it). A table without this member reverses nothing. */
     mp_status (*reverse_object_order)(void *user, void *state, mp_ctx *ctx, int32_t layer_index, int32_t *out);
+    /* Without an export. 1: the object of ctx (its settings) prints its support last (support_last), told before
+     * the export when the core plans a layer's order ahead (a half-layer frame). A table without this member or a
+     * null one plans nothing. */
+    mp_status (*support_last_planned)(void *user, mp_ctx *ctx, int32_t *out);
 } mp_gcode_events_v1;
 
 #ifdef __cplusplus

@@ -92,6 +92,9 @@ std::optional<std::pair<std::string, std::string>> validate_gcode_events(const P
 // Whether an implementation prints an auxiliary tower with the support filament at full layer height for the object's
 // settings (Print::validate's line width checks).
 bool gcode_events_tower_requested(const PrintObject &object);
+// Whether an implementation prints the object's support last (support_last) for its settings, asked before the export
+// by planners that order a layer ahead of it (ToolOrdering's half-layer frames).
+bool gcode_events_support_last_planned(const PrintObject &object);
 // The auxiliary tower the 3D scene shows for `config` (the plate's settings, mod rules resolved), from the first
 // implementation that shows one.
 std::optional<mp_tower_preview_v1> gcode_events_tower_preview(const DynamicPrintConfig &config);

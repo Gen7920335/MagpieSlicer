@@ -26,7 +26,7 @@
 
 #define LTI_MOD_ID "low_temp_interface"
 
-MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.2.0")
+MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.3.0")
 
 namespace lti {
 
@@ -817,8 +817,15 @@ mp_status tower_requested(void *, mp_ctx *ctx, int32_t *out)
     });
 }
 
+// The support prints last whenever the mod is on (support_last), so a half-layer frame planned before the export
+// keeps the layer's interfaces together and the temperature drops once.
+mp_status support_last_planned(void *, mp_ctx *ctx, int32_t *out)
+{
+    return magpie::guarded([&] { *out = read_params(ctx).enable ? 1 : 0; });
+}
+
 const mp_gcode_events_v1 table = {sizeof(mp_gcode_events_v1), open, event, support_last, tower_on_layer, path_speeds, start_gcode, close,
-                                  validate, tower_preview, tower_requested};
+                                  validate, tower_preview, tower_requested, nullptr, support_last_planned};
 
 } // namespace lti
 

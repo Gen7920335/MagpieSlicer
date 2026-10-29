@@ -55,6 +55,13 @@ bool has_reverse_object_order(const NativeEntry &entry)
            table_of(entry).reverse_object_order != nullptr;
 }
 
+// Whether the implementation's table reaches support_last_planned and sets it.
+bool has_support_last_planned(const NativeEntry &entry)
+{
+    return entry.table_size >= offsetof(mp_gcode_events_v1, support_last_planned) + sizeof(mp_gcode_events_v1::support_last_planned) &&
+           table_of(entry).support_last_planned != nullptr;
+}
+
 // The slicing warnings a call left in ctx: errors stop the slice, warnings reach the print's active step.
 void flush_warnings(Print &print, const NativeEntry &entry, mp_ctx &ctx)
 {
@@ -360,6 +367,29 @@ bool gcode_events_tower_requested(const PrintObject &object)
         int32_t     out = 0;
         std::string error;
         if (!call_without_export(*entry, [&]() { return table_of(*entry).tower_requested(entry->user, &ctx, &out); }, error))
+            throw SlicingError(error);
+        if (out != 0)
+            return true;
+    }
+    return false;
+}
+
+bool gcode_events_support_last_planned(const PrintObject &object)
+{
+    std::shared_ptr<const NativeModSet> mods = active_native_mods();
+    if (!mods)
+        return false;
+    for (const NativeEntry *entry : mods->slots(MP_GCODE_EVENTS_SLOT)) {
+        if (!usable(*entry) || !has_support_last_planned(*entry))
+            continue;
+        mp_ctx ctx;
+        ctx.mod           = entry->mod;
+        ctx.print_config  = &object.print()->full_print_config();
+        ctx.object_config = &object.config();
+        ctx.cancelled     = []() { return false; };
+        int32_t     out = 0;
+        std::string error;
+        if (!call_without_export(*entry, [&]() { return table_of(*entry).support_last_planned(entry->user, &ctx, &out); }, error))
             throw SlicingError(error);
         if (out != 0)
             return true;
