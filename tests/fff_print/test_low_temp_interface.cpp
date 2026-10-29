@@ -1430,10 +1430,28 @@ TEST_CASE("An H/2 layer cools once for the interfaces of both planes", "[LowTemp
     bool        cold                  = false;
     double      z_mm                  = 0.;
     std::string role;
-    std::vector<double> run_z_mm; // Z of every cold extrusion of the current run, mm
+    std::vector<double> run_z_mm;   // Z of every cold extrusion of the current run, mm
+    std::vector<double> layer_z_mm; // Z of every extrusion of the current layer, mm
+    // Extrusions never go down inside a layer (seed 106: support at 1.357 mm after the 1.38 mm core). Physical Z
+    // tolerance, mm.
+    constexpr double layer_z_tolerance_mm = 1e-4;
+    size_t layer_index = 0;
+    std::string z_drop; // the first drop on the layer: "<from> -> <to> (<role>)", mm
+    std::string last_role;
+    auto z_only_rises = [&]() {
+        for (size_t i = 1; i < layer_z_mm.size(); ++i)
+            if (layer_z_mm[i] < layer_z_mm[i - 1] - layer_z_tolerance_mm)
+                return false;
+        return true;
+    };
     std::istringstream  stream(gcode);
     for (std::string line; std::getline(stream, line);) {
         if (line == ";LAYER_CHANGE") {
+            INFO("layer " << layer_index << ", first drop " << z_drop);
+            CHECK(z_only_rises());
+            layer_z_mm.clear();
+            z_drop.clear();
+            ++layer_index;
             CHECK(begins_on_layer <= 1);
             layers_with_interface += begins_on_layer > 0 ? 1 : 0;
             begins_on_layer = 0;
@@ -1455,6 +1473,14 @@ TEST_CASE("An H/2 layer cools once for the interfaces of both planes", "[LowTemp
             if (const auto z = gcode_word(line, 'Z'))
                 z_mm = *z;
             const auto e = gcode_word(line, 'E');
+            // Skirt, brim and towers stand apart at the layer's full height.
+            const bool apart = role == "Skirt" || role == "Brim" || role == "Prime tower";
+            if (!apart && e && *e > 0. && (gcode_word(line, 'X') || gcode_word(line, 'Y'))) {
+                if (z_drop.empty() && !layer_z_mm.empty() && z_mm < layer_z_mm.back() - layer_z_tolerance_mm)
+                    z_drop = std::to_string(layer_z_mm.back()) + " (" + last_role + ") -> " + std::to_string(z_mm) + " (" + role + ")";
+                layer_z_mm.push_back(z_mm);
+                last_role = role;
+            }
             if (cold && e && *e > 0. && (gcode_word(line, 'X') || gcode_word(line, 'Y'))) {
                 CHECK((role == "Support interface" || role == "Ironing" || role == "Prime tower"));
                 run_z_mm.push_back(z_mm);

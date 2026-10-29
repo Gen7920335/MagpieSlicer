@@ -566,9 +566,12 @@ static SupportLastObjects support_last_objects(const std::vector<const PrintObje
 
 // MAGPIE: a frame's support of objects that print it last, out of `prefix`, so the layer's interfaces print in one
 // run and the temperature the support_last mod sets changes once (low temperature interface random test: seeds 2,
-// 27, 106 and 221 cooled and reheated twice a layer, once per plane). Z only rises. The lower plane (at or under the
-// object's lower outer-wall pass, or under the frame's top without one) prints after that pass, body then
-// interface; the upper plane's interface follows at once and its body prints after the core. Without a lower-plane
+// 27, 106 and 221 cooled and reheated twice a layer, once per plane). Z only rises. Support under the object's lower
+// outer-wall pass stays before it; the rest under the frame's top (the lower plane) prints after that pass, body then
+// interface; the upper plane (at the top) interface follows at once and its body prints after the core. Support
+// between the lower pass and the top belongs before the core too (seed 106, independent support layer heights: a
+// 1.357 mm support layer printed after the 1.38 mm core, and the drop tower after it at 1.357). An interface under
+// the lower pass therefore cools on its own before it, a second time on that layer (seed 27: 2 layers); Z wins. Without a lower-plane
 // interface the upper plane keeps the contract order after the core: body, then interface. A plane holding several
 // physical layers of one object keeps its stored order, which Z needs; when that order ends on an interface the upper
 // plane's interface still follows it (seed 27, independent support layer heights: two coolings on layers 72 and 83).
@@ -595,9 +598,12 @@ static void split_support_last_tasks(const SupportLastObjects &objects, double f
         }
         const auto it = lower_top_mm.find(task.object);
         const double z_mm = task.physical_layer->print_z;
-        const bool upper = it != lower_top_mm.end() ? z_mm > it->second + z_tolerance_mm :
-            z_mm > frame_print_z - z_tolerance_mm;
-        (upper ? upper_plane : lower_plane).push_back(std::move(task));
+        if (z_mm > frame_print_z - z_tolerance_mm)
+            upper_plane.push_back(std::move(task));
+        else if (it != lower_top_mm.end() && z_mm < it->second - z_tolerance_mm)
+            kept.push_back(std::move(task));
+        else
+            lower_plane.push_back(std::move(task));
     }
     prefix = std::move(kept);
     // Body and interface of one plane, each in stored order (an object with several physical layers there: all body).
