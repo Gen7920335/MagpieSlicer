@@ -6438,25 +6438,49 @@ static Polygon tower_footprint_with_skirt(const Print &print, const Polygon &foo
     return grown.empty() ? footprint : grown.front();
 }
 
-// MAGPIE: whether a tower footprint (scaled, the tower's frame) touches an object: instance hulls as
-// layered_print_cleareance_valid builds them, moved into the tower's frame.
-static bool wipe_tower_footprint_hits_object(const Print &print, const Polygon &footprint)
+// MAGPIE: what the tower must keep off, per object instance, in the tower's frame (scaled): the hull of its volumes
+// (as layered_print_cleareance_valid builds them) and of its generated support, which reaches past the model: seed
+// 12643 of the U1 random test put the tower clear of the cubes but on their support ("gcode path conflicts").
+static Polygons object_hulls_in_tower_frame(const Print &print)
 {
     const Vec3d plate_origin = print.get_plate_origin();
     const Point to_tower_frame(-scaled<coord_t>(plate_origin.x()), -scaled<coord_t>(plate_origin.y()));
-    for (const PrintObject *object : print.objects())
-        for (const PrintInstance &inst : object->instances())
+    Polygons hulls;
+    for (const PrintObject *object : print.objects()) {
+        Points support;
+        for (const SupportLayer *layer : object->support_layers())
+            layer->support_fills.collect_points(support);
+        for (const PrintInstance &inst : object->instances()) {
+            Points points;
             for (const ModelVolume *v : object->model_object()->volumes) {
                 if (!v->is_model_part())
                     continue;
                 Polygon hull = v->get_convex_hull_2d(Geometry::assemble_transform(Vec3d::Zero(), inst.model_instance->get_rotation(),
                                                                                   inst.model_instance->get_scaling_factor(), inst.model_instance->get_mirror()));
                 hull.translate(inst.shift - object->center_offset());
-                hull.translate(to_tower_frame);
-                if (!intersection(Polygons{footprint}, Polygons{hull}).empty())
-                    return true;
+                append(points, std::move(hull.points));
             }
-    return false;
+            for (const Point &p : support)
+                points.emplace_back(p + inst.shift);
+            if (points.size() < 3)
+                continue;
+            Polygon hull = Geometry::convex_hull(std::move(points));
+            hull.translate(to_tower_frame);
+            hulls.emplace_back(std::move(hull));
+        }
+    }
+    return hulls;
+}
+
+// MAGPIE: whether a tower footprint (scaled, the tower's frame) touches an object.
+static bool wipe_tower_footprint_hits_object(const Print &print, const Polygon &footprint)
+{
+    return !intersection(Polygons{footprint}, object_hulls_in_tower_frame(print)).empty();
+}
+
+static bool has_banded_object(const Print &print)
+{
+    return std::any_of(print.objects().begin(), print.objects().end(), [](const PrintObject *object) { return object->layer_bands().active(); });
 }
 
 void Print::validate_generated_wipe_tower_footprint() const
@@ -6483,8 +6507,7 @@ void Print::validate_generated_wipe_tower_footprint() const
     // generated tower that grew past the reserved room into an object would print through it (seed 9136 of the U1
     // random test, H/2 + multi-nozzle walls: tower brim 0.6 mm into a cube, no error). Only banded plates: Orca only
     // warns about a tower placed near an object, and a plate without bands keeps that.
-    if (std::any_of(m_objects.begin(), m_objects.end(), [](const PrintObject *object) { return object->layer_bands().active(); }) &&
-        wipe_tower_footprint_hits_object(*this, *tower_footprint))
+    if (has_banded_object(*this) && wipe_tower_footprint_hits_object(*this, *tower_footprint))
         throw Slic3r::SlicingError(L("Prime tower overlaps an object, and collisions will be caused.\n"));
 }
 
@@ -6496,8 +6519,38 @@ std::optional<Vec2d> Print::generated_wipe_tower_refit() const
     // MAGPIE: the skirt around the tower must end up on the bed too.
     const Polygon  with_skirt      = tower_footprint_with_skirt(*this, *footprint);
     const Polygons printable_polys = this->get_extruder_shared_printable_polygon();
-    if (printable_polys.empty() || diff(Polygons{with_skirt}, printable_polys).empty())
+    if (printable_polys.empty())
         return std::nullopt;
+    if (diff(Polygons{with_skirt}, printable_polys).empty()) {
+        // MAGPIE: on the bed but on an object (validate_generated_wipe_tower_footprint, banded plates): the placement
+        // kept room for the estimate, a bound that can run well past the tower (seed 12643 of the U1 random test:
+        // 121.6 mm estimated, 95 mm printed, put against a cube where no estimate-sized room was left). Take the clear
+        // anchor nearest the current one for the generated footprint, WIPE_TOWER_MARGIN (mm) from the objects' hulls
+        // and inside the bed, as the placement does for the estimate.
+        if (!has_banded_object(*this) || !wipe_tower_footprint_hits_object(*this, *footprint))
+            return std::nullopt;
+        const Point anchor(scaled<coord_t>(m_config.wipe_tower_x.get_at(m_plate_index)), scaled<coord_t>(m_config.wipe_tower_y.get_at(m_plate_index)));
+        Polygon local = with_skirt;
+        local.translate(-anchor);
+        const BoundingBox bed    = get_extents(printable_polys);
+        const BoundingBox fp     = get_extents(local);
+        const coord_t     margin = scaled<coord_t>(WIPE_TOWER_MARGIN);
+        const BoundingBox anchors(Point(bed.min.x() + margin - fp.min.x(), bed.min.y() + margin - fp.min.y()),
+                                  Point(bed.max.x() - margin - fp.max.x(), bed.max.y() - margin - fp.max.y()));
+        if (anchors.min.x() > anchors.max.x() || anchors.min.y() > anchors.max.y())
+            return std::nullopt;
+        const std::optional<Point> clear = nearest_clear_wipe_tower_anchor(anchors, local,
+            offset(object_hulls_in_tower_frame(*this), float(margin)), anchor);
+        if (!clear)
+            return std::nullopt;
+        Polygon moved = *footprint;
+        moved.translate(*clear - anchor);
+        Polygon moved_with_skirt = with_skirt;
+        moved_with_skirt.translate(*clear - anchor);
+        if (!diff(Polygons{moved_with_skirt}, printable_polys).empty() || !intersection(get_bed_excluded_area(m_config), Polygons{moved}).empty())
+            return std::nullopt;
+        return Vec2d(unscaled(clear->x()), unscaled(clear->y()));
+    }
     // Same rule as the GUI drag clamp, which holds the real tower's box WIPE_TOWER_MARGIN (mm) inside.
     const Vec2f shift = WipeTower::move_box_inside_polygon(get_extents(with_skirt), printable_polys, scaled<coord_t>(WIPE_TOWER_MARGIN));
     if (shift.isZero())

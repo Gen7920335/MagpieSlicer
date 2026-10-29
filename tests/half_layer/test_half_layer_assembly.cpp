@@ -3371,3 +3371,80 @@ TEST_CASE("The banded Type2 tower estimate holds the tower WipeTower2 plans for 
     const float volume_area_mm2 = prime_volume_mm3 * float(2 * visits - 1) / layer_height_mm;
     CHECK(volume_area_mm2 < planned_width_mm * planned_depth_mm);
 }
+
+// A banded plate's generated tower that lands on an object is refused (validate_generated_wipe_tower_footprint), and
+// Print::generated_wipe_tower_refit() gives the nearest anchor where the generated footprint is clear of every object,
+// as the CLI then slices again. The estimate the placement used is a bound that can run well past the tower: seed
+// 12643 of the U1 random test was placed for 121.6 mm and printed 95 mm, against a cube.
+TEST_CASE("A half-layer tower generated on an object is refitted clear of it", "[HalfLayer][ExecutionTower][TowerPlacement]")
+{
+    auto config = multifilament_config(2);
+    config.set_num_extruders(2);
+    set_toolhead_nozzle_diameter(config, 0, 0.4);
+    set_toolhead_nozzle_diameter(config, 1, 0.4);
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false},
+        {"enable_prime_tower", true}, {"wipe_tower_x", "20"}, {"wipe_tower_y", "20"},
+        {"prime_tower_brim_width", 3}, {"wipe_tower_rotation_angle", 0},
+        {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"wall_loops", 2},
+        {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
+        {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Slic3r::Test::half_layer_params(config, true);
+    size_flush_to_nozzles(config);
+    config.set_key_value("grab_length", new ConfigOptionFloats{0., 0.});
+    std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides;
+    for (int extruder : {1, 2})
+        overrides.push_back({{"extruder", extruder}, {"outer_wall_filament_id", 1}, {"inner_wall_filament_id", 2},
+            {"sparse_infill_filament_id", 2}, {"internal_solid_filament_id", 2}, {"top_surface_filament_id", 2},
+            {"bottom_surface_filament_id", 2}});
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(10.), cube(10.)}, print, model, config, &overrides);
+    // The cubes side by side in the middle of the 200 mm test bed, 30 mm apart.
+    for (size_t idx = 0; idx < model.objects.size(); ++idx)
+        model.objects[idx]->instances.front()->set_offset(Vec3d(90. + 30. * double(idx), 100., 0.));
+    print.apply(model, config);
+    REQUIRE(print.has_wipe_tower());
+    REQUIRE_NOTHROW(print.process());
+    const std::optional<Polygon> generated = print.generated_wipe_tower_footprint();
+    REQUIRE(generated);
+    const BoundingBox generated_box = get_extents(*generated);
+    const Vec2d tower_size_mm = unscaled(generated_box.size());
+
+    // Every object's first layer box on the plate (mm): its sliced outline moved by its instance shift.
+    std::vector<BoundingBoxf> objects;
+    for (const PrintObject *object : print.objects())
+        for (const PrintInstance &instance : object->instances()) {
+            BoundingBox box = get_extents(object->get_layer(0)->lslices);
+            box.translate(instance.shift);
+            objects.emplace_back(unscaled(box.min), unscaled(box.max));
+        }
+    REQUIRE(objects.size() == 2);
+    // The tower moved so that its footprint covers the first cube's centre.
+    const Vec2d centre = objects.front().center();
+    const Vec2d anchor_offset_mm = unscaled(generated_box.min) - Vec2d(20., 20.);
+    const double x_mm = centre.x() - 0.5 * tower_size_mm.x() - anchor_offset_mm.x();
+    const double y_mm = centre.y() - 0.5 * tower_size_mm.y() - anchor_offset_mm.y();
+    config.set_deserialize_strict({{"wipe_tower_x", std::to_string(x_mm)}, {"wipe_tower_y", std::to_string(y_mm)}});
+    print.apply(model, config);
+    std::string refusal;
+    try { print.process(); } catch (const Slic3r::SlicingError &e) { refusal = e.what(); }
+    // Refused for the object, not for the bed.
+    CHECK(refusal.find("overlaps an object") != std::string::npos);
+
+    const std::optional<Vec2d> refit = print.generated_wipe_tower_refit();
+    REQUIRE(refit);
+    config.set_deserialize_strict({{"wipe_tower_x", std::to_string(refit->x())}, {"wipe_tower_y", std::to_string(refit->y())}});
+    print.apply(model, config);
+    REQUIRE_NOTHROW(print.process());
+    const std::optional<Polygon> refitted = print.generated_wipe_tower_footprint();
+    REQUIRE(refitted);
+    const BoundingBoxf refitted_box(unscaled(get_extents(*refitted).min), unscaled(get_extents(*refitted).max));
+    for (const BoundingBoxf &object : objects) {
+        const bool apart = refitted_box.max.x() < object.min.x() || object.max.x() < refitted_box.min.x() ||
+                           refitted_box.max.y() < object.min.y() || object.max.y() < refitted_box.min.y();
+        CHECK(apart);
+    }
+    // A tower clear of the objects needs no refit.
+    CHECK_FALSE(print.generated_wipe_tower_refit());
+}
