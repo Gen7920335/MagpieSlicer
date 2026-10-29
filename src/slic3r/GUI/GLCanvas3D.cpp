@@ -3690,8 +3690,12 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
             DynamicPrintConfig &project_config = wxGetApp().preset_bundle->project_config;
             const auto *tower_x = project_config.option<ConfigOptionFloats>(AUX_TOWER_POSITION_KEYS[0]);
             const auto *tower_y = project_config.option<ConfigOptionFloats>(AUX_TOWER_POSITION_KEYS[1]);
-            const bool  global_support = bool_value("enable_support") || int_value("raft_layers") > 0 || int_value("enforce_support_layers") > 0;
-            auto plate_has_support = [global_support](PartPlate *plate) {
+            // Each setting the object does not override falls back to the print's, as the slice reads them: an
+            // object overriding only raft_layers keeps the print's enable_support.
+            const bool global_enable   = bool_value("enable_support");
+            const int  global_raft     = int_value("raft_layers");
+            const int  global_enforced = int_value("enforce_support_layers");
+            auto plate_has_support = [global_enable, global_raft, global_enforced](PartPlate *plate) {
                 if (plate == nullptr || !plate->has_printable_instances())
                     return false;
                 for (ModelObject *object : plate->get_objects_on_this_plate()) {
@@ -3700,10 +3704,9 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                     const ConfigOption *support  = object->config.option("enable_support");
                     const ConfigOption *raft     = object->config.option("raft_layers");
                     const ConfigOption *enforced = object->config.option("enforce_support_layers");
-                    bool enabled = (support == nullptr && raft == nullptr && enforced == nullptr) ? global_support : false;
-                    if (support != nullptr) enabled |= support->getBool();
-                    if (raft != nullptr) enabled |= raft->getInt() > 0;
-                    if (enforced != nullptr) enabled |= enforced->getInt() > 0;
+                    const bool enabled = (support != nullptr ? support->getBool() : global_enable) ||
+                                         (raft != nullptr ? raft->getInt() : global_raft) > 0 ||
+                                         (enforced != nullptr ? enforced->getInt() : global_enforced) > 0;
                     if (enabled)
                         return true;
                 }
