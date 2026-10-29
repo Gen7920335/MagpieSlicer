@@ -3265,3 +3265,44 @@ TEST_CASE("The tower estimate of a banded print reserves the tool changes its fr
     // The reserved box holds the generated tower: 1 mm of slack for the brim's whole loops and rounding.
     CHECK(generated_side_mm <= estimated_side_mm + 1.);
 }
+
+// A banded layer prints each object instance's tasks in turn. With the inner walls on one filament and the infill on
+// another, every cube's core is A-B, so two cubes printed A-B-A-B: a tool change more per object on each layer, and a
+// tower larger than the estimate reserved (seed 11026 of the U1 random test, 11 tool changes on a layer of two cubes
+// against 7). Grouping runs across objects gives two cubes the tool changes of one.
+TEST_CASE("A banded layer changes tool as often for two objects as for one", "[HalfLayer][ExecutionTower][TowerPlacement]")
+{
+    auto most_visits = [](size_t cubes) {
+        auto config = multifilament_config(2);
+        config.set_key_value("filament_map", new ConfigOptionInts{1, 1});
+        config.set_deserialize_strict({{"single_extruder_multi_material", true},
+            {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"},
+            {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"wall_loops", 2},
+            {"sparse_infill_density", "20%"},
+            {"only_one_wall_top", false}, {"only_one_wall_first_layer", false}, {"detect_overhang_wall", false},
+            {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+        Slic3r::Test::half_layer_params(config, true);
+        size_flush_to_nozzles(config);
+        config.set_key_value("grab_length", new ConfigOptionFloats{0.});
+        // Outer and inner walls on filament 1, infill and shells on filament 2.
+        std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides(cubes,
+            {{"outer_wall_filament_id", 1}, {"inner_wall_filament_id", 1}, {"sparse_infill_filament_id", 2},
+             {"internal_solid_filament_id", 2}, {"top_surface_filament_id", 2}, {"bottom_surface_filament_id", 2}});
+        Print print;
+        Model model;
+        init_print(std::vector<TriangleMesh>(cubes, cube(10.)), print, model, config, &overrides);
+        REQUIRE(print.get_object(0)->layer_bands().active());
+        REQUIRE_NOTHROW(print.process());
+        const ToolOrdering &ordering = print.tool_ordering();
+        REQUIRE(ordering.half_layer_execution_plan() != nullptr);
+        size_t most = 0;
+        for (const HalfLayerExecutionFrame &frame : ordering.half_layer_execution_plan()->frames)
+            most = std::max(most, frame.plan.visits.size());
+        return most;
+    };
+    const size_t one = most_visits(1);
+    const size_t two = most_visits(2);
+    CAPTURE(one, two);
+    REQUIRE(one >= 2);
+    CHECK(two == one);
+}

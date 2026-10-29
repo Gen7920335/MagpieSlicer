@@ -325,6 +325,59 @@ inline void rebuild_half_layer_visits(HalfLayerExecutionPlan &plan)
     }
 }
 
+// MAGPIE: one run per material across the objects of a frame block. The producers append each object instance's
+// tasks in turn, so two objects whose support body and interface print with different filaments changed tool on every
+// object: 11 tool changes on a layer of two cubes in the U1 random test (seed 11026) against 7 grouped, and a tower
+// larger than the footprint estimate. Each object instance keeps its own task order (body before interface, no-sort
+// roots, the region grouping of append_half_layer_model_tasks); only runs of different objects are interleaved, which
+// never overlap. A block holding a task that requires the upper pass before it (ironing) is left as it is.
+inline void group_half_layer_tasks_across_objects(std::vector<HalfLayerExecutionTask> &tasks)
+{
+    if (tasks.size() < 2)
+        return;
+    std::vector<std::pair<const PrintObject *, size_t>> owners;
+    std::vector<std::vector<size_t>> streams;
+    for (size_t i = 0; i < tasks.size(); ++i) {
+        if (tasks[i].requires_upper_before)
+            return;
+        const std::pair<const PrintObject *, size_t> owner{tasks[i].object, tasks[i].instance_id};
+        const auto it = std::find(owners.begin(), owners.end(), owner);
+        if (it == owners.end()) {
+            owners.push_back(owner);
+            streams.push_back({i});
+        } else
+            streams[size_t(it - owners.begin())].push_back(i);
+    }
+    if (streams.size() < 2)
+        return;
+    auto same_tool = [](const HalfLayerToolVisit &a, const HalfLayerToolVisit &b) {
+        return a.physical_tool == b.physical_tool && a.filament == b.filament;
+    };
+    std::vector<size_t> next(streams.size(), 0);
+    std::vector<size_t> order;
+    order.reserve(tasks.size());
+    HalfLayerToolVisit current = tasks.front().tool;
+    while (order.size() < tasks.size()) {
+        bool took = false;
+        for (size_t s = 0; s < streams.size(); ++s)
+            for (; next[s] < streams[s].size() && same_tool(tasks[streams[s][next[s]]].tool, current); ++next[s]) {
+                order.push_back(streams[s][next[s]]);
+                took = true;
+            }
+        if (!took)
+            for (size_t s = 0; s < streams.size(); ++s)
+                if (next[s] < streams[s].size()) {
+                    current = tasks[streams[s][next[s]]].tool;
+                    break;
+                }
+    }
+    std::vector<HalfLayerExecutionTask> grouped;
+    grouped.reserve(tasks.size());
+    for (size_t i : order)
+        grouped.push_back(std::move(tasks[i]));
+    tasks = std::move(grouped);
+}
+
 inline void refresh_half_layer_fixed_insertion_metrics(HalfLayerExecutionPlan &plan)
 {
     if (plan.insertion.boundary == HalfLayerInsertion::unavailable ||

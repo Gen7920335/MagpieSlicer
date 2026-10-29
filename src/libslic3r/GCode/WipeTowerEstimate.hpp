@@ -35,10 +35,13 @@ WipeTowerType resolve_wipe_tower_type(const ConfigBase &config);
 Polygon estimate_wipe_tower_first_layer_outline(const ConfigBase &config, WipeTowerType tower_type, double width, double depth, double height);
 
 // MAGPIE: how often one layer can visit each filament. A layer of a banded object (layer.bands slot, H/2) is printed
-// as an execution frame of three task runs, its lower band, its core and its upper band
-// (ToolOrdering::finalize_half_layer_frame), and the tower takes a tool change for every visit, so a filament can
-// be purged up to three times a layer instead of once.
-constexpr int BANDED_LAYER_VISITS_PER_FILAMENT = 3;
+// as an execution frame (ToolOrdering::finalize_half_layer_frame): the support below the lower outer-wall pass, the
+// lower pass, the support above it, the core, and the upper pass inserted inside the core, each block one run per
+// filament across objects (group_half_layer_tasks_across_objects). The tower takes a tool change for every visit, so
+// a filament printing support and core is visited before the lower pass, for the upper support, and on both sides of
+// the upper pass: four times a layer. Three was short: seed 11026 of the U1 random test (two cubes, before the
+// grouping) visited filament 0 five times on one layer and the generated tower, 87 x 89 mm, outgrew the 81.7 mm box.
+constexpr int BANDED_LAYER_VISITS_PER_FILAMENT = 4;
 
 // filament_ids:  0-based filaments purged on the plate. The config cannot see custom G-code tool
 //                changes, so ids derived from the model must include them

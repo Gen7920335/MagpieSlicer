@@ -6438,6 +6438,27 @@ static Polygon tower_footprint_with_skirt(const Print &print, const Polygon &foo
     return grown.empty() ? footprint : grown.front();
 }
 
+// MAGPIE: whether a tower footprint (scaled, the tower's frame) touches an object: instance hulls as
+// layered_print_cleareance_valid builds them, moved into the tower's frame.
+static bool wipe_tower_footprint_hits_object(const Print &print, const Polygon &footprint)
+{
+    const Vec3d plate_origin = print.get_plate_origin();
+    const Point to_tower_frame(-scaled<coord_t>(plate_origin.x()), -scaled<coord_t>(plate_origin.y()));
+    for (const PrintObject *object : print.objects())
+        for (const PrintInstance &inst : object->instances())
+            for (const ModelVolume *v : object->model_object()->volumes) {
+                if (!v->is_model_part())
+                    continue;
+                Polygon hull = v->get_convex_hull_2d(Geometry::assemble_transform(Vec3d::Zero(), inst.model_instance->get_rotation(),
+                                                                                  inst.model_instance->get_scaling_factor(), inst.model_instance->get_mirror()));
+                hull.translate(inst.shift - object->center_offset());
+                hull.translate(to_tower_frame);
+                if (!intersection(Polygons{footprint}, Polygons{hull}).empty())
+                    return true;
+            }
+    return false;
+}
+
 void Print::validate_generated_wipe_tower_footprint() const
 {
     const std::optional<Polygon> tower_footprint = this->generated_wipe_tower_footprint();
@@ -6458,6 +6479,13 @@ void Print::validate_generated_wipe_tower_footprint() const
     // The cutter/purge corner is a physical obstacle — the brim must stay out like the body.
     if (!intersection(get_bed_excluded_area(m_config), Polygons{*tower_footprint}).empty())
         throw Slic3r::SlicingError(L("Prime tower is too close to an exclusion area, and collisions will be caused.\n"));
+    // MAGPIE: a banded plate's tower is placed from an estimate that cannot see every tool visit of its frames, and a
+    // generated tower that grew past the reserved room into an object would print through it (seed 9136 of the U1
+    // random test, H/2 + multi-nozzle walls: tower brim 0.6 mm into a cube, no error). Only banded plates: Orca only
+    // warns about a tower placed near an object, and a plate without bands keeps that.
+    if (std::any_of(m_objects.begin(), m_objects.end(), [](const PrintObject *object) { return object->layer_bands().active(); }) &&
+        wipe_tower_footprint_hits_object(*this, *tower_footprint))
+        throw Slic3r::SlicingError(L("Prime tower overlaps an object, and collisions will be caused.\n"));
 }
 
 std::optional<Vec2d> Print::generated_wipe_tower_refit() const
@@ -6481,21 +6509,8 @@ std::optional<Vec2d> Print::generated_wipe_tower_refit() const
     if (!diff(Polygons{moved_with_skirt}, printable_polys).empty() || !intersection(get_bed_excluded_area(m_config), Polygons{moved}).empty())
         return std::nullopt;
     // Never onto an object: the space the placement kept free was sized from the estimate.
-    // Instance hulls as layered_print_cleareance_valid builds them, moved into the tower's frame.
-    const Vec3d plate_origin = this->get_plate_origin();
-    const Point to_tower_frame(-scaled<coord_t>(plate_origin.x()), -scaled<coord_t>(plate_origin.y()));
-    for (const PrintObject *object : m_objects)
-        for (const PrintInstance &inst : object->instances())
-            for (const ModelVolume *v : object->model_object()->volumes) {
-                if (!v->is_model_part())
-                    continue;
-                Polygon hull = v->get_convex_hull_2d(Geometry::assemble_transform(Vec3d::Zero(), inst.model_instance->get_rotation(),
-                                                                                  inst.model_instance->get_scaling_factor(), inst.model_instance->get_mirror()));
-                hull.translate(inst.shift - object->center_offset());
-                hull.translate(to_tower_frame);
-                if (!intersection(Polygons{moved}, Polygons{hull}).empty())
-                    return std::nullopt;
-            }
+    if (wipe_tower_footprint_hits_object(*this, moved))
+        return std::nullopt;
     return Vec2d(m_config.wipe_tower_x.get_at(m_plate_index) + shift.x(), m_config.wipe_tower_y.get_at(m_plate_index) + shift.y());
 }
 

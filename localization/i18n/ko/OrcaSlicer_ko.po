@@ -14804,6 +14804,9 @@ msgstr "프라임 타워가 다른 객체와 너무 가까워 충돌이 발생�
 msgid "Prime tower is too close to an exclusion area, and collisions will be caused.\n"
 msgstr "프라임 타워가 제외 영역에 너무 가까워 충돌이 발생하게 됩니다.\n"
 
+msgid "Prime tower overlaps an object, and collisions will be caused.\n"
+msgstr "프라임 타워가 물체와 겹쳐 충돌이 발생하게 됩니다.\n"
+
 # AI Translated
 msgid "Prime tower is too close to the clumping detection area, and collisions will be caused.\n"
 msgstr "프라임 타워가 뭉침 감지 영역에 너무 가까워 충돌이 발생하게 됩니다.\n"

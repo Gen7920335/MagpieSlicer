@@ -586,11 +586,19 @@ static void finalize_half_layer_frame(const LayerBandScheduler &scheduler, const
             (upper_plane ? prefix_upper : prefix_lower).push_back(std::move(task));
         }
         prefix = std::move(prefix_lower);
+        group_half_layer_tasks_across_objects(prefix_upper);
+        group_half_layer_tasks_across_objects(core);
         core.insert(core.begin(), std::make_move_iterator(prefix_upper.begin()), std::make_move_iterator(prefix_upper.end()));
-    }
+    } else
+        group_half_layer_tasks_across_objects(core);
+    // MAGPIE: one tool run per material across objects within each block (group_half_layer_tasks_across_objects).
+    group_half_layer_tasks_across_objects(prefix);
+    group_half_layer_tasks_across_objects(lower);
+    group_half_layer_tasks_across_objects(upper);
     // Producers already traverse dependency/no-sort collections in their
-    // stored order. Material grouping here would turn A-B-A into A-A-B and can
-    // move an interface ahead of its support body. Visits are derived from the
+    // stored order. Material grouping within one object instance would turn
+    // A-B-A into A-A-B and can move an interface ahead of its support body;
+    // the grouping above only interleaves whole runs of different instances. Visits are derived from the
     // preserved task stream below; they do not own task ordering.
     HalfLayerExecutionFrame frame;
     frame.print_z = tools.print_z;
