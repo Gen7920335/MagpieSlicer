@@ -561,6 +561,41 @@ SCENARIO("update_diff_values_to_child_config keeps a child's values on variants 
                 REQUIRE(parent.opt_serialize("retraction_length") == "1.1,1.1,0.8,0.8");
             }
         }
+        WHEN("the child lists no variants and stores one value per extruder") {
+            Slic3r::DynamicPrintConfig child;
+            child.set_deserialize_strict("retraction_length", "1.1,2.2");
+            parent.update_diff_values_to_child_config(child, "printer_extruder_id", "printer_extruder_variant",
+                                                      Slic3r::printer_options_with_variant_1,
+                                                      Slic3r::printer_options_with_variant_2);
+            THEN("each extruder's variants take that extruder's value") {
+                REQUIRE(parent.opt_serialize("retraction_length") == "1.1,1.1,2.2,2.2");
+            }
+        }
+    }
+
+    // A Snapmaker U1 user preset saved before the parent gained High Flow variants: four tools, one
+    // value per tool, no variant list. T2 to T4 kept the parent's 1.5 mm before the per-tool mapping.
+    GIVEN("A four-tool printer parent with Standard and High Flow variants per tool") {
+        Slic3r::DynamicPrintConfig parent;
+        parent.set_key_value("printer_extruder_variant",
+            variants({"Direct Drive Standard", "Direct Drive High Flow", "Direct Drive Standard", "Direct Drive High Flow",
+                      "Direct Drive Standard", "Direct Drive High Flow", "Direct Drive Standard", "Direct Drive High Flow"}));
+        parent.set_key_value("printer_extruder_id", new Slic3r::ConfigOptionInts({1, 1, 2, 2, 3, 3, 4, 4}));
+        parent.set_deserialize_strict("retraction_length", "1.5,1.5,1.5,1.5,1.5,1.5,1.5,1.5");
+        parent.set_deserialize_strict("z_hop", "0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4");
+
+        WHEN("the legacy child stores one value per tool") {
+            Slic3r::DynamicPrintConfig child;
+            child.set_deserialize_strict("retraction_length", "0.4,0.8,0.8,0.8");
+            child.set_deserialize_strict("z_hop", "0.05,0.05,0.05,0.05");
+            parent.update_diff_values_to_child_config(child, "printer_extruder_id", "printer_extruder_variant",
+                                                      Slic3r::printer_options_with_variant_1,
+                                                      Slic3r::printer_options_with_variant_2);
+            THEN("every tool keeps its own value on both of its variants") {
+                REQUIRE(parent.opt_serialize("retraction_length") == "0.4,0.4,0.8,0.8,0.8,0.8,0.8,0.8");
+                REQUIRE(parent.opt_serialize("z_hop") == "0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05");
+            }
+        }
     }
 }
 

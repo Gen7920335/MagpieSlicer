@@ -12533,6 +12533,23 @@ void DynamicPrintConfig::update_diff_values_to_child_config(DynamicPrintConfig& 
         variant_index = map_variant_indices(cur_extruder_variants, cur_extruder_ids, target_extruder_variants, target_extruder_ids);
     }
 
+    // MAGPIE: a child saved before its parent listed extruder variants (a multi-tool preset stored one
+    // value per tool, e.g. Snapmaker U1 presets from before the High Flow variants) has no variant list,
+    // so the mapping above gives the parent's first tool the child's first value and leaves the other
+    // tools on the parent's values. Such a key stores exactly one value per parent tool: tool i's value
+    // goes to every variant of the i-th extruder id. A key with one value keeps the mapping above.
+    std::vector<int> per_tool_index;
+    size_t           tool_count = 0;
+    if (target_variant_count == 0 && cur_variant_count > 0 && cur_extruder_ids.size() == size_t(cur_variant_count)) {
+        std::vector<int> tool_ids;
+        for (int id : cur_extruder_ids)
+            if (std::find(tool_ids.begin(), tool_ids.end(), id) == tool_ids.end())
+                tool_ids.push_back(id);
+        tool_count = tool_ids.size();
+        for (int id : cur_extruder_ids)
+            per_tool_index.push_back(int(std::find(tool_ids.begin(), tool_ids.end(), id) - tool_ids.begin()));
+    }
+
     const t_config_option_keys &keys = new_config.keys();
     for (auto& opt : keys) {
         if ((opt == extruder_id_name) || (opt == extruder_variant_name))
@@ -12564,6 +12581,8 @@ void DynamicPrintConfig::update_diff_values_to_child_config(DynamicPrintConfig& 
                 if (opt_vec_src->size() != variant_index.size() * size_t(stride)) {
                     opt_src->set(opt_target);
                 }
+                else if (tool_count > 1 && opt_vec_dest->size() == tool_count * size_t(stride))
+                    opt_vec_src->set_only_diff(opt_vec_dest, per_tool_index, stride, is_filament_extruder_override_key(opt));
                 else
                     // An override's nil means "disabled" and is the child's value; every other nil column inherits.
                     opt_vec_src->set_only_diff(opt_vec_dest, variant_index, stride, is_filament_extruder_override_key(opt));

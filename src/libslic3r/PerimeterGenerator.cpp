@@ -3169,7 +3169,13 @@ wall_0_inset, layer_height, input_params_tmp);
                         inner_params.fixed_outer_wall_overlaps.push_back(
                             half_layer_wall_boundary_overlap(*this, wall_plan, depth + 1, this->detail_wall_count));
                     }
-                    Arachne::WallToolPaths inner_wall_tool_paths(inner_region, perimeter_spacing, perimeter_spacing, coord_t(inner_loop_number + 1), 0, layer_height, inner_params);
+                    // MAGPIE: the H/2 depths this pass holds are printed by the outer wall's tool, so their bead basis is the
+                    // H/2 profile, as in the single and full passes; the inner wall's spacing made beads of the inner wall
+                    // nozzle that the small outer wall nozzle printed (B74-1 of the U1 random test, seed 7431).
+                    const coord_t inner_first_spacing = inner_params.fixed_outer_wall_spacings.empty() ? perimeter_spacing
+                                                                                                         : inner_params.fixed_outer_wall_spacings.front();
+                    Arachne::WallToolPaths inner_wall_tool_paths(inner_region, inner_first_spacing, bead_spacing_inner(inner_params, inner_loop_number + 1),
+                                                                 coord_t(inner_loop_number + 1), 0, layer_height, inner_params);
                     std::vector<Arachne::VariableWidthLines> inner_perimeters = inner_wall_tool_paths.getToolPaths();
 
                     if (clip_walls_over_top) {
