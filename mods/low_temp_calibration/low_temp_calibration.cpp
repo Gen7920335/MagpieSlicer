@@ -31,7 +31,7 @@
 
 #define LTC_MOD_ID "low_temp_calibration"
 
-MAGPIE_MOD_DEFINE(LTC_MOD_ID, "1.0.0")
+MAGPIE_MOD_DEFINE(LTC_MOD_ID, "1.1.0")
 
 namespace lesic {
 
@@ -838,6 +838,11 @@ void grid_build(mp_ctx *ctx, const mp_calib_field_v1 *fields, uint32_t n, const 
     // around the cube from the bed up to the lid. 2 mm keeps the support on the cube (toggle test 10-28: 0.35 mm
     // ring on every layer, 1 mm only the first layer, 2 mm none).
     print("support_object_xy_distance", "2");
+    // Snug support follows the lid's underside. Orca's default style takes a support area 0.7 mm wider than the cube
+    // on each side (11.4 against the cube top's 10.3 mm contact) and fills the margin of the bottom interface layers
+    // that the top interface does not reach with support body and its sheath, printed hot onto the cube's edge (random
+    // grid test 10-29: three or more top interface layers; snug removed it at 0.12/0.2/0.24 mm layers).
+    print("support_style", "snug");
     double coldest = std::numeric_limits<double>::max();
     for (int i = 0; i < g.nx(); ++i)
         for (int j = 0; j < g.ny(); ++j)

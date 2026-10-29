@@ -9,7 +9,7 @@
     // 2026-10-29). Bottom interface layers and bottom Z distance are fixed values only, not axes (Gen 2026-10-29).
     "id": "low_temp_calibration",
     "name": "Low temperature interface calibration", "name_ko": "저온 접점 캘리브레이션",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "api": { "major": 1, "min_minor": 1 },
     "binary": "low_temp_calibration",
     "slots": [ { "slot": "gcode.events", "version": 1, "impl": "low_temp_calibration" },

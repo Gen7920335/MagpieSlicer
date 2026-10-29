@@ -406,6 +406,26 @@ TEST_CASE("Each lid starts its gap above the cube's last layer and is back on th
     }
 }
 
+TEST_CASE("The interface grid keeps support body off the gap with more top interface layers", "[LowTemperatureCalibration]")
+{
+    OfficialMods mods;
+    // Four top and two bottom interface layers: Orca's default support style left support body and its sheath around
+    // the bottom interface layers, on the cube's edge (random grid test 10-29); snug support keeps the gap interface.
+    ModHost::CalibrationFields fields = grid_fields("temperature", 200., 190., 2, "none", 0., 0., 1);
+    for (auto &[name, value] : fields)
+        if (name == "top_interface_layers")
+            value = "4";
+    const std::string output = calibration_gcode("grid", grid_config(), fields);
+    int interface_layers = 0;
+    for (const LayerTrace &layer : trace_layers(output)) {
+        if (std::count(layer.roles.begin(), layer.roles.end(), "Support interface") == 0)
+            continue;
+        ++interface_layers;
+        CHECK(std::count(layer.roles.begin(), layer.roles.end(), "Support") == 0);
+    }
+    CHECK(interface_layers >= 4);
+}
+
 TEST_CASE("One interface run over objects with their own temperatures waits for each", "[LowTemperatureCalibration]")
 {
     OfficialMods mods;

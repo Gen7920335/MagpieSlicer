@@ -528,9 +528,6 @@ TEST_CASE("Temperature drop tower honors every activation guard", "[LowTemperatu
     settings.low_temperature_interface_enabled = false;
     disabled_cases.emplace_back("low-temperature mode off", settings);
     settings = {};
-    settings.interface_filament = 1;
-    disabled_cases.emplace_back("dedicated interface filament", settings);
-    settings = {};
     settings.print_sequence = PrintSequence::ByObject;
     disabled_cases.emplace_back("print by object", settings);
     settings = {};
@@ -1365,4 +1362,48 @@ TEST_CASE("A tool's preheat for its next use does not reset its low interface te
     CHECK(preheats > 0);
     CHECK(active_preheats == 0);
     CHECK(interface_resets == 0);
+}
+
+TEST_CASE("An interface of its own filament prints at the low temperature too", "[LowTemperatureInterface]")
+{
+    OfficialMods mods;
+    // A dedicated interface filament (another material) is printed cold like the support's own interface, cooled and
+    // heated back on the interface's tool (Gen 2026-10-29: heterogeneous interfaces too).
+    DynamicPrintConfig config = Test::multifilament_config(2, {
+        { "single_extruder_multi_material", 0 },
+        { "enable_support", 1 },
+        { "support_interface_top_layers", 2 },
+        { "support_filament", 1 },
+        { "support_interface_filament", 2 },
+        { "nozzle_temperature", "220,240" },
+        { "nozzle_temperature_initial_layer", "220,240" },
+    });
+    process_params(config, { { "enable", true }, { "temperature", 190 }, { "heating_time", 0.0 } });
+    Print print;
+    Model model;
+    Test::init_print({ mesh(TestMesh::overhang) }, print, model, config);
+    const std::string gcode = Test::gcode(print);
+    REQUIRE(gcode.find(begin_marker) != std::string::npos);
+
+    // Every interface region: the second tool down to 190 degC and back to its own 240 degC.
+    int  active = -1, regions = 0, cold = 0, heated_back = 0;
+    bool in_interface = false;
+    std::istringstream lines(gcode);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.size() >= 2 && line[0] == 'T' && std::isdigit(static_cast<unsigned char>(line[1])))
+            active = std::stoi(line.substr(1));
+        else if (line.find(begin_marker) != std::string::npos) {
+            in_interface = true;
+            ++regions;
+            CHECK(active == 1);
+        } else if (line.find(end_marker) != std::string::npos)
+            in_interface = false;
+        else if (line.rfind("M109 R190", 0) == 0 || line.rfind("M109 S190", 0) == 0 || line.rfind("M104 S190", 0) == 0)
+            cold += in_interface ? 1 : 0;
+        else if (line.rfind("M104 S240", 0) == 0 && !in_interface && regions > 0)
+            ++heated_back;
+    }
+    CHECK(regions > 0);
+    CHECK(cold == regions);
+    CHECK(heated_back >= regions);
 }

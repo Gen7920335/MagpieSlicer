@@ -1,5 +1,6 @@
-// Low temperature support interface (Magpie line 1): on a single nozzle, support interfaces print at a lower
-// temperature of their own, so they stick less to the model. The support prints after the object on each layer, the
+// Low temperature support interface (Magpie line 1): support interfaces print at a lower
+// temperature of their own, so they stick less to the model, with the support's filament or one of their own (another
+// material printed cold too, Gen 2026-10-29). The support prints after the object on each layer, the
 // nozzle waits for the interface temperature (or cools while printing the temperature drop tower), optionally cooled
 // by the auxiliary fan and wiped on a nozzle brush, and the next other extrusion heats back with a short dwell.
 //
@@ -25,7 +26,7 @@
 
 #define LTI_MOD_ID "low_temp_interface"
 
-MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.1.1")
+MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.2.0")
 
 namespace lti {
 
@@ -137,10 +138,11 @@ struct State
 
 void text(const State &s, const char *t) { s.w->text(s.w->w, t); }
 
-// Prints the low temperature interface for the object in ctx: its support's interface uses the support filament.
-bool enabled(const State &s, mp_ctx *ctx)
+// Prints the low temperature interface for the object in ctx, with the support's filament or a filament of its own
+// (an interface of another material printed cold too, Gen 2026-10-29): the interface's filament is the one printing it.
+bool enabled(const State &s, mp_ctx *)
 {
-    return s.p.enable && config_int(ctx, "support_interface_filament") == 0 && s.w->filament(s.w->w) >= 0;
+    return s.p.enable && s.w->filament(s.w->w) >= 0;
 }
 
 // The interface temperature of the object in ctx, degC: its own value (an object-scope parameter, the calibration
@@ -181,8 +183,7 @@ bool read_tower_enabled(const State &s, mp_ctx *ctx)
 {
     // PrintSequence::ByLayer.
     constexpr int by_layer = 0;
-    if (!s.p.tower || !s.p.enable || config_int(ctx, "support_interface_filament") != 0 || config_int(ctx, "print_sequence") != by_layer ||
-        has_configured_wiper(s.p))
+    if (!s.p.tower || !s.p.enable || config_int(ctx, "print_sequence") != by_layer || has_configured_wiper(s.p))
         return false;
     if (s.w->has_support_layers(s.w->w) == 0)
         return false;
@@ -743,7 +744,7 @@ mp_status validate(void *, mp_ctx *ctx, const mp_gcode_validate_v1 *object, mp_g
     // overheats the support filament (Magpie line 1).
     return magpie::guarded([&] {
         const Params p = read_params(ctx);
-        if (object->has_support == 0 || !p.enable || config_int(ctx, "support_interface_filament") != 0)
+        if (object->has_support == 0 || !p.enable)
             return;
         // Marlin EXTRUDE_MINTEMP and Klipper min_extrude_temp both default to 170 degC.
         constexpr int firmware_min_extrude_temperature_c = 170;
@@ -756,8 +757,12 @@ mp_status validate(void *, mp_ctx *ctx, const mp_gcode_validate_v1 *object, mp_g
             out->n_args  = 2;
             return;
         }
-        for (uint32_t i = 0; i < object->n_support_filaments; ++i) {
-            const int32_t filament          = object->support_filaments[i];
+        // The filament printing the interface: its own (1-based setting), else the support's.
+        const int32_t        interface_filament = config_int(ctx, "support_interface_filament") - 1;
+        std::vector<int32_t> filaments(object->support_filaments, object->support_filaments + object->n_support_filaments);
+        if (interface_filament >= 0)
+            filaments.assign(1, interface_filament);
+        for (const int32_t filament : filaments) {
             const int     max_temperature_c = int(config_at(ctx, "nozzle_temperature_range_high", filament).value_or(0.));
             if (max_temperature_c > 0 && temperature_c > max_temperature_c) {
                 out->message = "Support interface temperature %1% \xC2\xB0" "C exceeds the maximum nozzle temperature %2% \xC2\xB0" "C of filament %3%.";
@@ -781,7 +786,7 @@ mp_status tower_preview(void *, mp_ctx *ctx, int32_t style_temperature, mp_tower
         const int    interface_temperature = lowest_target(p, style_temperature, config_int(ctx, "support_interface_top_layers")); // degC
         const int    nozzles               = config_count(ctx, "nozzle_diameter");
         const auto   print_sequence        = config_f64(ctx, "print_sequence");
-        const bool   show = p.tower && p.enable && interface_temperature > 0 && config_int(ctx, "support_interface_filament") == 0 &&
+        const bool   show = p.tower && p.enable && interface_temperature > 0 &&
                           (!print_sequence || int(*print_sequence) == 0) && !has_configured_wiper(p) && nozzles > 0;
         int normal_temperature = 0; // degC, hottest filament
         for (const char *key : {"nozzle_temperature", "nozzle_temperature_initial_layer"})

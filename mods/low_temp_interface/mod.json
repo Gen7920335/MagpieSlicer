@@ -1,5 +1,6 @@
 {
-    // Low temperature support interface (Magpie line 1): on a single nozzle, support interfaces print at their own
+    // Low temperature support interface (Magpie line 1): support interfaces, with the support's filament or one of
+    // their own (another material printed cold too, Gen 2026-10-29), print at their own
     // lower temperature, so they stick less to the model. The support prints after the object on each layer, the
     // nozzle waits for the interface temperature (or cools while printing a temperature drop tower), and the next other
     // extrusion heats back. Optional nozzle cooling with the auxiliary fan and brushing on a nozzle brush. A native mod
@@ -8,7 +9,7 @@
     // print's value.
     "id": "low_temp_interface",
     "name": "Low temperature support interface", "name_ko": "저온 서포트 접점",
-    "version": "2.1.1",
+    "version": "2.2.0",
     "api": { "major": 1, "min_minor": 1 },
     "binary": "low_temp_interface",
     "slots": [ { "slot": "gcode.events", "version": 1, "impl": "low_temp_interface" } ],
