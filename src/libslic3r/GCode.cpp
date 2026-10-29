@@ -1169,9 +1169,16 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
     // PERMANENT DIAGNOSTIC: the tool change the caller asked for and the one the tower planned there, with the
     // printed layer and the tower layer, so a mismatch names its place without a probe build (seed 11438 of the
     // random test).
+    // The whole plan of the tower layer is logged as well (seed 4118 of the LTI random test).
     static std::string toolchange_mismatch_message(double printed_layer_z, const WipeTower::ToolChangeResult &tcr,
-                                                   int asked_tool, int tower_layer_idx, int tool_change_idx)
+                                                   int asked_tool, int tower_layer_idx, int tool_change_idx,
+                                                   const std::vector<std::vector<WipeTower::ToolChangeResult>> &tool_changes)
     {
+        std::string plan;
+        if (tower_layer_idx >= 0 && size_t(tower_layer_idx) < tool_changes.size())
+            for (const WipeTower::ToolChangeResult &change : tool_changes[tower_layer_idx])
+                plan += (plan.empty() ? "" : ", ") + std::to_string(change.initial_tool) + "->" + std::to_string(change.new_tool);
+        BOOST_LOG_TRIVIAL(error) << "tower layer " << tower_layer_idx << " plan: " << plan;
         return "Error: WipeTowerIntegration::append_tcr was asked to do a toolchange it didn't expect. Asked for tool " +
                std::to_string(asked_tool) + ", the tower planned " + std::to_string(tcr.initial_tool) + " -> " +
                std::to_string(tcr.new_tool) + " at tower z " + std::to_string(tcr.print_z) + " (tower layer " +
@@ -1194,7 +1201,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
     std::string WipeTowerIntegration::append_tcr(GCode& gcodegen, const WipeTower::ToolChangeResult& tcr, int new_filament_id, double z) const
     {
         if (new_filament_id != -1 && new_filament_id != tcr.new_tool)
-            throw Slic3r::InvalidArgument(toolchange_mismatch_message(gcodegen.m_last_layer_z, tcr, new_filament_id, m_layer_idx, m_tool_change_idx));
+            throw Slic3r::InvalidArgument(toolchange_mismatch_message(gcodegen.m_last_layer_z, tcr, new_filament_id, m_layer_idx, m_tool_change_idx, m_tool_changes));
 
         const std::optional<GCode::ToolchangePositionState> position_before_toolchange =
             gcodegen.capture_toolchange_position();
@@ -1792,7 +1799,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
                                                   double                             z) const
     {
         if (new_extruder_id != -1 && new_extruder_id != tcr.new_tool)
-            throw Slic3r::InvalidArgument(toolchange_mismatch_message(gcodegen.m_last_layer_z, tcr, new_extruder_id, m_layer_idx, m_tool_change_idx));
+            throw Slic3r::InvalidArgument(toolchange_mismatch_message(gcodegen.m_last_layer_z, tcr, new_extruder_id, m_layer_idx, m_tool_change_idx, m_tool_changes));
 
         const std::optional<GCode::ToolchangePositionState> position_before_toolchange =
             gcodegen.capture_toolchange_position();
