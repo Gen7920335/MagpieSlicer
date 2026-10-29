@@ -536,3 +536,24 @@ TEST_CASE("Only a cone wall gives the tower a stabilization cone", "[WipeTower]"
         CHECK_FALSE(print.get_conflict_result().has_value());
     }
 }
+
+// A sequential print keeps a tower only for one object, and prints it layer by layer with the tower planned from the
+// print's tool ordering. The object's own ordering resolved its "don't care" extruder from its own initial extruder, so a
+// raft on the support filament under an object on the default filament printed the object with the raft's tool where
+// the tower had planned a change ("toolchange it didn't expect", seed 4118 of the LTI random test).
+TEST_CASE("A sequential print with a tower prints the tool changes the tower planned", "[WipeTower]")
+{
+    auto config = multifilament_config(2);
+    size_flush_to_nozzles(config);
+    config.set_deserialize_strict({{"print_sequence", "by object"}, {"enable_prime_tower", true},
+        {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"}, {"raft_layers", 2}, {"enable_support", false},
+        {"support_filament", 2}, {"support_interface_filament", 0},
+        {"layer_height", 0.16}, {"initial_layer_print_height", 0.16}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    Print print;
+    Model model;
+    init_print({cube(10.)}, print, model, config);
+    REQUIRE(print.has_wipe_tower());
+    std::string exported;
+    REQUIRE_NOTHROW(exported = gcode(print));
+    CHECK_FALSE(exported.empty());
+}

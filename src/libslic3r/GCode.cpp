@@ -4625,6 +4625,15 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         this->set_extruders(sequential_tools);
 
         has_wipe_tower = print.has_wipe_tower() && tool_ordering.has_wipe_tower();
+        // MAGPIE: a sequential print keeps a tower only for one object (normalize_fdm_2), and then prints through the
+        // layer-by-layer path below with the tower Print::_make_wipe_tower planned from print.tool_ordering(). The
+        // per-object ordering above resolves "don't care" extruders from its own initial extruder, so its layers can
+        // name other tools than the tower's plan: seed 4118 of the LTI random test (raft, object on the default
+        // filament) printed layer 0.77 with T1 where the tower planned T1 -> T0 ("toolchange it didn't expect").
+        if (has_wipe_tower) {
+            tool_ordering       = print.tool_ordering();
+            initial_extruder_id = tool_ordering.first_extruder();
+        }
     } else {
         // Find tool ordering for all the objects at once, and the initial extruder ID.
         // If the tool ordering has been pre-calculated by Print class for wipe tower already, reuse it.
