@@ -1312,3 +1312,57 @@ TEST_CASE("Every temperature drop tower cooling pass prints under the tower's ro
     REQUIRE(passes > 0);
     CHECK(pass_extrusions > 0);
 }
+
+TEST_CASE("A tool's preheat for its next use does not reset its low interface temperature", "[LowTemperatureInterface]")
+{
+    OfficialMods mods;
+    // Orca's ooze prevention preheats a tool preheat_time seconds before its next T<n>, backtracking over the G-code
+    // already written. With a short idle time the preheat went back into the tool's own printing and reset the
+    // interface temperature mid-interface (U1 random test, seed 27). The overhang (filament 1, support and interface
+    // on it) and a cube (filament 2) alternate tools on every layer; a long preheat time reaches back past every
+    // tool change.
+    DynamicPrintConfig config = Test::multifilament_config(2, {
+        { "single_extruder_multi_material", 0 },
+        { "ooze_prevention", 1 },
+        { "preheat_time", 600 },
+        { "enable_support", 1 },
+        { "support_interface_top_layers", 2 },
+        { "support_filament", 0 },
+        { "support_interface_filament", 0 },
+        { "nozzle_temperature", "220,220" },
+        { "nozzle_temperature_initial_layer", "220,220" },
+    });
+    process_params(config, { { "enable", true }, { "temperature", 170 }, { "heating_time", 0.0 } });
+    Print print;
+    Model model;
+    const std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{ { { "extruder", 1 } }, { { "extruder", 2 } } };
+    Test::init_print({ mesh(TestMesh::overhang), Test::cube(20) }, print, model, config, &overrides);
+    const std::string gcode = Test::gcode(print);
+    REQUIRE(gcode.find(begin_marker) != std::string::npos);
+
+    // Walk the tools: no preheat of the active tool, and inside an interface no temperature for it but its own.
+    int  active = -1, preheats = 0, active_preheats = 0, interface_resets = 0;
+    bool in_interface = false;
+    std::istringstream lines(gcode);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.size() >= 2 && line[0] == 'T' && std::isdigit(static_cast<unsigned char>(line[1])))
+            active = std::stoi(line.substr(1));
+        else if (line.find(begin_marker) != std::string::npos)
+            in_interface = true;
+        else if (line.find(end_marker) != std::string::npos)
+            in_interface = false;
+        else if (line.find("; preheat T") != std::string::npos) {
+            ++preheats;
+            const size_t t = line.find(" T");
+            const int    tool = t != std::string::npos ? std::atoi(line.c_str() + t + 2) : -1;
+            if (tool == active) {
+                ++active_preheats;
+                if (in_interface)
+                    ++interface_resets;
+            }
+        }
+    }
+    CHECK(preheats > 0);
+    CHECK(active_preheats == 0);
+    CHECK(interface_resets == 0);
+}

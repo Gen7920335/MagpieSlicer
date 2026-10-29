@@ -18,6 +18,7 @@
 #include "GCode/LayerTimeTower.hpp"
 #include "GCode/GCodeEventHost.hpp"
 #include "ModHost/GCodeEvents.hpp"
+#include "ModHost/SupportStyle.hpp"
 #include "GCode/SpiralVase.hpp"
 #include "GCode/PressureEqualizer.hpp"
 #include "GCode/SmallAreaInfillFlowCompensator.hpp"
@@ -3553,6 +3554,13 @@ static void layer_time_blend_set_estimate(GCodeProcessor &processor, const Print
         ModHost::choose_active_slot(ModHost::time_plan_slots(), print.full_print_config(), nullptr, nullptr);
     const bool blending = !planner.impl().empty();
     processor.set_temperature_wait_estimate(blending && events != nullptr && events->changes_temperature());
+    // A nozzle temperature that changes while its tool prints (a G-code event mod, a support style's sublayer
+    // temperature) must not be reset by the tool's preheat for its next use; without them Orca's preheats as they were.
+    bool tool_temperature_changes = events != nullptr && events->changes_temperature();
+    for (const PrintObject *object : print.objects())
+        tool_temperature_changes = tool_temperature_changes ||
+            (object->has_support_material() && ModHost::style_interface_temperature(print.full_print_config(), &object->config()) > 0);
+    processor.set_preheat_after_tool_release(tool_temperature_changes);
     if (blending)
         processor.set_temperature_rates(layer_time_setting(planner, "heat_rate", 2.), layer_time_setting(planner, "cool_rate", 1.));
 }

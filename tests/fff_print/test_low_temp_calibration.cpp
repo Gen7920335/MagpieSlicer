@@ -11,7 +11,10 @@
 
 #include "test_helpers.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <regex>
@@ -400,5 +403,55 @@ TEST_CASE("Each lid starts its gap above the cube's last layer and is back on th
         REQUIRE(above.size() == reference.size());
         for (size_t k = 0; k < above.size(); ++k)
             CHECK_THAT(above[k], Catch::Matchers::WithinAbs(reference[k], 1e-6));
+    }
+}
+
+TEST_CASE("One interface run over objects with their own temperatures waits for each", "[LowTemperatureCalibration]")
+{
+    OfficialMods mods;
+    // H/2 support prints the specimens' interfaces one after another without an object's support end in between, so
+    // the interface temperature changes inside one run. A change between two objects' temperatures waits for the
+    // new one (U1 random test, seed 331: M104 and the next interface printed while the nozzle still heated).
+    DynamicPrintConfig config = grid_config();
+    set_mod_params(config, { { "half_layer.support", true } });
+    const std::string output = calibration_gcode("grid", config, grid_fields("temperature", 200., 190., 2, "none", 0., 0., 1), nullptr, false);
+    int interface_layers = 0;
+    for (const LayerTrace &layer : trace_layers(output)) {
+        if (std::count(layer.roles.begin(), layer.roles.end(), "Support interface") == 0)
+            continue;
+        ++interface_layers;
+        // Only the heating back is set without a wait.
+        for (const std::string &command : layer.temperatures)
+            CHECK((command.rfind("M109", 0) == 0 || command == "M104 S220"));
+        CHECK(std::count(layer.temperatures.begin(), layer.temperatures.end(), "M109 R190") +
+              std::count(layer.temperatures.begin(), layer.temperatures.end(), "M109 S190") >= 1);
+    }
+    CHECK(interface_layers >= 2);
+}
+
+// The random calibration test's driver (hidden, run by name): MAGPIE_LTCAL_CASE names a JSON file with "gcode" (a
+// sliced G-code whose config block gives the presets), optional "mod_settings" and "printer_mod_settings" (the
+// presets' mod values, which the config block leaves out), "fields" (the grid's form) and "out" (where the
+// calibration's G-code goes). A refused or failed calibration writes its message to "<out>.error".
+TEST_CASE("Interface grid random case driver", "[.ltcal_random]")
+{
+    OfficialMods mods;
+    const char  *case_path = std::getenv("MAGPIE_LTCAL_CASE");
+    REQUIRE(case_path != nullptr);
+    std::ifstream        in(case_path);
+    const nlohmann::json spec = nlohmann::json::parse(in);
+    DynamicPrintConfig   config = DynamicPrintConfig::full_print_config();
+    config.load_from_gcode_file(spec.at("gcode").get<std::string>(), ForwardCompatibilitySubstitutionRule::EnableSilent);
+    for (const char *key : { "mod_settings", "printer_mod_settings" })
+        if (spec.contains(key))
+            config.set_key_value(key, new ConfigOptionString(spec.at(key).get<std::string>()));
+    ModHost::CalibrationFields fields;
+    for (const auto &[name, value] : spec.at("fields").items())
+        fields.emplace_back(name, value.get<std::string>());
+    const std::string out = spec.at("out").get<std::string>();
+    try {
+        std::ofstream(out, std::ios::binary) << calibration_gcode("grid", config, fields);
+    } catch (const std::exception &e) {
+        std::ofstream(out + ".error", std::ios::binary) << e.what();
     }
 }

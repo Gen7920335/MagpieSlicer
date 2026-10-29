@@ -25,7 +25,7 @@
 
 #define LTI_MOD_ID "low_temp_interface"
 
-MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.1.0")
+MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.1.1")
 
 namespace lti {
 
@@ -115,6 +115,7 @@ struct State
     // From the first interface path until the next other extrusion, which restores the filament's temperature.
     bool   active       = false;
     int    target       = 0;  // degC
+    bool   target_sublayer = false; // the target is a support style's sublayer temperature, not an object's
     int    filament     = -1;
     int    normal       = 0;  // degC
     double heating_time = 0.; // s
@@ -522,7 +523,10 @@ void start(State &s, mp_ctx *ctx, int target_temperature)
             text(s, "; low-temperature support interface auxiliary cooling\n");
             s.w->aux_fan(s.w->w, s.p.aux_fan_speed);
             auxiliary_fan_started = true;
-        } else if (fan_possible && s.w->position_known(s.w->w) != 0) {
+        } else if (fan_possible) {
+            // An unknown position (the first move after a tool change's G-code) travels straight there, as the core's
+            // own first travel after it does: the U1 random test (seed 27) lost the cooling on every interface that
+            // followed a tool change.
             Vec2 position(s.p.cooling_x, s.p.cooling_y);
             bool valid = position.x >= 0. && position.y >= 0. && std::isfinite(position.x) && std::isfinite(position.y);
             if (!valid) {
@@ -562,7 +566,8 @@ void start(State &s, mp_ctx *ctx, int target_temperature)
             s.w->aux_fan(s.w->w, resume);
         }
 
-        if (has_configured_wiper(s.p) && s.w->position_known(s.w->w) != 0) {
+        // From an unknown position as well (see the cooling travel above).
+        if (has_configured_wiper(s.p)) {
             text(s, "; low-temperature support interface nozzle brushing\n");
             s.w->raw_travel(s.w->w, s.p.brush_start_x, s.p.brush_start_y, "move to nozzle brush");
             s.w->set_feedrate(s.w->w, s.p.brush_speed * 60., "set nozzle brush speed");
@@ -574,6 +579,7 @@ void start(State &s, mp_ctx *ctx, int target_temperature)
     }
     s.active       = true;
     s.target       = interface_temperature;
+    s.target_sublayer = target_temperature > 0;
     s.filament     = filament_id;
     s.normal       = normal_temperature;
     s.heating_time = s.p.heating_time;
@@ -593,6 +599,7 @@ void finish(State &s)
     }
     s.active       = false;
     s.target       = 0;
+    s.target_sublayer = false;
     s.filament     = -1;
     s.normal       = 0;
     s.heating_time = 0.;
@@ -614,6 +621,7 @@ void on_path(State &s, mp_ctx *ctx, mp_gcode_event_v1 &ev)
                 s.w->set_temperature(s.w->w, target, 1, s.filament, target < s.target ? MP_TEMP_WAIT_COOLING : 0);
                 s.target = target;
             }
+            s.target_sublayer   = sublayer_temperature > 0;
             ev.owns_temperature = 1;
             return;
         }
@@ -623,13 +631,19 @@ void on_path(State &s, mp_ctx *ctx, mp_gcode_event_v1 &ev)
         if (!s.active)
             start(s, ctx, sublayer_temperature);
         else {
-            // Between sublayer and contact interface the target changes without another cooling wait.
+            // Between sublayer and contact interface the target changes without another cooling wait. Between two
+            // objects' own temperatures (one interface run over several objects, an H/2 frame) it waits as the
+            // calibration grid's next specimen does: the U1 random test (seed 331) printed the next object's
+            // interface while the nozzle still heated from 175 to 226 degC.
             const int     target   = sublayer_temperature > 0 ? sublayer_temperature : object_temperature(s, ctx);
             const int32_t filament = s.w->filament(s.w->w);
             if (target > 0 && target != s.target && filament >= 0) {
-                s.w->set_temperature(s.w->w, target, 0, filament, 0);
+                const bool object_change = sublayer_temperature <= 0 && !s.target_sublayer;
+                s.w->set_temperature(s.w->w, target, object_change ? 1 : 0, filament,
+                                     object_change && target < s.target ? MP_TEMP_WAIT_COOLING : 0);
                 s.target = target;
             }
+            s.target_sublayer = sublayer_temperature > 0;
         }
     } else if (s.active)
         finish(s);

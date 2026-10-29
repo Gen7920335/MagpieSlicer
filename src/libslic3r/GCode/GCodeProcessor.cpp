@@ -969,6 +969,10 @@ private:
     // gcode lines cache, used only when writing by time
     std::deque<LineData> m_lines;
     size_t               m_added_lines_counter{0};
+    // MAGPIE: the tool command (T<n>) selected last, and when each tool was released by the next tool change, s
+    // (insert_lines with after_tool_release).
+    std::string                  m_selected_tool;
+    std::map<std::string, float> m_tool_released_at;
     // map of gcode line ids from original to final
     // used to update m_result.moves[].gcode_id
     std::vector<std::pair<size_t, size_t>> m_gcode_lines_map;
@@ -1056,7 +1060,8 @@ public:
     void insert_lines(const Backtrace&                                                    backtrace,
                       const std::string&                                                  cmd,
                       std::function<std::string(unsigned int, const std::vector<float>&)> line_inserter,
-                      std::function<std::string(const std::string&)>                      line_replacer)
+                      std::function<std::string(const std::string&)>                      line_replacer,
+                      bool                                                                after_tool_release = false)
     {
         // Orca: find start pos by seaching G28/G29/PRINT_START/START_PRINT commands
         auto is_start_pos = [](const std::string& curr_cmd) {
@@ -1064,6 +1069,17 @@ public:
                    ascii_iequals(curr_cmd, "START_PRINT");
         };
         assert(!m_lines.empty());
+        // MAGPIE: the time the tool change released cmd's tool (m_preheat_after_tool_release): the tool printed until
+        // then, so no line goes in before it. Every tool change comes through here: the tool selected last is the one
+        // this change releases.
+        float released_at = -std::numeric_limits<float>::max(); // s
+        if (after_tool_release) {
+            if (!m_selected_tool.empty())
+                m_tool_released_at[m_selected_tool] = m_times[Normal];
+            if (const auto it = m_tool_released_at.find(cmd); it != m_tool_released_at.end())
+                released_at = it->second;
+        }
+        m_selected_tool = cmd;
         const float time_step           = backtrace.time_step();
         size_t      rev_it_dist         = 0;    // distance from the end of the cache of the starting point of the backtrace
         float       last_time_insertion = 0.0f; // used to avoid inserting two lines at the same time
@@ -1075,7 +1091,10 @@ public:
 
             std::string curr_cmd = GCodeReader::GCodeLine::extract_cmd(rev_it->line);
             // backtrace into the cache to find the place where to insert the line
-            while (rev_it != m_lines.rend() && rev_it->times[Normal] > time_threshold_i && curr_cmd != cmd && !is_start_pos(curr_cmd)) {
+            // At or before the release (a line of the same time as the T<n> follows it, at most).
+            auto at_release = [&]() { return rev_it->times[Normal] <= released_at; };
+            while (rev_it != m_lines.rend() && rev_it->times[Normal] > time_threshold_i && curr_cmd != cmd && !is_start_pos(curr_cmd) &&
+                   !at_release()) {
                 rev_it->line = line_replacer(rev_it->line);
                 ++rev_it;
                 if (rev_it != m_lines.rend())
@@ -1085,6 +1104,8 @@ public:
             // we met the previous evenience of cmd, or the start position, stop inserting lines
             if (rev_it != m_lines.rend() && (curr_cmd == cmd || is_start_pos(curr_cmd)))
                 break;
+            // MAGPIE: at the release the remaining steps go right after it, once.
+            const bool released = rev_it != m_lines.rend() && at_release();
 
             // insert the line for the current step
             if (rev_it != m_lines.rend() && rev_it != start_rev_it && rev_it->times[Normal] != last_time_insertion) {
@@ -1107,6 +1128,8 @@ public:
 
                 ++m_added_lines_counter;
             }
+            if (released)
+                break;
         }
     }
 
@@ -1605,7 +1628,8 @@ void GCodeProcessor::run_post_process()
                             }
                         }
                         return line;
-                    }
+                    },
+                    m_preheat_after_tool_release
                 );
             }
         }
@@ -3811,6 +3835,7 @@ void GCodeProcessor::reset()
     m_wait_sites.clear();
     m_wait_uncertain = false;
     m_estimate_temperature_waits = false;
+    m_preheat_after_tool_release = false;
     m_nozzle_temperatures.clear();
     m_cp_color.reset();
     m_mass_locator = nullptr;

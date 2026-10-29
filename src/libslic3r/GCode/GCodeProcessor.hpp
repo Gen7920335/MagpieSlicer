@@ -1418,6 +1418,10 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
             bool   set_while_idle = false;
         };
         bool                           m_estimate_temperature_waits { false };
+        // MAGPIE: a nozzle temperature changes while its tool prints (a G-code event mod, a support style's sublayer
+        // temperature), so a tool's preheat before its next T<n> is not moved back past the tool change that
+        // released the tool (it would reset that tool's lowered temperature). Off after reset().
+        bool                           m_preheat_after_tool_release { false };
         // Orca: set while a BBL VM109 (a virtual wait the firmware does not perform) goes through process_M109.
         bool                           m_virtual_temperature_wait { false };
         float                          m_heat_rate { 2.f }, m_cool_rate { 1.f };
@@ -1548,6 +1552,8 @@ inline constexpr float DEFAULT_FILAMENT_DENSITY = 1.245f;
         static const std::string &wait_site_tag();
         // Counts M109 temperature waits as time (see m_estimate_temperature_waits). Off after reset().
         void set_temperature_wait_estimate(bool on) { m_estimate_temperature_waits = on; }
+        // Keeps tool preheats out of the tool's own printing (see m_preheat_after_tool_release). Off after reset().
+        void set_preheat_after_tool_release(bool on) { m_preheat_after_tool_release = on; }
         // The nozzle's heating and cooling rates that estimate assumes, degC/s (at least 0.1).
         void set_temperature_rates(double heat_rate, double cool_rate)
         {
