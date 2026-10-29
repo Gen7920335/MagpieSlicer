@@ -137,7 +137,10 @@ def slice_corpus(cli, out, corpus_path, external_dir, only, ignore_keys, timeout
                '--load-filaments', ';'.join(filaments),
                '--outputdir', gcode_dir]
         # Extra CLI options for the case, such as --filament_colour for multi-filament cases.
-        cmd += case.get('cli_args', []) + [model]
+        # A relative path among the extra arguments (a second model) is the repository's, like `model`.
+        cli_args = [os.path.join(ROOT, a) if not os.path.isabs(a) and os.path.isfile(os.path.join(ROOT, a)) else a
+                    for a in case.get('cli_args', [])]
+        cmd += cli_args + [model]
         started = time.monotonic()
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',

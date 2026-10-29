@@ -297,7 +297,7 @@
     "2,1",
     "--arrange",
     "1",
-    "D:\\claude\\magpie-next-m7\\tests\\data\\20mm_cube.obj"
+    "tests/data/20mm_cube.obj"
    ]
   }
  ]

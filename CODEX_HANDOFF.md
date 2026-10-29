@@ -16,6 +16,16 @@
 
 ## History
 
+### 2026-10-29 Total deep code review (branch review-total-20261029, built in D:\claude\magpie-next-bblwall) - BUILT
+
+- Gen asked for a review of every Magpie feature on ff79c7ccc4 against his intent (D:\claude\MAGPIE_FULL_HISTORY_KO.md, memory, mod.json): core patches (GCode, ToolOrdering, H/2 frames and tower split, LTB write_waits and planner, LTI, line width routing, support generators, wipe towers, brim, slicing, seams, 3MF, presets, CLI, mod package/signatures, aux tower placement) and the official mods. Report D:\claude
+eports\TOTAL_REVIEW_20261029_KO.md. Repro harness D:\claude\golden
+eview (own datadir).
+- KNOWN bug (CLI toggle): H/2 support (half_layer.support) lost the support_extras interface sublayer temperature. The tag is ExtrusionEntityCollection::interface_temperature on the sublayer collection; append_half_layer_support_tasks flattened collections into leaf tasks, so the H/2 support run printed at the model temperature (tee.stl, sublayer_temperature 190: M104 S190 x2 with H/2 off, 0 with it on; with LTI on the 215 sublayer target vanished too). HalfLayerExecutionTask::interface_temperature carries it, the dispatch batches runs by it and sets m_path_temperature_tag around extrude_support_entities. After: S190 x8 / S215 x4 with H/2 on. Test "Interface sublayers of half-height support print at their own temperature".
+- Judgment: multi_nozzle_walls 2.2.1: detail_toolhead equal to the walls' own toolhead means no detail nozzle (it fell through to the automatic smaller same-colour nozzle; Gen 2026-10-22: the designated tool always wins). Judgment (GUI preview only): the temperature drop tower preview reads an object's enable_support/raft_layers/enforce_support_layers each with the print's fallback.
+- Reviewed, no defect found: see the report's list. Not reproducible, left alone: a combined skirt skipped on an H/2 layer whose first extruder is a tower-only visit (Orca's first-layer order always puts a wall filament first in the tube tests).
+- Verified: ctest 3035/3035 (5 python-host skips); gate golden/review (a = ltirand/bin_lfb ff79c7ccc4, b = review build, 9 corpora): 209 cases identical (frog_h2w_by_object re-sliced after the corpus fix) apart from the multi_nozzle_walls version in the `; mods:` line (cmpv3.py); frog_h2w_by_object failed on both sides for a stale model path in the corpus (fixed in this commit); --mod-test multi_nozzle_walls, half_layer, support_extras pass.
+
 ### 2026-10-28 Random GUI test fixes (branches cli-warnings-utf8, tcr-mismatch-11438, worktree D:\claude\magpie-next-bblwall) - BUILT
 
 - 82c0d1ded6: CLI g_slicing_warnings under a mutex (seed 9024: heap corruption when two objects' support steps warn at once inside Print::process's tbb::parallel_for; probe with the push held open: no lock -> two callbacks inside, one warning lost; lock -> one at a time). Collapsed notifications trim whole UTF-8 characters (Korean showed "?" where a character was cut).
