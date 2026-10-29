@@ -730,6 +730,14 @@ TEST_CASE("Detail routing applies the chosen toolhead, then colour priority", "[
         const DynamicPrintConfig config = four_nozzle_print_config({ "#0000FF", "#FF0000", "#00FF00", "#FFFF00" }, { "PLA", "PLA", "PLA", "PLA" });
         CHECK(detail_filament(config, 2) == 2);
     }
+    SECTION("the walls' own toolhead chosen prints no detail walls") {
+        // Every filament has the walls' colour and material, so the automatic choice would take the 0.15 mm nozzle
+        // (filament 4). Toolhead 1 is the one printing the walls: the designated tool prints every wall, and no
+        // other nozzle stands in. Before, the choice fell through to the automatic one.
+        const DynamicPrintConfig config = four_nozzle_print_config({ "#FF0000", "#FF0000", "#FF0000", "#FF0000" }, { "PLA", "PLA", "PLA", "PLA" });
+        CHECK(detail_filament(config, 0) == 4);
+        CHECK(detail_filament(config, 1) == 1);
+    }
 }
 
 // MAGPIE: line 1 (Beta 7). In a by-object print, the detail nozzle of one object must be registered as

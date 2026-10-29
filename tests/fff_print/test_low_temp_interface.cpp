@@ -816,6 +816,26 @@ TEST_CASE("Interface sublayers print at their own temperature and the model at t
         CHECK(temperature_c == 220);
 }
 
+TEST_CASE("Interface sublayers of half-height support print at their own temperature", "[LowTemperatureInterface][Sublayer][HalfLayer]")
+{
+    OfficialMods mods;
+    // The sublayer temperature is a tag on the support collection (SupportCommon.cpp); H/2 support flattens the
+    // collections into leaf tasks, which lost it: the sublayers printed at the filament temperature (185 never set),
+    // with and without the low temperature interface (then 170 took every interface layer).
+    const bool low_temperature_interface = GENERATE(false, true);
+    CAPTURE(low_temperature_interface);
+    DynamicPrintConfig config = sublayer_temperature_config(low_temperature_interface, 185);
+    Slic3r::Test::half_layer_params(config, false, true);
+    Print print;
+    init_and_process_print({ TestMesh::overhang }, print, config);
+    const TemperatureTrace trace = trace_temperatures(Slic3r::Test::gcode(print), config);
+
+    CHECK(std::count(trace.targets.begin(), trace.targets.end(), 185) > 0);
+    REQUIRE_FALSE(trace.model_temperatures.empty());
+    for (const int temperature_c : trace.model_temperatures)
+        CHECK(temperature_c == 220);
+}
+
 TEST_CASE("Interface sublayers apply to Cura and to slim and hybrid tree support", "[LowTemperatureInterface][Sublayer][SupportExtras]")
 {
     OfficialMods mods;

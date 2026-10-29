@@ -7026,12 +7026,16 @@ void append_half_layer_support_tasks(const PrintObject &object, const Layer &log
         config.apply(object.print()->default_region_config());
         config.apply(object.config(), true);
         const bool first_layer = std::abs(physical->bottom_z()) < EPSILON;
+        // MAGPIE: `interface_temperature` is the innermost enclosing collection's tag (a support style's interface
+        // sublayer, SupportCommon.cpp), which extrude_support() reads from the collection; the leaves carry it here.
         auto collect = [&](auto &&self, const ExtrusionEntity &entity,
-                           const ExtrusionEntityCollection &root) -> void {
+                           const ExtrusionEntityCollection &root, int interface_temperature) -> void {
             if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+                if (collection->interface_temperature > 0)
+                    interface_temperature = collection->interface_temperature;
                 for (const ExtrusionEntity *child : collection->entities)
                     if (child != nullptr)
-                        self(self, *child, root);
+                        self(self, *child, root, interface_temperature);
                 return;
             }
             if (entity.length() <= 0.)
@@ -7055,6 +7059,7 @@ void append_half_layer_support_tasks(const PrintObject &object, const Layer &log
             task.support = true;
             task.wipe_root_kind = interface_role ? HalfLayerWipeRootKind::SupportInterface :
                 HalfLayerWipeRootKind::SupportBody;
+            task.interface_temperature = interface_temperature;
             task.requires_upper_before = role == erIroning;
             const Point a = entity.first_point() + shift;
             const Point b = entity.last_point() + shift;
@@ -7078,7 +7083,7 @@ void append_half_layer_support_tasks(const PrintObject &object, const Layer &log
             core.push_back(std::move(task));
         };
         const size_t first_task = core.size();
-        collect(collect, physical->support_fills, physical->support_fills);
+        collect(collect, physical->support_fills, physical->support_fills, 0);
         // MAGPIE: one physical layer's support body before its interface, each in its stored order. Tree support
         // stores every branch's body next to its interface, so the stored order changed tool on every branch when the
         // two print with different filaments: 128 tool changes on a layer of seed 636 of the U1 random test against 3
@@ -9294,12 +9299,23 @@ LayerResult GCode::process_layer(
                     const HalfLayerExecutionTask &candidate = half_layer_frame->plan.tasks[run_end];
                     if (!task_is_active(candidate) || !candidate.support || candidate.object != task.object ||
                         candidate.instance_id != task.instance_id || candidate.physical_layer != task.physical_layer ||
-                        candidate.logical_layer != task.logical_layer || candidate.entity->role() != role)
+                        candidate.logical_layer != task.logical_layer || candidate.entity->role() != role ||
+                        candidate.interface_temperature != task.interface_temperature)
                         break;
                     support_entities.push_back(const_cast<ExtrusionEntity *>(candidate.entity));
                     ++run_end;
                 }
-                gcode += this->extrude_support_entities(support_entities, role, true);
+                // MAGPIE: the run's sublayer temperature, as extrude_support() tags it from the collection the leaves
+                // came from (the tasks are leaves, so the collection is gone here). Without it an H/2 support printed
+                // its interface sublayers at the filament temperature (support_extras sublayer_temperature, and the
+                // low temperature interface's sublayer target).
+                {
+                    const int outer_tag = m_path_temperature_tag;
+                    if (outer_tag == 0)
+                        m_path_temperature_tag = task.interface_temperature;
+                    ScopeGuard restore_tag([this, outer_tag]() { m_path_temperature_tag = outer_tag; });
+                    gcode += this->extrude_support_entities(support_entities, role, true);
+                }
                 task_index = run_end;
             }
         }

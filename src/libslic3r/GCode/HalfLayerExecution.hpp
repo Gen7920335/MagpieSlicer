@@ -48,6 +48,10 @@ struct HalfLayerExecutionTask {
     unsigned int wipe_reservation_source_filament = unsigned(-1);
     unsigned int wipe_reservation_destination_filament = unsigned(-1);
     HalfLayerWipeRootKind wipe_root_kind = HalfLayerWipeRootKind::Model;
+    // MAGPIE: the nozzle temperature of the support collection this leaf came from (a support style's interface
+    // sublayer, ExtrusionEntityCollection::interface_temperature), degC; 0 = none. The producer flattens the
+    // collections into leaf tasks, so the tag travels with each leaf and the dispatch sets it again around them.
+    int interface_temperature = 0;
     bool perimeter = false;
     bool support = false;
     bool requires_upper_before = false;

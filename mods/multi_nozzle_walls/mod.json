@@ -8,7 +8,7 @@
     // region by them.
     "id": "multi_nozzle_walls",
     "name": "Multi-nozzle walls", "name_ko": "다중 노즐 벽",
-    "version": "2.2.0",
+    "version": "2.2.1",
     "api": { "major": 1, "min_minor": 0 },
     "binary": "multi_nozzle_walls",
     // The speed of the walls the detail nozzle prints is a setting the core reads for the region (mm/s, or %).
