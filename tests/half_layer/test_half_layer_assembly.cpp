@@ -3317,7 +3317,8 @@ TEST_CASE("A banded layer changes tool as often for two objects as for one", "[H
 // (prime_volume x (changes - 1)) must not: seed 9025 of the U1 random test planned 7.5 mm a change against its 5.6 mm.
 TEST_CASE("The banded Type2 tower estimate holds the tower WipeTower2 plans for its changes", "[HalfLayer][ExecutionTower][TowerPlacement]")
 {
-    const bool ramming = GENERATE(false, true);
+    // No ramming, both filaments ramming, only filament 1 ramming (a change is charged its own old tool's ramming).
+    const int  ramming = GENERATE(0, 1, 2);
     const bool rib     = GENERATE(false, true);
     auto config = multifilament_config(2);
     config.set_num_extruders(2);
@@ -3328,7 +3329,7 @@ TEST_CASE("The banded Type2 tower estimate holds the tower WipeTower2 plans for 
         {"enable_prime_tower", true}, {"wipe_tower_x", "40"}, {"wipe_tower_y", "40"}, {"wipe_tower_type", "type2"},
         {"wipe_tower_wall_type", rib ? "rib" : "rectangle"}, {"prime_volume", 45}, {"prime_tower_width", 30},
         {"layer_height", 0.12}, {"initial_layer_print_height", 0.12}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
-    config.set_key_value("filament_multitool_ramming", new ConfigOptionBools{ramming, ramming});
+    config.set_key_value("filament_multitool_ramming", new ConfigOptionBools{ramming != 0, ramming == 1});
     config.set_key_value("filament_multitool_ramming_volume", new ConfigOptionFloats{5., 5.});
     config.set_key_value("filament_multitool_ramming_flow", new ConfigOptionFloats{40., 40.});
     size_flush_to_nozzles(config);

@@ -2390,20 +2390,28 @@ std::pair<float, float> WipeTower2::estimate_box(const ConfigBase& config, const
     std::vector<Ramming> rammings;
     for (unsigned int id : filament_ids)
         rammings.push_back(ramming_of(config, id));
+    // A change is the old tool's ramming rows and the new tool's wipe rows. Every filament is entered and left at most
+    // `visits` times a layer, so the layer holds at most visits x (its widest wipe + its own ramming) per filament:
+    // charging every change the costliest old tool's ramming counted one filament's ramming for all of them.
     auto layer_depth = [&](float box_width) {
         float total = 0.f;
-        for (size_t n = 0; n < filament_ids.size(); ++n) {
-            float costliest = 0.f;
+        for (size_t f = 0; f < filament_ids.size(); ++f) {
+            float wipe = 0.f, ramming = 0.f;
             for (size_t o = 0; o < filament_ids.size(); ++o) {
-                if (o == n)
+                if (o == f)
                     continue;
-                const Ramming &r          = rammings[o];
-                const bool     do_ramming = (semm->value && ramming_on->value) || r.multitool;
-                costliest = std::max(costliest, toolchange_depth(box_width, frame, layer_height, width_of(filament_ids[o]),
-                    width_of(filament_ids[n]), r.volume_mm3, r.line_width_multiplicator, r.step_multiplicator, do_ramming,
-                    do_ramming && !semm->value && gap_wall, float(prime_volume->value), flow, spacing, spacing_rm).required);
+                auto change = [&](size_t from, size_t to) {
+                    const Ramming &r          = rammings[from];
+                    const bool     do_ramming = (semm->value && ramming_on->value) || r.multitool;
+                    return toolchange_depth(box_width, frame, layer_height, width_of(filament_ids[from]),
+                        width_of(filament_ids[to]), r.volume_mm3, r.line_width_multiplicator, r.step_multiplicator, do_ramming,
+                        do_ramming && !semm->value && gap_wall, float(prime_volume->value), flow, spacing, spacing_rm);
+                };
+                const ToolchangeDepth into = change(o, f);
+                wipe    = std::max(wipe, into.required - into.ramming);
+                ramming = std::max(ramming, change(f, o).ramming);
             }
-            total += float(visits) * costliest;
+            total += float(visits) * (wipe + ramming);
         }
         return total;
     };

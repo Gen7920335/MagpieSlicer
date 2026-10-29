@@ -65,7 +65,7 @@ public:
                                             float wipe_volume_mm3, float extra_flow, float planning_spacing,
                                             float extra_spacing_ramming);
     // MAGPIE: the box (width, depth; mm, depth with the frame) planned for a layer that changes to each of
-    // `filament_ids` `visits` times at `layer_height` mm, each change from the costliest other filament, through
+    // `filament_ids` `visits` times at `layer_height` mm, each entered and left that often (its widest wipe, its own ramming), through
     // toolchange_depth() and plan()'s rib squaring. For the pre-slice estimate of a banded plate (WipeTowerEstimate);
     // {0, 0} when the config lacks a key it reads. Non-SEMM purges only: every change wipes prime_volume.
     static std::pair<float, float> estimate_box(const ConfigBase& config, const std::vector<unsigned int>& filament_ids,
