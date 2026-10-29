@@ -421,8 +421,11 @@ TEST_CASE("One interface run over objects with their own temperatures waits for 
             continue;
         ++interface_layers;
         // Only the heating back is set without a wait.
-        for (const std::string &command : layer.temperatures)
-            CHECK((command.rfind("M109", 0) == 0 || command == "M104 S220"));
+        for (const std::string &command : layer.temperatures) {
+            INFO(command);
+            const bool waits_or_heats_back = command.rfind("M109", 0) == 0 || command == "M104 S220";
+            CHECK(waits_or_heats_back);
+        }
         CHECK(std::count(layer.temperatures.begin(), layer.temperatures.end(), "M109 R190") +
               std::count(layer.temperatures.begin(), layer.temperatures.end(), "M109 S190") >= 1);
     }
@@ -441,7 +444,12 @@ TEST_CASE("Interface grid random case driver", "[.ltcal_random]")
     std::ifstream        in(case_path);
     const nlohmann::json spec = nlohmann::json::parse(in);
     DynamicPrintConfig   config = DynamicPrintConfig::full_print_config();
-    config.load_from_gcode_file(spec.at("gcode").get<std::string>(), ForwardCompatibilitySubstitutionRule::EnableSilent);
+    if (spec.contains("gcode"))
+        config.load_from_gcode_file(spec.at("gcode").get<std::string>(), ForwardCompatibilitySubstitutionRule::EnableSilent);
+    // Or single settings ({"key": "value"}) over the defaults.
+    if (spec.contains("config"))
+        for (const auto &[key, value] : spec.at("config").items())
+            config.set_deserialize_strict(key, value.get<std::string>());
     for (const char *key : { "mod_settings", "printer_mod_settings" })
         if (spec.contains(key))
             config.set_key_value(key, new ConfigOptionString(spec.at(key).get<std::string>()));
