@@ -221,6 +221,12 @@ WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeT
 
     const double min_depth      = WipeTower::get_limit_depth_by_height(float(max_object_height));
     const float  perimeter_width = float(nozzle_diameter) * 1.25f; // Width_To_Nozzle_Ratio
+    // MAGPIE: a banded plate's Type2 tower, sized as WipeTower2 plans it (WipeTower2::estimate_box): every change takes
+    // whole purge rows plus the old tool's ramming rows, so the purge volume alone came up short: seed 9025 of the U1
+    // random test (0.2 mm nozzles, ramming T0/T2) planned 7.5 mm a change against the 5.6 mm 45 mm3 fill, and a layer
+    // changes tool filaments x visits times, the first visit included. {0, 0} falls back to the volume below.
+    const std::pair<float, float> banded_box = (!type1 && visits > 1 && !semm_flush && !dual_nozzle && filaments_cnt > 1) ?
+        WipeTower2::estimate_box(config, filament_ids, visits, float(layer_height)) : std::pair<float, float>{0.f, 0.f};
     // With nothing to purge, plan_tower_new sizes the tower for wrapping detection or the
     // stability minimum; WipeTower2 only knows the latter.
     const double idle_depth = (type1 && wrapping && !smooth_timelapse) ? WipeTower::get_wrapping_detection_depth() : min_depth;
@@ -235,7 +241,9 @@ WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeT
             // filament kept for timelapse or wrapping) sizes for the idle depth.
             const bool   has_purge = !type1 && volume > EPSILON;
             const double square    = has_purge ? std::sqrt(volume / layer_height * extra_spacing) : idle_depth;
-            side = WipeTower::rib_footprint_side(float(square), float(square), float(rib_width), float(extra_rib_length), float(max_object_height));
+            side = banded_box.second > 0.f ?
+                WipeTower::rib_footprint_side(banded_box.first, banded_box.second, float(rib_width), float(extra_rib_length), float(max_object_height)) :
+                WipeTower::rib_footprint_side(float(square), float(square), float(rib_width), float(extra_rib_length), float(max_object_height));
         }
         footprint.width = footprint.depth = side;
     } else {
@@ -249,6 +257,8 @@ WipeTowerFootprint estimate_wipe_tower_footprint(const ConfigBase &config, WipeT
             // The flush volumes already hold the spacing between wipes.
             if (!semm_flush)
                 depth *= extra_spacing;
+            if (banded_box.second > 0.f)
+                depth = banded_box.second;
             depth = std::max(min_depth, depth);
         }
         footprint.width = width;

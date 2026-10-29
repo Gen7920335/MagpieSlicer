@@ -3310,3 +3310,63 @@ TEST_CASE("A banded layer changes tool as often for two objects as for one", "[H
     REQUIRE(one >= 2);
     CHECK(two == one);
 }
+
+// A banded plate's Type2 tower is estimated as WipeTower2 plans it (WipeTower2::estimate_box): whole purge rows and the
+// old tool's ramming rows per change, and every visit of every filament. The tower WipeTower2 builds for exactly the
+// changes the estimate assumes must fit the estimated box, and the purge-volume square the estimate used before
+// (prime_volume x (changes - 1)) must not: seed 9025 of the U1 random test planned 7.5 mm a change against its 5.6 mm.
+TEST_CASE("The banded Type2 tower estimate holds the tower WipeTower2 plans for its changes", "[HalfLayer][ExecutionTower][TowerPlacement]")
+{
+    const bool ramming = GENERATE(false, true);
+    const bool rib     = GENERATE(false, true);
+    auto config = multifilament_config(2);
+    config.set_num_extruders(2);
+    set_toolhead_nozzle_diameter(config, 0, 0.2);
+    set_toolhead_nozzle_diameter(config, 1, 0.2);
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false},
+        {"enable_prime_tower", true}, {"wipe_tower_x", "40"}, {"wipe_tower_y", "40"}, {"wipe_tower_type", "type2"},
+        {"wipe_tower_wall_type", rib ? "rib" : "rectangle"}, {"prime_volume", 45}, {"prime_tower_width", 30},
+        {"layer_height", 0.12}, {"initial_layer_print_height", 0.12}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    config.set_key_value("filament_multitool_ramming", new ConfigOptionBools{ramming, ramming});
+    config.set_key_value("filament_multitool_ramming_volume", new ConfigOptionFloats{5., 5.});
+    config.set_key_value("filament_multitool_ramming_flow", new ConfigOptionFloats{40., 40.});
+    size_flush_to_nozzles(config);
+    Print print;
+    Model model;
+    init_print({cube(5.)}, print, model, config);
+    CAPTURE(ramming, rib);
+
+    // Two filaments visited four times a layer: eight changes, the first from the previous layer's last tool.
+    constexpr size_t visits = 4;
+    const float layer_height_mm = 0.12f, prime_volume_mm3 = 45.f;
+    WipeTower2 tower(print.config(), print.default_region_config(), 0, Vec3d::Zero(), {{0.f, 45.f}, {45.f, 0.f}}, 1);
+    tower.set_extruder(0, print.config());
+    tower.set_extruder(1, print.config());
+    unsigned int current = 1;
+    for (int layer = 1; layer <= 5; ++layer) {
+        const float z = layer_height_mm * float(layer);
+        tower.plan_toolchange(z, layer_height_mm, current, current, 0.f);
+        for (size_t change = 0; change < 2 * visits; ++change) {
+            tower.plan_toolchange(z, layer_height_mm, current, 1 - current, prime_volume_mm3);
+            current = 1 - current;
+        }
+    }
+    std::vector<std::vector<WipeTower::ToolChangeResult>> results;
+    tower.generate(results);
+    const float planned_width_mm = tower.width(), planned_depth_mm = tower.get_depth();
+
+    const auto [estimated_width_mm, estimated_depth_mm] = WipeTower2::estimate_box(print.config(), {0, 1}, visits, layer_height_mm);
+    CAPTURE(planned_width_mm, planned_depth_mm, estimated_width_mm, estimated_depth_mm);
+    // The placement reserves the rib footprint of the larger side (WipeTower::rib_footprint_side), a rectangle its depth
+    // at the configured width. Tolerance 0.001 mm, float rounding.
+    if (rib)
+        CHECK(std::max(estimated_width_mm, estimated_depth_mm) >= std::max(planned_width_mm, planned_depth_mm) - 1e-3f);
+    else {
+        CHECK_THAT(estimated_width_mm, Catch::Matchers::WithinAbs(planned_width_mm, 1e-3));
+        CHECK(estimated_depth_mm >= planned_depth_mm - 1e-3f);
+    }
+    // The volume estimate it replaces: the purge area, prime_volume per change, one change fewer than the visits.
+    const float volume_area_mm2 = prime_volume_mm3 * float(2 * visits - 1) / layer_height_mm;
+    CHECK(volume_area_mm2 < planned_width_mm * planned_depth_mm);
+}

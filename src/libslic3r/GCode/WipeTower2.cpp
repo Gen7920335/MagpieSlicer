@@ -1041,6 +1041,48 @@ WipeTower::ToolChangeResult WipeTower2::construct_tcr(WipeTowerWriter2& writer,
 
 
 
+WipeTower2::Ramming WipeTower2::ramming_of(const ConfigBase& config, size_t idx)
+{
+    Ramming ramming;
+    const auto *semm = config.option<ConfigOptionBool>("single_extruder_multi_material");
+    const auto *parameters = config.option<ConfigOptionStrings>("filament_ramming_parameters");
+    const auto *enabled    = config.option<ConfigOptionBools>("filament_multitool_ramming");
+    const auto *volume     = config.option<ConfigOptionFloats>("filament_multitool_ramming_volume");
+    const auto *flow_opt   = config.option<ConfigOptionFloats>("filament_multitool_ramming_flow");
+    if (semm != nullptr && semm->value) {
+        if (parameters == nullptr || parameters->values.empty())
+            return ramming;
+        std::istringstream stream{parameters->get_at(idx)};
+        float speed = 0.f;
+        stream >> ramming.line_width_multiplicator >> ramming.step_multiplicator;
+        ramming.line_width_multiplicator /= 100;
+        ramming.step_multiplicator /= 100;
+        while (stream >> speed)
+            ramming.speed.push_back(speed);
+        // ramming_speed now contains speeds to be used for every 0.25s piece of the ramming line.
+        // This allows to have the ramming flow variable. The 0.25s value is how it is saved in config
+        // and the same time step has to be used when the ramming is performed.
+        ramming.volume_mm3 = 0.25f * std::accumulate(ramming.speed.begin(), ramming.speed.end(), 0.f);
+    } else {
+        // We will use the same variables internally, but the correspondence to the configuration options will be different.
+        float vol  = volume != nullptr && !volume->values.empty() ? float(volume->get_at(idx)) : 0.f;
+        float flow = flow_opt != nullptr && !flow_opt->values.empty() ? float(flow_opt->get_at(idx)) : 0.f;
+        ramming.multitool = enabled != nullptr && !enabled->values.empty() && enabled->get_at(idx) && vol > 0.f && flow > 0.f;
+        ramming.line_width_multiplicator = 2.;
+        ramming.step_multiplicator = 1.;
+
+        // Now the ramming speed vector. In this case it contains just one value (flow).
+        // The time is calculated and saved separately. This is here so that the MM ramming
+        // is not limited by the 0.25s granularity - it is not possible to create a SEMM-style
+        // ramming_speed vector that would respect both the volume and flow (because of
+        // rounding issues with small volumes and high flow).
+        ramming.speed.push_back(flow);
+        ramming.multitool_time_s = flow > 0.f ? vol/flow : 0.f;
+        ramming.volume_mm3 = ramming.multitool_time_s * flow;
+    }
+    return ramming;
+}
+
 bool WipeTower2::use_gap_wall(const PrintConfig& config)
 {
     // The cone wall has its own fully separate generator with no gap machinery.
@@ -1205,32 +1247,15 @@ void WipeTower2::set_extruder(size_t idx, const PrintConfig& config)
     m_perimeter_width = nozzle_diameter * Width_To_Nozzle_Ratio; // MAGPIE: the last tool's until a tool prints (use_tool_width())
     m_frame_width     = std::max(m_frame_width, m_perimeter_width);
 
-    if (m_semm) {
-        std::istringstream stream{config.filament_ramming_parameters.get_at(idx)};
-        float speed = 0.f;
-        stream >> m_filpar[idx].ramming_line_width_multiplicator >> m_filpar[idx].ramming_step_multiplicator;
-        m_filpar[idx].ramming_line_width_multiplicator /= 100;
-        m_filpar[idx].ramming_step_multiplicator /= 100;
-        while (stream >> speed)
-            m_filpar[idx].ramming_speed.push_back(speed);
-        // ramming_speed now contains speeds to be used for every 0.25s piece of the ramming line.
-        // This allows to have the ramming flow variable. The 0.25s value is how it is saved in config
-        // and the same time step has to be used when the ramming is performed.
-    } else {
-        // We will use the same variables internally, but the correspondence to the configuration options will be different.
-        float vol  = config.filament_multitool_ramming_volume.get_at(idx);
-        float flow = config.filament_multitool_ramming_flow.get_at(idx);
-        m_filpar[idx].multitool_ramming = config.filament_multitool_ramming.get_at(idx) && vol > 0.f && flow > 0.f;
-        m_filpar[idx].ramming_line_width_multiplicator = 2.;
-        m_filpar[idx].ramming_step_multiplicator = 1.;
-
-        // Now the ramming speed vector. In this case it contains just one value (flow).
-        // The time is calculated and saved separately. This is here so that the MM ramming
-        // is not limited by the 0.25s granularity - it is not possible to create a SEMM-style
-        // ramming_speed vector that would respect both the volume and flow (because of 
-        // rounding issues with small volumes and high flow).
-        m_filpar[idx].ramming_speed.push_back(flow);
-        m_filpar[idx].multitool_ramming_time = flow > 0.f ? vol/flow : 0.f;
+    {
+        const Ramming ramming = ramming_of(config, idx);
+        m_filpar[idx].ramming_line_width_multiplicator = ramming.line_width_multiplicator;
+        m_filpar[idx].ramming_step_multiplicator       = ramming.step_multiplicator;
+        m_filpar[idx].ramming_speed.insert(m_filpar[idx].ramming_speed.end(), ramming.speed.begin(), ramming.speed.end());
+        if (!m_semm) {
+            m_filpar[idx].multitool_ramming      = ramming.multitool;
+            m_filpar[idx].multitool_ramming_time = ramming.multitool_time_s;
+        }
     }
 
     m_used_filament_length.resize(std::max(m_used_filament_length.size(), idx + 1)); // makes sure that the vector is big enough so we don't have to check later
@@ -2313,30 +2338,6 @@ void WipeTower2::plan_toolchange(float z_par, float layer_height_par, unsigned i
 WipeTower2::WipeTowerInfo::ToolChange WipeTower2::set_toolchange(size_t old_tool, size_t new_tool, float layer_height, float wipe_volume, bool first_layer_plan)
 {
     // MAGPIE: the box is the frame's, its wipe rows the new tool's, the ramming the old tool's (as tool_change() prints them).
-    const float old_width = tool_perimeter_width(old_tool);
-    const float new_width = tool_perimeter_width(new_tool);
-    float width = m_wipe_tower_width - (m_frame_width + 2*new_width); // = width - 3 x the width with one nozzle size
-	float length_to_extrude = volume_to_length((m_semm ? 0.25f : m_filpar[old_tool].multitool_ramming_time) * std::accumulate(m_filpar[old_tool].ramming_speed.begin(), m_filpar[old_tool].ramming_speed.end(), 0.f),
-										old_width * m_filpar[old_tool].ramming_line_width_multiplicator,
-										layer_height);
-    // Orca: Reserve ramming depth only when toolchange_Unload() will actually ram,
-    // otherwise the unprinted reservation leaves blank bands between the purge boxes.
-    const bool do_ramming = tool_ramming_enabled(old_tool);
-    // Orca: with the gap wall on a multi-tool printer the ram band is quantized up to
-    // the whole reserved rows and the wipe restarts at the left-edge boundary on a
-    // fresh row below it (BBL parity: the old-tool purge is whole rows and the wipe
-    // always starts at the box corner, where the entry scrub runs).
-    const bool boundary_wipe_start = boundary_wipe_start_enabled(old_tool);
-    float ramming_depth = do_ramming ? ((int(length_to_extrude / width) + 1) * (old_width * m_filpar[old_tool].ramming_line_width_multiplicator * m_filpar[old_tool].ramming_step_multiplicator) * m_extra_spacing_ramming) : 0;
-    // first_wipe_line rides for free on the last (partially used) ramming row, which
-    // is already covered by ramming_depth. Without ramming that row does not exist
-    // (and with a boundary wipe start the ram band is quantized to whole rows), so
-    // the whole wipe volume needs reserved wiping depth.
-    float first_wipe_line = (do_ramming && !boundary_wipe_start) ? - (width*((length_to_extrude / width)-int(length_to_extrude / width)) - width) : 0.f;
-
-    // Printed by the old tool (toolchange_Unload()).
-    float first_wipe_volume = length_to_volume(first_wipe_line, old_width * m_extra_flow, layer_height);
-
     // ORCA: Keep wipe-depth planning consistent with toolchange_Wipe().
     // ORCA: On the first layer, toolchange_Wipe() advances purge rows using
     // ORCA: m_extra_flow * m_perimeter_width, while later layers use
@@ -2345,10 +2346,97 @@ WipeTower2::WipeTowerInfo::ToolChange WipeTower2::set_toolchange(size_t old_tool
     // ORCA: Use the same spacing here so reserved depth matches consumed depth
     // ORCA: and first-layer purge segments do not leave visible gaps.
     const float planning_spacing = first_layer_plan ? m_extra_flow : m_extra_spacing_wipe;
+    const float ramming_volume = (m_semm ? 0.25f : m_filpar[old_tool].multitool_ramming_time) *
+        std::accumulate(m_filpar[old_tool].ramming_speed.begin(), m_filpar[old_tool].ramming_speed.end(), 0.f);
+    // Orca: Reserve ramming depth only when toolchange_Unload() will actually ram,
+    // otherwise the unprinted reservation leaves blank bands between the purge boxes.
+    // Orca: with the gap wall on a multi-tool printer the ram band is quantized up to
+    // the whole reserved rows and the wipe restarts at the left-edge boundary on a
+    // fresh row below it (BBL parity: the old-tool purge is whole rows and the wipe
+    // always starts at the box corner, where the entry scrub runs).
+    const ToolchangeDepth depth = toolchange_depth(m_wipe_tower_width, m_frame_width, layer_height, tool_perimeter_width(old_tool),
+        tool_perimeter_width(new_tool), ramming_volume, m_filpar[old_tool].ramming_line_width_multiplicator,
+        m_filpar[old_tool].ramming_step_multiplicator, tool_ramming_enabled(old_tool), boundary_wipe_start_enabled(old_tool),
+        wipe_volume, m_extra_flow, planning_spacing, m_extra_spacing_ramming);
+	return WipeTowerInfo::ToolChange(old_tool, new_tool, depth.required, depth.ramming, depth.first_wipe_line, wipe_volume);
+}
 
-    float wiping_depth = get_wipe_depth(wipe_volume - first_wipe_volume, layer_height, new_width, m_extra_flow, planning_spacing, width);
+std::pair<float, float> WipeTower2::estimate_box(const ConfigBase& config, const std::vector<unsigned int>& filament_ids,
+                                                 size_t visits, float layer_height)
+{
+    const auto *nozzles       = config.option<ConfigOptionFloats>("nozzle_diameter");
+    const auto *tower_width   = config.option<ConfigOptionFloat>("prime_tower_width");
+    const auto *prime_volume  = config.option<ConfigOptionFloat>("prime_volume");
+    const auto *extra_flow    = config.option<ConfigOptionPercent>("wipe_tower_extra_flow");
+    const auto *extra_spacing = config.option<ConfigOptionPercent>("wipe_tower_extra_spacing");
+    const auto *semm          = config.option<ConfigOptionBool>("single_extruder_multi_material");
+    const auto *ramming_on    = config.option<ConfigOptionBool>("enable_filament_ramming");
+    const auto *skip_points   = config.option<ConfigOptionBool>("prime_tower_skip_points");
+    const ConfigOption *wall  = config.option("wipe_tower_wall_type");
+    if (nozzles == nullptr || nozzles->values.empty() || tower_width == nullptr || prime_volume == nullptr ||
+        extra_flow == nullptr || extra_spacing == nullptr || semm == nullptr || ramming_on == nullptr ||
+        skip_points == nullptr || wall == nullptr || filament_ids.size() < 2 || layer_height <= 0.f)
+        return {0.f, 0.f};
+    // As the constructor and set_extruder() derive them.
+    const float flow       = float(extra_flow->value / 100.);
+    const float spacing    = float(extra_spacing->value / 100. * extra_flow->value / 100.);
+    const float spacing_rm = float(extra_spacing->value / 100.);
+    const bool  gap_wall   = skip_points->value && wall->getInt() != int(wtwCone);
+    const float ratio      = 1.25f; // Width_To_Nozzle_Ratio
+    auto width_of = [&](unsigned int id) { return float(nozzles->get_at(id)) * ratio; };
+    float frame = 0.f;
+    for (double nozzle : nozzles->values)
+        frame = std::max(frame, float(nozzle) * ratio);
+    std::vector<Ramming> rammings;
+    for (unsigned int id : filament_ids)
+        rammings.push_back(ramming_of(config, id));
+    auto layer_depth = [&](float box_width) {
+        float total = 0.f;
+        for (size_t n = 0; n < filament_ids.size(); ++n) {
+            float costliest = 0.f;
+            for (size_t o = 0; o < filament_ids.size(); ++o) {
+                if (o == n)
+                    continue;
+                const Ramming &r          = rammings[o];
+                const bool     do_ramming = (semm->value && ramming_on->value) || r.multitool;
+                costliest = std::max(costliest, toolchange_depth(box_width, frame, layer_height, width_of(filament_ids[o]),
+                    width_of(filament_ids[n]), r.volume_mm3, r.line_width_multiplicator, r.step_multiplicator, do_ramming,
+                    do_ramming && !semm->value && gap_wall, float(prime_volume->value), flow, spacing, spacing_rm).required);
+            }
+            total += float(visits) * costliest;
+        }
+        return total;
+    };
+    float box_width = float(tower_width->value);
+    float depth     = layer_depth(box_width);
+    // plan(): a rib wall squares the tower to the purge area and replans every change for that width.
+    if (wall->getInt() == int(wtwRib) && depth > EPSILON) {
+        box_width = align_ceil(std::sqrt(depth * box_width), frame);
+        depth     = layer_depth(box_width);
+    }
+    return {box_width, depth + frame};
+}
 
-	return WipeTowerInfo::ToolChange(old_tool, new_tool, ramming_depth + wiping_depth, ramming_depth, first_wipe_line, wipe_volume);
+WipeTower2::ToolchangeDepth WipeTower2::toolchange_depth(float tower_width, float frame_width, float layer_height, float old_width,
+    float new_width, float ramming_volume, float ramming_line_width_multiplicator, float ramming_step_multiplicator, bool do_ramming,
+    bool boundary_wipe_start, float wipe_volume, float extra_flow, float planning_spacing, float extra_spacing_ramming)
+{
+    float width = tower_width - (frame_width + 2*new_width); // = width - 3 x the width with one nozzle size
+	float length_to_extrude = volume_to_length(ramming_volume, old_width * ramming_line_width_multiplicator, layer_height);
+    ToolchangeDepth depth;
+    depth.ramming = do_ramming ? ((int(length_to_extrude / width) + 1) * (old_width * ramming_line_width_multiplicator * ramming_step_multiplicator) * extra_spacing_ramming) : 0;
+    // first_wipe_line rides for free on the last (partially used) ramming row, which
+    // is already covered by ramming_depth. Without ramming that row does not exist
+    // (and with a boundary wipe start the ram band is quantized to whole rows), so
+    // the whole wipe volume needs reserved wiping depth.
+    depth.first_wipe_line = (do_ramming && !boundary_wipe_start) ? - (width*((length_to_extrude / width)-int(length_to_extrude / width)) - width) : 0.f;
+
+    // Printed by the old tool (toolchange_Unload()).
+    float first_wipe_volume = length_to_volume(depth.first_wipe_line, old_width * extra_flow, layer_height);
+
+    float wiping_depth = get_wipe_depth(wipe_volume - first_wipe_volume, layer_height, new_width, extra_flow, planning_spacing, width);
+    depth.required = depth.ramming + wiping_depth;
+    return depth;
 }
 
 

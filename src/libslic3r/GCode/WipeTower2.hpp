@@ -42,6 +42,35 @@ public:
 	// used to reserve wipe tower space before the tower is generated.
 	static float estimate_semm_flush_volume(const ConfigBase& config, size_t filaments_cnt);
 
+    // MAGPIE: how a filament rams out at a tool change, read as set_extruder() reads it (it calls this).
+    struct Ramming {
+        bool  multitool                  = false; // multi-tool ramming configured (non-SEMM)
+        float volume_mm3                 = 0.f;   // rammed volume
+        float line_width_multiplicator   = 2.f;
+        float step_multiplicator         = 1.f;
+        std::vector<float> speed;                 // SEMM: speeds of 0.25 s pieces; multi-tool: the one flow (mm3/s)
+        float multitool_time_s           = 0.f;
+    };
+    static Ramming ramming_of(const ConfigBase& config, size_t filament);
+    // MAGPIE: the depth (mm) one tool change reserves in a tower box `tower_width` mm wide with `frame_width` margins:
+    // set_toolchange()'s arithmetic, which calls this, shared with the pre-slice estimate (WipeTowerEstimate).
+    struct ToolchangeDepth {
+        float required        = 0.f; // ramming + wiping depth, mm
+        float ramming         = 0.f; // mm
+        float first_wipe_line = 0.f; // mm of the first wipe line printed by the old tool
+    };
+    static ToolchangeDepth toolchange_depth(float tower_width, float frame_width, float layer_height, float old_width,
+                                            float new_width, float ramming_volume_mm3, float ramming_line_width_multiplicator,
+                                            float ramming_step_multiplicator, bool do_ramming, bool boundary_wipe_start,
+                                            float wipe_volume_mm3, float extra_flow, float planning_spacing,
+                                            float extra_spacing_ramming);
+    // MAGPIE: the box (width, depth; mm, depth with the frame) planned for a layer that changes to each of
+    // `filament_ids` `visits` times at `layer_height` mm, each change from the costliest other filament, through
+    // toolchange_depth() and plan()'s rib squaring. For the pre-slice estimate of a banded plate (WipeTowerEstimate);
+    // {0, 0} when the config lacks a key it reads. Non-SEMM purges only: every change wipes prime_volume.
+    static std::pair<float, float> estimate_box(const ConfigBase& config, const std::vector<unsigned int>& filament_ids,
+                                                size_t visits, float layer_height);
+
     
     // Construct ToolChangeResult from current state of WipeTower2 and WipeTowerWriter2.
     // WipeTowerWriter2 is moved from !
