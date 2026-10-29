@@ -26,7 +26,7 @@
 
 #define LTI_MOD_ID "low_temp_interface"
 
-MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.3.0")
+MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.3.1")
 
 namespace lti {
 
@@ -392,9 +392,10 @@ bool build_tower_path(State &s, mp_ctx *ctx, TowerPath &path)
     return true;
 }
 
-bool build_tower_brim_paths(const State &s, mp_ctx *ctx, std::vector<TowerPath> &paths)
+// The brim's lines at height_mm, the height of the tower pass they go under.
+bool build_tower_brim_paths(const State &s, mp_ctx *ctx, double height_mm, std::vector<TowerPath> &paths)
 {
-    const double  layer_height_now = s.w->layer_height(s.w->w);
+    const double  layer_height_now = height_mm;
     const int32_t filament_id      = s.w->filament(s.w->w);
     if (!s.path_initialized || layer_height_now <= 0. || filament_id < 0 || s.spacing <= 0.0)
         return false;
@@ -468,14 +469,15 @@ void extrude_tower(State &s, mp_ctx *ctx, const TowerPath &path, bool cooling_tr
     if (!path.empty()) {
         const TowerPath       *first = &path;
         std::vector<TowerPath> brim_paths;
-        if (!cooling_transition && !s.brim_printed && build_tower_brim_paths(s, ctx, brim_paths) && !brim_paths.empty())
+        if (!s.brim_printed && build_tower_brim_paths(s, ctx, path.height, brim_paths) && !brim_paths.empty())
             first = &brim_paths.front();
         s.w->tower_arrival(s.w->w, first->xy[0], first->xy[1], MP_ROLE_WIPE_TOWER, "travel to the temperature drop tower");
     }
-    // The tower owns its brim; object and support layers do not decide its first pass.
-    if (!cooling_transition && !s.brim_printed) {
+    // The tower owns its brim, under its first pass, a cooling pass too (an interface on the tower's first layer: the
+    // brim came after it, U1 random test seed 3501), at that pass's height (H/2 cools at mid-layer).
+    if (!s.brim_printed) {
         std::vector<TowerPath> brim_paths;
-        if (build_tower_brim_paths(s, ctx, brim_paths)) {
+        if (build_tower_brim_paths(s, ctx, path.height, brim_paths)) {
             text(s, "; temperature drop tower brim begin\n");
             for (const TowerPath &brim : brim_paths) {
                 text(s, "; temperature drop tower brim line\n");

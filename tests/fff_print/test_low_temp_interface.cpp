@@ -1492,3 +1492,22 @@ TEST_CASE("An H/2 layer cools once for the interfaces of both planes", "[LowTemp
     // The fixture really has interfaces in both planes of a layer: some cold run spans two Z.
     CHECK(runs_over_two_planes > 0);
 }
+
+TEST_CASE("The temperature drop tower's brim comes before its first pass, a cooling pass too", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    OfficialMods mods;
+    // One raft layer: its interface cools on the tower's first layer, so the tower's first pass is a cooling pass. The
+    // brim came after it (U1 random test seed 3501; a 1-layer raft on the U1 showed the same).
+    DynamicPrintConfig config = tower_config(TowerSettings{});
+    config.set_deserialize_strict({ { "raft_layers", 1 } });
+    const std::string output = slice({ TestMesh::overhang }, config);
+    const size_t brim    = output.find("; temperature drop tower brim begin");
+    const size_t cooling = output.find("temperature drop tower cooling pass");
+    const size_t layer   = output.find("; temperature drop tower layer");
+    REQUIRE(brim != std::string::npos);
+    REQUIRE(cooling != std::string::npos);
+    CHECK(brim < cooling);
+    CHECK(brim < layer);
+    // One brim.
+    CHECK(output.find("; temperature drop tower brim begin", brim + 1) == std::string::npos);
+}
