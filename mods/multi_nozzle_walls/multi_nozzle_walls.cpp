@@ -292,9 +292,11 @@ magpie::ExPolys boolean(int32_t op, const magpie::ExPolys &a, const magpie::ExPo
 }
 
 // Whether the island has detail that a smaller round bead reproduces better than the island's own: a convex
-// corner whose missing depth shrinks by more than 5 um, or area only the smaller bead's swept outline reaches.
-// Islands with holes or concave corners keep the large nozzle (line 1). `target` is the island as the walls follow
-// it (simplified and united by the core).
+// corner of the outer contour whose missing depth shrinks by more than 5 um (holes and concave corners do not
+// take this away; a hole's own corners are not looked at), or, for an island without holes or concave corners,
+// area only the smaller bead's swept outline reaches. `target` is the island as the walls follow it (simplified and
+// united by the core). Gen 2026-10-30: this is the intended rule; the old comment said holed islands keep the
+// large nozzle, which the code never did.
 bool island_needs_detail(const magpie::ExPolys &target, double large_diameter_mm, double detail_diameter_mm)
 {
     if (detail_diameter_mm >= large_diameter_mm - EPSILON)
