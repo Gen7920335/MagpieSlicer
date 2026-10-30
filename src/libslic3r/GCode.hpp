@@ -99,6 +99,10 @@ struct LayerTimeWaitSite
 
 // Where a layer time blending wait happens (the layer time planner's wait_at setting).
 enum class LayerTimeWaitAt { InPlace, Tower, Park, PurgeTower };
+// MAGPIE: the filament (0-based) the layer time tower is printed with when the planner names a toolhead for it
+// (its tower_toolhead setting, 1-based; 0 = the tool in use): the lowest filament on that toolhead among the print's,
+// else among all. Nothing when the waits are not at the tower, in a by-object or spiral print, or for toolhead 0.
+std::optional<unsigned int> layer_time_tower_filament(const Print &print);
 
 class OozePrevention {
 public:
@@ -615,6 +619,11 @@ protected:
     // purge_tower: the visit tag of this layer, where the nozzle has arrived over the tower; empty when the
     // layer has none to write.
     std::string     layer_time_tower_arrival();
+    // The tower block of a layer: travel to the tower, the loops, retracted at both ends. With `site` the site tag is
+    // written over the tower and the site filled in; without it the visit tag (a deferred tower, the wait at its visit).
+    std::string     layer_time_tower_block(coordf_t print_z, LayerTimeWaitSite *site);
+    // tower_toolhead: the tower block once the layer's tool is the tower's (after its tool change); "" otherwise.
+    std::string     layer_time_tower_at_tool(unsigned int filament);
     void            apply_layer_time_plan(Print &print, const std::string &path_tmp);
     // Bedslinger model: derive the Y-axis acceleration limit from the machine force/bed-mass config
     // and the mass already printed. Yields the min machine Y acceleration when the A2L config keys are
@@ -981,6 +990,11 @@ protected:
     // purge_tower: this layer's tower visit is still to be tagged; the last layer's visit was tagged.
     bool                                m_layer_time_visit_wanted{ false };
     bool                                m_layer_time_visit_tagged{ false };
+    // tower_toolhead: the filament printing the tower (0-based, -1 = the tool in use), and a layer whose tower block
+    // waits for that tool to come in (its site tag was written at the layer start).
+    int                                 m_layer_time_tower_filament{ -1 };
+    bool                                m_layer_time_tower_pending{ false };
+    coordf_t                            m_layer_time_tower_pending_z{ 0. };
     LayerTimeWaitAt                     m_layer_time_wait_at{ LayerTimeWaitAt::InPlace };
     // The layer time tower: placed at the first site; its footprint's lower left corner (brim included),
     // its side and its brim width, mm (plate coordinates), the Z of its last layer and whether its brim is out.

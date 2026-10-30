@@ -3520,6 +3520,36 @@ static double layer_time_setting(const ModHost::ActiveSlotChoice &planner, const
     return fallback;
 }
 
+std::optional<unsigned int> layer_time_tower_filament(const Print &print)
+{
+    const ModHost::ActiveSlotChoice planner =
+        ModHost::choose_active_slot(ModHost::time_plan_slots(), print.full_print_config(), nullptr, nullptr);
+    if (!planner.choice.error.empty() || planner.impl().empty())
+        return std::nullopt;
+    std::string wait_at;
+    if (const std::optional<ModHost::ExprValue> v = planner.setting("wait_at"); v && std::holds_alternative<std::string>(*v))
+        wait_at = std::get<std::string>(*v);
+    // As the export decides where it waits: no tower in a by-object print, no blending in a spiral one.
+    if (wait_at != "tower" || print.config().print_sequence.value == PrintSequence::ByObject || print.config().spiral_mode.value)
+        return std::nullopt;
+    const int    toolhead     = int(std::lround(layer_time_setting(planner, "tower_toolhead", 0.)));
+    const size_t nozzle_count = print.config().nozzle_diameter.size();
+    if (toolhead <= 0 || size_t(toolhead) > nozzle_count)
+        return std::nullopt;
+    const std::vector<unsigned int> used           = print.extruders();
+    const size_t                    filament_count = print.config().filament_diameter.size();
+    std::optional<unsigned int>     any;
+    for (size_t f = 0; f < filament_count; ++f) {
+        if (printing_nozzle_index(print.config(), int(f) + 1, print.is_BBL_printer()) != size_t(toolhead - 1))
+            continue;
+        if (std::find(used.begin(), used.end(), unsigned(f)) != used.end())
+            return unsigned(f);
+        if (!any)
+            any = unsigned(f);
+    }
+    return any;
+}
+
 // MAGPIE: the speed of a region's detail walls: the wall planner the region uses gives it (its wall.plan setting
 // detail_wall_speed, mm/s or a percentage of the outer wall speed); 0 without one.
 static ConfigOptionFloatOrPercent detail_wall_speed_of(const Print &print, const PrintObjectConfig *object_config,
@@ -3645,6 +3675,9 @@ static void write_waits(const std::string &src, const std::string &dst, const st
     const std::string end_tag   = ";" + GCodeProcessor::wait_tower_end_tag();
     size_t            k         = 0;
     bool              skipping  = false;
+    // A site that waits at its visit (tower_toolhead) wrote its tag at the layer start, before its tower block: the
+    // block belongs to site k - 1 then, not k.
+    bool              visit_block_pending = false;
     std::string       skipped_e; // the last E value set inside the block being left out, as written
     bool              skipped_e_was_reset = false; // ... by a G92
     std::string       line;
@@ -3666,7 +3699,8 @@ static void write_waits(const std::string &src, const std::string &dst, const st
             if (line == tag) {
                 ++k;
             } else if (line == end_tag) {
-                skipping = false;
+                skipping            = false;
+                visit_block_pending = false;
                 // A block that ends with the writer's own E reset needs nothing more.
                 if (absolute_e && !skipped_e.empty() && !skipped_e_was_reset)
                     out << "G92 E" << skipped_e << "\n";
@@ -3676,7 +3710,7 @@ static void write_waits(const std::string &src, const std::string &dst, const st
             }
             continue;
         }
-        if (line == begin_tag && k >= tower_end) {
+        if (line == begin_tag && (visit_block_pending ? k - 1 : k) >= tower_end) {
             skipping = true;
             skipped_e.clear();
             skipped_e_was_reset = false;
@@ -3687,8 +3721,10 @@ static void write_waits(const std::string &src, const std::string &dst, const st
             if (k < sites.size() && sites[k].wait_at_visit && form[k] != WaitForm::None && dwell_ms[k] > 0)
                 out << "G4 P" << dwell_ms[k] << "\n";
         } else if (line == tag && k < sites.size() && sites[k].wait_at_visit) {
+            visit_block_pending = true;
             ++k;
         } else if (line == tag && k < sites.size()) {
+            visit_block_pending = false;
             const LayerTimeWaitSite &site = sites[k];
             const WaitForm           f    = form[k];
             if (f == WaitForm::Lifted)
@@ -3770,6 +3806,61 @@ std::string GCode::layer_time_tower_arrival()
     return std::string(LayerTimeBlendExport::visit_tag) + "\n";
 }
 
+std::string GCode::layer_time_tower_block(coordf_t print_z, LayerTimeWaitSite *site)
+{
+    const Print &print = *m_print;
+    const Vec2f  writer_offset = m_writer.get_xy_offset();
+    auto emitted = [&writer_offset](const Vec2d &p) { return Vec2d(p.x() - writer_offset.x(), p.y() - writer_offset.y()); };
+    // The tower's spot is in plate coordinates (place_layer_time_tower); the plate's origin puts it on the bed, where
+    // the writer's offset takes it off again.
+    const Vec2d plate_origin(print.get_plate_origin().x(), print.get_plate_origin().y());
+    std::string gcode;
+    // MAGPIE: in an H/2 frame every travel keeps the bands' clearance, measured from the logical layer the
+    // nozzle works for. The site comes before the frame's first band, so the tower block travels as the
+    // frame's own full layer (m_layer, the object layer at print_z): without one, travel_to stopped the slice.
+    const Layer *const logical_before   = m_logical_layer;
+    const double       reference_before = m_half_layer_motion_reference_height;
+    if (m_half_layer_dispatch_active && m_logical_layer == nullptr && m_layer != nullptr) {
+        m_logical_layer                      = m_layer;
+        m_half_layer_motion_reference_height = m_layer->height;
+    }
+    // A block that starts and ends retracted, at the layer's Z, with the same pending lift: the export
+    // can leave it out above the last wait that needs the tower.
+    gcode += this->retract();
+    gcode += m_writer.travel_to_z(m_nominal_z, "layer time tower: up to the layer", true);
+    m_need_change_layer_lift_z = false;
+    gcode += this->retract();
+    gcode += ";" + GCodeProcessor::wait_tower_begin_tag() + "\n";
+    const Vec2d center = m_layer_time_tower_origin + Vec2d(0.5, 0.5) * (m_layer_time_tower_side + 2. * m_layer_time_tower_brim) + plate_origin;
+    gcode += this->travel_to(Point(scaled<coord_t>(Vec2d(center - m_origin))), erWipeTower, "travel to the layer time tower");
+    if (site != nullptr) {
+        site->at_tower = true;
+        site->z        = m_writer.get_position().z();
+        const Vec2d at = emitted(center);
+        site->x = at.x();
+        site->y = at.y();
+        gcode += ";" + GCodeProcessor::wait_site_tag() + "\n";
+    } else {
+        // The wait of the site written at the layer start, over the tower (write_waits).
+        gcode += std::string(LayerTimeBlendExport::visit_tag) + "\n";
+    }
+    gcode += this->extrude_layer_time_tower(print_z);
+    gcode += this->retract();
+    gcode += ";" + GCodeProcessor::wait_tower_end_tag() + "\n";
+    m_logical_layer                      = logical_before;
+    m_half_layer_motion_reference_height = reference_before;
+
+    return gcode;
+}
+
+std::string GCode::layer_time_tower_at_tool(unsigned int filament)
+{
+    if (!m_layer_time_tower_pending || int(filament) != m_layer_time_tower_filament)
+        return {};
+    m_layer_time_tower_pending = false;
+    return this->layer_time_tower_block(m_layer_time_tower_pending_z, nullptr);
+}
+
 std::optional<Vec2d> GCode::layer_time_park_position(const Print &print, coordf_t print_z)
 {
     const std::vector<Vec2d> &area = m_config.printable_area.values;
@@ -3799,7 +3890,10 @@ bool GCode::place_layer_time_tower(const Print &print)
         return false;
     // The nozzle of the tool printing (check_extrusion_width's): cur_extruder_index() reads the print's filament map,
     // which on a printer with one toolhead per filament leaves every filament on nozzle 0.
-    const double nozzle = EXTRUDER_CONFIG(nozzle_diameter);          // mm
+    // tower_toolhead: that tool's nozzle, by the routing the filament's own widths use (printing_nozzle_index).
+    const double nozzle = m_layer_time_tower_filament >= 0 ?
+        m_config.nozzle_diameter.get_at(printing_nozzle_index(print.config(), m_layer_time_tower_filament + 1, print.is_BBL_printer())) :
+        EXTRUDER_CONFIG(nozzle_diameter);                            // mm
     const double brim   = layer_time_tower_brim(nozzle);             // mm
     const double side   = m_layer_time_tower_size;                                      // mm
     const double skirt  = layer_time_tower_skirt(m_config.skirt_loops.value, m_config.skirt_distance.value, nozzle); // mm
@@ -3938,35 +4032,18 @@ std::string GCode::layer_time_wait_site(const Print &print, coordf_t print_z)
     // layer_time_park_position); the plate's origin puts them on the bed, where the writer's offset takes it off again.
     const Vec2d plate_origin(print.get_plate_origin().x(), print.get_plate_origin().y());
     if (m_layer_time_wait_at == LayerTimeWaitAt::Tower) {
-        // MAGPIE: in an H/2 frame every travel keeps the bands' clearance, measured from the logical layer the
-        // nozzle works for. The site comes before the frame's first band, so the tower block travels as the
-        // frame's own full layer (m_layer, the object layer at print_z): without one, travel_to stopped the slice.
-        const Layer *const logical_before   = m_logical_layer;
-        const double       reference_before = m_half_layer_motion_reference_height;
-        if (m_half_layer_dispatch_active && m_logical_layer == nullptr && m_layer != nullptr) {
-            m_logical_layer                      = m_layer;
-            m_half_layer_motion_reference_height = m_layer->height;
+        const Extruder *current = m_writer.filament();
+        if (m_layer_time_tower_filament >= 0 && (current == nullptr || int(current->id()) != m_layer_time_tower_filament)) {
+            // tower_toolhead: the tower's tool is not in. The site stays at the layer start (the intervals are the
+            // model's layer times); the tower block, with the visit tag its wait is written at, is printed once the
+            // layer's tool change brings the tower's tool in (layer_time_tower_at_tool).
+            site.wait_at_visit           = true;
+            m_layer_time_tower_pending   = true;
+            m_layer_time_tower_pending_z = print_z;
+            m_layer_time_sites.push_back(site);
+            return gcode + ";" + GCodeProcessor::wait_site_tag() + "\n";
         }
-        // A block that starts and ends retracted, at the layer's Z, with the same pending lift: the export
-        // can leave it out above the last wait that needs the tower.
-        gcode += this->retract();
-        gcode += m_writer.travel_to_z(m_nominal_z, "layer time tower: up to the layer", true);
-        m_need_change_layer_lift_z = false;
-        gcode += this->retract();
-        gcode += ";" + GCodeProcessor::wait_tower_begin_tag() + "\n";
-        const Vec2d center = m_layer_time_tower_origin + Vec2d(0.5, 0.5) * (m_layer_time_tower_side + 2. * m_layer_time_tower_brim) + plate_origin;
-        gcode += this->travel_to(Point(scaled<coord_t>(Vec2d(center - m_origin))), erWipeTower, "travel to the layer time tower");
-        site.at_tower = true;
-        site.z        = m_writer.get_position().z();
-        const Vec2d at = emitted(center);
-        site.x = at.x();
-        site.y = at.y();
-        gcode += ";" + GCodeProcessor::wait_site_tag() + "\n";
-        gcode += this->extrude_layer_time_tower(print_z);
-        gcode += this->retract();
-        gcode += ";" + GCodeProcessor::wait_tower_end_tag() + "\n";
-        m_logical_layer                      = logical_before;
-        m_half_layer_motion_reference_height = reference_before;
+        gcode += this->layer_time_tower_block(print_z, &site);
     } else {
         if ((m_layer_time_wait_at == LayerTimeWaitAt::Park || m_layer_time_wait_at == LayerTimeWaitAt::PurgeTower) && m_last_pos_defined) {
             if (std::optional<Vec2d> park = this->layer_time_park_position(print, print_z)) {
@@ -4531,6 +4608,11 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     m_layer_time_tower_placed    = false;
     m_layer_time_visit_wanted = false;
     m_layer_time_visit_tagged = false;
+    // tower_toolhead: the tower's own tool (ToolOrdering plans its change on every object layer).
+    m_layer_time_tower_filament = -1;
+    m_layer_time_tower_pending  = false;
+    if (const std::optional<unsigned int> f = layer_time_tower_filament(print); f && m_layer_time_wait_at == LayerTimeWaitAt::Tower)
+        m_layer_time_tower_filament = int(*f);
     m_layer_time_tower_side      = 0.;
     m_layer_time_tower_last_z    = 0.;
     m_layer_time_tower_brim_done = false;
@@ -9258,6 +9340,9 @@ LayerResult GCode::process_layer(
                 m_last_processor_extrusion_role = erWipeTower;
                 m_role_tag_claimed              = true;
             }
+            // MAGPIE: the layer time tower, once its own tool is in (tower_toolhead); its filament's visit may be
+            // tower-only.
+            gcode += this->layer_time_tower_at_tool(visit.tool.filament);
             if (visit.tower_only)
                 continue;
 
@@ -9454,6 +9539,8 @@ LayerResult GCode::process_layer(
             m_last_processor_extrusion_role = erWipeTower;
             m_role_tag_claimed              = true;
         }
+        // MAGPIE: the layer time tower, once its own tool is in (tower_toolhead).
+        gcode += this->layer_time_tower_at_tool(extruder_id);
 
         // Belt printers: now that this pass's tool is selected, lay down any ordinary-layer
         // apron band whose brim filament is this extruder, before the object extrusion at
@@ -10068,6 +10155,13 @@ LayerResult GCode::process_layer(
         BOOST_LOG_TRIVIAL(warning) << "Layer time blending: no tower visit on the layer at " << print_z
                                    << " mm; the next layer's wait parks";
         m_layer_time_visit_wanted = false;
+    }
+    if (m_layer_time_tower_pending) {
+        // PERMANENT DIAGNOSTIC: the tower's tool never came in on this layer (ToolOrdering plans it on every layer
+        // with an object layer), so this site's wait is not written.
+        BOOST_LOG_TRIVIAL(warning) << "Layer time blending: the tower toolhead's filament " << m_layer_time_tower_filament + 1
+                                   << " did not print on the layer at " << print_z << " mm; no wait there";
+        m_layer_time_tower_pending = false;
     }
 
 #if 0

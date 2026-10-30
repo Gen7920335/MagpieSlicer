@@ -5734,6 +5734,7 @@ void GLCanvas3D::load_layer_time_tower_previews(const DynamicPrintConfig &resolv
 {
     std::string wait_at;
     double      tower_size = 0.; // mm
+    int         tower_toolhead = 0; // 1-based; 0 = the tool in use
     try {
         const ModHost::ActiveSlotChoice planner = ModHost::choose_active_slot(ModHost::time_plan_slots(), resolved, nullptr, nullptr);
         if (!planner.choice.error.empty() || planner.impl().empty())
@@ -5742,6 +5743,8 @@ void GLCanvas3D::load_layer_time_tower_previews(const DynamicPrintConfig &resolv
             wait_at = std::get<std::string>(*v);
         if (const std::optional<ModHost::ExprValue> v = planner.setting("tower_size"); v && std::holds_alternative<double>(*v))
             tower_size = std::get<double>(*v);
+        if (const std::optional<ModHost::ExprValue> v = planner.setting("tower_toolhead"); v && std::holds_alternative<double>(*v))
+            tower_toolhead = int(std::lround(std::get<double>(*v)));
     } catch (const std::exception &) {
         return;
     }
@@ -5778,9 +5781,12 @@ void GLCanvas3D::load_layer_time_tower_previews(const DynamicPrintConfig &resolv
                                     brim != nullptr ? brim->getFloat() : global_brim });
             }
         }
-        // The nozzle of the plate's first filament (the export: the one printing when the tower is placed).
+        // The nozzle of the plate's first filament (the export: the one printing when the tower is placed), or of the
+        // toolhead chosen for the tower.
         size_t tool = 0;
-        if (const std::vector<int> filaments = plate->get_extruders(true); !filaments.empty() && filaments.front() > 0) {
+        if (tower_toolhead > 0 && size_t(tower_toolhead) <= nozzles->values.size()) {
+            tool = size_t(tower_toolhead - 1);
+        } else if (const std::vector<int> filaments = plate->get_extruders(true); !filaments.empty() && filaments.front() > 0) {
             const int mapped = filament_map != nullptr && !filament_map->values.empty() ? filament_map->get_at(size_t(filaments.front() - 1)) : 1;
             tool             = mapped > 0 && size_t(mapped) <= nozzles->values.size() ? size_t(mapped - 1) : 0;
         }

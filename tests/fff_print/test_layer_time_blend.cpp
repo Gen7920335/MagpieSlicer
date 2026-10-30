@@ -15,6 +15,7 @@
 #include "test_utils.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <limits>
@@ -934,6 +935,73 @@ TEST_CASE("The layer time tower is printed in the width of the nozzle printing i
     // Flow's automatic perimeter width is 1.125 x the nozzle.
     for (const double width : tower_widths)
         CHECK_THAT(width, WithinAbs(1.125 * second_nozzle_mm, 1e-3));
+}
+
+TEST_CASE("The layer time tower is printed by the chosen toolhead, its wait at its visit", "[LayerTimeBlend]")
+{
+    // tower_toolhead (Gen 2026-10-30): the tower's own tool. ToolOrdering plans that tool into every layer, the
+    // export prints the tower once the tool is in and the wait happens at its visit tag; the site tag stays at the
+    // layer start, so the intervals are still the model's layer times. 0 keeps the tool in use: one filament
+    // prints, so no tool changes at all.
+    const int tower_toolhead = GENERATE(0, 2);
+    DYNAMIC_SECTION("tower toolhead " << tower_toolhead) {
+        // Two toolheads of 0.4 mm; the model prints with filament 1 (toolhead 1) alone.
+        DynamicPrintConfig config = multifilament_config(2, {
+            {"layer_height", 0.3}, {"initial_layer_print_height", 0.3}, // mm
+            {"wall_loops", 2}, {"sparse_infill_density", 15}, {"enable_support", false}, {"skirt_loops", 0},
+            {"brim_type", "no_brim"}, {"slow_down_for_layer_cooling", false}, {"use_relative_e_distances", true},
+            {"enable_prime_tower", false},
+        });
+        config.set_num_extruders(2);
+        config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(false));
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.4, 0.4});
+        size_flush_to_nozzles(config);
+        const DynamicPrintConfig blend = wait_at_config("tower", 10., {{"tower_toolhead", std::to_string(tower_toolhead)}});
+        for (const char *key : {"mod_settings", "printer_mod_settings"})
+            config.set_key_value(key, blend.option(key)->clone());
+
+        const std::string              out   = slice_mesh(pillar_with_slab(), config);
+        const std::vector<std::string> lines = lines_of(out);
+        const int tower_tool = tower_toolhead == 0 ? 0 : tower_toolhead - 1; // 0-based tool the blocks must print with
+        int    tool = 0; // the tool in (T lines), 0 before the first
+        size_t blocks = 0, waits = 0, visits = 0, sites = 0;
+        bool   in_block = false;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            const std::string &line = lines[i];
+            if (line.size() >= 2 && line[0] == 'T' && std::isdigit(static_cast<unsigned char>(line[1]))) {
+                tool = std::stoi(line.substr(1));
+            } else if (line == ";MAGPIE_WAIT_TOWER_BEGIN") {
+                in_block = true;
+                ++blocks;
+                CHECK(tool == tower_tool);
+            } else if (line == ";MAGPIE_WAIT_TOWER_END") {
+                in_block = false;
+            } else if (line == ";MAGPIE_WAIT_VISIT") {
+                ++visits;
+                CHECK(in_block);
+            } else if (line == site_tag) {
+                ++sites;
+                // With the tower's own tool the site tag is at the layer start, outside the block.
+                CHECK(in_block == (tower_toolhead == 0));
+            } else if (line.rfind("G4 P", 0) == 0) {
+                ++waits;
+                // Every wait is over the tower: right before the tag the block puts after the travel there.
+                CHECK(in_block);
+                REQUIRE(i + 1 < lines.size());
+                CHECK(lines[i + 1] == (tower_toolhead == 0 ? site_tag : std::string(";MAGPIE_WAIT_VISIT")));
+            } else if (!in_block && axis_value(line, 'E') && *axis_value(line, 'E') > 0. && (axis_value(line, 'X') || axis_value(line, 'Y'))) {
+                // The model is filament 1's.
+                CHECK(tool == 0);
+            }
+        }
+        REQUIRE(blocks > 0);
+        CHECK(waits > 0);
+        CHECK(sites >= blocks);
+        CHECK(visits == (tower_toolhead == 0 ? 0 : blocks));
+        // Toolhead 2 is planned into every layer with a block: a change to it and back; toolhead 0 changes nothing.
+        CHECK(count_lines_starting(out, "T1") == (tower_toolhead == 0 ? 0 : blocks));
+        check_blended(measured_intervals(out), 10.);
+    }
 }
 
 TEST_CASE("On a later plate the tower and the park position stay where they are on the first", "[LayerTimeBlend]")

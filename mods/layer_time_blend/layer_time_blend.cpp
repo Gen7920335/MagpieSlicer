@@ -117,4 +117,4 @@ int32_t magpie::mod_init(const MagpieHostApi &host, MagpieRegistrar &registrar)
 
 void magpie::mod_shutdown() { LayerTimeBlend::set_diagnostic_sink({}); }
 
-MAGPIE_MOD_DEFINE(LTB_MOD_ID, "1.4.0")
+MAGPIE_MOD_DEFINE(LTB_MOD_ID, "1.5.0")

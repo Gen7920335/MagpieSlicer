@@ -16,6 +16,12 @@
 
 ## History
 
+### 2026-10-30 Layer time tower toolhead (branch ltb-tower-tool, worktree D:\claude\magpie-next-ltt) - UNBUILT
+
+- Gen: a setting for which tool prints the layer time blending tower. layer_time_blend 1.5.0 parameter `tower_toolhead` (int, 1-based, 0 = the tool in use, default 0; slot setting of gcode.time_plan; invalidates psWipeTower, psSkirtBrim, psGCodeExport). Core: `layer_time_tower_filament(print)` (GCode.cpp) maps the toolhead to a filament (printing_nozzle_index; the print's own filament on it first); ToolOrdering's Print ctor appends it to every layer with an object layer (like insert_wipe_tower_extruder), so the prime tower plans the change and H/2 frames give it a tower-only visit. Export: the site tag stays at the layer start (wait_at_visit), the tower block is printed by `layer_time_tower_at_tool()` after that tool's change in both the plain and the H/2 loop, with the visit tag its wait is written at (`layer_time_tower_block()` is the old tower branch, shared). write_waits: the block of such a site is site k-1 (visit_block_pending), else the last wait's block was cut. Placement reads the tower tool's nozzle; the 3D preview too.
+- Limitation: the tool change is planned even when the tower turns out not to fit (then the waits park and the change is wasted); the ordering cannot know the placement.
+- Test "The layer time tower is printed by the chosen toolhead, its wait at its visit" (GENERATE 0, 2). Not built: bblwall was in use (Gen), the lightning thread was building; build slot requested.
+
 ### 2026-10-29 Total deep code review (branch review-total-20261029, built in D:\claude\magpie-next-bblwall) - BUILT
 
 - Gen asked for a review of every Magpie feature on ff79c7ccc4 against his intent (D:\claude\MAGPIE_FULL_HISTORY_KO.md, memory, mod.json): core patches (GCode, ToolOrdering, H/2 frames and tower split, LTB write_waits and planner, LTI, line width routing, support generators, wipe towers, brim, slicing, seams, 3MF, presets, CLI, mod package/signatures, aux tower placement) and the official mods. Report D:\claude

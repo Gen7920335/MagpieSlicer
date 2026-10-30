@@ -10,6 +10,7 @@
 #include "HalfLayerSources.hpp"
 #include "HalfLayerSupportSources.hpp"
 #include "ClipperUtils.hpp"
+#include "libslic3r/GCode.hpp"
 #include "libslic3r/ModHost/GCodeEvents.hpp"
 #include "libslic3r/ModHost/SlotChoice.hpp"
 #include "libslic3r/ModHost/WallPlanner.hpp"
@@ -1054,6 +1055,14 @@ ToolOrdering::ToolOrdering(const Print &print, unsigned int first_extruder, bool
     // Collect extruders reuqired to print the layers.
     for (auto object : print.objects())
         this->collect_extruders(*object, per_layer_extruder_switches);
+
+    // MAGPIE: the layer time tower's toolhead (layer time blending, tower_toolhead) prints the tower on every layer
+    // with an object layer, so its tool change is planned here, with the prime tower's purge, like the wipe tower
+    // filament's (insert_wipe_tower_extruder); the export prints the tower once that tool is in.
+    if (const std::optional<unsigned int> tower_filament = layer_time_tower_filament(print))
+        for (LayerTools &lt : m_layer_tools)
+            if (lt.has_object && !lt.extruders.empty() && !lt.has_extruder(*tower_filament))
+                lt.extruders.emplace_back(*tower_filament);
 
     // Reorder the extruders to minimize tool switches.
     std::vector<unsigned int> first_layer_tool_order;
