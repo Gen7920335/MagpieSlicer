@@ -31,6 +31,7 @@ add_executable(${_TEST_NAME}_tests
     test_native_mods.cpp
     test_mod_printer_manifest.cpp
     test_layer_time_blend.cpp
+    test_lightning_distance_field.cpp
     test_mod_index.cpp
     test_magpie_release_version.cpp
     test_legacy_settings.cpp

@@ -81,10 +81,18 @@ DistanceField::DistanceField(const coord_t& radius, const Polygons& current_outl
                     }
                 }
                 self.m_unsupported_points[unsupported_points_prev_size + sp_idx] = {sp, coord_t(std::sqrt(d2))};
-                assert(self.m_unsupported_points_bbox.contains(sp));
             }
         }); // end of parallel_for
     }
+    // MAGPIE: the grid maps a point to (point - bbox.min) / m_cell_size, a division that truncates toward zero, so it
+    // needs every point at or above bbox.min. Points are sampled from the opened overhang, which can reach past the
+    // infill outlines: U1 random seed 13956 (vanilla Orca on the s13956 inputs) had a point 0.244 mm below them. Its
+    // y offset of -0.07 cells truncated to 0, the cell of the next point up, so initialize() overwrote one with the other
+    // and the lost point was never erased: generateNewTrees() attached a node to it without end (111 GB, PC frozen).
+    // Read from the stalled process (distance_field: 33 points, 32 erased, the 33rd sharing cell (6, 0)); with the
+    // bbox grown to the points the same inputs slice. The bbox is unchanged when every point lies inside the outlines.
+    for (const UnsupportedCell &cell : m_unsupported_points)
+        m_unsupported_points_bbox.merge(cell.loc);
     std::stable_sort(m_unsupported_points.begin(), m_unsupported_points.end(), [&radius](const UnsupportedCell &a, const UnsupportedCell &b) {
         constexpr coord_t prime_for_hash = 191;
         return std::abs(b.dist_to_boundary - a.dist_to_boundary) > radius ?
@@ -164,6 +172,16 @@ void DistanceField::update(const Point& to_node, const Point& added_leaf)
             }
         }
     }
+}
+
+void DistanceField::markErased(size_t cell_idx)
+{
+    if (m_unsupported_points_erased[cell_idx])
+        return;
+    m_unsupported_points_erased[cell_idx] = true;
+    if (const Point grid_addr = this->to_grid_point(m_unsupported_points[cell_idx].loc);
+        m_unsupported_points_grid.find_cell_idx(grid_addr) == cell_idx)
+        m_unsupported_points_grid.mark_erased(grid_addr);
 }
 
 #if 0

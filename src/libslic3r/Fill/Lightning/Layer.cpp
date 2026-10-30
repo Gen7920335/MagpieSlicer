@@ -89,6 +89,9 @@ void Layer::generateNewTrees
             tree_node_locator.insert(std::make_pair(to_grid_point(new_parent->getLocation(), current_outlines_bbox), new_parent));
         // update distance field
         distance_field.update(grounding_loc.p(), unsupported_location);
+        // MAGPIE: the leaf was just placed on this cell, so it is supported whatever update() could reach. Without
+        // this, a cell update() misses is returned by tryGetNextPoint() again on every pass and the loop never ends.
+        distance_field.markErased(unsupported_cell_idx);
     }
 
 #ifdef LIGHTNING_TREE_NODE_DEBUG_OUTPUT

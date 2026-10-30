@@ -74,6 +74,11 @@ public:
      */
     void update(const Point& to_node, const Point& added_leaf);
 
+    // MAGPIE: whether update() removed this cell, and removing it outright when it did not. Layer::generateNewTrees()
+    // asks for the next cell from the same index again, so a cell update() cannot reach would be handed back forever.
+    bool isErased(size_t cell_idx) const { return m_unsupported_points_erased[cell_idx]; }
+    void markErased(size_t cell_idx);
+
 protected:
     /*!
      * Spacing between grid points to consider supporting.
@@ -107,7 +112,8 @@ protected:
     /*!
      * BoundingBox of all points in m_unsupported_points. Used for mapping of sign integer numbers to positive integer numbers.
      */
-    const BoundingBox          m_unsupported_points_bbox;
+    // MAGPIE: not const, grown in the constructor to hold every sampled point (see there).
+    BoundingBox                m_unsupported_points_bbox;
 
     /*!
      * Links the unsupported points to a grid point, so that we can quickly look
