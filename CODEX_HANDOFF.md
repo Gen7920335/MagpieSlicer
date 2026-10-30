@@ -16,11 +16,13 @@
 
 ## History
 
-### 2026-10-30 Layer time tower toolhead (branch ltb-tower-tool, worktree D:\claude\magpie-next-ltt) - UNBUILT
+### 2026-10-30 Layer time tower toolhead (branch ltb-tower-tool, worktree D:\claude\magpie-next-ltt) - BUILT
 
 - Gen: a setting for which tool prints the layer time blending tower. layer_time_blend 1.5.0 parameter `tower_toolhead` (int, 1-based, 0 = the tool in use, default 0; slot setting of gcode.time_plan; invalidates psWipeTower, psSkirtBrim, psGCodeExport). Core: `layer_time_tower_filament(print)` (GCode.cpp) maps the toolhead to a filament (printing_nozzle_index; the print's own filament on it first); ToolOrdering's Print ctor appends it to every layer with an object layer (like insert_wipe_tower_extruder), so the prime tower plans the change and H/2 frames give it a tower-only visit. Export: the site tag stays at the layer start (wait_at_visit), the tower block is printed by `layer_time_tower_at_tool()` after that tool's change in both the plain and the H/2 loop, with the visit tag its wait is written at (`layer_time_tower_block()` is the old tower branch, shared). write_waits: the block of such a site is site k-1 (visit_block_pending), else the last wait's block was cut. Placement reads the tower tool's nozzle; the 3D preview too.
 - Limitation: the tool change is planned even when the tower turns out not to fit (then the waits park and the change is wasted); the ordering cannot know the placement.
-- Test "The layer time tower is printed by the chosen toolhead, its wait at its visit" (GENERATE 0, 2). Not built: bblwall was in use (Gen), the lightning thread was building; build slot requested.
+- Test "The layer time tower is printed by the chosen toolhead, its wait at its visit" (GENERATE 0, 2). Built in magpie-next-ltt/build (own tree, --deps-dir magpie-next/deps/build).
+- Two defects found by the first build and fixed (diagnostics toggled them): the ToolOrdering lists are still 1-based where the tower filament is planned (the 0-based id read the model's filament 1 as planned, toolhead 3 printed T1); the export's site times paired a block after its site with the next site, so the planner saw no tower times and cut every block (tower_end 0). From layer 2 on the tower's tool is the layer's first (sort_and_build_data rotate); layer 1 keeps the initial tool. PERMANENT DIAGNOSTIC: info lines naming the planned and the printed tower filament; warning when a layer's tower tool never came in.
+- Verified: ctest 3037/3037; gate golden/ltt (a = towerest/bin_ee06, b = ltt/bin signed mods, 9 corpora) 210 identical apart from the mods version line; U1 CLI repro golden/ltt/repro (tee, 4 toolheads): toolhead 2 and 3 print the tower with T1/T2 on all 60 layers, 0 blocks with the wrong tool, toolhead 0 unchanged; --mod-test layer_time_blend pass. Rebased onto magpie-next 0541f9ff38 (lightning fix; Fill code, not rebuilt together) and fast-forwarded.
 
 ### 2026-10-29 Total deep code review (branch review-total-20261029, built in D:\claude\magpie-next-bblwall) - BUILT
 
