@@ -1,4 +1,4 @@
 {
     "args": ["tower.3mf"],
-    "contains": ["; mods: layer_time_blend 1.5.0", ";MAGPIE_WAIT_TOWER_BEGIN", "G4 P"]
+    "contains": ["; mods: layer_time_blend 1.5.1", ";MAGPIE_WAIT_TOWER_BEGIN", "G4 P"]
 }

@@ -3770,7 +3770,8 @@ static double rest_to_rest_time(double distance, double speed, double accel)
 // one, one and both objects' layers) although each object's own time between its layers does not, and blending
 // them added waits on every layer (+50 % in the 2026-10-27 model). Sites only where all of them start a layer make
 // each interval a whole period of the pattern. A by-object print prints one object per layer pass.
-static bool layer_time_all_objects_at(const Print &print, coordf_t print_z)
+// ToolOrdering plans the tower toolhead's change on the same layers.
+bool layer_time_all_objects_at(const Print &print, coordf_t print_z)
 {
     if (print.config().print_sequence.value == PrintSequence::ByObject)
         return true;
@@ -3855,7 +3856,10 @@ std::string GCode::layer_time_tower_block(coordf_t print_z, LayerTimeWaitSite *s
 
 std::string GCode::layer_time_tower_at_tool(unsigned int filament)
 {
-    if (!m_layer_time_tower_pending || int(filament) != m_layer_time_tower_filament)
+    // The tool really in: a pass whose tool change the tower left out keeps the tool it had.
+    const Extruder *current = m_writer.filament();
+    if (!m_layer_time_tower_pending || int(filament) != m_layer_time_tower_filament || current == nullptr ||
+        int(current->id()) != m_layer_time_tower_filament)
         return {};
     m_layer_time_tower_pending = false;
     return this->layer_time_tower_block(m_layer_time_tower_pending_z, nullptr);
@@ -4152,7 +4156,10 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
             sites[k].park_trip_s      = written.can_park ? written.park_trip_s : 0.;
             sites[k].uncertain        = times.uncertain[k];
             if (std::isfinite(times.begin[k]) && std::isfinite(times.end[k])) {
-                sites[k].tower_pre_s   = times.site[k] - times.begin[k];
+                // A deferred block (tower_toolhead) starts after its site, past the tool change: none of it is in
+                // this interval, all of it in the next. Its negative site - begin put the tool change's time into
+                // this interval when the planner took the tower out (review 2026-10-30).
+                sites[k].tower_pre_s   = std::max(0., times.site[k] - times.begin[k]);
                 sites[k].tower_block_s = times.end[k] - times.begin[k];
             }
         }
@@ -4200,8 +4207,15 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
         check.finalize(false);
         const std::vector<double> measured = site_times(check.wait_site_times()).site;
         const size_t              kept     = std::min(n, plan.tower_end);
+        // A site that waits at its tower visit (tower_toolhead) has its tag at the layer start, outside the block,
+        // so it stays when its block is left out; the sites before tower_end come first either way. Expecting only
+        // `kept` skipped the correction whenever the tower was cut (the test of tower_toolhead: "53 sites after
+        // filling, 44 expected", review 2026-10-30).
+        size_t                    remaining = kept;
+        for (size_t k = kept; k < n; ++k)
+            remaining += m_layer_time_sites[k].wait_at_visit;
         bool                      corrected = false;
-        if (measured.size() == kept) {
+        if (measured.size() == remaining) {
             const std::vector<double> interval = intervals(measured);
             for (size_t k = 1; k < kept; ++k) {
                 if (form[k] == WaitForm::None)
@@ -4224,7 +4238,7 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
             }
         } else {
             // PERMANENT DIAGNOSTIC: the filled G-code lost or gained a site; its waits stay uncorrected.
-            BOOST_LOG_TRIVIAL(error) << "Layer time blending: " << measured.size() << " sites after filling, " << kept << " expected";
+            BOOST_LOG_TRIVIAL(error) << "Layer time blending: " << measured.size() << " sites after filling, " << remaining << " expected";
         }
         if (corrected)
             LayerTimeBlendExport::write_waits(path_tmp, path_filled, m_layer_time_sites, form, dwell_ms, plan.tower_end, absolute_e);
@@ -4720,9 +4734,22 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         // per-object ordering above resolves "don't care" extruders from its own initial extruder, so its layers can
         // name other tools than the tower's plan: seed 4118 of the LTI random test (raft, object on the default
         // filament) printed layer 0.77 with T1 where the tower planned T1 -> T0 ("toolchange it didn't expect").
+        // The first tool, the tools set up and the first non-support filaments come from that ordering too, as a by-layer
+        // print takes them below: with a Type2 tower and no priming the tower plans from the last tool, and starting
+        // with the first one printed a raft on the support filament with the default filament, the tower then
+        // "changing" from a tool never loaded (review 2026-10-30, the same model by layer starts with T1, by object T0).
         if (has_wipe_tower) {
             tool_ordering       = print.tool_ordering();
-            initial_extruder_id = tool_ordering.first_extruder();
+            initial_extruder_id = (wipe_tower_type == WipeTowerType::Type2 && !print.config().single_extruder_multi_material_priming) ?
+                tool_ordering.all_extruders().back() :
+                tool_ordering.first_extruder();
+            initial_non_support_extruder_id = (unsigned int) -1;
+            std::fill(first_non_support_filaments.begin(), first_non_support_filaments.end(), -1);
+            std::fill(first_filaments.begin(), first_filaments.end(), -1);
+            tool_ordering.cal_non_support_filaments(print.config(), initial_non_support_extruder_id, first_non_support_filaments, first_filaments);
+            append(sequential_tools, tool_ordering.all_extruders());
+            sort_remove_duplicates(sequential_tools);
+            this->set_extruders(sequential_tools);
         }
     } else {
         // Find tool ordering for all the objects at once, and the initial extruder ID.

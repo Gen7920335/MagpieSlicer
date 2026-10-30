@@ -103,6 +103,8 @@ enum class LayerTimeWaitAt { InPlace, Tower, Park, PurgeTower };
 // (its tower_toolhead setting, 1-based; 0 = the tool in use): the lowest filament on that toolhead among the print's,
 // else among all. Nothing when the waits are not at the tower, in a by-object or spiral print, or for toolhead 0.
 std::optional<unsigned int> layer_time_tower_filament(const Print &print);
+// MAGPIE: whether a layer at print_z gets a layer time wait site: every object printing there has a layer there.
+bool layer_time_all_objects_at(const Print &print, coordf_t print_z);
 
 class OozePrevention {
 public:

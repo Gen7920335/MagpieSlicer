@@ -471,16 +471,18 @@ void ToolOrdering::sort_and_build_data(const Print& print, unsigned int first_ex
     bool reorder_first_layer = (first_extruder != (unsigned int)(-1));
     this->resolve_mixed_filaments(print.config());
     reorder_extruders_for_minimum_flush_volume(reorder_first_layer);
-    this->enforce_mixed_component_order();
     // MAGPIE: the layer time tower's tool (tower_toolhead) goes first on every layer after the first, so the change
     // to it is the layer's first (Orca makes it before the layer change) and the tower is printed right at the wait
     // site; the first layer keeps the print's initial tool and prints the tower once the tower's tool comes in.
+    // Before the mixed component order, which keeps this order where a mixed filament's components allow it and
+    // overrides it where they do not (review 2026-10-30: after it, the move could break that order).
     if (const std::optional<unsigned int> tower_filament = layer_time_tower_filament(print))
         for (size_t i = 1; i < m_layer_tools.size(); ++i) {
             std::vector<unsigned int> &extruders = m_layer_tools[i].extruders;
             if (auto it = std::find(extruders.begin(), extruders.end(), *tower_filament); it != extruders.end() && it != extruders.begin())
                 std::rotate(extruders.begin(), it, it + 1);
         }
+    this->enforce_mixed_component_order();
     m_sorted = true;
     this->build_half_layer_execution(print);
 
@@ -1073,8 +1075,12 @@ ToolOrdering::ToolOrdering(const Print &print, unsigned int first_extruder, bool
         // model's own filament 1 read as "already planned" and toolhead 3 came out as filament 2 (U1 repro).
         const unsigned int tower_filament_1based = *tower_filament + 1;
         size_t             planned               = 0;
+        // Only layers with a wait site (layer_time_all_objects_at, as GCode::process_layer writes them): with objects of
+        // different layer heights the others have no tower block, and the change there was for nothing (review
+        // 2026-10-30).
         for (LayerTools &lt : m_layer_tools)
-            if (lt.has_object && !lt.extruders.empty() && !lt.has_extruder(tower_filament_1based)) {
+            if (lt.has_object && !lt.extruders.empty() && !lt.has_extruder(tower_filament_1based) &&
+                layer_time_all_objects_at(print, lt.print_z)) {
                 lt.extruders.emplace_back(tower_filament_1based);
                 ++planned;
             }

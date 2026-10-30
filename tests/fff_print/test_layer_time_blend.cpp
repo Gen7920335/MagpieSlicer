@@ -1019,6 +1019,79 @@ TEST_CASE("The layer time tower is printed by the chosen toolhead, its wait at i
     }
 }
 
+namespace {
+
+// Two toolheads of 0.4 mm, no prime tower; the layer time waits at `wait_at` with the tower on toolhead 2.
+DynamicPrintConfig tower_toolhead_2_config(const std::string &wait_at)
+{
+    DynamicPrintConfig config = multifilament_config(2, {
+        {"layer_height", 0.3}, {"initial_layer_print_height", 0.3}, // mm
+        {"wall_loops", 2}, {"sparse_infill_density", 15}, {"enable_support", false}, {"skirt_loops", 0},
+        {"brim_type", "no_brim"}, {"slow_down_for_layer_cooling", false}, {"use_relative_e_distances", true},
+        {"enable_prime_tower", false},
+    });
+    config.set_num_extruders(2);
+    config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(false));
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.4, 0.4});
+    size_flush_to_nozzles(config);
+    const DynamicPrintConfig blend = wait_at_config(wait_at, 10., {{"tower_toolhead", "2"}});
+    for (const char *key : {"mod_settings", "printer_mod_settings"})
+        config.set_key_value(key, blend.option(key)->clone());
+    return config;
+}
+
+} // namespace
+
+TEST_CASE("The tower toolhead changes in only on layers with a wait site", "[LayerTimeBlend]")
+{
+    // Review 2026-10-30: two cubes of 0.3 and 0.2 mm layers have a site only where both start a layer (every 0.6 mm);
+    // the tower's tool came in on every object layer, so the layers between changed tools for no tower.
+    DynamicPrintConfig config = tower_toolhead_2_config("tower");
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    Print print;
+    Model model;
+    std::vector<TriangleMesh> meshes;
+    meshes.push_back(make_cube(10., 10., 12.));
+    meshes.push_back(make_cube(10., 10., 12.));
+    const std::vector<std::vector<ConfigBase::SetDeserializeItem>> per_object = { {}, { { "layer_height", "0.2" } } };
+    init_print(std::move(meshes), print, model, config, &per_object);
+    const std::string out   = gcode(print);
+    const size_t      sites = count_lines_starting(out, site_tag);
+    REQUIRE(sites > 0);
+    // Fewer sites than G-code layers: the fixture has layers without one.
+    CHECK(sites < count_lines_starting(out, ";LAYER_CHANGE"));
+    // Toolhead 2 is filament 2's, which prints nothing else: it comes in on site layers only (the equal cubes need no
+    // wait, so the tower itself is cut away above the last one; the changes stay planned).
+    CHECK(count_lines_starting(out, "T1") > 0);
+    CHECK(count_lines_starting(out, "T1") <= sites);
+}
+
+TEST_CASE("Choosing the tower as the wait place brings the tower toolhead into the tool ordering", "[LayerTimeBlend]")
+{
+    // Review 2026-10-30: wait_at decides whether ToolOrdering plans the tower toolhead's filament, but it invalidated
+    // the G-code export only, so park -> tower re-exported with the ordering of park: the tower's tool never came in,
+    // and no tower or wait was printed.
+    BundledMods mods;
+    REQUIRE(mods.errors.empty());
+    DynamicPrintConfig config = tower_toolhead_2_config("park");
+    Print print;
+    Model model;
+    // Where slice_mesh puts it: the tower has room beside it.
+    TriangleMesh mesh = pillar_with_slab();
+    mesh.translate(100.f, 100.f, 0.f);
+    init_print({mesh}, print, model, config, nullptr, /*arrange=*/false);
+    const std::string parked = gcode(print);
+    CHECK(count_lines_starting(parked, "T1") == 0);
+
+    config = tower_toolhead_2_config("tower");
+    print.apply(model, config);
+    CHECK_FALSE(print.is_step_done(psWipeTower));
+    const std::string towered = gcode(print);
+    CHECK(count_lines_starting(towered, ";MAGPIE_WAIT_TOWER_BEGIN") > 0);
+    CHECK(count_lines_starting(towered, "T1") > 0);
+}
+
 TEST_CASE("On a later plate the tower and the park position stay where they are on the first", "[LayerTimeBlend]")
 {
     // Review 2026-10-22: the tower's spot, the park position and the printable area are in plate coordinates;

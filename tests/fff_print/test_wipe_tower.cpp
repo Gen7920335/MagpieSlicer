@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <catch2/catch_all.hpp>
 
 #include "libslic3r/Config.hpp"
@@ -556,4 +557,35 @@ TEST_CASE("A sequential print with a tower prints the tool changes the tower pla
     std::string exported;
     REQUIRE_NOTHROW(exported = gcode(print));
     CHECK_FALSE(exported.empty());
+}
+
+// Review 2026-10-30: one object with a tower prints the same tools by object as by layer. With a Type2 tower and no
+// priming the tower plans from the last tool; the by-object export started with the first, so the raft on filament 2
+// was printed with filament 1 (by layer T1 first, by object T0 throughout the raft).
+TEST_CASE("A sequential print with a tower starts with the tool a by-layer print starts with", "[WipeTower]")
+{
+    auto tool_lines = [](const std::string &print_sequence) {
+        auto config = multifilament_config(2);
+        size_flush_to_nozzles(config);
+        config.set_deserialize_strict({{"print_sequence", print_sequence}, {"enable_prime_tower", true}, {"wipe_tower_type", "type2"},
+            {"single_extruder_multi_material_priming", false}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"}, {"raft_layers", 2},
+            {"enable_support", false}, {"support_filament", 2}, {"support_interface_filament", 0},
+            {"layer_height", 0.16}, {"initial_layer_print_height", 0.16}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+        Print print;
+        Model model;
+        init_print({cube(10.)}, print, model, config);
+        REQUIRE(print.has_wipe_tower());
+        std::vector<std::string> tools;
+        std::istringstream       in(gcode(print));
+        std::string              line;
+        while (std::getline(in, line))
+            if (line.size() >= 2 && line[0] == 'T' && std::isdigit(static_cast<unsigned char>(line[1])))
+                tools.push_back(line.substr(0, line.find_first_of(" ;")));
+        return tools;
+    };
+    const std::vector<std::string> by_layer = tool_lines("by layer");
+    REQUIRE_FALSE(by_layer.empty());
+    // The raft is filament 2's: the by-layer print starts with it.
+    CHECK(by_layer.front() == "T1");
+    CHECK(tool_lines("by object") == by_layer);
 }
