@@ -4105,9 +4105,14 @@ void GCode::apply_layer_time_plan(Print &print, const std::string &path_tmp)
         SiteTimes out;
         double    begin = std::numeric_limits<double>::quiet_NaN();
         for (const Mark &mark : marks) {
-            if (mark.kind == MarkKind::TowerBegin)
-                begin = mark.time_s;
-            else if (mark.kind == MarkKind::Site) {
+            if (mark.kind == MarkKind::TowerBegin) {
+                // A block before its site (the usual layout), or after it: a deferred tower (tower_toolhead, the
+                // tool change first) belongs to the last site, which has no block yet.
+                if (!out.begin.empty() && std::isnan(out.begin.back()) && std::isnan(out.end.back()))
+                    out.begin.back() = mark.time_s;
+                else
+                    begin = mark.time_s;
+            } else if (mark.kind == MarkKind::Site) {
                 out.site.push_back(mark.time_s);
                 out.uncertain.push_back(mark.uncertain);
                 out.begin.push_back(begin);
@@ -4611,8 +4616,11 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     // tower_toolhead: the tower's own tool (ToolOrdering plans its change on every object layer).
     m_layer_time_tower_filament = -1;
     m_layer_time_tower_pending  = false;
-    if (const std::optional<unsigned int> f = layer_time_tower_filament(print); f && m_layer_time_wait_at == LayerTimeWaitAt::Tower)
+    if (const std::optional<unsigned int> f = layer_time_tower_filament(print); f && m_layer_time_wait_at == LayerTimeWaitAt::Tower) {
         m_layer_time_tower_filament = int(*f);
+        // PERMANENT DIAGNOSTIC: the filament the export prints the tower with (ToolOrdering logs what it planned).
+        BOOST_LOG_TRIVIAL(info) << "Layer time blending: the tower toolhead's filament is " << *f + 1;
+    }
     m_layer_time_tower_side      = 0.;
     m_layer_time_tower_last_z    = 0.;
     m_layer_time_tower_brim_done = false;

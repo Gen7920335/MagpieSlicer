@@ -472,6 +472,15 @@ void ToolOrdering::sort_and_build_data(const Print& print, unsigned int first_ex
     this->resolve_mixed_filaments(print.config());
     reorder_extruders_for_minimum_flush_volume(reorder_first_layer);
     this->enforce_mixed_component_order();
+    // MAGPIE: the layer time tower's tool (tower_toolhead) goes first on every layer after the first, so the change
+    // to it is the layer's first (Orca makes it before the layer change) and the tower is printed right at the wait
+    // site; the first layer keeps the print's initial tool and prints the tower once the tower's tool comes in.
+    if (const std::optional<unsigned int> tower_filament = layer_time_tower_filament(print))
+        for (size_t i = 1; i < m_layer_tools.size(); ++i) {
+            std::vector<unsigned int> &extruders = m_layer_tools[i].extruders;
+            if (auto it = std::find(extruders.begin(), extruders.end(), *tower_filament); it != extruders.end() && it != extruders.begin())
+                std::rotate(extruders.begin(), it, it + 1);
+        }
     m_sorted = true;
     this->build_half_layer_execution(print);
 
@@ -1059,10 +1068,20 @@ ToolOrdering::ToolOrdering(const Print &print, unsigned int first_extruder, bool
     // MAGPIE: the layer time tower's toolhead (layer time blending, tower_toolhead) prints the tower on every layer
     // with an object layer, so its tool change is planned here, with the prime tower's purge, like the wipe tower
     // filament's (insert_wipe_tower_extruder); the export prints the tower once that tool is in.
-    if (const std::optional<unsigned int> tower_filament = layer_time_tower_filament(print))
+    if (const std::optional<unsigned int> tower_filament = layer_time_tower_filament(print)) {
+        // The lists are still 1-based here (handle_dontcare_extruder() reindexes them below): with the 0-based id the
+        // model's own filament 1 read as "already planned" and toolhead 3 came out as filament 2 (U1 repro).
+        const unsigned int tower_filament_1based = *tower_filament + 1;
+        size_t             planned               = 0;
         for (LayerTools &lt : m_layer_tools)
-            if (lt.has_object && !lt.extruders.empty() && !lt.has_extruder(*tower_filament))
-                lt.extruders.emplace_back(*tower_filament);
+            if (lt.has_object && !lt.extruders.empty() && !lt.has_extruder(tower_filament_1based)) {
+                lt.extruders.emplace_back(tower_filament_1based);
+                ++planned;
+            }
+        // PERMANENT DIAGNOSTIC: which filament the tower's tool change was planned with, and on how many layers.
+        BOOST_LOG_TRIVIAL(info) << "Layer time blending: the tower toolhead's filament " << *tower_filament + 1 << " planned into "
+                                << planned << " of " << m_layer_tools.size() << " layers";
+    }
 
     // Reorder the extruders to minimize tool switches.
     std::vector<unsigned int> first_layer_tool_order;

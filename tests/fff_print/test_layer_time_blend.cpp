@@ -964,7 +964,7 @@ TEST_CASE("The layer time tower is printed by the chosen toolhead, its wait at i
         const std::vector<std::string> lines = lines_of(out);
         const int tower_tool = tower_toolhead == 0 ? 0 : tower_toolhead - 1; // 0-based tool the blocks must print with
         int    tool = 0; // the tool in (T lines), 0 before the first
-        size_t blocks = 0, waits = 0, visits = 0, sites = 0;
+        size_t blocks = 0, waits = 0, visits = 0, sites = 0, sites_in_block = 0;
         bool   in_block = false;
         for (size_t i = 0; i < lines.size(); ++i) {
             const std::string &line = lines[i];
@@ -981,14 +981,19 @@ TEST_CASE("The layer time tower is printed by the chosen toolhead, its wait at i
                 CHECK(in_block);
             } else if (line == site_tag) {
                 ++sites;
-                // With the tower's own tool the site tag is at the layer start, outside the block.
-                CHECK(in_block == (tower_toolhead == 0));
+                sites_in_block += in_block;
+                // The tool in use prints the tower right at the site (the tag inside the block). The tower's own tool
+                // comes in after the site, so its block carries the visit tag instead, except where the previous layer
+                // left that tool in (then the block is immediate, the site inside it).
+                if (tower_toolhead == 0)
+                    CHECK(in_block);
             } else if (line.rfind("G4 P", 0) == 0) {
                 ++waits;
                 // Every wait is over the tower: right before the tag the block puts after the travel there.
                 CHECK(in_block);
                 REQUIRE(i + 1 < lines.size());
-                CHECK(lines[i + 1] == (tower_toolhead == 0 ? site_tag : std::string(";MAGPIE_WAIT_VISIT")));
+                const bool over_tower = lines[i + 1] == site_tag || lines[i + 1] == ";MAGPIE_WAIT_VISIT";
+                CHECK(over_tower);
             } else if (!in_block && axis_value(line, 'E') && *axis_value(line, 'E') > 0. && (axis_value(line, 'X') || axis_value(line, 'Y'))) {
                 // The model is filament 1's.
                 CHECK(tool == 0);
@@ -997,9 +1002,19 @@ TEST_CASE("The layer time tower is printed by the chosen toolhead, its wait at i
         REQUIRE(blocks > 0);
         CHECK(waits > 0);
         CHECK(sites >= blocks);
-        CHECK(visits == (tower_toolhead == 0 ? 0 : blocks));
-        // Toolhead 2 is planned into every layer with a block: a change to it and back; toolhead 0 changes nothing.
-        CHECK(count_lines_starting(out, "T1") == (tower_toolhead == 0 ? 0 : blocks));
+        // Every block waits at its site tag or its visit tag.
+        CHECK(visits + sites_in_block == blocks);
+        if (tower_toolhead == 0)
+            CHECK(visits == 0);
+        // Toolhead 2 is planned into every layer (the ordering cannot know where the tower stops), so at least every
+        // layer with a block changes to it; toolhead 0 changes nothing.
+        const size_t changes_to_tower = count_lines_starting(out, "T1");
+        if (tower_toolhead == 0) {
+            CHECK(changes_to_tower == 0);
+        } else {
+            CHECK(changes_to_tower >= blocks);
+            CHECK(changes_to_tower <= sites);
+        }
         check_blended(measured_intervals(out), 10.);
     }
 }
