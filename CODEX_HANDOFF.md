@@ -16,6 +16,13 @@
 
 ## History
 
+### 2026-10-31 Third total code review (branch total-review-3, worktree D:\claude\magpie-next-review2) - BUILT
+
+- Gen asked for another full review of magpie-next 4b181abb27. Report D:\claudeeports\TOTAL_REVIEW3_20261031_KO.md; harness D:\claude\goldeneview2 (r_matrix.py, gate3.sh), bin golden/review3/bin.
+- KNOWN (test toggled on the old GCode.cpp): with tower_toolhead, a site whose block printed right at it (the layer before ended with the tower's tool, e.g. layer 2) left the next site, which waits at its visit, nowhere to write its wait: that site's interval had no visit tag. The old code fails the new test (layer 2 no wait, neighbour intervals 242 s apart against a 10 s limit); with the visit tag after the site tag in such a block (tower_toolhead only) it passes. Test "With the tower toolhead the layer after a block printed at its site still waits". The deferred block's comment now says it carries the next site's wait (what write_waits always did).
+- Reviewed, no defect: self-review of 4b181abb27 (sequential tower with skirt and brim: same tools by object and by layer), ModNetService (address/consent checks, TLS, secrets, threads), ModLayerRangesEditor, ModCalibrationDialog.
+- Verified: ctest 3043/3043; gate (a = ltt/bin 5c5a054dee, c = review3/bin) 210 identical; U1 matrix tee/thin/slab x toolhead 2,3 x prime tower x H/2 x support: 48 slices rc 0, every block on the tower's tool, no site-count or missing-tool log line.
+
 ### 2026-10-30 Second total code review (branch total-review-2, worktree D:\claude\magpie-next-review2) - BUILT
 
 - Gen asked for a second full review of magpie-next 5c5a054dee, including the lightning loop fix, layer time tower toolhead, the 4118 sequential tool order and the CLI tower refit. Report D:\claudeeports\TOTAL_REVIEW2_20261030_KO.md. Harness D:\claude\goldeneview2 (own datadir, every slice through jobrun.py 16 GB cap; r_seq.py, r_cut.py, slab_pillar via mkstl.py).

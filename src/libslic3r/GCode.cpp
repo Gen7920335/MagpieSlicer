@@ -3841,8 +3841,14 @@ std::string GCode::layer_time_tower_block(coordf_t print_z, LayerTimeWaitSite *s
         site->x = at.x();
         site->y = at.y();
         gcode += ";" + GCodeProcessor::wait_site_tag() + "\n";
+        // tower_toolhead: the rest of this block is in the next site's interval, and when that site waits at its
+        // visit its wait belongs here, over the tower. Without the tag a site following a block printed right at its
+        // site (the layer before ended with the tower's tool) had nowhere to wait (review 2026-10-31).
+        if (m_layer_time_tower_filament >= 0)
+            gcode += std::string(LayerTimeBlendExport::visit_tag) + "\n";
     } else {
-        // The wait of the site written at the layer start, over the tower (write_waits).
+        // Written after this layer's site tag, so write_waits puts the next site's wait here: that site's interval
+        // (from this layer's site to its own) is the one this block is in.
         gcode += std::string(LayerTimeBlendExport::visit_tag) + "\n";
     }
     gcode += this->extrude_layer_time_tower(print_z);

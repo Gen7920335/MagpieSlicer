@@ -1002,8 +1002,11 @@ TEST_CASE("The layer time tower is printed by the chosen toolhead, its wait at i
         REQUIRE(blocks > 0);
         CHECK(waits > 0);
         CHECK(sites >= blocks);
-        // Every block waits at its site tag or its visit tag.
-        CHECK(visits + sites_in_block == blocks);
+        // Every block has its site tag or its visit tag; with the tower's own tool every block also carries a visit tag,
+        // where the next site's wait goes when that site waits at its visit (review 2026-10-31).
+        CHECK(visits + sites_in_block >= blocks);
+        if (tower_toolhead != 0)
+            CHECK(visits == blocks);
         if (tower_toolhead == 0)
             CHECK(visits == 0);
         // Toolhead 2 is planned into every layer (the ordering cannot know where the tower stops), so at least every
@@ -1021,8 +1024,9 @@ TEST_CASE("The layer time tower is printed by the chosen toolhead, its wait at i
 
 namespace {
 
-// Two toolheads of 0.4 mm, no prime tower; the layer time waits at `wait_at` with the tower on toolhead 2.
-DynamicPrintConfig tower_toolhead_2_config(const std::string &wait_at)
+// Two toolheads of 0.4 mm, no prime tower; the layer time waits at `wait_at` (limit max_diff_s, s) with the tower on
+// `toolhead`.
+DynamicPrintConfig tower_toolhead_2_config(const std::string &wait_at, double max_diff_s = 10., const std::string &toolhead = "2")
 {
     DynamicPrintConfig config = multifilament_config(2, {
         {"layer_height", 0.3}, {"initial_layer_print_height", 0.3}, // mm
@@ -1034,7 +1038,7 @@ DynamicPrintConfig tower_toolhead_2_config(const std::string &wait_at)
     config.set_key_value("single_extruder_multi_material", new ConfigOptionBool(false));
     config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.4, 0.4});
     size_flush_to_nozzles(config);
-    const DynamicPrintConfig blend = wait_at_config(wait_at, 10., {{"tower_toolhead", "2"}});
+    const DynamicPrintConfig blend = wait_at_config(wait_at, max_diff_s, {{"tower_toolhead", toolhead}});
     for (const char *key : {"mod_settings", "printer_mod_settings"})
         config.set_key_value(key, blend.option(key)->clone());
     return config;
@@ -1065,6 +1069,36 @@ TEST_CASE("The tower toolhead changes in only on layers with a wait site", "[Lay
     // wait, so the tower itself is cut away above the last one; the changes stay planned).
     CHECK(count_lines_starting(out, "T1") > 0);
     CHECK(count_lines_starting(out, "T1") <= sites);
+}
+
+TEST_CASE("With the tower toolhead the layer after a block printed at its site still waits", "[LayerTimeBlend]")
+{
+    // Review 2026-10-31: the first layer ends with the tower's tool, so layer 2 prints its block right at its site and
+    // layer 3 waits at its visit. Layer 2's interval (site 2 to site 3) had no visit tag to take that wait. A 5 mm
+    // pillar two layers high (0.6 mm, 0.3 mm layers) under a 40 mm slab: layer 2 is far shorter than layer 3, so
+    // the wait the 10 s limit needs falls exactly there.
+    const int tower_toolhead = GENERATE(0, 2);
+    DYNAMIC_SECTION("tower toolhead " << tower_toolhead) {
+        const std::string toolhead = std::to_string(tower_toolhead);
+        TriangleMesh      mesh     = make_cube(5., 5., 0.6);
+        TriangleMesh      slab     = make_cube(40., 40., 3.);
+        slab.translate(-17.5f, -17.5f, 0.6f);
+        mesh.merge(slab);
+        const std::string              out   = slice_mesh(mesh, tower_toolhead_2_config("tower", 10., toolhead));
+        const std::vector<std::string> lines = lines_of(out);
+        // The wait between the second and the third site (layer 2's interval), wherever in it.
+        size_t sites = 0;
+        bool   layer_2_waits = false;
+        for (const std::string &line : lines) {
+            if (line == site_tag)
+                ++sites;
+            else if (sites == 2 && line.rfind("G4 P", 0) == 0)
+                layer_2_waits = true;
+        }
+        REQUIRE(sites >= 3); // the tower (and a site in it) may stop above the last wait
+        CHECK(layer_2_waits);
+        check_blended(measured_intervals(out), 10.);
+    }
 }
 
 TEST_CASE("Choosing the tower as the wait place brings the tower toolhead into the tool ordering", "[LayerTimeBlend]")
