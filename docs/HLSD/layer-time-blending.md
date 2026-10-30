@@ -85,7 +85,10 @@ when a wait is next to them.
 - `tower` (the mod's default): a hollow 15 mm square tower with a 5-line brim, printed one loop
   per layer next to the objects (20 mm off their bounding box) or at the plate's
   `layer_time_blend_tower_x/_y`, in plate coordinates like the park position and the printable area
-  (the plate's origin puts them on the bed). The nozzle waits over its center, then prints the loop,
+  (the plate's origin puts them on the bed). The mod's `tower_toolhead` names the tool that prints it
+  (0: the tool in use); that tool's filament is planned into every object layer's tool order, so a
+  prime tower purges the change, and the tower block is printed once the tool is in, the wait at its
+  visit tag while the site tag stays at the layer start. The nozzle waits over its center, then prints the loop,
   which re-primes it. A step taller than the nozzle's `max_layer_height` since the tower's last loop
   (the first object layer on a raft) is printed as several loops, each at its own Z, the last at
   the layer's. Each layer's part is a self-contained block that starts and ends retracted at the
