@@ -1,6 +1,6 @@
 <div align="center">
 
-<img alt="Magpie Slicer logo" src="resources/images/MagpieSlicer.png" width="150">
+<img alt="Magpie Slicer logo" src="resources/images/MagpieSlicer_192px_transparent.png" width="150">
 
 # Magpie Slicer
 
