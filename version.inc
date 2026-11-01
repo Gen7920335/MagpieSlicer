@@ -12,7 +12,7 @@ option(MAGPIE_SLICING_PROFILER "Build the isolated Magpie slicing profiler devel
 # magpie-slicer, package "Magpie Slicer"): it installs over line 1 and reads line 1's data folder.
 set(MAGPIE_ORCA_BASE_VERSION "2.5.0")
 set(MAGPIE_RELEASE_LINE 2)
-set(MAGPIE_RELEASE_REVISION 0)
+set(MAGPIE_RELEASE_REVISION 1)
 set(MAGPIE_RELEASE_VERSION
     "${MAGPIE_ORCA_BASE_VERSION}.${MAGPIE_RELEASE_LINE}.${MAGPIE_RELEASE_REVISION}")
 math(EXPR MAGPIE_WINDOWS_BUILD_VERSION

@@ -24,7 +24,7 @@ Magpie Slicer is based on [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer)
 - **Manual update check:** Help > Check for updates queries the GitHub releases. Nothing is checked automatically at start.
 - **Korean translation** of the app and of every mod's names and settings.
 
-Versions follow `<Orca version>.<Magpie line>.<revision>` (currently 2.5.0.2.0). The Windows 10/11 x64 installer is on the [Releases](../../releases) page.
+Versions follow `<Orca version>.<Magpie line>.<revision>` (currently 2.5.0.2.1). The Windows 10/11 x64 installer is on the [Releases](../../releases) page.
 
 ## Bundled mods
 

@@ -24,7 +24,7 @@ Magpie Slicer는 [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer) 나이�
 - **업데이트 확인은 수동:** 도움말 > 업데이트 확인에서 GitHub 릴리스를 조회합니다. 시작할 때 자동으로 확인하지 않습니다.
 - **한국어 번역:** 앱과 모드 이름·설정이 모두 한국어로 번역되어 있습니다.
 
-버전은 `<Orca 버전>.<Magpie 라인>.<리비전>` 형식입니다(현재 2.5.0.2.0). Windows 10/11 x64 설치 파일을 [Releases](../../releases)에서 받을 수 있습니다.
+버전은 `<Orca 버전>.<Magpie 라인>.<리비전>` 형식입니다(현재 2.5.0.2.1). Windows 10/11 x64 설치 파일을 [Releases](../../releases)에서 받을 수 있습니다.
 
 ## 기본 모드
 
