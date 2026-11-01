@@ -9721,7 +9721,14 @@ void Tab::update_extruder_variants(int extruder_id, bool reload)
         // MAGPIE: and the process tab enables it to pick the nozzle of the per-nozzle line width rows.
         if (m_extruder_switch_variants || (m_type == Preset::TYPE_PRINTER && extruder_nums >= 2) || per_nozzle_widths_switch()) {
             auto options = generate_extruder_options();
-            m_extruder_switch->SetOptions(options);
+            // MAGPIE: the same tags keep their buttons. This runs inside the switch's own click when the per-nozzle rows
+            // appear (switch_excluder -> reload_config -> load_per_nozzle_line_widths), and rebuilding destroyed the
+            // button whose click was still being handled: the app closed on picking the right nozzle of a 0.4/0.6 H2D.
+            bool same_options = m_extruder_switch->GetCount() == options.size();
+            for (size_t i = 0; same_options && i < options.size(); ++i)
+                same_options = m_extruder_switch->GetOptionText(unsigned(i)) == options[i];
+            if (!same_options)
+                m_extruder_switch->SetOptions(options);
             int item_n = options.empty() ? 0 : options.size();
             if (m_type == Preset::TYPE_PRINTER){ // we are on printer settings dialog and larger padding can be used
                 int h_pad  = item_n > 8 ? 6 : (item_n > 6 ? 9 : (item_n > 5 ? 12 : (item_n > 4 ? 18 : (item_n > 3 ? 24 : (item_n > 2 ? 36 : 48)))));

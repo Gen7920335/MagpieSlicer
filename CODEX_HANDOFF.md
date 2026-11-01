@@ -16,6 +16,12 @@
 
 ## History
 
+### 2026-11-01 H2D 0.4/0.6: app closed on the process tab's right nozzle tag (branch magpie-next, HOMESERVER) - BUILT
+
+- User report (v2.5.0.2.0): H2D, left 0.4 / right 0.6 in the sidebar, then clicking "Right SF" in the process settings closed the app. Reproduced on the release build (gen79's magpie-next-ltt build tree copied to HOMESERVER, test datadir C:\gen79D\claude\h2d-test\datadir, clicks posted with C:\gen79D\claude\h2d-test\repro.ps1): ACCESS_VIOLATION, stack Button::MSWWindowProc (Button.cpp:530) -> wxWindow::MSWWindowProc on WM_LBUTTONUP, log line Tab::update_extruder_variants-1 right before.
+- Cause KNOWN: the sidebar's left/right combos (Sidebar::priv::switch_diameter) set the nozzles apart without refreshing the process tab, so its per-nozzle line width rows turned on inside the switch's own click (switch_excluder -> reload_config -> load_per_nozzle_line_widths -> update_extruder_variants -> MultiSwitchButton::SetOptions), which destroyed the clicked button.
+- Fix: update_extruder_variants keeps the buttons when the tags are unchanged; switch_diameter's mixed-size branch clears the changed nozzles' per-nozzle widths and reloads/updates the process tab, as set_row_nozzle_diameter does. KNOWN by toggle: Tab.cpp change alone -> same clicks, no crash (no crash log, buttons kept); plus Plater.cpp -> the rows turn on at the combo change, the tag click no longer flips them. GUI only; G-code unaffected. Not committed.
+
 ### 2026-10-31 Third total code review (branch total-review-3, worktree D:\claude\magpie-next-review2) - BUILT
 
 - Gen asked for another full review of magpie-next 4b181abb27. Report D:\claudeeports\TOTAL_REVIEW3_20261031_KO.md; harness D:\claude\goldeneview2 (r_matrix.py, gate3.sh), bin golden/review3/bin.

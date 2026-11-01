@@ -2014,9 +2014,20 @@ bool Sidebar::priv::switch_diameter(bool single)
             if (printer_tab == nullptr || nozzle_diameter_opt == nullptr || nozzle_diameter_opt->size() < 2)
                 return false;
 
+            // MAGPIE: the nozzles whose diameter changed start from the line width settings scaled to their new size,
+            // and the process settings show their per-nozzle line width table now, as set_row_nozzle_diameter does.
+            std::vector<size_t> changed;
+            for (size_t i = 0; i < 2; ++i)
+                if (std::abs(nozzle_diameter_opt->values[i] - (i == 0 ? left_value : right_value)) > EPSILON) // mm
+                    changed.push_back(i);
             nozzle_diameter_opt->values[0] = left_value;
             nozzle_diameter_opt->values[1] = right_value;
             printer_tab->load_config(new_conf);
+            if (auto *print_tab = dynamic_cast<TabPrint *>(wxGetApp().get_tab(Preset::TYPE_PRINT))) {
+                print_tab->clear_per_nozzle_widths(changed);
+                print_tab->reload_config();
+                print_tab->update();
+            }
             return true;
         }
         diameter = diameter_left;
