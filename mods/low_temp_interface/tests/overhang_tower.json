@@ -11,6 +11,6 @@
         "; temperature drop tower brim begin",
         "; low-temperature support interface end",
         "M104 S175",
-        "; mods: low_temp_interface 2.3.1"
+        "; mods: low_temp_interface 2.3.2"
     ]
 }

@@ -9,7 +9,7 @@
     // print's value.
     "id": "low_temp_interface",
     "name": "Low temperature support interface", "name_ko": "저온 서포트 접점",
-    "version": "2.3.1",
+    "version": "2.3.2",
     "api": { "major": 1, "min_minor": 1 },
     "binary": "low_temp_interface",
     "slots": [ { "slot": "gcode.events", "version": 1, "impl": "low_temp_interface" } ],

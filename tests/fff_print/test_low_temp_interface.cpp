@@ -28,6 +28,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <map>
 #include <cstdlib>
 #include <limits>
 #include <optional>
@@ -480,6 +481,51 @@ TEST_CASE("Temperature drop tower scales and slows only its final 10 mm", "[LowT
         CHECK(cooling_end < interface);
         CHECK(output.find(wait_temperature, nonblocking) > interface);
     }
+}
+
+TEST_CASE("Temperature drop tower layers are as tall as their rise under H/2 support", "[LowTemperatureInterface][TemperatureDropTower]")
+{
+    // H/2 support makes a layer's height its thinnest band (0.1 mm under 0.2 mm layers); the tower printed that height
+    // while rising 0.2 mm a layer (case_044 of the U1 random sweep), half the plastic it needs. Every tower layer after
+    // the first must be as tall as its Z step from the tower's previous layer, mm.
+    OfficialMods mods;
+    const std::string scope = GENERATE(std::string("all"), std::string("contact"));
+    CAPTURE(scope);
+    TowerSettings      settings;
+    DynamicPrintConfig config = tower_config(settings);
+    Slic3r::Test::half_layer_params(config, false, true, scope);
+    const std::string output = slice({ TestMesh::overhang }, config);
+    std::map<double, double> heights; // tower layer Z -> its bead height, mm
+    std::string type;
+    double      z = 0., height = 0.;
+    std::istringstream stream(output);
+    for (std::string line; std::getline(stream, line);) {
+        if (line.rfind(";TYPE:", 0) == 0)
+            type = line.substr(6);
+        else if (line.rfind(";HEIGHT:", 0) == 0)
+            height = std::stod(line.substr(8));
+        else if (line.rfind("G1 ", 0) == 0 || line.rfind("G0 ", 0) == 0) {
+            if (const auto zz = gcode_word(line, 'Z'))
+                z = *zz;
+            const auto e = gcode_word(line, 'E');
+            if (type == "Prime tower" && e && *e > 0. && (gcode_word(line, 'X') || gcode_word(line, 'Y')))
+                heights[std::round(z * 1000.) / 1000.] = height;
+        }
+    }
+    REQUIRE(heights.size() >= 5);
+    // The first layer rises from the bed.
+    CHECK(heights.begin()->second == Catch::Approx(heights.begin()->first).margin(0.002));
+    double previous = -1.;
+    size_t checked  = 0;
+    for (const auto &[layer_z, bead] : heights) {
+        if (previous >= 0.) {
+            CAPTURE(layer_z, bead, previous);
+            CHECK(bead == Catch::Approx(layer_z - previous).margin(0.002)); // ;HEIGHT is printed to 3 decimals
+            ++checked;
+        }
+        previous = layer_z;
+    }
+    CHECK(checked + 1 == heights.size());
 }
 
 TEST_CASE("Temperature drop tower stays inside rear-left bed bounds", "[LowTemperatureInterface][TemperatureDropTower]")

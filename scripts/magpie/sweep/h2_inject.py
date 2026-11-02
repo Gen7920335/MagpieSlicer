@@ -271,6 +271,31 @@ def main():
     path = write(out, tmp, 'time')
     record('time', f'estimated time {int(all_s * 1.05)} s against {all_s} s for "all"', H.compare_pair(path, ga, go), base_pair)
 
+    # tower_height: one tower layer printed at half its rise (H/2 bands did this to the temperature drop tower).
+    tower = None
+    for name in corpus:
+        path_ = gcode_of(a.out, name)
+        if path_ is None:
+            continue
+        gt = H.Gcode(path_)
+        zs = sorted({round(m.z, 3) for m in gt.moves if m.kind == 'Prime tower'})
+        if len(zs) > 3:
+            tower = (name, path_, gt, zs)
+            break
+    if tower is None:
+        rows.append(('tower_height', 'no case with a tower', None, None, None))
+    else:
+        name, path_, gt, zs = tower
+        z = zs[len(zs) // 2]
+        moves = [m for m in gt.moves if m.kind == 'Prime tower' and abs(m.z - z) < 1e-3]
+        ls = read(path_)
+        for m in sorted(moves, key=lambda m: -m.line):
+            ls = with_height(ls, m, 0.5 * m.h)
+        scope = scope_of(corpus[name]) or 'all'
+        path = write(ls, tmp, 'tower_height')
+        record('tower_height', f'{name}: tower layer at Z {z:.3f} printed at half its height',
+               run(path, scope), run(path_, scope))
+
     shutil.rmtree(tmp, ignore_errors=True)
     print(f'{"check":<15} {"caught":<7} {"before":>6} {"after":>6}  injected defect')
     for check, defect, caught, before, after in rows:

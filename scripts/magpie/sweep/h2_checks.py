@@ -18,6 +18,8 @@ Checks of one G-code:
   gap            the support around an XY has a band-sized Z hole
   flow           a support path's extrusion per mm matches its width and height
   z_safety       the nozzle never runs below material printed earlier at the same XY
+  tower_height   a tower (prime tower, temperature drop tower) layer is as tall as its rise from the
+                 tower's previous layer (H/2 bands made the drop tower print half its rise)
 Checks of a "contact" G-code against the same case sliced with "all" and with H/2 off:
   coverage       the support's XY footprint at each Z is the same as both
   model          the object's paths are the same as "all" (the range changes the support only)
@@ -51,6 +53,7 @@ GAP_MIN_MM = 0.05            # a hole in a support column shorter than this is r
 GAP_CELL_MM = 2.0            # coarse raster for support columns; finer than the support pattern spacing
 FLOW_LOW, FLOW_HIGH = 0.8, 1.25  # extruded volume / (width x height bead) of a support path
 FLOW_MIN_LEN_MM = 1.0        # shorter paths carry E rounded to 5 decimals
+TOWER_TOL_MM = 0.003          # tower bead height against its Z rise (both printed to 0.001 mm)
 Z_SAFETY_MM = 0.02           # material this far above a path's bottom, or a travel's nozzle, collides
 # Footprint change per Z bin that counts, mm2, in cells one support line pitch wide (~9 mm2). Against
 # "all" correct builds differ by 0 (102 cases of seed 31, 2026-11-02); against H/2 off by up to 117 mm2, 3.6 %
@@ -590,6 +593,25 @@ def check_z_safety(g, s, report):
     report.points['z_safety'] = {'travels': travels, 'extrusions': extrusions}
 
 
+def check_tower_height(g, s, report):
+    """Every tower layer after the first: bead height = Z step from the tower's previous layer."""
+    layers = {}
+    for m in g.moves:
+        if m.kind == 'Prime tower':
+            layers.setdefault(round(m.z, 3), set()).add(round(m.h, 3))
+    # The first layer rises from the bed when it starts within a nozzle of it.
+    previous = 0.0 if layers and min(layers) <= g.number('nozzle_diameter', 0.4) + TOWER_TOL_MM else None
+    for z in sorted(layers):
+        if previous is not None:
+            rise = z - previous
+            wrong = sorted(h for h in layers[z] if abs(h - rise) > TOWER_TOL_MM)
+            if wrong:
+                report.add(issue('tower_height', 'tower layer height differs from its rise', z, None,
+                                 {'heights': wrong, 'rise_mm': round(rise, 3)}))
+        previous = z
+    report.points['tower'] = {'layers': len(layers)}
+
+
 def check_one(path, scope, off_path=None):
     """All single-G-code checks. scope: "contact" or "all"; off_path: the same case with H/2 off."""
     g = Gcode(path)
@@ -603,6 +625,7 @@ def check_one(path, scope, off_path=None):
     check_columns(g, s, report)
     check_flow(g, s, report)
     check_z_safety(g, s, report)
+    check_tower_height(g, s, report)
     return report.as_dict()
 
 

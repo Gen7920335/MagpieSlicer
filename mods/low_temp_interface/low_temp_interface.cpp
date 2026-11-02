@@ -26,7 +26,7 @@
 
 #define LTI_MOD_ID "low_temp_interface"
 
-MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.3.1")
+MAGPIE_MOD_DEFINE(LTI_MOD_ID, "2.3.2")
 
 namespace lti {
 
@@ -277,12 +277,19 @@ bool build_tower_path(State &s, mp_ctx *ctx, TowerPath &path)
         config_count(ctx, "nozzle_temperature_initial_layer") == 0)
         return false;
     const float nozzle_diameter = float(config_at(ctx, "nozzle_diameter", physical_extruder_id).value_or(0.));
-    // The tower layer is as tall as the Z step since the tower's last layer (mm). Under H/2 the cooling pass prints it
-    // at mid-layer, so the end-of-layer pass above it is only half a layer tall; the layer's full height would extrude
-    // twice the plastic. A larger step keeps the layer height as before.
+    // The tower layer is as tall as the Z step since the tower's last layer (mm), whatever the layer's own height. Under
+    // H/2 the cooling pass prints it at mid-layer, so the end-of-layer pass above it is only half a layer tall; and
+    // H/2 support makes the layer's height its thinnest band (0.1 mm under 0.2 mm layers), which printed the tower at
+    // half its rise every layer (case_044 of the U1 random sweep: 0.1 mm beads 0.2 mm apart). The tower's first layer
+    // rises from the bed (a first layer of 0.25 mm printed 0.125 mm thick under H/2 support); one starting higher than
+    // a nozzle above the bed keeps the layer's height, as before.
     float layer_height = float(layer_height_now);
-    if (const double step = s.w->nominal_z(s.w->w) - s.last_print_z; step > EPSILON && step < layer_height)
-        layer_height = float(step);
+    if (s.last_print_z > -0.5 * std::numeric_limits<double>::max()) {
+        if (const double step = s.w->nominal_z(s.w->w) - s.last_print_z; step > EPSILON)
+            layer_height = float(step);
+    } else if (const double from_bed = s.w->nominal_z(s.w->w); from_bed > EPSILON && from_bed <= nozzle_diameter) {
+        layer_height = float(from_bed);
+    }
     if (nozzle_diameter <= 0.0f || layer_height <= 0.0f)
         return false;
     // A tower layer taller than the nozzle cannot be printed (the core refuses such layers, and its flow has no valid
