@@ -8,6 +8,6 @@
     "contains": [
         ";TYPE:Outer wall",
         ";TYPE:Support",
-        "; mods: half_layer 2.0.1"
+        "; mods: half_layer 2.1.0"
     ]
 }
