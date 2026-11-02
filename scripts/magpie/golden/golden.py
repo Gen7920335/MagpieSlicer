@@ -94,7 +94,68 @@ def resolve_model(model, external_dir):
     return path if os.path.isfile(path) else None
 
 
-def slice_corpus(cli, out, corpus_path, external_dir, only, ignore_keys, timeout_s, datadir=None):
+class _MemoryCap:
+    """Caps a running slicer's committed memory with a Windows job object and reads its peak.
+
+    Off Windows nothing is capped and the peak is unknown (None). The process is assigned right
+    after it starts; the few milliseconds before that are not capped.
+    """
+
+    def __init__(self, proc, cap_mb):
+        self.job = None
+        if os.name != 'nt':
+            return
+        import ctypes
+        from ctypes import wintypes
+        self.ctypes, self.wintypes = ctypes, wintypes
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        self.k32 = k32
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.OpenProcess.restype = wintypes.HANDLE
+        self.job = k32.CreateJobObjectW(None, None)
+        info = self._info()
+        info.BasicLimitInformation.LimitFlags = 0x100  # JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        info.ProcessMemoryLimit = int(cap_mb) * 1024 * 1024
+        k32.SetInformationJobObject(self.job, 9, ctypes.byref(info), ctypes.sizeof(info))  # extended limit info
+        handle = k32.OpenProcess(0x0001 | 0x0100 | 0x0400, False, proc.pid)  # terminate, set quota, query
+        if handle:
+            k32.AssignProcessToJobObject(self.job, handle)
+            k32.CloseHandle(handle)
+
+    def _info(self):
+        ctypes, wintypes = self.ctypes, self.wintypes
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_ulonglong) for n in ('r_ops', 'w_ops', 'o_ops', 'r_bytes', 'w_bytes', 'o_bytes')]
+
+        class Basic(ctypes.Structure):
+            _fields_ = [('PerProcessUserTimeLimit', ctypes.c_longlong), ('PerJobUserTimeLimit', ctypes.c_longlong),
+                        ('LimitFlags', wintypes.DWORD), ('MinimumWorkingSetSize', ctypes.c_size_t),
+                        ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', wintypes.DWORD),
+                        ('Affinity', ctypes.c_size_t), ('PriorityClass', wintypes.DWORD),
+                        ('SchedulingClass', wintypes.DWORD)]
+
+        class Extended(ctypes.Structure):
+            _fields_ = [('BasicLimitInformation', Basic), ('IoInfo', IoCounters),
+                        ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
+                        ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
+        return Extended()
+
+    def peak_mb(self):
+        if not self.job:
+            return None
+        info = self._info()
+        if not self.k32.QueryInformationJobObject(self.job, 9, self.ctypes.byref(info), self.ctypes.sizeof(info), None):
+            return None
+        return round(info.PeakProcessMemoryUsed / (1024 * 1024))
+
+    def close(self):
+        if self.job:
+            self.k32.CloseHandle(self.job)
+            self.job = None
+
+
+def slice_corpus(cli, out, corpus_path, external_dir, only, ignore_keys, timeout_s, datadir=None, memory_cap_mb=None):
     corpus = load_corpus(corpus_path)
     os.makedirs(out, exist_ok=True)
     manifest = {'cli': os.path.abspath(cli), 'corpus': os.path.relpath(corpus_path, ROOT), 'cases': {}}
@@ -142,23 +203,37 @@ def slice_corpus(cli, out, corpus_path, external_dir, only, ignore_keys, timeout
                     for a in case.get('cli_args', [])]
         cmd += cli_args + [model]
         started = time.monotonic()
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
-                                  timeout=timeout_s)
-            code = proc.returncode
-            with open(os.path.join(case_dir, 'cli.log'), 'w', encoding='utf-8') as f:
-                f.write(' '.join(cmd) + '\n\n' + proc.stdout + '\n' + proc.stderr)
-            # A mod that fails to load is only logged, and the slice then runs without it. A
-            # comparison that silently lost its mod would pass for the wrong reason.
-            if code == 0 and 'Mod not loaded' in proc.stdout + proc.stderr:
-                code = 'mod-not-loaded'
-        except subprocess.TimeoutExpired:
-            code = 'timeout'
+        # Wall-clock start, to match a crash log the slicer writes to this case.
+        started_at = round(time.time(), 2)
+        peak_mb = None
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8',
+                              errors='replace') as proc:
+            job = _MemoryCap(proc, memory_cap_mb) if memory_cap_mb else None
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout_s)
+                code = proc.returncode
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+                code = 'timeout'
+            if job:
+                peak_mb = job.peak_mb()
+                job.close()
+        with open(os.path.join(case_dir, 'cli.log'), 'w', encoding='utf-8') as f:
+            f.write(' '.join(cmd) + '\n\n' + stdout + '\n' + stderr)
+        # A slicer stopped by the memory cap fails its allocations; say so instead of a crash code.
+        if code != 0 and peak_mb is not None and peak_mb >= 0.95 * memory_cap_mb:
+            code = 'memory-cap'
+        # A mod that fails to load is only logged, and the slice then runs without it. A
+        # comparison that silently lost its mod would pass for the wrong reason.
+        if code == 0 and 'Mod not loaded' in stdout + stderr:
+            code = 'mod-not-loaded'
         seconds = round(time.monotonic() - started, 2)
         gcodes = sorted(p for p in os.listdir(gcode_dir) if p.endswith('.gcode'))
         if code != 0 or not gcodes:
             failed = True
-            manifest['cases'][name] = {'status': 'slice-failed', 'exit': code, 'seconds': seconds}
+            manifest['cases'][name] = {'status': 'slice-failed', 'exit': code, 'seconds': seconds, 'started': started_at,
+                                       'peak_mb': peak_mb, 'gcode': bool(gcodes)}
             print(f'{name}: slice failed (exit {code}), see {case_dir}/cli.log')
             continue
         lines = []
@@ -171,7 +246,7 @@ def slice_corpus(cli, out, corpus_path, external_dir, only, ignore_keys, timeout
         with open(norm_path, 'w', encoding='utf-8', errors='surrogateescape') as f:
             f.writelines(norm)
         digest = hashlib.sha256(''.join(norm).encode('utf-8', 'surrogateescape')).hexdigest()
-        manifest['cases'][name] = {'status': 'ok', 'sha256': digest, 'lines': len(norm), 'seconds': seconds}
+        manifest['cases'][name] = {'status': 'ok', 'sha256': digest, 'lines': len(norm), 'seconds': seconds, 'peak_mb': peak_mb}
         print(f'{name}: {digest[:16]} ({len(norm)} lines, {seconds}s)')
     with open(os.path.join(out, 'manifest.json'), 'w', encoding='utf-8') as f:
         json.dump(manifest, f, indent=2)
