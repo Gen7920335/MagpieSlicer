@@ -91,7 +91,7 @@ private:
     void load_text(const std::string &text);
     // Puts back the value the saved preset holds for the row `key` (the revert button).
     void revert(const std::string &key);
-    // The saved preset's own text when `text` holds the same values (defaults filled in for this panel's rows), else
+    // The saved preset's own text when `text` holds the same values (defaults filled in for any loaded mod's), else
     // `text`: rewriting the same values must not leave the preset marked modified.
     std::string kept_saved_text(const std::string &text) const;
     // The value a row's control shows, as the parameter's type.

@@ -424,15 +424,19 @@ std::string ModParamsPanel::kept_saved_text(const std::string &text) const
     const std::string saved_raw = saved_text();
     const json        saved     = parse_object(saved_raw);
     const json        stored    = parse_object(text);
-    bool              same      = true;
+    // A key only one side holds is equal when it holds its parameter's default. Any loaded mod's parameter, not only
+    // this panel's rows: a commit drops only its own rows' defaults, so a project that stores defaults (written by the
+    // CLI) kept the other rows' defaults in the text and the preset stayed marked modified after its edit was undone.
+    const auto at_default = [this](const std::string &key, const json &value) {
+        const ModHost::ModParam *param = find_param(m_mods.get(), key);
+        return param != nullptr && std::visit([&value](const auto &d) { return value == json(d); }, param->default_value);
+    };
+    bool same = true;
     for (auto it = stored.begin(); same && it != stored.end(); ++it)
-        same = saved.contains(it.key()) && saved.at(it.key()) == it.value();
+        same = saved.contains(it.key()) ? saved.at(it.key()) == it.value() : at_default(it.key(), it.value());
     for (auto it = saved.begin(); same && it != saved.end(); ++it)
-        if (!stored.contains(it.key())) {
-            // Dropped from the text: equal only if it is one of this panel's rows at its default.
-            const auto row = std::find_if(m_rows.begin(), m_rows.end(), [&it](const Row &r) { return r.key == it.key(); });
-            same = row != m_rows.end() && std::visit([&it](const auto &d) { return it.value() == json(d); }, row->param->default_value);
-        }
+        if (!stored.contains(it.key()))
+            same = at_default(it.key(), it.value());
     return same ? saved_raw : text;
 }
 
