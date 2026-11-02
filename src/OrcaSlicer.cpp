@@ -7051,10 +7051,23 @@ int CLI::run(int argc, char **argv)
                                             cfg->option<ConfigOptionFloats>("wipe_tower_x", true)->set_at(&wt_x_opt, index, 0);
                                             cfg->option<ConfigOptionFloats>("wipe_tower_y", true)->set_at(&wt_y_opt, index, 0);
                                         }
+                                        // MAGPIE: the grouping the slice derived, as read back onto the plate after a slice.
+                                        // The plate config still held the pre-slice maps, so the apply undid the grouping,
+                                        // which drops the generated tower, and validate() then judged the moved tower by the
+                                        // pre-slice estimate the refit had just replaced (123.6 mm square, past the bed at
+                                        // the new place) and the first error came back without a second slice (seed 15414
+                                        // of the U1 random test, H/2 outer walls + Mixed support).
+                                        new_print_config.option<ConfigOptionInts>("filament_map", true)->values = print_fff->get_filament_maps();
+                                        if (const std::vector<int> volume_maps = print_fff->get_filament_volume_maps(); !volume_maps.empty())
+                                            new_print_config.option<ConfigOptionInts>("filament_volume_map", true)->values = volume_maps;
+                                        if (const std::vector<int> nozzle_maps = print_fff->get_filament_nozzle_maps(); !nozzle_maps.empty())
+                                            new_print_config.option<ConfigOptionInts>("filament_nozzle_map", true)->values = nozzle_maps;
                                         print->apply(model, new_print_config);
                                         std::vector<StringObjectException> refit_warnings;
-                                        if (!print->validate(&refit_warnings).string.empty())
+                                        if (const StringObjectException refit_error = print->validate(&refit_warnings); !refit_error.string.empty()) {
+                                            BOOST_LOG_TRIVIAL(warning) << "plate " << index + 1 << ": the moved wipe tower fails validation: " << refit_error.string;
                                             throw;
+                                        }
                                         run();
                                     }
                                 };
