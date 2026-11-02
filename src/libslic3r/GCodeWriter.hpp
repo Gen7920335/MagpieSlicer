@@ -160,6 +160,15 @@ public:
     void add_object_start_labels(std::string &gcode);
     void add_object_end_labels(std::string &gcode);
     void add_object_change_labels(std::string& gcode);
+    // MAGPIE: the object label the G-code is inside (the start string written last, until its end string is written);
+    // empty outside every label.
+    const std::string &open_object_label() const { return m_open_object_label; }
+    // An object label opened or closed by G-code the writer did not write (a tool change's M624 ... M625 bracket).
+    void note_object_label_opened(const std::string &start) { m_open_object_label = start; }
+    void note_object_label_closed() { m_open_object_label.clear(); }
+    // The start string written at the next extrusion, taken out (so G-code that belongs to no object goes unlabelled).
+    std::string take_object_start_str() { std::string s = std::move(m_gcode_label_objects_start); m_gcode_label_objects_start.clear(); return s; }
+    std::string take_object_end_str() { std::string s = std::move(m_gcode_label_objects_end); m_gcode_label_objects_end.clear(); return s; }
 
     //BBS:
     void set_current_position_clear(bool clear) { m_is_current_pos_clear = clear; };
@@ -297,6 +306,7 @@ private:
 
     std::string m_gcode_label_objects_start;
     std::string m_gcode_label_objects_end;
+    std::string m_open_object_label;
 
     //SoftFever
     bool            m_is_bbl_printers = false;

@@ -1326,6 +1326,23 @@ void Tab::update_extruder_switch_colors()
             check_extruder_options_status((int) switch_index, sys_extruder, modified_extruder, pages_to_check);
         // no matching page: clear the flag so the tag doesn't keep a stale color
 
+        // MAGPIE: a nozzle's per-nozzle line widths (Quality, Strength) mark its tag too; they are indexed by the
+        // nozzle, not by the variant check_extruder_options_status() reads.
+        if (!modified_extruder && m_type == Preset::TYPE_PRINT && m_extruder_switch && per_nozzle_widths_switch()) {
+            int              nozzle = 0;
+            NozzleVolumeType volume_type;
+            parse_extruder_selection(int(switch_index), nozzle, volume_type);
+            const DynamicPrintConfig &saved = m_presets->get_selected_preset().config;
+            auto at = [nozzle](const ConfigOptionFloats *opt) { return opt != nullptr && size_t(nozzle) < opt->values.size() ? opt->values[nozzle] : 0.; };
+            for (const char *width_key : per_nozzle_line_width_base_keys()) {
+                const std::string key = per_nozzle_line_width_key(width_key);
+                if (at(m_config->option<ConfigOptionFloats>(key)) != at(saved.option<ConfigOptionFloats>(key))) {
+                    modified_extruder = true;
+                    break;
+                }
+            }
+        }
+
         if (m_extruder_switch) m_extruder_switch->SetModified(switch_index, modified_extruder);
         if (m_variant_combo)   m_variant_combo->SetModified(switch_index, modified_extruder);
     }
@@ -7188,6 +7205,10 @@ void TabPrinter::on_value_change(const std::string& opt_key, const boost::any& v
                 else
                     nozzles.push_back(size_t(opt_idx));
                 print_tab->clear_per_nozzle_widths(nozzles);
+                // The process settings show or hide their per-nozzle line width table now, not on their next reload,
+                // which could come inside a click on their nozzle switch.
+                print_tab->reload_config();
+                print_tab->update();
             }
 
         if (opt_key_pure == "retract_after_wipe" || opt_key_pure == "retract_before_wipe") {
@@ -9750,6 +9771,15 @@ void Tab::update_extruder_variants(int extruder_id, bool reload)
                 }
             }
 
+            // MAGPIE: the tag the switch already shows sends no selection event, so its nozzle volume (SF or HF of a
+            // hybrid nozzle, reset above to the extruder's own type) is taken here, as the event handler takes it.
+            if (selection_index == m_extruder_switch->GetSelection()) {
+                int              selected_extruder = 0;
+                NozzleVolumeType selected_type     = NozzleVolumeType::nvtStandard;
+                parse_extruder_selection(selection_index, selected_extruder, selected_type);
+                if (selected_extruder >= 0 && selected_extruder < int(m_actual_nozzle_volumes.size()))
+                    m_actual_nozzle_volumes[selected_extruder] = selected_type;
+            }
             m_extruder_switch->SetSelection(selection_index);
             m_extruder_switch->Enable(true);
             m_extruder_sync->Enable(true);
@@ -10192,6 +10222,10 @@ void Tab::sync_excluder()
         auto &opt = dirty_options[i];
         auto n= opt.find('#');
         if (n == std::string::npos)
+            continue;
+        // MAGPIE: a per-nozzle line width is indexed by the nozzle, not by the nozzle variant, and belongs to that
+        // nozzle's size, so copying variants leaves it alone (its variant index wrote past the list and crashed).
+        if (boost::ends_with(opt.substr(0, n), "_per_nozzle"))
             continue;
         auto field = m_active_page->get_field(opt.substr(0, n), from_index + 256);
         auto line  = m_active_page->get_line(opt.substr(0, n), from_index + 256);

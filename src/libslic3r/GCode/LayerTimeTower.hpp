@@ -59,6 +59,32 @@ struct LayerTimeTowerSpot
     bool  fits { false };
 };
 
+// The part of the bed (mm, plate coordinates) every nozzle in `nozzles` reaches: a printer whose nozzles each reach
+// only part of the bed (extruder_printable_area: the Bambu H2D's left nozzle x 0-325, right 25-350) cannot print the
+// tower beyond it. The bed itself when no nozzle has an area of its own or the areas do not overlap the bed.
+inline std::vector<Vec2d> layer_time_tower_area(const std::vector<Vec2d> &printable_area,
+                                                const std::vector<std::vector<Vec2d>> &extruder_printable_area,
+                                                const std::vector<size_t> &nozzles)
+{
+    BoundingBoxf area;
+    for (const Vec2d &p : printable_area)
+        area.merge(p);
+    bool narrowed = false;
+    for (const size_t nozzle : nozzles) {
+        if (nozzle >= extruder_printable_area.size() || extruder_printable_area[nozzle].size() < 3)
+            continue;
+        BoundingBoxf reach;
+        for (const Vec2d &p : extruder_printable_area[nozzle])
+            reach.merge(p);
+        area.min = area.min.cwiseMax(reach.min);
+        area.max = area.max.cwiseMin(reach.max);
+        narrowed = true;
+    }
+    if (!narrowed || !area.defined || area.min.x() >= area.max.x() || area.min.y() >= area.max.y())
+        return printable_area;
+    return { area.min, Vec2d(area.max.x(), area.min.y()), area.max, Vec2d(area.min.x(), area.max.y()) };
+}
+
 // The spot of a tower of side `side` (mm) with a brim `brim` (mm) wide: the stored position (configured_x/_y, mm,
 // both at least zero), clamped onto the bed, else the middle of the first side of the objects' bounding box (right,
 // left, behind, in front) where the footprint stays on the bed and clear of the objects (grown by `skirt`, mm, their

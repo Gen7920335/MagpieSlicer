@@ -212,6 +212,11 @@ std::vector<std::string> SettingsFactory::get_options(const bool is_part)
         std::vector<std::string> obj_options = obj_config.keys();
         options.insert(options.end(), obj_options.begin(), obj_options.end());
     }
+    // MAGPIE: the per-nozzle line widths are edited in the process settings only (TabPrint); an object, part or layer
+    // range has no row for them, so the menus offered a "Line width" that could not be seen or edited.
+    options.erase(std::remove_if(options.begin(), options.end(),
+                                 [](const std::string &key) { return boost::ends_with(key, "_per_nozzle"); }),
+                  options.end());
     return options;
 }
 

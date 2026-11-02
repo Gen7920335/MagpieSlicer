@@ -472,6 +472,88 @@ TEST_CASE("An automatic filament map slices the walls on the nozzle it derives",
     }
 }
 
+// MAGPIE: the reslice above runs on the slicing thread; the GUI's cancel callback stops that very thread and waits for
+// it, so calling it there froze the app (H2D 0.4/0.6, first slice in Auto For Flush, 2026-11-02). The reslice must not
+// call the print's cancel callback; Print::apply on the UI thread still does.
+TEST_CASE("Reslicing for a derived filament map does not cancel the print", "[LineWidths][FilamentMap]")
+{
+    // One of the two seeds differs from the map the engine derives, so one run reslices (the other is the control).
+    int reslices = 0;
+    for (const std::vector<int> &initial_map : { std::vector<int>{ 1, 1 }, std::vector<int>{ 2, 2 } }) {
+        DynamicPrintConfig config = two_nozzles(0.4, 0.8);
+        config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmAutoForFlush;
+        config.set_key_value("filament_map", new ConfigOptionInts(initial_map));
+        config.set_key_value("filament_colour", new ConfigOptionStrings{ "#F2754E", "#F2754E" });
+        Print print;
+        print.is_BBL_printer() = true;
+        Model model;
+        init_print({ make_cube(20., 20., 20.) }, print, model, config);
+        int cancels = 0;
+        print.set_cancel_callback([&cancels]() { ++cancels; });
+        print.process();
+        CHECK(cancels == 0);
+        reslices += print.config().filament_map.values != initial_map;
+    }
+    CHECK(reslices == 1);
+}
+
+// The widths of the outer walls in the G-code, mm (a BBL printer writes "; FEATURE: <role>", "; LINE_WIDTH: <mm>").
+static std::set<double> outer_wall_widths(Print &print)
+{
+    std::set<double> widths;
+    double           width = 0.;
+    std::string      role;
+    GCodeReader      reader;
+    reader.parse_buffer(gcode(print), [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const std::string raw(line.raw());
+        if (raw.rfind("; FEATURE: ", 0) == 0)
+            role = raw.substr(11);
+        else if (raw.rfind("; LINE_WIDTH: ", 0) == 0)
+            width = std::stod(raw.substr(14));
+        else if (line.extruding(self) && line.dist_XY(self) > 0 && role == "Outer wall")
+            widths.insert(std::round(width * 100.) / 100.);
+    });
+    return widths;
+}
+
+// MAGPIE: in manual mode the map is the user's; changing it changed the nozzle of each filament, but only the tower and
+// the skirt were redone, so the walls kept the widths of the old nozzle.
+TEST_CASE("Changing a manual filament map slices the walls on the new nozzle", "[LineWidths][FilamentMap]")
+{
+    auto config_with = [](const std::vector<int> &map) {
+        DynamicPrintConfig config = two_nozzles(0.4, 0.8);
+        config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+        config.set_key_value("filament_map", new ConfigOptionInts(map));
+        config.set_key_value("filament_colour", new ConfigOptionStrings{ "#F2754E", "#F2754E" });
+        config.set_deserialize_strict({ { "outer_wall_line_width_per_nozzle", "0.42,0.84" } });
+        return config;
+    };
+    Print print;
+    print.is_BBL_printer() = true;
+    Model model;
+    init_print({ make_cube(20., 20., 20.) }, print, model, config_with({ 1, 1 }));
+    print.process();
+    CHECK(outer_wall_widths(print) == std::set<double>{ 0.42 });
+    print.apply(model, config_with({ 2, 2 }));
+    CHECK_FALSE(print.objects().front()->is_step_done(posSlice));
+    print.process();
+    CHECK(outer_wall_widths(print) == std::set<double>{ 0.84 });
+}
+
+// MAGPIE: a map entry past the nozzle count (a damaged 3MF) indexed per-nozzle arrays past their end.
+TEST_CASE("A filament map entry past the nozzle count falls back to nozzle 1", "[LineWidths][FilamentMap]")
+{
+    DynamicPrintConfig config = two_nozzles(0.4, 0.8);
+    config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value = fmmManual;
+    config.set_key_value("filament_map", new ConfigOptionInts{ 3, 2 });
+    config.set_key_value("filament_colour", new ConfigOptionStrings{ "#F2754E", "#F2754E" });
+    Print print;
+    print.is_BBL_printer() = true;
+    Model model;
+    init_print({ make_cube(10., 10., 2.) }, print, model, config);
+    CHECK(print.config().filament_map.values == std::vector<int>{ 1, 2 });
+}
+
 TEST_CASE("Support set to the current tool is printed by filament 1 when the nozzles differ in size", "[LineWidths][Support]")
 {
     PrintConfig mixed;

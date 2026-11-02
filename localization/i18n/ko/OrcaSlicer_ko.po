@@ -37833,8 +37833,8 @@ msgstr ""
 
 # AI Translated
 #, boost-format
-msgid "Line width too small. On a printer with nozzles of different sizes, an absolute line width is the width for the %1% mm nozzle and is scaled to the other nozzles. Enter a percentage to set the width relative to each nozzle."
-msgstr "선 너비가 너무 작습니다. 노즐 크기가 서로 다른 프린터에서는 절대값 선 너비를 %1% mm 노즐 기준 너비로 보고 다른 노즐에 맞게 비율로 바꿉니다. 노즐마다 비율로 정하려면 백분율로 입력하세요."
+msgid "Line width too small: it must be wider than the layer height. On a printer with nozzles of different sizes, an absolute line width is the width for the %1% mm nozzle and is scaled to the other nozzles. Enter a percentage to set the width relative to each nozzle."
+msgstr "선 너비가 너무 작습니다. 선 너비는 레이어 높이보다 넓어야 합니다. 노즐 크기가 서로 다른 프린터에서는 절대값 선 너비를 %1% mm 노즐 기준 너비로 보고 다른 노즐에 맞게 비율로 바꿉니다. 노즐마다 비율로 정하려면 백분율로 입력하세요."
 
 # AI Translated
 #, boost-format

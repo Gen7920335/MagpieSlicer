@@ -1544,8 +1544,13 @@ void UnsavedChangesDialog::update_tree(Preset::Type type, DynamicConfig * config
         }
         auto category = option.category_local;
         auto opt = dynamic_cast<ConfigOptionVectorBase*>(config->option(opt_key));
-        std::string           value_from    = opt->vserialize()[from];
-        std::string           value_to    = opt->vserialize()[to];
+        // Orca: from/to index the option's own vector, which a caller may hand over shorter than them; such a row is
+        // left out instead of reading past the end (the nozzle copy crashed on a per-nozzle line width).
+        const std::vector<std::string> values = opt != nullptr ? opt->vserialize() : std::vector<std::string>();
+        if (from < 0 || to < 0 || size_t(from) >= values.size() || size_t(to) >= values.size())
+            continue;
+        std::string           value_from    = values[from];
+        std::string           value_to    = values[to];
         PresetItem            pi            = {type, opt_key, category, option.group_local, option.label_local, into_u8(value_from), into_u8(value_to)};
         m_presetitems.push_back(pi);
     }
@@ -1629,7 +1634,10 @@ void UnsavedChangesDialog::update_tree(Preset::Type type, PresetCollection* pres
                     label += " (" + (variant_index % 2 == 0 ? _L("Normal") : _L("Silent")) + ")";
                 variant_index /= 2;
             }
-            if (variant_index >= 0 && extruder_variant && variant_index < extruder_variant->size()) {
+            // MAGPIE: a per-nozzle line width is indexed by the nozzle, not by the nozzle variant: named by its toolhead.
+            if (variant_index >= 0 && boost::ends_with(get_pure_opt_key(opt_key), "_per_nozzle")) {
+                category = wxString::Format("T%d: ", variant_index + 1) + category;
+            } else if (variant_index >= 0 && extruder_variant && variant_index < extruder_variant->size()) {
                 // Orca: Match the untranslated category and use the same extruder names as the printer tabs.
                 if (option.category.compare(0, 9, L"Extruder ") == 0)
                     category = _L("Extruder");

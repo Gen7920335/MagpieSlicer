@@ -1684,6 +1684,7 @@ void GCodeWriter::add_object_start_labels(std::string& gcode)
 {
     if (!m_gcode_label_objects_start.empty()) {
         gcode += m_gcode_label_objects_start;
+        m_open_object_label = m_gcode_label_objects_start;
         m_gcode_label_objects_start = "";
     }
 }
@@ -1692,6 +1693,7 @@ void GCodeWriter::add_object_end_labels(std::string& gcode)
 {
     if (!m_gcode_label_objects_end.empty()) {
         gcode += m_gcode_label_objects_end;
+        m_open_object_label.clear();
         m_gcode_label_objects_end = "";
 
         // Orca: reset E so that e value remain correct after skipping the object

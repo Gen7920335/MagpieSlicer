@@ -843,7 +843,8 @@ double Print::max_allowed_layer_height() const
 {
     double nozzle_diameter_max = 0.;
     for (unsigned int extruder_id : this->extruders())
-        nozzle_diameter_max = std::max(nozzle_diameter_max, m_config.nozzle_diameter.get_at(extruder_id));
+        // MAGPIE: the nozzle the filament prints with (Bambu filament map).
+        nozzle_diameter_max = std::max(nozzle_diameter_max, m_config.nozzle_diameter.get_at(printing_nozzle_index(m_config, int(extruder_id) + 1, this->is_BBL_printer())));
     return nozzle_diameter_max;
 }
 
@@ -1983,7 +1984,7 @@ static std::string line_width_error(bool too_small, double reference_mm)
     if (reference_mm <= 0.)
         return too_small ? L("Line width too small") : L("Line width too large");
     return (boost::format(too_small ?
-        L("Line width too small. On a printer with nozzles of different sizes, an absolute line width is the width for the %1% mm nozzle and is scaled to the other nozzles. Enter a percentage to set the width relative to each nozzle.") :
+        L("Line width too small: it must be wider than the layer height. On a printer with nozzles of different sizes, an absolute line width is the width for the %1% mm nozzle and is scaled to the other nozzles. Enter a percentage to set the width relative to each nozzle.") :
         L("Line width too large. On a printer with nozzles of different sizes, an absolute line width is the width for the %1% mm nozzle and is scaled to the other nozzles. Enter a percentage to set the width relative to each nozzle.")) %
             reference_mm).str();
 }
@@ -2286,6 +2287,13 @@ std::string Print::slicing_errors_message(const SlicingErrors &errors) const
 }
 
 StringObjectException Print::validate(std::vector<StringObjectException> *warnings, Polygons* collison_polygons, std::vector<std::pair<Polygon, float>>* height_polygons) const
+{
+    return this->validate_impl(warnings, collison_polygons, height_polygons, false);
+}
+
+// MAGPIE: map_final: the filament map is the one the print uses (process() after an automatic mode derived it), so the
+// nozzle checks run even while nozzle_checks_wait_for_map() holds.
+StringObjectException Print::validate_impl(std::vector<StringObjectException> *warnings, Polygons* collison_polygons, std::vector<std::pair<Polygon, float>>* height_polygons, bool map_final) const
 {
     auto add_warning = [warnings](StringObjectException w) {
         w.is_warning = true;
@@ -3004,7 +3012,9 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 		double min_nozzle_diameter = std::numeric_limits<double>::max();
 		double max_nozzle_diameter = 0;
 		for (unsigned int extruder_id : extruders) {
-			double dmr = m_config.nozzle_diameter.get_at(extruder_id);
+			// MAGPIE: the nozzle the filament prints with (a Bambu printer maps filaments to nozzles), not the
+			// nozzle that shares the filament's number.
+			double dmr = m_config.nozzle_diameter.get_at(printing_nozzle_index(m_config, int(extruder_id) + 1, this->is_BBL_printer()));
 			min_nozzle_diameter = std::min(min_nozzle_diameter, dmr);
 			max_nozzle_diameter = std::max(max_nozzle_diameter, dmr);
 		}
@@ -3105,13 +3115,17 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 
             // MAGPIE: H/2 objects are checked per role (validate_half_layer_nozzles) instead of below.
             const bool half_layer_object = object->layer_bands().active();
+            // MAGPIE: in an automatic filament map mode on a Bambu printer with nozzles of different sizes the map is
+            // derived while slicing; the checks that resolve a filament's nozzle wait for it (process() runs them).
+            const bool nozzle_checks_wait = !map_final && this->nozzle_checks_wait_for_map();
+            const bool nozzle_checks     = !half_layer_object && !nozzle_checks_wait;
             // Tallest layer of the object (variable layer height included), mm.
             double max_height_mm = object->config().layer_height.value;
             if (half_layer_object) {
                 const std::vector<coordf_t> &profile = layer_height_profile(size_t(std::find(m_objects.begin(), m_objects.end(), object) - m_objects.begin()));
                 for (size_t k = 1; k < profile.size(); k += 2)
                     max_height_mm = std::max(max_height_mm, double(profile[k]));
-                if (StringObjectException error = validate_half_layer_nozzles(*object, m_config.initial_layer_print_height.value, max_height_mm);
+                if (StringObjectException error = nozzle_checks_wait ? StringObjectException() : validate_half_layer_nozzles(*object, m_config.initial_layer_print_height.value, max_height_mm);
                     !error.string.empty())
                     return error;
             }
@@ -3124,35 +3138,39 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                 size_t first_layer_extruder = object->config().raft_layers == 1
                     ? support_interface_printing_filament(m_config, object->config().support_interface_filament.value, object->config().support_filament.value)-1
                     : printing_filament(m_config, object->config().support_filament.value)-1;
+                // MAGPIE: on the nozzle the filament prints with.
                 first_layer_min_nozzle_diameter = (first_layer_extruder == size_t(-1)) ?
                     min_nozzle_diameter :
-                    m_config.nozzle_diameter.get_at(first_layer_extruder);
+                    m_config.nozzle_diameter.get_at(printing_nozzle_index(m_config, int(first_layer_extruder) + 1, this->is_BBL_printer()));
             } else {
                 // if we don't have raft layers, any nozzle diameter is potentially used in first layer
                 first_layer_min_nozzle_diameter = min_nozzle_diameter;
             }
-            if (!half_layer_object && initial_layer_print_height > first_layer_min_nozzle_diameter)
+            if (nozzle_checks && initial_layer_print_height > first_layer_min_nozzle_diameter)
                 return {L("Layer height cannot exceed nozzle diameter."), object, "initial_layer_print_height"};
 
             // validate layer_height
             double layer_height = object->config().layer_height.value;
-            if (!half_layer_object && layer_height > min_nozzle_diameter)
+            // While the map waits: a layer no nozzle of the printer can print is an error whatever the map.
+            if (nozzle_checks_wait && !half_layer_object && layer_height > *std::max_element(m_config.nozzle_diameter.values.begin(), m_config.nozzle_diameter.values.end()))
+                return {L("Layer height cannot exceed nozzle diameter."), object, "layer_height"};
+            if (nozzle_checks && layer_height > min_nozzle_diameter)
                 return {L("Layer height cannot exceed nozzle diameter."), object, "layer_height"};
 
             // Validate extrusion widths.
             std::string err_msg;
-            if (!half_layer_object && !validate_extrusion_width(object->config(), "line_width", layer_height, err_msg))
+            if (nozzle_checks && !validate_extrusion_width(object->config(), "line_width", layer_height, err_msg))
             	return {err_msg, object, "line_width"};
             if (object->has_support() || object->has_raft()) {
-                if (!half_layer_object && !validate_extrusion_width(object->config(), "support_line_width", layer_height, err_msg))
+                if (nozzle_checks && !validate_extrusion_width(object->config(), "support_line_width", layer_height, err_msg))
                     return {err_msg, object, "support_line_width"};
             }
             for (const char *opt_key : { "inner_wall_line_width", "outer_wall_line_width", "sparse_infill_line_width", "internal_solid_infill_line_width", "top_surface_line_width","skin_infill_line_width" ,"skeleton_infill_line_width"})
 				for (const PrintRegion &region : object->all_regions())
-                    if (!half_layer_object && !validate_extrusion_width(region.config(), opt_key, layer_height, err_msg))
+                    if (nozzle_checks && !validate_extrusion_width(region.config(), opt_key, layer_height, err_msg))
 		            	return  {err_msg, object, opt_key};
             // MAGPIE: per-nozzle line widths, each on its own nozzle (H/2 objects: validate_half_layer_nozzles).
-            if (!half_layer_object) {
+            if (nozzle_checks) {
                 std::set<size_t> printing_nozzles;
                 for (const unsigned int extruder_id : extruders)
                     printing_nozzles.insert(printing_nozzle_index(m_config, int(extruder_id) + 1, this->is_BBL_printer()));
@@ -3177,6 +3195,8 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 
             const bool allow_thin_bridge_width = object->config().thick_bridges && object->config().thick_internal_bridges;
             for (const PrintRegion &region : object->all_regions()) {
+                if (nozzle_checks_wait)
+                    break;
                 for (FlowRole bridge_role : { frPerimeter, frInfill, frSolidInfill, frTopSolidInfill }) {
                     // MAGPIE: on the bridged feature's nozzle, its per-nozzle bridge width included.
                     const size_t nozzle          = region.printing_nozzle(*object, PrintRegion::width_feature(bridge_role));
@@ -4537,6 +4557,18 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
         }
     }
 
+    // MAGPIE: the nozzle checks validate() left for the derived filament map (nozzle_checks_wait_for_map), now that
+    // the automatic mode has written it into the config. Only an error those checks add is raised: the rest of
+    // validate() ran before slicing (the GUI and the CLI call it; a caller that did not keeps that choice).
+    if (this->nozzle_checks_wait_for_map()) {
+        if (StringObjectException error = this->validate_impl(nullptr, nullptr, nullptr, true);
+            !error.string.empty() && this->validate_impl(nullptr, nullptr, nullptr, false).string != error.string)
+            throw Slic3r::SlicingError(error.string, error.object != nullptr ? size_t(error.object->id().id) : 0);
+        // An apply() that came meanwhile cleared the flag for a config this slice did not use.
+        this->throw_if_canceled();
+        m_filament_map_derived = true;
+    }
+
     BOOST_LOG_TRIVIAL(info) << "Slicing process finished." << log_memory_info();
 
     {
@@ -5329,8 +5361,22 @@ bool Print::reslice_for_derived_filament_map()
     BOOST_LOG_TRIVIAL(info) << "filament_map derived from the sliced objects differs from the map they were sliced with; slicing them again with it";
     // From the slice: the slicing parameters (raft heights read the support nozzle) and the support flows follow
     // the map too, and only posSlice renews them.
-    for (PrintObject *object : m_objects)
-        object->invalidate_step(posSlice);
+    // This runs on the slicing thread, inside process(): the GUI's cancel callback stops that very thread and waits
+    // for it, so it is swapped for a no-op while the steps are invalidated (with it the slice never finished and
+    // the next settings change froze the app). The state mutex keeps Print::apply's invalidation on the UI thread
+    // out meanwhile, and the callback comes back even if a mod's layer band plan throws.
+    {
+        std::scoped_lock<std::mutex> lock(this->state_mutex());
+        const cancel_callback_type cancel = this->cancel_callback();
+        this->set_cancel_callback([]() {});
+        ScopeGuard restore_cancel([this, &cancel]() { this->set_cancel_callback(cancel); });
+        for (PrintObject *object : m_objects) {
+            object->invalidate_step(posSlice); // with everything after it, the slicing parameters included
+            // As Print::apply does after invalidating: the layer bands and the slicing parameters follow the new map.
+            object->update_layer_bands();
+            object->update_slicing_parameters();
+        }
+    }
     return true;
 }
 

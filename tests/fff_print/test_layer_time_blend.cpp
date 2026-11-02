@@ -1312,3 +1312,28 @@ TEST_CASE("A site right after a tool change counts the tool change's time", "[La
     CHECK_THAT(direct[1] - direct[0], WithinAbs(after_g1[1] - after_g1[0], 0.05));
     CHECK(direct[1] - direct[0] < 10.5);
 }
+
+// MAGPIE: a printer whose nozzles each reach part of the bed (H2D: left x 0-325, right x 25-350) cannot print the layer
+// time tower beyond the part its nozzles share; the placement only knew the bed.
+TEST_CASE("The layer time tower stays where its nozzles reach", "[LayerTimeBlend]")
+{
+    const std::vector<Vec2d>  bed { { 0., 0. }, { 350., 0. }, { 350., 320. }, { 0., 320. } };
+    const std::vector<Vec2ds> reach { { { 0., 0. }, { 325., 0. }, { 325., 320. }, { 0., 320. } },
+                                      { { 25., 0. }, { 350., 0. }, { 350., 320. }, { 25., 320. } } };
+    auto x_range = [](const std::vector<Vec2d> &area) {
+        BoundingBoxf box;
+        for (const Vec2d &p : area)
+            box.merge(p);
+        return std::make_pair(box.min.x(), box.max.x());
+    };
+    CHECK(x_range(layer_time_tower_area(bed, reach, { 0 })) == std::make_pair(0., 325.));
+    CHECK(x_range(layer_time_tower_area(bed, reach, { 1 })) == std::make_pair(25., 350.));
+    CHECK(x_range(layer_time_tower_area(bed, reach, { 0, 1 })) == std::make_pair(25., 325.));
+    // No area of its own (one nozzle, other printers): the bed.
+    CHECK(layer_time_tower_area(bed, {}, { 0 }) == bed);
+    // A stored position past the left nozzle's reach is clamped inside it.
+    const std::optional<LayerTimeTowerSpot> spot =
+        place_layer_time_tower(layer_time_tower_area(bed, reach, { 0 }), 15., 3., 0., {}, std::nullopt, 340., 100.);
+    REQUIRE(spot);
+    CHECK(spot->origin.x() + 15. <= 325. + 1e-6); // mm, the tower body inside the reach
+}

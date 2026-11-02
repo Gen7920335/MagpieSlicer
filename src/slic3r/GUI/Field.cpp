@@ -512,7 +512,7 @@ void Field::get_value_by_opt_type(wxString& str, const bool check_value/* = true
 			m_value = double(m_opt.min);
 			break;
 		}
-        double val;
+        double val = 0.;
 
         bool is_na_value = m_opt.nullable && str == m_na_value;
 
@@ -529,13 +529,18 @@ void Field::get_value_by_opt_type(wxString& str, const bool check_value/* = true
         {
             if (is_na_value)
                 val = ConfigOptionFloatsNullable::nil_value();
-            else if (!str.ToDouble(&val))
-            {
+            // Orca: an unparsable entry left val unset (ToDouble() writes nothing on failure), and ToDouble() takes "nan"
+            // and "inf", which no setting can hold: a NaN slipped past the range check and closed the app when the value
+            // was serialized ("Serializing NaN"). Both keep the previous value.
+            else if (!str.ToDouble(&val) || !std::isfinite(val)) {
                 if (!check_value) {
                     m_value.clear();
                     break;
                 }
                 show_error(m_parent, _(L("Invalid numeric.")));
+                const bool had_value = !m_value.empty() && m_value.type() == typeid(double) &&
+                                       std::isfinite(boost::any_cast<double>(m_value));
+                val = had_value ? boost::any_cast<double>(m_value) : std::clamp(0., double(m_opt.min), double(m_opt.max));
                 set_value(double_to_string(val), true);
             }
             if (!m_opt.is_value_valid(val))

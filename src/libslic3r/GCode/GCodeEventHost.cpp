@@ -388,7 +388,25 @@ void GCodeEventHost::raise(GCode &g, mp_gcode_event_v1 &ev, std::string &out)
         return;
     std::string *previous_output = g.m_gcode_event_output;
     const bool   previous_moved  = g.m_gcode_event_moved;
-    g.m_gcode_event_output       = &out;
+    // MAGPIE: what a mod writes (a tower, a park, its temperatures) belongs to no object: on a Bambu printer it goes
+    // outside every object label, or skipping the object on the printer skipped it too. The writer's pending label
+    // strings are held back while the mod writes; then an object that has ended closes its label before the output,
+    // an open one closes around it, and one about to start still opens at its next extrusion.
+    const bool  unlabelled = g.is_BBL_Printer() && g.m_gcode_event_depth == 0;
+    std::string pending_start, pending_end, open_label;
+    if (unlabelled) {
+        pending_start = g.m_writer.take_object_start_str();
+        pending_end   = g.m_writer.take_object_end_str();
+        open_label    = g.m_writer.open_object_label();
+    }
+    ScopeGuard restore_labels([&g, &pending_start, &pending_end]() {
+        if (!pending_end.empty())
+            g.m_writer.set_object_end_str(pending_end);
+        if (!pending_start.empty())
+            g.m_writer.set_object_start_str(pending_start);
+    });
+    std::string event_out;
+    g.m_gcode_event_output       = &event_out;
     g.m_gcode_event_moved        = false;
     ++g.m_gcode_event_depth;
     // Free moves leave no extrusion behind the nozzle to wipe along.
@@ -400,6 +418,17 @@ void GCodeEventHost::raise(GCode &g, mp_gcode_event_v1 &ev, std::string &out)
         g.m_gcode_event_moved  = previous_moved;
     });
     g.m_gcode_events->raise(ev);
+    if (event_out.empty())
+        return;
+    if (unlabelled && !pending_end.empty()) {
+        g.m_writer.set_object_end_str(pending_end);
+        pending_end.clear();
+        g.m_writer.add_object_end_labels(out);
+        out += event_out;
+    } else if (unlabelled && !open_label.empty())
+        out += "; stop printing object for a mod's output\nM625\n" + event_out + open_label;
+    else
+        out += event_out;
 }
 
 bool GCodeEventHost::path_speeds(GCode &g, const mp_gcode_speed_query_v1 &query, std::vector<double> &speeds)

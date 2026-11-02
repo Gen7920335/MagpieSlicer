@@ -2150,8 +2150,8 @@ static std::vector<MultiNozzleUtils::NozzleGroupInfo> build_nozzle_groups(const 
 //   * no print->get_filament_print_time() → speed_info.filament_print_time empty (TimeEvaluator → 0);
 //   * the fmmAutoForQuality and Bowden-PA-calibration limit blocks are omitted (Orca has no
 //     fmmAutoForQuality mode and no Calib_Params::has_bowden_extruder).
-// prefer_non_model_filament (Bowden extruders) is all-false for the Direct-Drive BBL fleet, so the
-// support-preference reward path stays dormant.
+// prefer_non_model_filament is set for Bowden extruders (the X2D's right one), but the support-preference
+// reward path stays dormant: usage_type is always ModelOnly here (see above).
 static FilamentGroupContext build_filament_group_context(
     const Print*                                     print,
     const std::vector<std::vector<unsigned int>>&    layer_filaments,

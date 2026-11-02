@@ -1168,6 +1168,8 @@ public:
 
     // Returns an empty string if valid, otherwise returns an error message.
     StringObjectException validate(std::vector<StringObjectException> *warnings = nullptr, Polygons* collison_polygons = nullptr, std::vector<std::pair<Polygon, float>>* height_polygons = nullptr) const override;
+    // MAGPIE: validate() with the filament map taken as final (see nozzle_checks_wait_for_map).
+    StringObjectException validate_impl(std::vector<StringObjectException> *warnings, Polygons* collison_polygons, std::vector<std::pair<Polygon, float>>* height_polygons, bool map_final) const;
     // The per-object messages of a SlicingErrors, each prefixed with its object's name.
     std::string slicing_errors_message(const SlicingErrors &errors) const;
     double              skirt_first_layer_height() const;
@@ -1185,6 +1187,12 @@ public:
     const PrintConfig&          config() const { return m_config; }
     // MAGPIE: the nozzle absolute line widths are scaled from on a printer with mixed nozzle sizes, mm; 0 otherwise.
     double                      line_width_reference_mm() const { return m_line_width_context.reference_mm; }
+    // MAGPIE: validate() leaves the checks that resolve a filament's nozzle to process() while an automatic filament
+    // map mode has not derived the map yet on a Bambu printer whose nozzles differ in size (validated against the
+    // seed map they gave false or missed errors).
+    bool                        nozzle_checks_wait_for_map() const
+        { return m_isBBLPrinter && m_line_width_context.reference_mm > 0. && is_auto_filament_map_mode(m_config.filament_map_mode.value) &&
+                 !m_filament_map_derived; }
     // MAGPIE: the nozzle (mm) a line width read for no particular extrusion is resolved on: the reference
     // nozzle on a printer with mixed nozzle sizes, which gives back an absolute width as set; else nozzle 0.
     double                      shared_line_width_nozzle() const
@@ -1618,6 +1626,9 @@ private:
     
     //SoftFever
     bool m_isBBLPrinter = false;
+    // MAGPIE: the filament map process() derived in an automatic mode is in m_config; cleared by apply()
+    // (nozzle_checks_wait_for_map).
+    std::atomic<bool> m_filament_map_derived { false };
 
     // Ordered collections of extrusion paths to build skirt loops and brim.
     ExtrusionEntityCollection               m_skirt;

@@ -1301,6 +1301,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
                 config.set_key_value("max_layer_z", new ConfigOptionFloat(gcodegen.m_max_layer_z));
                 if (!gcodegen.m_filament_instances_code.empty()) {
                     end_filament_gcode_str += ("M624 " + gcodegen.m_filament_instances_code + "\n");
+                    gcodegen.m_writer.note_object_label_opened("M624 " + gcodegen.m_filament_instances_code + "\n");
                     gcodegen.m_filament_instances_code = "";
                     add_change_filament_624 = true;
                 }
@@ -1722,6 +1723,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
             start_filament_gcode_str = gcodegen.placeholder_parser_process("filament_start_gcode", filament_start_gcode, new_filament_id, &config);
             if (add_change_filament_624) {
                 start_filament_gcode_str += "M625\n";
+                gcodegen.m_writer.note_object_label_closed();
                 add_change_filament_624 = false;
             }
             check_add_eol(start_filament_gcode_str);
@@ -3873,7 +3875,12 @@ std::string GCode::layer_time_tower_at_tool(unsigned int filament)
 
 std::optional<Vec2d> GCode::layer_time_park_position(const Print &print, coordf_t print_z)
 {
-    const std::vector<Vec2d> &area = m_config.printable_area.values;
+    // The part of the bed the nozzle of the tool in use reaches: on the H2D the right nozzle starts at x 25 (X2D: 20.5),
+    // and the automatic spot at the bed's left edge sent it where it cannot go.
+    std::vector<size_t> nozzles;
+    if (m_writer.filament() != nullptr)
+        nozzles.push_back(printing_nozzle_index(print.config(), int(m_writer.filament()->id()) + 1, print.is_BBL_printer()));
+    const std::vector<Vec2d> area = layer_time_tower_area(m_config.printable_area.values, m_config.extruder_printable_area.values, nozzles);
     if (area.size() < 3)
         return std::nullopt;
     BoundingBoxf bed; // mm, plate coordinates
@@ -3887,8 +3894,13 @@ std::optional<Vec2d> GCode::layer_time_park_position(const Print &print, coordf_
     Polygon bed_polygon;
     for (const Vec2d &p : area)
         bed_polygon.points.emplace_back(Point::new_scale(p.x(), p.y()));
-    if (!bed_polygon.contains(Point::new_scale(position.x(), position.y())))
+    if (!bed_polygon.contains(Point::new_scale(position.x(), position.y()))) {
+        // PERMANENT DIAGNOSTIC: the park position is off the bed or out of the nozzle's reach; the wait stays in place.
+        BOOST_LOG_TRIVIAL(warning) << "Layer time blending: park position (" << position.x() << ", " << position.y()
+                                   << ") is out of reach of the nozzle in use (x " << bed.min.x() << "-" << bed.max.x() << ", y "
+                                   << bed.min.y() << "-" << bed.max.y() << "); waiting in place";
         return std::nullopt;
+    }
     return position;
 }
 
@@ -3928,7 +3940,15 @@ bool GCode::place_layer_time_tower(const Print &print)
     const size_t plate        = size_t(std::max(0, print.get_plate_index()));
     const double configured_x = aux_tower_position_at(&m_config.layer_time_blend_tower_x, plate);
     const double configured_y = aux_tower_position_at(&m_config.layer_time_blend_tower_y, plate);
-    const std::optional<LayerTimeTowerSpot> spot = Slic3r::place_layer_time_tower(area, side, brim, skirt, objects, prime_tower, configured_x, configured_y);
+    // The nozzles printing the tower: the chosen one, else every nozzle the print uses (the tool in use prints it).
+    std::vector<size_t> tower_nozzles;
+    if (m_layer_time_tower_filament >= 0)
+        tower_nozzles.push_back(printing_nozzle_index(print.config(), m_layer_time_tower_filament + 1, print.is_BBL_printer()));
+    else
+        for (const unsigned int filament : print.extruders(true))
+            tower_nozzles.push_back(printing_nozzle_index(print.config(), int(filament) + 1, print.is_BBL_printer()));
+    const std::vector<Vec2d> tower_area = layer_time_tower_area(area, m_config.extruder_printable_area.values, tower_nozzles);
+    const std::optional<LayerTimeTowerSpot> spot = Slic3r::place_layer_time_tower(tower_area, side, brim, skirt, objects, prime_tower, configured_x, configured_y);
     if (!spot || !spot->fits) {
         // PERMANENT DIAGNOSTIC: no room for the tower; the waits park instead.
         BOOST_LOG_TRIVIAL(warning) << "Layer time blending: the tower (" << side + 2. * brim << " mm with its brim) does not fit"
@@ -13544,6 +13564,7 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
             config.set_key_value("filament_extruder_id", new ConfigOptionInt(int(get_extruder_id(old_filament_id))));
             if (!m_filament_instances_code.empty()) {
                 gcode += ("M624 " + m_filament_instances_code + "\n");
+                m_writer.note_object_label_opened("M624 " + m_filament_instances_code + "\n");
                 m_filament_instances_code = "";
                 add_change_filament_624   = true;
             }
@@ -13924,6 +13945,7 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
         gcode += this->placeholder_parser_process("filament_start_gcode", filament_start_gcode, new_filament_id, &config);
         if (add_change_filament_624) {
             gcode += "M625\n";
+            m_writer.note_object_label_closed();
             add_change_filament_624 = false;
         }
         check_add_eol(gcode);

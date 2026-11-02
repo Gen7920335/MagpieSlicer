@@ -244,6 +244,35 @@ detail-nozzle overhang width.
   every numeric field, then by label" (test_magpie_release_version.cpp). The GUI path itself is not covered by a
   test.
 
+## Settings fields and the nozzle copy dialog (GUI only, 2026-11-01)
+
+- Wrong: a number field took "nan" and "inf" (`wxString::ToDouble`), and a NaN passed the range check, so the value
+  reached the config and closed the app when serialized ("Serializing NaN"; seen on a per-nozzle line width).
+  `UnsavedChangesDialog::update_tree` read `vserialize()[from]` / `[to]` without a bounds check, so a copy whose
+  indices lay past an option's list read past its end (bad_alloc; seen copying a per-nozzle line width between
+  nozzles). `MultiSwitchButton::SetSelection` indexed its buttons again after the selection event without checking
+  that the handler had not replaced them, and `DeleteAllOptions` destroyed the buttons at once, including one still
+  handling the click whose selection handler replaced the options (ACCESS_VIOLATION in `Button::MSWWindowProc`).
+- Change: `TextCtrl::get_value_by_opt_type` rejects a non-finite number like an unparsable one and keeps the
+  previous value (Field.cpp); `update_tree` leaves such a row out; `SetSelection` re-checks the selection after the
+  event, and `DeleteAllOptions` hides the old buttons and leaves their deletion to the next idle time
+  (`wxApp::ScheduleForDestruction`; the destructor still deletes at once) (SwitchButton.cpp).
+- Tests: none in ctest (wxWidgets GUI). Checked in the app on H2D 0.4/0.6: "nan" in a per-nozzle line width row and
+  the nozzle copy button after editing one, both closed the 2.5.0.2.0 build.
+
+## Nozzle checks and Bambu device sync on the mapped nozzle (2026-11-02)
+
+- Wrong: `Print::validate` took the smallest/largest nozzle and the raft's first-layer nozzle by filament number
+  (`nozzle_diameter.get_at(filament)`), and `max_allowed_layer_height` too; on a Bambu printer the filament map names
+  the nozzle, so a manual map 2,1 checked the wrong nozzle. The device sync's "only Standard flow for 0.2" test read
+  the other nozzle's diameter on printers whose extruder map swaps them (H2D, X2D `physical_extruder_map` [1,0]), so a
+  0.2 nozzle beside a High Flow one synced the High Flow side as Standard. A number field that could not be parsed
+  used an uninitialised value.
+- Change: those checks go through `printing_nozzle_index` (Print.cpp); the sync tests the diameter of the nozzle
+  whose flow it reads (Plater.cpp); `TextCtrl::get_value_by_opt_type` keeps the previous value (Field.cpp).
+- Tests: none for the GUI parts. The CLI matrix (C:\gen79D\claude\h2d-test\cli\matrix.js) slices H2D and X2D with
+  five nozzle pairs and five map modes.
+
 ## Known Orca bugs not patched
 
 - The Type-1 tower (`WipeTower::set_extruder`) takes one line width for every tool from the nozzle of the last

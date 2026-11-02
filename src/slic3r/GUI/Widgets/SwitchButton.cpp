@@ -5,6 +5,7 @@
 
 #include "../wxExtensions.hpp"
 
+#include <wx/app.h>
 #include <wx/event.h>
 #include <wx/checklst.h>
 #include <wx/gdicmn.h>
@@ -809,8 +810,17 @@ void MultiSwitchButton::SetOptions(const std::vector<wxString> &options)
 void MultiSwitchButton::DeleteAllOptions()
 {
     sel = -1;
+    // Orca: a selection handler may replace the options while one of these buttons is still handling the click that
+    // sent the selection, and deleting it there leaves its window procedure running on a deleted object (the app
+    // closed). Outside the destructor the buttons are hidden now and deleted at the next idle time.
+    const bool defer = wxTheApp != nullptr && !IsBeingDeleted();
     for (auto *btn : btns) {
-        if (btn)
+        if (btn == nullptr)
+            continue;
+        if (defer) {
+            btn->Hide();
+            wxTheApp->ScheduleForDestruction(btn);
+        } else
             btn->Destroy();
     }
     btns.clear();
@@ -837,6 +847,9 @@ void MultiSwitchButton::SetSelection(int index)
     sel = index;
     update_button_styles();
     send_selection_event();
+    // The selection handler may have replaced the options (SetOptions clears the selection), so sel is checked again.
+    if (sel < 0 || sel >= (int) btns.size())
+        return;
     // The selected button may be scrolled out of sight, e.g. when the tab restores the active tool.
     scroll_option_into_view(btns[sel]);
     Refresh();

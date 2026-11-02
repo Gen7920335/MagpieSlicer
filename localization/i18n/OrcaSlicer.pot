@@ -31417,7 +31417,7 @@ msgid "Avoid warping\nDid you know that when printing materials that are prone t
 msgstr ""
 
 #, boost-format
-msgid "Line width too small. On a printer with nozzles of different sizes, an absolute line width is the width for the %1% mm nozzle and is scaled to the other nozzles. Enter a percentage to set the width relative to each nozzle."
+msgid "Line width too small: it must be wider than the layer height. On a printer with nozzles of different sizes, an absolute line width is the width for the %1% mm nozzle and is scaled to the other nozzles. Enter a percentage to set the width relative to each nozzle."
 msgstr ""
 
 #, boost-format

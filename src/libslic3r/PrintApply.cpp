@@ -1369,6 +1369,17 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
             m_mod_rule_clashes.push_back({std::move(c.setting), std::move(c.used_mod), std::move(c.used_value), std::move(others)});
         }
     }
+    // MAGPIE: a filament map names nozzles 1..n. An entry outside that (a damaged 3MF, which the loader only clamps
+    // below 1, or a CLI typo) indexed per-nozzle arrays past their end; it falls back to nozzle 1, as entries below 1 do.
+    if (auto *filament_map = new_full_config.option<ConfigOptionInts>("filament_map"); filament_map != nullptr) {
+        const auto *nozzles = new_full_config.option<ConfigOptionFloats>("nozzle_diameter");
+        const int   nozzle_count = nozzles != nullptr ? int(nozzles->values.size()) : 0;
+        for (int &nozzle : filament_map->values)
+            if (nozzle_count > 0 && (nozzle < 1 || nozzle > nozzle_count)) {
+                BOOST_LOG_TRIVIAL(warning) << "filament_map names nozzle " << nozzle << " of " << nozzle_count << "; nozzle 1 is used";
+                nozzle = 1;
+            }
+    }
     // MAGPIE: absolute line widths follow each nozzle on printers with mixed nozzle sizes. Done before the
     // config is diffed, so a change of nozzle_diameter or printer_variant invalidates the widths it moves;
     // object and region overrides take the same reference below.
@@ -1670,10 +1681,21 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 
     // Grab the lock for the Print / PrintObject milestones.
 	std::scoped_lock<std::mutex> lock(this->state_mutex());
+    // MAGPIE: a new config or model is validated against the seed map until process() derives the map again.
+    m_filament_map_derived = false;
 
     // The following call may stop the background processing.
     if (! print_diff.empty())
         update_apply_status(this->invalidate_state_by_config_options(new_full_config, print_diff));
+    // MAGPIE: on a Bambu printer whose nozzles differ in size the filament map decides the nozzle, so the line
+    // widths, H/2 bands, slicing parameters and support flows of each feature (printing_nozzle_index). A changed map
+    // (manual, or a new mode) slices the objects again; Orca only redid the tower and the skirt. The automatic modes
+    // keep the map they derive themselves (the diff erased it above) and reslice through
+    // reslice_for_derived_filament_map().
+    if (m_isBBLPrinter && m_line_width_context.reference_mm > 0. &&
+        std::any_of(print_diff.begin(), print_diff.end(), [](const t_config_option_key &key) { return key == "filament_map" || key == "filament_map_mode"; }))
+        for (PrintObject *object : m_objects)
+            update_apply_status(object->invalidate_step(posSlice));
 
     // Apply variables to placeholder parser. The placeholder parser is used by G-code export,
     // which should be stopped if print_diff is not empty.

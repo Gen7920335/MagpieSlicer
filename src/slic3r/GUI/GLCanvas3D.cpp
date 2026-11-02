@@ -5792,8 +5792,23 @@ void GLCanvas3D::load_layer_time_tower_previews(const DynamicPrintConfig &resolv
         }
         const double nozzle = nozzles->get_at(tool);          // mm
         const double brim   = layer_time_tower_brim(nozzle);  // mm
+        // The part of the bed the tower's nozzles reach, as the export narrows it (GCode::place_layer_time_tower).
+        std::vector<size_t> tower_nozzles;
+        if (tower_toolhead > 0 && size_t(tower_toolhead) <= nozzles->values.size())
+            tower_nozzles.push_back(tool);
+        else
+            for (const int filament : plate->get_extruders(true))
+                if (filament > 0) {
+                    // As printing_nozzle_index has it: a Bambu printer maps filaments to nozzles, others print filament n on nozzle n.
+                    const int mapped = !wxGetApp().preset_bundle->is_bbl_vendor() ? filament :
+                                       filament_map != nullptr && !filament_map->values.empty() ? filament_map->get_at(size_t(filament - 1)) : 1;
+                    tower_nozzles.push_back(mapped > 0 && size_t(mapped) <= nozzles->values.size() ? size_t(mapped - 1) : 0);
+                }
+        const auto *tool_areas = resolved.option<ConfigOptionPointsGroups>("extruder_printable_area");
+        const std::vector<Vec2d> tower_area = layer_time_tower_area(bed->values, tool_areas != nullptr ? tool_areas->values : std::vector<Vec2ds>(),
+                                                                    tower_nozzles);
         const std::optional<LayerTimeTowerSpot> spot =
-            place_layer_time_tower(bed->values, tower_size, brim, layer_time_tower_skirt(skirt_loops, skirt_distance, nozzle), objects,
+            place_layer_time_tower(tower_area, tower_size, brim, layer_time_tower_skirt(skirt_loops, skirt_distance, nozzle), objects,
                                    prime_towers[plate_id], aux_tower_position_at(tower_x, size_t(plate_id)),
                                    aux_tower_position_at(tower_y, size_t(plate_id)));
         if (!spot)

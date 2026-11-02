@@ -1018,7 +1018,8 @@ struct Sidebar::priv
     // extruder_count >= 2 && support_multi_nozzle. When is_manual, always pops the MultiNozzleSyncDialog;
     // otherwise reuses the app_config-cached option when the machine's nozzle config is unchanged.
     std::optional<NozzleOption> get_nozzle_options(MachineObject* obj, int extruder_count, bool support_multi_nozzle, bool is_manual);
-    bool switch_diameter(bool single);
+    // MAGPIE: user_pick is false when the printer sync sets the nozzles the machine reports.
+    bool switch_diameter(bool single, bool user_pick = true);
     // MAGPIE: sets extruder `extruder`'s nozzle diameter (mm) in the printer preset being edited.
     void set_row_nozzle_diameter(size_t extruder, double diameter_mm);
     // Switch to the printer preset offering `diameter`.
@@ -1995,7 +1996,7 @@ void Sidebar::priv::set_row_nozzle_diameter(size_t extruder, double diameter_mm)
         print_tab->update();
 }
 
-bool Sidebar::priv::switch_diameter(bool single)
+bool Sidebar::priv::switch_diameter(bool single, bool user_pick)
 {
     wxString diameter;
     if (single) {
@@ -2016,8 +2017,12 @@ bool Sidebar::priv::switch_diameter(bool single)
 
             // MAGPIE: the nozzles whose diameter changed start from the line width settings scaled to their new size,
             // and the process settings show their per-nozzle line width table now, as set_row_nozzle_diameter does.
+            // A printer sync over a preset that reverted to one size (a restart, a system preset) restores the
+            // machine's nozzles, so the widths saved for them stay; any other change of a nozzle clears its widths.
+            const bool was_one_size = std::all_of(nozzle_diameter_opt->values.begin(), nozzle_diameter_opt->values.end(),
+                [&](double d) { return std::abs(d - nozzle_diameter_opt->values.front()) <= EPSILON; }); // mm
             std::vector<size_t> changed;
-            for (size_t i = 0; i < 2; ++i)
+            for (size_t i = 0; (user_pick || !was_one_size) && i < 2; ++i)
                 if (std::abs(nozzle_diameter_opt->values[i] - (i == 0 ? left_value : right_value)) > EPSILON) // mm
                     changed.push_back(i);
             nozzle_diameter_opt->values[0] = left_value;
@@ -2033,7 +2038,22 @@ bool Sidebar::priv::switch_diameter(bool single)
         diameter = diameter_left;
     }
 
-    return switch_diameter_to(diameter);
+    // MAGPIE: nozzles brought to one size switch the printer preset; a nozzle that changed size on the way keeps no
+    // per-nozzle widths of its old size while the process preset stays (a 0.4/0.6 pair through 0.6/0.6 to 0.6/0.4
+    // left the left nozzle with its 0.4 widths).
+    const std::vector<double> nozzles_before = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter")->values;
+    const std::string         print_before   = wxGetApp().preset_bundle->prints.get_edited_preset().name;
+    const bool                switched       = switch_diameter_to(diameter);
+    const std::vector<double> nozzles_after  = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter")->values;
+    if (switched && wxGetApp().preset_bundle->prints.get_edited_preset().name == print_before)
+        if (auto *print_tab = dynamic_cast<TabPrint *>(wxGetApp().get_tab(Preset::TYPE_PRINT))) {
+            std::vector<size_t> changed;
+            for (size_t i = 0; i < std::min(nozzles_before.size(), nozzles_after.size()); ++i)
+                if (std::abs(nozzles_before[i] - nozzles_after[i]) > EPSILON) // mm
+                    changed.push_back(i);
+            print_tab->clear_per_nozzle_widths(changed);
+        }
+    return switched;
 }
 
 bool Sidebar::priv::switch_diameter_to(const wxString &diameter)
@@ -2561,7 +2581,12 @@ bool Sidebar::priv::sync_extruder_list(bool &only_external_material, bool is_man
                 continue;
             }
             // hack code, only use standard flow for 0.2
-            if (std::fabs(nozzle_diameters[extruder_id] - 0.2) > EPSILON)
+            // MAGPIE: of the nozzle whose flow is read (device extruder_id); nozzle_diameters[extruder_id] holds device
+            // index's, the other nozzle on a printer whose extruder map swaps them (H2D, X2D: physical_extruder_map
+            // [1,0]), so a 0.2 nozzle beside a High Flow one gave the High Flow side Standard.
+            const double flow_nozzle_diameter = nozzle_option ? nozzle_diameters[extruder_id] :
+                                                                obj->GetExtderSystem()->GetNozzleDiameter(extruder_id);
+            if (std::fabs(flow_nozzle_diameter - 0.2) > EPSILON)
                 // Map device flow->volume via the table, not `flowtype - 1`.
                 // The arithmetic only aligns for S_FLOW/H_FLOW; U_FLOW(3)-1 would yield nvtHybrid(2), not nvtTPUHighFlow(3).
                 target_type = DevNozzle::ToNozzleVolumeType(obj->GetExtderSystem()->GetNozzleFlowType(extruder_id));
@@ -2608,7 +2633,7 @@ bool Sidebar::priv::sync_extruder_list(bool &only_external_material, bool is_man
         left_extruder->combo_diameter->SetSelection(left_index);
         right_extruder->combo_diameter->SetSelection(right_index);
         is_switching_diameter = true;
-        switch_diameter(false);
+        switch_diameter(false, false);
         is_switching_diameter = false;
         AMSCountPopupWindow::SetAMSCount(deputy_index, deputy_4, deputy_1);
         AMSCountPopupWindow::SetAMSCount(main_index, main_4, main_1);
@@ -4177,7 +4202,8 @@ void Sidebar::update_presets(Preset::Type preset_type)
             // MAGPIE: a nozzle set apart from the variant's size (the rows' diameter dropdowns) offers the flow types
             // of its own size; every other row keeps the variant's, as Orca has it.
             std::string diameter = diameter_of_variant;
-            if (extruder.rows_edit_diameter() && index < int(nozzle_diameter->values.size())) {
+            // The Bambu left/right cards set their nozzles apart too (switch_diameter).
+            if ((extruder.rows_edit_diameter() || extruder.group_index >= 0) && index < int(nozzle_diameter->values.size())) {
                 const std::string own = get_diameter_string(nozzle_diameter->values[index]);
                 if (diameter.substr(0, diameter.find_first_not_of("0123456789.")) != own)
                     diameter = own;
@@ -4206,13 +4232,22 @@ void Sidebar::update_presets(Preset::Type preset_type)
             }
             if (select == -1) {
                 select = combo_flow->GetCount() - 1;
+                // MAGPIE: Standard when the nozzle offers it (a 0.2 nozzle set to High Flow), not the list's last type.
+                for (unsigned int i = 0; i < combo_flow->GetCount(); ++i)
+                    if (int(intptr_t(combo_flow->GetClientData(i))) == int(NozzleVolumeType::nvtStandard))
+                        select = int(i);
                 // MAGPIE: the extruder's flow type is not one its nozzle offers (a diameter just picked in the row):
                 // it takes the type the row now shows, as picking it would.
-                if (select >= 0 && extruder.flow_reset_row == row && index < int(nozzle_volumes->values.size())) {
+                // A left/right card resets it on any refresh: its diameter combo picks no row.
+                if (select >= 0 && (extruder.flow_reset_row == row || extruder.group_index >= 0) && index < int(nozzle_volumes->values.size())) {
                     const int shown = int(intptr_t(combo_flow->GetClientData(select)));
                     if (nozzle_volumes->values[index] != shown)
-                        if (auto *printer_tab = dynamic_cast<TabPrinter *>(wxGetApp().get_tab(Preset::TYPE_PRINTER)))
-                            wxGetApp().CallAfter([printer_tab, index, shown]() { printer_tab->set_extruder_volume_type(index, NozzleVolumeType(shown)); });
+                        // Looked up when it runs, and only for an extruder the printer still has: the printer may change first.
+                        wxGetApp().CallAfter([index, shown]() {
+                            auto *printer_tab = dynamic_cast<TabPrinter *>(wxGetApp().get_tab(Preset::TYPE_PRINTER));
+                            if (printer_tab != nullptr && index < wxGetApp().preset_bundle->get_printer_extruder_count())
+                                printer_tab->set_extruder_volume_type(index, NozzleVolumeType(shown));
+                        });
                 }
             }
             combo_flow->SetSelection(select);
