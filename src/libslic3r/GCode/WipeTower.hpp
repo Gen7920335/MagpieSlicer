@@ -240,6 +240,8 @@ public:
     // Orca: has_filament_switcher is not a static PrintConfig member here, so it is pushed in from
     // Print via a setter rather than read in the ctor. Device-set only.
     void set_has_filament_switcher(bool v) { m_has_filament_switcher = v; }
+    // MAGPIE: whether filament_map routes each filament to its nozzle (printing_nozzle_index); before set_extruder().
+    void set_is_bbl_printer(bool v) { m_is_bbl_printer = v; }
 	// Appends into internal structure m_plan containing info about the future wipe tower
 	// to be used before building begins. The entries must be added ordered in z.
     void plan_toolchange(float z_par, float layer_height_par, unsigned int old_tool, unsigned int new_tool, float wipe_volume_ec = 0.f, float wipe_volume_nc = 0.f, float prime_volume = 0.f);
@@ -572,6 +574,34 @@ private:
 	float m_perimeter_width = 0.4f * Width_To_Nozzle_Ratio; // Width of an extrusion line, also a perimeter spacing for 100% infill.
     float m_nozzle_change_perimeter_width = 0.4f * Width_To_Nozzle_Ratio;
 	float m_extrusion_flow = 0.038f; //0.029f;// Extrusion flow is derived from m_perimeter_width, layer height and filament diameter.
+    // MAGPIE: each tool prints the tower in its own nozzle's width, as WipeTower2 does: m_perimeter_width,
+    // m_nozzle_change_perimeter_width and m_extrusion_flow hold the widths and flow of the tool printing at the moment
+    // (use_tool_width()). The tower's frame (the room beside its wall, the margins of its blocks and depth, the row
+    // pitch of a sparse block, which the layers above must find again) takes the widest tool's, so every tool's lines
+    // fit it. With one nozzle size all of them are the width before. Planned toolchanges use the tools they name.
+    bool  m_is_bbl_printer = false;
+    float m_frame_width    = 0.f; // the widest tool's m_perimeter_width
+    float m_frame_nc_width = 0.f; // the widest tool's m_nozzle_change_perimeter_width
+    float tool_perimeter_width(size_t tool) const
+    {
+        return tool < m_filpar.size() ? m_filpar[tool].nozzle_diameter * Width_To_Nozzle_Ratio : m_perimeter_width;
+    }
+    float tool_nozzle_change_width(size_t tool) const
+    {
+        return tool < m_filpar.size() ? nozzle_change_perimeter_width(m_filpar[tool].nozzle_diameter) : m_nozzle_change_perimeter_width;
+    }
+    // Where a line of width `width` beside the wall runs: its edge where the frame's widest line has its own (written as
+    // Orca's m_perimeter_width + (width - m_perimeter_width) / 2, so one nozzle size gives the same numbers).
+    float frame_inset(float width) const { return m_frame_width + (width - m_frame_width) / 2; }
+    // The room such lines leave on both sides of the tower's width.
+    float frame_room(float width) const { return m_frame_width + width; }
+    void use_tool_width(size_t tool)
+    {
+        m_perimeter_width               = tool_perimeter_width(tool);
+        m_nozzle_change_perimeter_width = tool_nozzle_change_width(tool);
+        if (m_layer_height > 0.f)
+            m_extrusion_flow = extrusion_flow(m_layer_height);
+    }
     std::unordered_map<int, std::pair<float,float>> m_block_infill_gap_width; // categories to infill_gap: toolchange gap, nozzlechange gap
 	// Extruder specific parameters.
     std::vector<FilamentParameters> m_filpar;

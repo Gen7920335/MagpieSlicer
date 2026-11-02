@@ -6058,6 +6058,7 @@ void Print::_make_wipe_tower()
             wipe_tower.set_has_filament_switcher(hfs && hfs->value);
         }
         wipe_tower.set_shared_print_bed(this->get_extruder_shared_printable_polygon());
+        wipe_tower.set_is_bbl_printer(this->is_BBL_printer());
         // Set the extruder & material properties at the wipe tower object.
         for (size_t i = 0; i < number_of_extruders; ++i)
             wipe_tower.set_extruder(i, m_config);
