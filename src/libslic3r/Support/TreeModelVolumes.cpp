@@ -421,13 +421,17 @@ const Polygons& TreeModelVolumes::getPlaceableAreas(const coord_t orig_radius, L
     const coord_t radius = ceilRadius(orig_radius);
     if (std::optional<std::reference_wrapper<const Polygons>> result = m_placeable_areas_cache.getArea({ radius, layer_idx }); result)
         return (*result).get();
+    // MAGPIE: radius 0 is answered by the collision cache below, which the precalculation fills, so it is not a
+    // missed precalculation: with support on the build plate only nothing caches radius 0 placeables, and every
+    // tree bottom contact printed "Error: Not precalculated Placeable areas requested, radius 0" (seed 15414 of
+    // the U1 random test, Mixed support with organic trees: 24 lines, no fault).
+    if (orig_radius == 0)
+        // Placable areas for radius 0 are calculated in the general collision code.
+        return this->getCollision(0, layer_idx, true);
     if (m_precalculated) {
         BOOST_LOG_TRIVIAL(error_level_not_in_cache) << "Had to calculate Placeable Areas at radius " << radius << " and layer " << layer_idx << ", but precalculate was called. Performance may suffer!";
         tree_supports_show_error(format("Not precalculated Placeable areas requested, radius %1%, layer %2%", radius, layer_idx), false);
     }
-    if (orig_radius == 0)
-        // Placable areas for radius 0 are calculated in the general collision code.
-        return this->getCollision(0, layer_idx, true);
     const_cast<TreeModelVolumes*>(this)->calculatePlaceables(radius, layer_idx, throw_on_cancel);
     return getPlaceableAreas(orig_radius, layer_idx, throw_on_cancel);
 }
