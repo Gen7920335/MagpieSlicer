@@ -2992,6 +2992,102 @@ TEST_CASE("H/2 support of the contact zones keeps the support body at its own he
     CHECK(contact.total_mm < 0.75 * all.total_mm);
 }
 
+TEST_CASE("H/2 support keeps a body island out of a contact band's Z and XY", "[HalfLayer][SupportContactZone]")
+{
+    // A body island 2 x 2 mm over [2.0, 2.2] mm; banded layers beside it, mm.
+    auto square = [](double x_mm, double y_mm, double size_mm) {
+        return Polygon::new_scale({{x_mm, y_mm}, {x_mm + size_mm, y_mm}, {x_mm + size_mm, y_mm + size_mm}, {x_mm, y_mm + size_mm}});
+    };
+    const ExPolygon island(square(0., 0., 2.));
+    const Polygons  over{square(1., 1., 2.)};      // overlaps the island in XY
+    const Polygons  aside{square(5., 0., 2.)};     // does not
+    auto layer = [](double bottom_mm, double top_mm, const Polygons &polys) {
+        return HalfHeightBandedLayer{bottom_mm, top_mm, &polys, get_extents(polys)};
+    };
+    constexpr double tol_mm = 0.000001;
+    auto overlaps = [&](std::vector<HalfHeightBandedLayer> layers) {
+        double max_h = 0.;
+        for (const auto &l : layers)
+            max_h = std::max(max_h, l.top_z_mm - l.bottom_z_mm);
+        std::sort(layers.begin(), layers.end(), [](const auto &a, const auto &b) { return a.top_z_mm < b.top_z_mm; });
+        return half_height_support_island_overlaps_bands(island, 2.0, 2.2, layers, max_h, tol_mm);
+    };
+    // A contact band inside the island's Z, over it: the island is banded with it.
+    CHECK(overlaps({layer(2.0, 2.1, over)}));
+    CHECK(overlaps({layer(2.1, 2.3, over)}));
+    // Touching in Z only, or beside it in XY: it keeps its height.
+    CHECK_FALSE(overlaps({layer(2.2, 2.4, over)}));
+    CHECK_FALSE(overlaps({layer(1.8, 2.0, over)}));
+    CHECK_FALSE(overlaps({layer(2.0, 2.2, aside)}));
+    CHECK_FALSE(overlaps({}));
+    // Among others, sorted by top.
+    CHECK(overlaps({layer(0.2, 0.4, over), layer(2.0, 2.2, aside), layer(2.15, 2.35, over), layer(5.0, 5.2, over)}));
+    // Within the modulation's reach (half a 0.4 mm line) of a band beside it: 0.1 mm away overlaps, 0.5 mm does not.
+    const Polygons near{square(2.1, 0., 2.)};
+    const Polygons far{square(2.5, 0., 2.)};
+    std::vector<HalfHeightBandedLayer> near_layers{layer(2.0, 2.1, near)}, far_layers{layer(2.0, 2.1, far)};
+    CHECK_FALSE(half_height_support_island_overlaps_bands(island, 2.0, 2.2, near_layers, 0.1, tol_mm));
+    CHECK(half_height_support_island_overlaps_bands(island, 2.0, 2.2, near_layers, 0.1, tol_mm, scaled<coord_t>(0.2)));
+    CHECK_FALSE(half_height_support_island_overlaps_bands(island, 2.0, 2.2, far_layers, 0.1, tol_mm, scaled<coord_t>(0.2)));
+}
+
+TEST_CASE("H/2 support prints every band of the first layer as the flange", "[HalfLayer][SupportBands]")
+{
+    // Range "all" bands the first support layer; the band above the one on the bed was printed as the base (organic:
+    // only its outline), and the next layer hung over the flange (tee, tree support: 191 mm of path against 672 mm).
+    const int generator = GENERATE(0, 3);   // 0 normal, 3 organic tree
+    CAPTURE(generator);
+    constexpr double h_mm = 0.2;
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"layer_height", h_mm}, {"initial_layer_print_height", h_mm}, {"enable_support", true},
+        {"support_threshold_angle", 60}, {"support_top_z_distance", 0.2}, {"support_on_build_plate_only", true},
+        {"support_threshold_overlap", 0.}});
+    Slic3r::Test::half_layer_params(config, false, true, "all");
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(generator == 3 ? stTreeAuto : stNormalAuto));
+    if (generator == 3)
+        config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(smsTreeOrganic));
+    TriangleMesh mesh = make_cube(5., 10., 6.);
+    TriangleMesh ceiling = make_cube(20., 10., 1.2);
+    ceiling.translate(0.f, 0.f, 6.f);
+    mesh.merge(ceiling);
+    Print print;
+    Model model;
+    init_print({mesh}, print, model, config);
+    print.process();
+    // Path length, mm, of the lower band (print_z near 0.1 mm) and the upper band (near 0.2 mm) of the first layer.
+    double lower_mm = 0., upper_mm = 0.;
+    auto add = [&](double print_z, const ExtrusionPath &path) {
+        const double length_mm = unscale<double>(path.length());
+        if (std::abs(print_z - 0.5 * h_mm) < 0.01)
+            lower_mm += length_mm;
+        else if (std::abs(print_z - h_mm) < 0.01)
+            upper_mm += length_mm;
+    };
+    auto collect = [&](auto &&self, double print_z, const ExtrusionEntity &entity) -> void {
+        if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+            for (const ExtrusionEntity *child : collection->entities)
+                if (child != nullptr)
+                    self(self, print_z, *child);
+        } else if (const auto *path = dynamic_cast<const ExtrusionPath *>(&entity)) {
+            add(print_z, *path);
+        } else if (const auto *multi = dynamic_cast<const ExtrusionMultiPath *>(&entity)) {
+            for (const ExtrusionPath &p : multi->paths)
+                add(print_z, p);
+        } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(&entity)) {
+            for (const ExtrusionPath &p : loop->paths)
+                add(print_z, p);
+        }
+    };
+    for (const SupportLayer *layer : print.get_object(0)->support_layers())
+        collect(collect, layer->print_z, layer->support_fills);
+    CAPTURE(lower_mm, upper_mm);
+    REQUIRE(lower_mm > 0.);
+    // Both bands are the same flange, so the same length to a few percent (fill phase). Measured (MSVC Release,
+    // 2026-11-02), lower / upper band, mm: normal 742.6 / 743.1, organic 278.2 / 279.7.
+    CHECK(upper_mm >= 0.8 * lower_mm);
+    CHECK(upper_mm <= 1.25 * lower_mm);
+}
+
 TEST_CASE("Independent support layers under H/2 support produce no sliver bands", "[HalfLayer][SupportBands]")
 {
     constexpr double h_mm = 0.2;

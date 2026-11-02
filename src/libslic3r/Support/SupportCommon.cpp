@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <limits>
 #include <map>
+#include <set>
 #include <memory>
 #include <math.h>
 #include <initializer_list>
@@ -1666,6 +1667,27 @@ bool HalfHeightSupportScope::body_island_banded(const ExPolygon &island, double 
     return half_height_support_island_in_contact_zone(island, bottom_mm, top_mm, m_model, m_top_window_mm, m_bottom_window_mm);
 }
 
+bool half_height_support_island_overlaps_bands(const ExPolygon &island, double bottom_mm, double top_mm,
+    const std::vector<HalfHeightBandedLayer> &layers, double max_height_mm, double z_tolerance_mm, coord_t grow_scaled)
+{
+    if (layers.empty())
+        return false;
+    const Polygons    grown      = grow_scaled > 0 ? offset(island, float(grow_scaled)) : to_polygons(island);
+    const BoundingBox island_box = get_extents(grown);
+    // Layers whose top lies above the island's bottom, up to those that start above its top.
+    auto it = std::upper_bound(layers.begin(), layers.end(), bottom_mm + z_tolerance_mm,
+        [](double z_mm, const HalfHeightBandedLayer &layer) { return z_mm < layer.top_z_mm; });
+    for (; it != layers.end() && it->top_z_mm < top_mm + max_height_mm + z_tolerance_mm; ++it) {
+        if (std::min(top_mm, it->top_z_mm) - std::max(bottom_mm, it->bottom_z_mm) <= z_tolerance_mm)
+            continue;
+        if (it->polygons == nullptr || !it->bbox.overlap(island_box))
+            continue;
+        if (!intersection(grown, *it->polygons).empty())
+            return true;
+    }
+    return false;
+}
+
 static void refine_half_height_support_regions(const PrintObject &object,
     SupportGeneratorLayerStorage &storage,
     std::initializer_list<SupportGeneratorLayersPtr *> groups,
@@ -1708,6 +1730,29 @@ static void refine_half_height_support_regions(const PrintObject &object,
             previous_mm = ends[i];
         }
     };
+    const auto never_banded = [&](const SupportGeneratorLayer *layer) {
+        return layer->height <= z_tolerance_mm ||
+               (object.slicing_parameters().has_raft() && layer->print_z <= raft_top_mm + z_tolerance_mm);
+    };
+    // The layers every range bands (contacts, interfaces), for keeping a body island out of their Z and XY.
+    std::vector<HalfHeightBandedLayer> banded_layers;
+    double                             banded_max_height_mm = 0.;
+    if (scope.contact_only() && body_group != nullptr) {
+        const std::set<const SupportGeneratorLayer *> body_layers(body_group->begin(), body_group->end());
+        for (auto *group : groups)
+            if (group != body_group)
+                for (const SupportGeneratorLayer *layer : *group)
+                    if (!never_banded(layer) && !layer->polygons.empty() && body_layers.count(layer) == 0) {
+                        banded_layers.push_back({layer->bottom_print_z(), layer->print_z, &layer->polygons, get_extents(layer->polygons)});
+                        banded_max_height_mm = std::max(banded_max_height_mm, layer->height);
+                    }
+        std::sort(banded_layers.begin(), banded_layers.end(),
+                  [](const HalfHeightBandedLayer &a, const HalfHeightBandedLayer &b) { return a.top_z_mm < b.top_z_mm; });
+    }
+    // The support modulation trims a layer by the overlapping layers' polygons grown by half its line width
+    // (modulate_extrusion_by_overlapping_layers): the same reach, scaled.
+    const coord_t band_reach_scaled = banded_layers.empty() ? 0 :
+        coord_t(0.5 * SupportParameters(object).support_material_flow.scaled_width());
     std::map<SupportGeneratorLayer *, SupportGeneratorLayersPtr> refined;
     for (auto *group : groups) {
         const bool body = group == body_group && scope.contact_only();
@@ -1716,8 +1761,7 @@ static void refine_half_height_support_regions(const PrintObject &object,
             auto found = refined.find(original);
             if (found == refined.end()) {
                 SupportGeneratorLayersPtr bands;
-                if (original->height <= z_tolerance_mm ||
-                    (object.slicing_parameters().has_raft() && original->print_z <= raft_top_mm + z_tolerance_mm)) {
+                if (never_banded(original)) {
                     bands.push_back(original);
                 } else if (!body) {
                     make_bands(original, original->polygons, bands);
@@ -1729,7 +1773,12 @@ static void refine_half_height_support_regions(const PrintObject &object,
                     for (ExPolygon &island : union_ex(original->polygons)) {
                         // Judge the island before moving it: the order of evaluation of function arguments is unspecified
                         // (MSVC moved it out first and judged an empty island, so no body island was ever banded).
-                        const bool in_zone = scope.body_island_banded(island, original->bottom_print_z(), original->print_z);
+                        // An island under a contact or interface band in its own Z goes into bands with it (the bed's
+                        // islands excepted, whose height the first layer needs).
+                        const bool in_zone = scope.body_island_banded(island, original->bottom_print_z(), original->print_z) ||
+                            (original->bottom_print_z() > EPSILON &&
+                             half_height_support_island_overlaps_bands(island, original->bottom_print_z(), original->print_z,
+                                                                       banded_layers, banded_max_height_mm, z_tolerance_mm, band_reach_scaled));
                         polygons_append(in_zone ? banded : kept, to_polygons(std::move(island)));
                     }
                     if (banded.empty()) {
@@ -2403,12 +2452,18 @@ void generate_support_toolpaths(
                     // For every other printer type, support z is never negative, so this
                     // matches the original "first layer at z=0" behaviour unchanged.
                     const bool is_belt_printer = std::abs(slicing_params.belt_floor_shear_factor) > EPSILON;
-                    if (! is_belt_printer && base.layer->bottom_z < EPSILON && support_params.aligned_first_layer) {
+                    // MAGPIE: H/2 support prints the first layer in bands; every band of it is the first layer (its
+                    // source layer stands on the bed), not only the band on the bed. Printed as the base instead, an
+                    // organic upper band was only its outline, and the next layer hung 0.125 mm over the flange.
+                    const bool first_layer = base.layer->bottom_z < EPSILON ||
+                        (support_params.banded_support && base.layer->half_layer_parent_height_mm > EPSILON &&
+                         base.layer->half_layer_parent_print_z_mm - base.layer->half_layer_parent_height_mm < EPSILON);
+                    if (! is_belt_printer && first_layer && support_params.aligned_first_layer) {
                         // MAGPIE: the base lines continue down to the bed, printed with the first layer's flow.
                         flow = support_params.first_layer_flow;
                         if (support_params.banded_support)
                             flow = flow.with_height(float(base.layer->height));
-                    } else if (! is_belt_printer && base.layer->bottom_z < EPSILON) {
+                    } else if (! is_belt_printer && first_layer) {
                         // Base flange (the 1st layer).
                         filler = filler_first_layer;
                         filler->angle = Geometry::deg2rad(float(config.support_angle.value + 90.));

@@ -72,6 +72,24 @@ private:
     double                            m_bottom_window_mm = 0.;
 };
 
+// A support layer that prints in bands whatever the range (a contact or interface layer) as the H/2 contact zone test
+// sees it: its physical Z extent, mm, its polygons and their box.
+struct HalfHeightBandedLayer {
+    double          bottom_z_mm;
+    double          top_z_mm;
+    const Polygons *polygons;
+    BoundingBox     bbox;
+};
+
+// Whether a support body island printed over [bottom_mm, top_mm] overlaps in XY a banded layer whose Z extent overlaps
+// its own by more than z_tolerance_mm. Kept at its own height, such an island would share Z with a band in the same
+// place: the support modulation then trims the island down to the band's top, assuming the band's material below,
+// where the band's lines do not run (a 0.1 mm hole under hilda03, normal support, range "contact"). The modulation
+// trims by the band's polygons grown by half a line, so the island counts as overlapping within grow_scaled (scaled
+// distance) of them too. `layers` is sorted by top_z_mm; max_height_mm is the tallest of them.
+bool half_height_support_island_overlaps_bands(const ExPolygon &island, double bottom_mm, double top_mm,
+    const std::vector<HalfHeightBandedLayer> &layers, double max_height_mm, double z_tolerance_mm, coord_t grow_scaled = 0);
+
 // Turn some of the base layers into base interface layers.
 // For soluble interfaces with non-soluble bases, print maximum two first interface layers with the base
 // extruder to improve adhesion of the soluble filament to the base.

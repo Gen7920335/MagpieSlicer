@@ -910,6 +910,12 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
     std::chrono::time_point<clock_> t0{ clock_::now() };
     // main part of overhang detection can be parallel
     tbb::concurrent_vector<ExPolygons> overhangs_all_layers(m_object->layer_count());
+    // MAGPIE: what the second pass (sharp tails, cantilevers) takes from the first: a layer with too many overhangs to
+    // search, the lower layer grown by the overhang angle, that offset, and the lower layer a belt shifts.
+    std::vector<char>       layer_skipped(m_object->layer_count(), 0);
+    std::vector<ExPolygons> lower_offseted_all(m_object->layer_count());
+    std::vector<coordf_t>   lower_offset_all(m_object->layer_count(), 0.);
+    std::vector<ExPolygons> effective_lower_all(m_object->layer_count());
     tbb::parallel_for(tbb::blocked_range<size_t>(0, m_object->layer_count()),
         [&](const tbb::blocked_range<size_t>& range) {
             for (size_t layer_nr = range.begin(); layer_nr < range.end(); layer_nr++) {
@@ -1000,13 +1006,47 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
                 ExPolygons lower_layer_offseted = offset_ex(effective_lower, support_offset_scaled, SUPPORT_SURFACES_OFFSET_PARAMETERS);
                 overhangs_all_layers[layer_nr] = diff_ex(curr_polys, lower_layer_offseted);
 
-                double duration{ std::chrono::duration_cast<second_>(clock_::now() - t0).count() };
-                if (duration > 30 || overhangs_all_layers[layer_nr].size() > 100) {
-                    BOOST_LOG_TRIVIAL(info) << "detect_overhangs takes more than 30 secs, skip cantilever and sharp tails detection: layer_nr=" << layer_nr << " duration=" << duration;
-                    config_detect_sharp_tails = false;
-                    config_remove_small_overhangs = false;
+                if (overhangs_all_layers[layer_nr].size() > 100)
+                    layer_skipped[layer_nr] = 1;
+                lower_offseted_all[layer_nr] = std::move(lower_layer_offseted);
+                lower_offset_all[layer_nr]   = lower_layer_offset;
+                if (belt_ovh_active)
+                    effective_lower_all[layer_nr] = std::move(effective_lower);
+            }
+        }
+    ); // end tbb::parallel_for
+
+    // MAGPIE: the cut-off is decided here, once for all layers. Switched off from inside the parallel loop above, it
+    // left the layers other threads had already reached with sharp-tail detection and the rest without, so the
+    // overhangs (and the trees) differed from run to run (hilda03, organic tree under H/2 support: 6 or 7 overhang
+    // islands on one layer; a layer with more than 100 islands turned it off).
+    {
+        const double duration{ std::chrono::duration_cast<second_>(clock_::now() - t0).count() };
+        const auto   crowded = std::find(layer_skipped.begin(), layer_skipped.end(), char(1));
+        if (duration > 30 || crowded != layer_skipped.end()) {
+            BOOST_LOG_TRIVIAL(info) << "detect_overhangs takes more than 30 secs or finds more than 100 overhangs on a layer, skip "
+                                       "cantilever and sharp tails detection: layer_nr=" << (crowded - layer_skipped.begin()) << " duration=" << duration;
+            config_detect_sharp_tails = false;
+            config_remove_small_overhangs = false;
+        }
+    }
+    std::vector<double> cantilever_dist_all(m_object->layer_count(), 0.);
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, m_object->layer_count()),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t layer_nr = range.begin(); layer_nr < range.end(); layer_nr++) {
+                if (m_object->print()->canceled())
+                    break;
+                if (!is_auto(stype) && layer_nr > enforce_support_layers)
                     continue;
-                }
+                Layer* layer = m_object->get_layer(layer_nr);
+                if (layer->lower_layer == nullptr || layer_skipped[layer_nr])
+                    continue;
+                Layer*            lower_layer          = layer->lower_layer;
+                const coordf_t    lower_layer_offset   = lower_offset_all[layer_nr];
+                ExPolygons&       curr_polys           = layer->lslices_extrudable;
+                const ExPolygons& lower_polys          = lower_layer->lslices_extrudable;
+                const ExPolygons& effective_lower      = belt_ovh_active ? effective_lower_all[layer_nr] : lower_polys;
+                ExPolygons&       lower_layer_offseted = lower_offseted_all[layer_nr];
                 if (is_auto(stype) && config_detect_sharp_tails)
                 {
                     // BBS detect sharp tail
@@ -1083,7 +1123,7 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
                         dist_max = std::max(dist_max, dist_pt);
                     }
                     if (dist_max > scale_(3)) {  // is cantilever if the farmost point is larger than 3mm away from base
-                        max_cantilever_dist = std::max(max_cantilever_dist, dist_max);
+                        cantilever_dist_all[layer_nr] = std::max(cantilever_dist_all[layer_nr], dist_max);
                         layer->cantilevers.emplace_back(poly);
                         BOOST_LOG_TRIVIAL(debug) << "found a cantilever cluster. layer_nr=" << layer_nr << dist_max;
                         has_cantilever = true;
@@ -1092,6 +1132,8 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
             }
         }
     ); // end tbb::parallel_for
+    for (const double dist : cantilever_dist_all)
+        max_cantilever_dist = std::max(max_cantilever_dist, dist);
 
     BOOST_LOG_TRIVIAL(info) << "max_cantilever_dist=" << max_cantilever_dist;
     if (check_support_necessity)

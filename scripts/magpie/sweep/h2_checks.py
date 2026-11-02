@@ -11,7 +11,8 @@ Checks of one G-code:
   contact_bottom support standing on the model, within the window, prints in bands
   all_banded     range "all": every support path prints in a band
   deep_body      range "contact": some of the deep support body prints at a whole layer
-  island         range "contact": a banded support island has the model within reach of the window
+  island         range "contact": a banded support island has the model within reach of the window, or
+                 an interface band beside it in its own Z (it is banded with that band)
   first_layer    range "contact": a support body island on the bed keeps the whole first layer
   overlap        two support paths of different Z overlap in Z at the same XY (double extrusion)
   gap            the support around an XY has a band-sized Z hole
@@ -52,10 +53,12 @@ FLOW_LOW, FLOW_HIGH = 0.8, 1.25  # extruded volume / (width x height bead) of a 
 FLOW_MIN_LEN_MM = 1.0        # shorter paths carry E rounded to 5 decimals
 Z_SAFETY_MM = 0.02           # material this far above a path's bottom, or a travel's nozzle, collides
 # Footprint change per Z bin that counts, mm2, in cells one support line pitch wide (~9 mm2). Against
-# "all" correct builds differ by 0 (102 cases of seed 31, 2026-11-02); against H/2 off by up to 45 mm2
-# (5 cells, resin support only). An island smaller than the threshold can vanish unseen.
+# "all" correct builds differ by 0 (102 cases of seed 31, 2026-11-02); against H/2 off by up to 117 mm2, 3.6 %
+# (hilda03: a 0.1 mm interface band fills at its own line pitch, the lines at the edges move; every band holds the
+# whole layer's polygons, probe 2026-11-02). An island smaller than the threshold can vanish unseen.
 COVER_MIN_MM2 = 20.0
 COVER_OFF_MIN_MM2 = 60.0
+COVER_OFF_SHARE = 0.05       # ... and this share of the footprint, against H/2 off
 COVER_Z_MM = 0.002           # Z overlap with a bin that counts (Z is printed to 0.001 mm)
 TIME_SHARE = 0.01            # "contact" may take this much longer than "all" (estimator rounding)
 REPORT_MAX = 6               # issues listed per check
@@ -431,6 +434,18 @@ def check_islands(g, s, report, natural, geo=None):
         return
     size = max(CELL_MM, s.island_reach)
     model = ModelIndex(geo or g, None, size)
+    # Interface paths per coarse cell: a body island under or beside an interface band in its own Z is banded with it
+    # (the modulation would otherwise trim it where the band's lines do not run).
+    interfaces = {}
+    for m in g.support():
+        if m.kind == 'Support interface':
+            for x, y in m.samples():
+                interfaces.setdefault(cell(x, y, size), set()).add((round(m.z - m.h, 4), round(m.z, 4)))
+
+    def beside_interface(x, y, bottom, top):
+        c = cell(x, y, size)
+        return any(min(top, it) - max(bottom, ib) > HEIGHT_TOL_MM
+                   for dx in (-1, 0, 1) for dy in (-1, 0, 1) for ib, it in interfaces.get((c[0] + dx, c[1] + dy), ()))
     by_z = {}
     for m in g.support():
         if s.raft and m.z < model.lowest - HEIGHT_TOL_MM:
@@ -467,7 +482,7 @@ def check_islands(g, s, report, natural, geo=None):
                 for m in cells[c]:
                     layer = natural.interval(m.x0, m.y0, m.z)
                     bottom, top = layer if layer else (m.z - m.h - s.layer, m.z + s.layer)
-                    if _island_reaches_model(model, s, m.x0, m.y0, bottom, top):
+                    if _island_reaches_model(model, s, m.x0, m.y0, bottom, top) or beside_interface(m.x0, m.y0, bottom, top):
                         touched = True
                         break
                 if touched:
@@ -633,7 +648,8 @@ def compare_pair(contact_path, all_path, off_path=None):
             a, b = fc.get(k, set()), fother.get(k, set())
             diff = len(a ^ b) * size * size
             worst = max(worst, diff)
-            if diff > (COVER_MIN_MM2 if other_name == 'all' else COVER_OFF_MIN_MM2):
+            whole = max(len(a), len(b)) * size * size
+            if diff > COVER_MIN_MM2 if other_name == 'all' else (diff > COVER_OFF_MIN_MM2 and diff > COVER_OFF_SHARE * whole):
                 measured = {'contact_mm2': round(len(a) * size * size, 1),
                             f'{other_name}_mm2': round(len(b) * size * size, 1), 'differs_mm2': round(diff, 1)}
                 if fo is not None and other_name == 'all':
