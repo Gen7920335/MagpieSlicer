@@ -1796,6 +1796,54 @@ static void refine_half_height_support_regions(const PrintObject &object,
             append(replacement, found->second);
         }
         std::sort(replacement.begin(), replacement.end(), [](const auto *a, const auto *b) { return *a < *b; });
+        // MAGPIE: one layer of a kind per print_z and height. The toolpath generator takes the first top contact (bottom
+        // contact, interface) at a support layer's print_z, so the bands of two layers overlapping in Z (contacts of
+        // different thickness) that end at the same cut lost one of them: frog legs under H/2 support of the contact
+        // zones, the 0.20-0.28 band of a 0.20-0.48 mm contact layer behind that of a 0.20-0.32 mm one, a 0.08 mm hole
+        // under the interface (random test 2026-11-03, c0044). Such layers are united into a new one (a band or an
+        // original may sit in other groups too, so neither is changed). The body keeps its own pairing (base_band_layer).
+        if (group != body_group) {
+            SupportGeneratorLayersPtr merged;
+            merged.reserve(replacement.size());
+            size_t run_begin = 0; // the first of the layers in `merged` sharing print_z and height with the current one
+            for (SupportGeneratorLayer *layer : replacement) {
+                if (run_begin < merged.size() && (std::abs(merged[run_begin]->print_z - layer->print_z) > z_tolerance_mm ||
+                                                  std::abs(merged[run_begin]->height - layer->height) > z_tolerance_mm))
+                    run_begin = merged.size();
+                // A group may hold two kinds (Mixed support's interfaces: top and bottom), which the sort keeps in no order.
+                auto same = std::find_if(merged.begin() + run_begin, merged.end(), [layer](const SupportGeneratorLayer *other) {
+                    return other->layer_type == layer->layer_type && !other->polygons.empty();
+                });
+                if (same == merged.end() || layer->polygons.empty()) {
+                    merged.push_back(layer);
+                    continue;
+                }
+                SupportGeneratorLayer *last = *same;
+                auto &united = storage.allocate_unguarded(last->layer_type);
+                united.print_z = last->print_z;
+                united.bottom_z = last->bottom_z;
+                united.height = last->height;
+                united.bridging = last->bridging || layer->bridging;
+                united.idx_object_layer_above = last->idx_object_layer_above;
+                united.idx_object_layer_below = last->idx_object_layer_below;
+                united.half_layer_source_id = last->half_layer_source_id;
+                united.half_layer_interface_id = last->half_layer_interface_id;
+                united.fractional_top = last->fractional_top || layer->fractional_top;
+                united.half_layer_parent_print_z_mm = last->half_layer_parent_print_z_mm;
+                united.half_layer_parent_height_mm = last->half_layer_parent_height_mm;
+                united.polygons = union_(last->polygons, layer->polygons);
+                auto unite = [](const std::unique_ptr<Polygons> &a, const std::unique_ptr<Polygons> &b) -> std::unique_ptr<Polygons> {
+                    if (!a && !b)
+                        return nullptr;
+                    return std::make_unique<Polygons>(!a ? *b : !b ? *a : union_(*a, *b));
+                };
+                united.contact_polygons = unite(last->contact_polygons, layer->contact_polygons);
+                united.overhang_polygons = unite(last->overhang_polygons, layer->overhang_polygons);
+                united.enforcer_polygons = unite(last->enforcer_polygons, layer->enforcer_polygons);
+                *same = &united;
+            }
+            replacement.swap(merged);
+        }
         group->swap(replacement);
     }
 }
