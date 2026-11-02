@@ -2966,7 +2966,16 @@ StringObjectException Print::validate_impl(std::vector<StringObjectException> *w
                     slicing_params0.gap_support_object != slicing_params.gap_support_object)
                     return {L("The prime tower is only supported for multiple objects if they are printed with the same support_top_z_distance."), object};
 #endif
-                if (!equal_layering(slicing_params, slicing_params0))
+                // MAGPIE: the minimum and maximum layer heights follow the nozzles printing each object, so on a printer
+                // whose nozzles differ in size two objects on different nozzles never matched, though both print the
+                // same fixed layers (U1/H2D/X2D random test 2026-11-03: 33 of 240 refused). They bound variable layering
+                // only, which a custom layer height profile brings and the Z series check below compares.
+                SlicingParameters layering = slicing_params;
+                if (!has_custom_layering) {
+                    layering.min_layer_height = slicing_params0.min_layer_height;
+                    layering.max_layer_height = slicing_params0.max_layer_height;
+                }
+                if (!equal_layering(layering, slicing_params0))
                     return  { L("A prime tower requires that all objects are sliced with the same layer height."), object };
                 if (has_custom_layering) {
                     auto &lh         = layer_height_profile(i);

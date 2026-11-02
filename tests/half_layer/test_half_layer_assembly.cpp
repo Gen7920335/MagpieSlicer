@@ -1232,7 +1232,9 @@ TEST_CASE("Both wipe tower planners consume repeated half-layer visits", "[HalfL
     if (separate_nozzles) {
         config.set_num_extruders(2);
         set_toolhead_nozzle_diameter(config, 0, 0.4);
-        set_toolhead_nozzle_diameter(config, 1, 0.2);
+        // MAGPIE: 0.6, not 0.2: two objects on 0.2 mm layers make the 0.2 nozzle's widths too narrow, which
+        // validate() only reported once the prime tower took both objects (it refused their layering first).
+        set_toolhead_nozzle_diameter(config, 1, 0.6);
         config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
     } else {
         config.set_key_value("filament_map", new ConfigOptionInts{1, 1});
@@ -2397,6 +2399,43 @@ TEST_CASE("Changing flow invalidates cached half-layer purge capacity", "[HalfLa
     CHECK(support_body_capacity() == Catch::Approx(old_volume * 0.5));
 }
 
+// MAGPIE: the prime tower's layering check compared the minimum and maximum layer heights, which follow each object's
+// nozzle: two objects on nozzles of different sizes were refused although both print the same fixed layers (U1/H2D/X2D
+// random test 2026-11-03, 33 of 240 cases).
+TEST_CASE("A prime tower takes objects on nozzles of different sizes with the same fixed layers", "[HalfLayer][TowerClearanceRegression]")
+{
+    const bool type1 = GENERATE(false, true);
+    auto config = multifilament_config(2);
+    config.set_num_extruders(2);
+    set_toolhead_nozzle_diameter(config, 0, 0.4);
+    set_toolhead_nozzle_diameter(config, 1, 0.6);
+    config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
+    config.set_deserialize_strict({{"single_extruder_multi_material", false},
+        {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"},
+        {"layer_height", 0.2}, {"initial_layer_print_height", 0.2}, {"skirt_loops", 0}, {"brim_type", "no_brim"}});
+    size_flush_to_nozzles(config);
+    std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides;
+    for (int filament : {1, 2}) {
+        overrides.push_back({{"extruder", filament}});
+        for (const char *key : {"outer_wall_filament_id", "inner_wall_filament_id",
+                "sparse_infill_filament_id", "internal_solid_filament_id",
+                "top_surface_filament_id", "bottom_surface_filament_id"})
+            overrides.back().push_back({key, filament});
+    }
+    Print print;
+    print.is_BBL_printer() = type1;
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(6.), cube(5.)}, print, model, config, &overrides);
+    CAPTURE(type1);
+    REQUIRE(print.get_object(0)->slicing_parameters().max_layer_height != print.get_object(1)->slicing_parameters().max_layer_height);
+    const std::string error = print.validate().string;
+    INFO(error);
+    // The test config lacks layer G-code ("G92 E0"); only the layering error is this test's.
+    CHECK(error.find("same layer height") == std::string::npos);
+    REQUIRE_NOTHROW(print.process());
+    REQUIRE(print.has_wipe_tower());
+}
+
 TEST_CASE("Wipe-into never claims across separate physical nozzles",
     "[HalfLayer][WipeIntoMultiNozzle]")
 {
@@ -2404,7 +2443,8 @@ TEST_CASE("Wipe-into never claims across separate physical nozzles",
     auto config = multifilament_config(2);
     config.set_num_extruders(2);
     set_toolhead_nozzle_diameter(config, 0, 0.4);
-    set_toolhead_nozzle_diameter(config, 1, 0.2);
+    // MAGPIE: 0.6, not 0.2 (as in "Both wipe tower planners consume repeated half-layer visits").
+    set_toolhead_nozzle_diameter(config, 1, 0.6);
     config.set_key_value("filament_map", new ConfigOptionInts{1, 2});
     config.set_deserialize_strict({{"single_extruder_multi_material", false},
         {"enable_prime_tower", true}, {"wipe_tower_x", "50"}, {"wipe_tower_y", "50"} /* MAGPIE: inside the 200 mm test bed (nightly default is off it) */, {"purge_in_prime_tower", true},
