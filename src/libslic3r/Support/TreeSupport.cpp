@@ -1560,14 +1560,29 @@ void TreeSupport::generate_toolpaths()
         std::vector<std::unique_ptr<SupportLayer>> physical_layers;
         const double raft_top_mm = m_slicing_params.raft_contact_top_z;
         constexpr double z_tolerance_mm = 0.000001; // Physical raft endpoint tolerance, mm.
+        // Which base areas are banded (all of them unless only the contact zones are, Gen 2026-11-01). Roofs, floors and
+        // first roof layers (the interfaces and contacts) always are.
+        const HalfHeightSupportScope scope(*m_object);
         for (const SupportLayer *original : m_object->support_layers()) {
             if (!original->support_fills.empty())
                 throw std::logic_error("Classic tree half-height refinement must precede toolpath generation");
             const bool raft = m_slicing_params.has_raft() && original->print_z <= raft_top_mm + z_tolerance_mm;
-            const auto ends = raft ? std::vector<double>{original->print_z} :
+            std::vector<char> banded(original->area_groups.size(), raft ? 0 : 1);
+            if (!raft && scope.contact_only())
+                for (size_t i = 0; i < banded.size(); ++i) {
+                    const auto &group = original->area_groups[i];
+                    banded[i] = group.type != SupportLayer::BaseType ||
+                                scope.body_island_banded(*group.area, original->bottom_z(), original->print_z);
+                }
+            const bool any_banded = std::find(banded.begin(), banded.end(), 1) != banded.end();
+            const bool all_banded = std::find(banded.begin(), banded.end(), 0) == banded.end();
+            // A layer with no group (empty) splits as before, so the band grid of the support stays continuous.
+            const auto ends = raft || (!any_banded && !original->area_groups.empty()) ? std::vector<double>{original->print_z} :
                 half_height_support_band_ends(cuts_mm, original->bottom_z(), original->print_z, min_band_mm, max_band_mm);
             double bottom_mm = original->bottom_z();
-            for (double top_mm : ends) {
+            for (size_t band_idx = 0; band_idx < ends.size(); ++band_idx) {
+                const double top_mm   = ends[band_idx];
+                const bool   top_band = band_idx + 1 == ends.size();
                 auto layer = std::unique_ptr<SupportLayer>(new SupportLayer(physical_layers.size(),
                     original->interface_id(), m_object, top_mm - bottom_mm, top_mm, 0.5 * (bottom_mm + top_mm)));
                 layer->support_type = original->support_type;
@@ -1576,19 +1591,37 @@ void TreeSupport::generate_toolpaths()
                 layer->lslices = original->lslices;
                 layer->lslices_bboxes = original->lslices_bboxes;
                 layer->roof_gap_areas = original->roof_gap_areas;
+                // A lower band carries only the banded areas; the top band carries every area, those kept at the source
+                // layer's height marked with it. Areas are copied with their groups, in their source order.
+                auto included = [&](size_t group_idx) { return top_band || all_banded || banded[group_idx] != 0; };
+                std::unordered_map<const ExPolygon *, bool> keep_area;
+                for (size_t i = 0; i < original->area_groups.size(); ++i)
+                    keep_area.emplace(original->area_groups[i].area, included(i));
                 std::unordered_map<const ExPolygon *, ExPolygon *> areas;
                 auto copy_areas = [&](const ExPolygons &source, ExPolygons &destination) {
-                    destination = source;
-                    for (size_t i = 0; i < source.size(); ++i)
-                        areas.emplace(&source[i], &destination[i]);
+                    destination.clear();
+                    destination.reserve(source.size());
+                    for (const ExPolygon &area : source)
+                        if (auto it = keep_area.find(&area); it == keep_area.end() || it->second)
+                            destination.push_back(area);
+                    // Pointers taken after the vector stops growing.
+                    size_t next = 0;
+                    for (const ExPolygon &area : source)
+                        if (auto it = keep_area.find(&area); it == keep_area.end() || it->second)
+                            areas.emplace(&area, &destination[next++]);
                 };
                 copy_areas(original->base_areas, layer->base_areas);
                 copy_areas(original->roof_areas, layer->roof_areas);
                 copy_areas(original->floor_areas, layer->floor_areas);
                 copy_areas(original->roof_1st_layer, layer->roof_1st_layer);
-                layer->area_groups = original->area_groups;
-                for (auto &group : layer->area_groups)
-                    group.area = areas.at(group.area);
+                for (size_t i = 0; i < original->area_groups.size(); ++i) {
+                    if (!included(i))
+                        continue;
+                    auto &group = layer->area_groups.emplace_back(original->area_groups[i]);
+                    group.area  = areas.at(group.area);
+                    if (!banded[i] && ends.size() > 1)
+                        group.physical_height = original->height;
+                }
                 physical_layers.push_back(std::move(layer));
                 half_layer_source_ids.push_back(original->id());
                 bottom_mm = top_mm;
@@ -1776,10 +1809,6 @@ void TreeSupport::generate_toolpaths()
 
                 SupportLayer* ts_layer = m_object->get_support_layer(layer_id);
                 const size_t logical_support_id = half_layer_source_ids.empty() ? layer_id : half_layer_source_ids[layer_id];
-                Flow support_flow(support_extrusion_width, ts_layer->height, nozzle_diameter);
-                Flow interface_flow = support_material_interface_flow(m_object, ts_layer->height); // update flow using real support layer height
-                coordf_t support_spacing         = object_config.support_base_pattern_spacing.value + support_flow.spacing();
-                coordf_t support_density         = std::min(1., support_flow.spacing() / support_spacing);
                 ts_layer->support_fills.no_sort = false;
                 // ORCA: per-layer Fill instances to avoid shared-state races during interlaced interfaces.
                 std::shared_ptr<Fill> filler_interface = std::shared_ptr<Fill>(Fill::new_from_type(m_support_params.contact_fill_pattern));
@@ -1834,6 +1863,13 @@ void TreeSupport::generate_toolpaths()
                 filler_Roof1stLayer->set_bounding_box(bbox_object);
 
                 for (auto& area_group : ts_layer->area_groups) {
+                    // MAGPIE: an area that H/2 support of the contact zones keeps at its source layer's height prints
+                    // with that height on its layer's top band (AreaGroup::physical_height).
+                    const coordf_t area_height = area_group.physical_height > 0. ? area_group.physical_height : ts_layer->height;
+                    const Flow support_flow(support_extrusion_width, area_height, nozzle_diameter);
+                    const Flow interface_flow = support_material_interface_flow(m_object, area_height); // update flow using real support layer height
+                    const coordf_t support_spacing   = object_config.support_base_pattern_spacing.value + support_flow.spacing();
+                    const coordf_t support_density   = std::min(1., support_flow.spacing() / support_spacing);
                     ExPolygon& poly = *area_group.area;
                     ExPolygons polys;
                     FillParams fill_params;
@@ -1851,7 +1887,7 @@ void TreeSupport::generate_toolpaths()
                             Flow flow = m_raft_layers > 0 ? support_flow :
                                         brim_role == erSupportMaterialInterface ? first_layer_flow_interface : first_layer_flow_base;
                             if (m_object->layer_bands().support && m_raft_layers == 0)
-                                flow = support_material_1st_layer_flow(m_object, float(ts_layer->height));
+                                flow = support_material_1st_layer_flow(m_object, float(area_height));
                             make_perimeter_and_inner_brim(ts_layer->support_fills.entities, poly, wall_count, flow,
                                                           brim_role);
                             polys = offset_ex(poly, -flow.scaled_spacing());
@@ -1922,7 +1958,7 @@ void TreeSupport::generate_toolpaths()
                         bool support_base_on_bed = (logical_support_id == 0 && m_raft_layers == 0 && !belt_floor_active);
                         Flow flow = support_base_on_bed ? m_support_params.first_layer_flow : support_flow;
                         if (m_object->layer_bands().support && support_base_on_bed)
-                            flow = flow.with_height(float(ts_layer->height));
+                            flow = flow.with_height(float(area_height));
                         bool need_infill = with_infill;
                         if(m_object_config->support_base_pattern==smpDefault)
                             need_infill &= area_group.need_infill;

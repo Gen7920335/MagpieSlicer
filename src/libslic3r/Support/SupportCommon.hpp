@@ -1,6 +1,7 @@
 #ifndef slic3r_SupportCommon_hpp_
 #define slic3r_SupportCommon_hpp_
 
+#include "../ExPolygon.hpp"
 #include "../Polygon.hpp"
 #include "../Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
@@ -30,6 +31,46 @@ std::pair<double, double> half_height_support_band_limits_mm(const PrintObject &
 // two are split evenly when the merged band would exceed max_band_mm.
 std::vector<double> half_height_support_band_ends(
     const std::vector<double> &cuts_mm, double bottom_mm, double top_mm, double min_band_mm, double max_band_mm);
+
+// MAGPIE: H/2 support banding only the contact zones (LayerBandPlan::support_contact_only, Gen 2026-11-01). Contact
+// and interface layers are always banded. A support body island is banded only on a side of the support without
+// interface layers, where it lies next to the model: the contact layer and the one beyond it. An island is judged on
+// its own geometry, so one island next to the model never bands another island, nor the branch under it.
+//
+// How far from the model, mm, a body island is still banded on one side: the side's Z gap plus 1.5 layers without
+// interface layers (the contact layer sits at the gap, the next at gap + 1 layer, the third at gap + 2 layers), or
+// 0.5 layers with them (only an island touching the model with no interface over it: a part the interface missed).
+double half_height_support_window_mm(double gap_mm, int interface_layers, double layer_height_mm);
+
+// A model layer as the H/2 contact zone test sees it: its Z extent, mm, and its slices.
+struct HalfHeightModelLayer {
+    double            bottom_z_mm;
+    double            top_z_mm;
+    const ExPolygons *slices;
+};
+
+// Whether a support body island printed over [bottom_mm, top_mm] lies in a contact zone: some model layer starting
+// within top_window_mm above its top, or ending within bottom_window_mm below its bottom, overlaps it in XY. `model`
+// is sorted by Z.
+bool half_height_support_island_in_contact_zone(const ExPolygon &island, double bottom_mm, double top_mm,
+    const std::vector<HalfHeightModelLayer> &model, double top_window_mm, double bottom_window_mm);
+
+// The H/2 support range of one object: which support body islands print in bands.
+class HalfHeightSupportScope {
+public:
+    explicit HalfHeightSupportScope(const PrintObject &object);
+    // Only the contact zones are banded; false: all of the support is.
+    bool contact_only() const { return m_contact_only; }
+    // Whether a support body island printed over [bottom_mm, top_mm] prints in bands. An island on the bed never does
+    // in contact zone mode.
+    bool body_island_banded(const ExPolygon &island, double bottom_mm, double top_mm) const;
+
+private:
+    bool                              m_contact_only;
+    std::vector<HalfHeightModelLayer> m_model;
+    double                            m_top_window_mm    = 0.;
+    double                            m_bottom_window_mm = 0.;
+};
 
 // Turn some of the base layers into base interface layers.
 // For soluble interfaces with non-soluble bases, print maximum two first interface layers with the base

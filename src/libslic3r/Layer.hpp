@@ -372,6 +372,9 @@ protected:
         coordf_t   dist_to_top; // mm dist to top
         bool need_infill = false;
         bool need_extra_wall = false;
+        // MAGPIE: the area's printed height, mm, where it differs from its layer's (H/2 support of the contact zones
+        // keeps an area at its source layer's height on a half-height band); 0: the layer's height.
+        coordf_t physical_height = 0.;
         AreaGroup(ExPolygon *a, int t, coordf_t d) : area(a), type(t), dist_to_top(d) {}
     };
     std::vector<AreaGroup>                    area_groups;

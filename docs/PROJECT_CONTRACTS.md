@@ -49,6 +49,7 @@ This document contains conditional project-specific contracts. Read or search on
 - Cura support joins nearby support regions during top-down area propagation. Joining adds connector geometry without deleting the original regions, and join distance 0 preserves the unjoined geometry.
 - `support_angle` rotates normal support infill in XY; rectilinear grid alternates the configured angle and its perpendicular direction.
 - Cura solid support raft is opt-in and fills only the Cura support bed-contact first layer. It must not implicitly enable support.
+- H/2 (half-height) support bands only the contact zones by default (`half_layer.support_scope` "contact", Gen 2026-11-01): contact and interface layers always; on a side without interface layers, the support island next to the model (the contact layer and the next one). Every other support island keeps its own layer height. Islands are judged one by one against the model in XY, so an island next to the model never bands another island or the branch under it. An island standing on the bed is never banded in this mode. "all" bands every support layer as before.
 
 # 5. Low-Temperature Interface Contract
 

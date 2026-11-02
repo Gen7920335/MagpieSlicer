@@ -6,14 +6,22 @@
     // are read per object, so an object can set its own.
     "id": "half_layer",
     "name": "Half-height outer walls and support", "name_ko": "절반 높이 외벽과 서포트",
-    "version": "2.0.1",
+    "version": "2.1.0",
     "api": { "major": 1, "min_minor": 1 },
     "binary": "half_layer",
     "slots": [ { "slot": "layer.bands", "version": 1, "impl": "half_layer" } ],
     "thread_safe": true,
     "params": {
         "outer_walls": { "scope": "object", "invalidates": ["posPerimeters", "posSupportMaterial"], "type": "bool", "default": false, "label": "Half-height outer walls", "label_ko": "절반 높이 외벽", "ui": { "after": "wall_loops" } },
-        "support":     { "scope": "object", "invalidates": ["posSupportMaterial"], "type": "bool", "default": false, "label": "Half-height support", "label_ko": "절반 높이 서포트", "ui": { "after": "enable_support" }, "visible": "enable_support or raft_layers > 0 or enforce_support_layers > 0" }
+        "support":     { "scope": "object", "invalidates": ["posSupportMaterial"], "type": "bool", "default": false, "label": "Half-height support", "label_ko": "절반 높이 서포트", "ui": { "after": "enable_support" }, "visible": "enable_support or raft_layers > 0 or enforce_support_layers > 0" },
+        // Which support prints at half height (Gen 2026-11-01): only the contact zones by default (contacts and interface
+        // layers; on a side without interface layers the island next to the model, the contact layer and the next one),
+        // the rest at its own height to save print time. "all" bands every support layer, as before 2.1.0.
+        "support_scope": { "scope": "object", "invalidates": ["posSupportMaterial"], "type": "string", "default": "contact",
+                           "options": [ { "value": "contact", "label": "Contact zones only (recommended)", "label_ko": "접촉부만 (추천)" },
+                                        { "value": "all",     "label": "All of the support",               "label_ko": "서포트 전체" } ],
+                           "label": "Half-height support range", "label_ko": "절반 높이 서포트 범위", "ui": { "after": "enable_support" },
+                           "visible": "(enable_support or raft_layers > 0 or enforce_support_layers > 0) and (half_layer.support or half_layer.outer_walls)" }
     },
     // Line 1 (and line 2 before H/2 was a native mod) saved these as the rule wrote them; their defaults carry nothing.
     "legacy_keys": {

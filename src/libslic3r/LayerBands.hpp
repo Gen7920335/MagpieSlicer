@@ -30,6 +30,10 @@ struct LayerBandPlan
     int wall_depths = 0;
     // The object's support prints in the bands.
     bool support = false;
+    // Only the support's contact zones print in the bands: contacts and interfaces, and, on a side without
+    // interface layers, the support next to the model (the contact layer and the one beyond it). The rest of the
+    // support keeps its own height. False: all of the support is banded.
+    bool support_contact_only = false;
     // Each band's height as a fraction of its model layer, bottom band first.
     std::vector<double> band_fractions;
     // Travel over banded paths lifts at least this many model layer heights (0: the configured Z hop).
@@ -49,6 +53,7 @@ struct LayerBandPlan
     bool same_as(const LayerBandPlan &other) const
     {
         return mod_id == other.mod_id && wall_depths == other.wall_depths && support == other.support &&
+               support_contact_only == other.support_contact_only &&
                band_fractions == other.band_fractions && min_travel_lift_layers == other.min_travel_lift_layers &&
                support_band_min_layers == other.support_band_min_layers && support_band_max_layers == other.support_band_max_layers &&
                error == other.error;

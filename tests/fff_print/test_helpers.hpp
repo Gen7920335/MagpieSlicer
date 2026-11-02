@@ -174,11 +174,13 @@ struct OfficialMods
 void set_mod_params(DynamicPrintConfig &config, const nlohmann::json &params);
 // The same for parameters of the multi-nozzle walls mod: { { "<name>", value }, ... } of multi_nozzle_walls.<name>.
 void multi_nozzle_params(DynamicPrintConfig &config, const nlohmann::json &params);
-// The H/2 mod's parameters (half_layer.outer_walls, half_layer.support), read while the official mods' manifests are
-// active (OfficialMods, BundledMods). Half-height outer walls bring half-height support with them.
-void half_layer_params(DynamicPrintConfig &config, bool outer_walls, bool support = false);
+// The H/2 mod's parameters (half_layer.outer_walls, half_layer.support, half_layer.support_scope), read while the
+// official mods' manifests are active (OfficialMods, BundledMods). Half-height outer walls bring half-height support
+// with them. The tests of the band executor were written for all of the support in bands ("all"); the mod's default
+// bands only the contact zones ("contact").
+void half_layer_params(DynamicPrintConfig &config, bool outer_walls, bool support = false, const std::string &support_scope = "all");
 // The same for one object's settings (object_mod_settings), over the print's values.
-void half_layer_object_params(ModelConfig &config, bool outer_walls, bool support = false);
+void half_layer_object_params(ModelConfig &config, bool outer_walls, bool support = false, const std::string &support_scope = "all");
 // The official H/2 mod's choice of where the later band goes (its layer.bands schedule).
 const LayerBandScheduler &half_layer_scheduler();
 

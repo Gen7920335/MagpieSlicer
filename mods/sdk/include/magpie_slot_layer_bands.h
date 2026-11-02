@@ -34,6 +34,9 @@ extern "C" {
 
 #define MP_LAYER_BANDS_SLOT "layer.bands"
 #define MP_LAYER_BANDS_VERSION 1
+/* Values of mp_layer_bands_object_v1::support. */
+#define MP_LAYER_BANDS_SUPPORT_ALL 1
+#define MP_LAYER_BANDS_SUPPORT_CONTACT 2
 /* Most bands a model layer can be divided into. */
 #define MP_LAYER_BANDS_MAX 8
 
@@ -42,7 +45,10 @@ typedef struct mp_layer_bands_object_v1 {
     /* Wall depths, counted from the outer wall (1 = the outer wall only), printed in the bands;
      * deeper walls keep the model layer's height. 0: walls are not banded. */
     int32_t wall_depths;
-    /* Nonzero: the object's support is printed in bands. */
+    /* The object's support printed in bands: 0 none, MP_LAYER_BANDS_SUPPORT_ALL all of it,
+     * MP_LAYER_BANDS_SUPPORT_CONTACT only its contact zones (contact and interface layers, and on a
+     * side without interface layers the support island next to the model: the contact layer and the
+     * one beyond it); the rest keeps its own height. Any other nonzero value means all of it. */
     int32_t support;
     /* Bands per model layer and each band's height as a fraction of its model layer, bottom band
      * first; the fractions are above 0 and add up to 1. Ignored when nothing is banded. */

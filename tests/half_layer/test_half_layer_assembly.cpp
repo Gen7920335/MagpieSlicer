@@ -2850,6 +2850,148 @@ TEST_CASE("Half-height support band ends never leave a sliver", "[HalfLayer][Sup
     CHECK(same_ends(half_height_support_band_ends(cuts_mm, 0.189, 0.211, 0., 0.1), {0.2, 0.211}));
 }
 
+TEST_CASE("H/2 support contact zone windows reach the contact layer and the next one", "[HalfLayer][SupportContactZone]")
+{
+    // Layer 0.2 mm, gap 0.2 mm. Without interface layers the contact layer (0.2 mm from the model) and the next (0.4 mm)
+    // are inside, the third (0.6 mm) outside; with interface layers only a body touching the model (0.2 mm).
+    constexpr double h_mm = 0.2, gap_mm = 0.2;
+    const double no_interface_mm = half_height_support_window_mm(gap_mm, 0, h_mm);
+    const double interface_mm    = half_height_support_window_mm(gap_mm, 2, h_mm);
+    CHECK(no_interface_mm == Catch::Approx(0.5));
+    CHECK(interface_mm == Catch::Approx(0.3));
+    for (const double d_mm : {0.2, 0.4})
+        CHECK(d_mm < no_interface_mm);
+    CHECK(0.6 > no_interface_mm);
+    CHECK(0.2 < interface_mm);
+    CHECK(0.4 > interface_mm);
+    CHECK_THROWS(half_height_support_window_mm(-0.1, 0, h_mm));
+    CHECK_THROWS(half_height_support_window_mm(gap_mm, 0, 0.));
+}
+
+TEST_CASE("H/2 support contact zones judge each island on its own", "[HalfLayer][SupportContactZone]")
+{
+    // A ceiling 2 x 2 mm starting at Z 6.0 mm over island A; island B stands 5 mm beside it, under nothing.
+    auto square = [](double x_mm, double y_mm, double size_mm) {
+        return ExPolygon(Polygon::new_scale({{x_mm, y_mm}, {x_mm + size_mm, y_mm}, {x_mm + size_mm, y_mm + size_mm}, {x_mm, y_mm + size_mm}}));
+    };
+    const ExPolygons ceiling{square(0., 0., 2.)};
+    const ExPolygons floor_slab{square(0., 0., 2.)};
+    // The ceiling layer [6.0, 6.2] and a floor layer [0.8, 1.0] under island A, mm.
+    const std::vector<HalfHeightModelLayer> model{{0.8, 1.0, &floor_slab}, {6.0, 6.2, &ceiling}};
+    const ExPolygon island_a = square(0.5, 0.5, 1.);
+    const ExPolygon island_b = square(7., 0., 1.);
+    // Windows of 0.5 mm above and below (no interface layers, gap 0.2 mm, layer 0.2 mm).
+    constexpr double window_mm = 0.5;
+    auto zone = [&](const ExPolygon &island, double top_mm) {
+        return half_height_support_island_in_contact_zone(island, top_mm - 0.2, top_mm, model, window_mm, window_mm);
+    };
+    // Under the ceiling: the contact layer (top 5.8) and the next (top 5.6) are in the zone, the third (5.4) is not.
+    CHECK(zone(island_a, 5.8));
+    CHECK(zone(island_a, 5.6));
+    CHECK_FALSE(zone(island_a, 5.4));
+    // Island B beside it never is, whatever the height.
+    CHECK_FALSE(zone(island_b, 5.8));
+    CHECK_FALSE(zone(island_b, 5.6));
+    // On the floor slab: the island standing on it (bottom 1.2, gap 0.2) and the next (bottom 1.4) are, the third not.
+    CHECK(zone(island_a, 1.4));
+    CHECK(zone(island_a, 1.6));
+    CHECK_FALSE(zone(island_a, 1.8));
+    CHECK_FALSE(zone(island_b, 1.4));
+}
+
+TEST_CASE("H/2 support of the contact zones keeps the support body at its own height", "[HalfLayer][SupportContactZone]")
+{
+    // generator: 0 normal, 1 Cura, 2 classic tree, 3 organic tree.
+    const int generator = GENERATE(0, 1, 2, 3);
+    const int interface_layers = GENERATE(0, 2);
+    CAPTURE(generator, interface_layers);
+    constexpr double h_mm = 0.2;
+    // The ceiling's bottom, mm, and the support's top under its 0.2 mm gap.
+    constexpr double ceiling_mm = 6.0, support_top_mm = 5.8;
+    // The thickest support layer, mm: independent support layers reach the default maximum layer height, 0.75 x the
+    // 0.4 mm nozzle (measured 0.295 mm for normal and tree support), so the contact layer and the next can reach
+    // 2 x 0.3 mm under the support top.
+    constexpr double support_layer_max_mm = 0.3;
+    struct Paths { double banded_mm = 0., full_mm = 0.; };
+    struct Measure { Paths zone, body; double total_mm = 0.; };
+    auto measure = [&](const std::string &scope) {
+        auto config = DynamicPrintConfig::full_print_config();
+        config.set_deserialize_strict({{"layer_height", h_mm}, {"initial_layer_print_height", h_mm},
+            {"enable_support", true}, {"support_threshold_angle", 60}, {"support_top_z_distance", 0.2},
+            {"support_interface_top_layers", interface_layers}, {"support_interface_bottom_layers", interface_layers},
+            {"support_on_build_plate_only", true}, {"support_threshold_overlap", 0.}});
+        Slic3r::Test::half_layer_params(config, false, true, scope);
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(generator == 2 || generator == 3 ? stTreeAuto : stNormalAuto));
+        if (generator == 1)
+            Slic3r::Test::set_mod_params(config, nlohmann::json{{"cura_support.enable", true}});
+        if (generator == 2 || generator == 3)
+            config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(generator == 2 ? smsTreeStrong : smsTreeOrganic));
+        TriangleMesh mesh = make_cube(5., 10., ceiling_mm);
+        TriangleMesh ceiling = make_cube(20., 10., 1.2);
+        ceiling.translate(0.f, 0.f, float(ceiling_mm));
+        mesh.merge(ceiling);
+        Print print;
+        Model model;
+        init_print({mesh}, print, model, config);
+        print.process();
+        const auto &object = *print.get_object(size_t(0));
+        CHECK(object.layer_bands().support_contact_only == (scope == "contact"));
+        Measure m;
+        // Path heights against the test's own layer height: half (<= 0.1 mm) or whole (>= 0.2 mm), tolerance 0.001 mm.
+        auto add = [&](double print_z, const ExtrusionPath &path) {
+            const double length_mm = unscale<double>(path.length());
+            m.total_mm += length_mm;
+            // The top two model layers under the support top lie in the contact layer or the next whatever the support
+            // layer heights; the body runs above the first two layers up to the lowest the next layer can reach
+            // (2 x support_layer_max_mm under the support top). Between the two either may hold.
+            Paths *paths = print_z > support_top_mm - 2. * h_mm + 0.001 ? &m.zone :
+                           print_z > 2. * h_mm + 0.001 && print_z < support_top_mm - 2. * support_layer_max_mm - 0.001 ? &m.body : nullptr;
+            if (paths == nullptr)
+                return;
+            if (path.height <= 0.5 * h_mm + 0.001)
+                paths->banded_mm += length_mm;
+            else if (path.height >= h_mm - 0.001)
+                paths->full_mm += length_mm;
+        };
+        auto collect = [&](auto &&self, double print_z, const ExtrusionEntity &entity) -> void {
+            if (const auto *collection = dynamic_cast<const ExtrusionEntityCollection *>(&entity)) {
+                for (const ExtrusionEntity *child : collection->entities)
+                    if (child != nullptr)
+                        self(self, print_z, *child);
+            } else if (const auto *path = dynamic_cast<const ExtrusionPath *>(&entity)) {
+                add(print_z, *path);
+            } else if (const auto *multi = dynamic_cast<const ExtrusionMultiPath *>(&entity)) {
+                for (const ExtrusionPath &p : multi->paths)
+                    add(print_z, p);
+            } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(&entity)) {
+                for (const ExtrusionPath &p : loop->paths)
+                    add(print_z, p);
+            }
+        };
+        for (const SupportLayer *layer : object.support_layers())
+            collect(collect, layer->print_z, layer->support_fills);
+        return m;
+    };
+    const Measure all = measure("all"), contact = measure("contact");
+    CAPTURE(all.total_mm, contact.total_mm, contact.zone.banded_mm, contact.zone.full_mm, contact.body.banded_mm, contact.body.full_mm);
+    REQUIRE(all.total_mm > 0.);
+    REQUIRE(contact.zone.banded_mm + contact.zone.full_mm > 0.);
+    REQUIRE(contact.body.banded_mm + contact.body.full_mm > 0.);
+    // "all" bands every layer: nothing prints at a whole layer.
+    CHECK(all.body.full_mm == 0.);
+    CHECK(all.zone.full_mm == 0.);
+    // The contact layer and the next stay in bands (the quality the feature keeps)...
+    CHECK(contact.zone.banded_mm >= 0.95 * (contact.zone.banded_mm + contact.zone.full_mm));
+    // ...and the body under them prints at its own height (the print time it saves).
+    CHECK(contact.body.full_mm >= 0.95 * (contact.body.banded_mm + contact.body.full_mm));
+    // About half the passes of the body: the support's path length drops by well over a quarter (6 mm of body under
+    // two banded layers). Measured (MSVC Release, 2026-11-02), contact / all path length, mm, generator/interface:
+    // normal 0: 3089 / 8042 (0.38), normal 2: 4071 / 9024 (0.45), Cura 0: 2625 / 4911 (0.53), Cura 2: 2997 / 5283
+    // (0.57), classic 0: 2952 / 8648 (0.34), classic 2: 2906 / 8618 (0.34), organic 0: 1726 / 3064 (0.56), organic 2:
+    // 1933 / 3410 (0.57). Every zone fully banded, every body fully at its own height.
+    CHECK(contact.total_mm < 0.75 * all.total_mm);
+}
+
 TEST_CASE("Independent support layers under H/2 support produce no sliver bands", "[HalfLayer][SupportBands]")
 {
     constexpr double h_mm = 0.2;

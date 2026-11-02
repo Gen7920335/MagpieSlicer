@@ -14,7 +14,7 @@
 
 #define HALF_LAYER_MOD_ID "half_layer"
 
-MAGPIE_MOD_DEFINE(HALF_LAYER_MOD_ID, "2.0.1")
+MAGPIE_MOD_DEFINE(HALF_LAYER_MOD_ID, "2.1.0")
 
 namespace half_layer {
 
@@ -25,7 +25,9 @@ mp_status plan(void *, mp_ctx *ctx, mp_layer_bands_object_v1 *out)
         // Half-height outer walls need support built on the same half-height grid underneath them (line 1 beta 6).
         const bool support = outer_walls || magpie::param_i64(ctx, "support").value_or(0) != 0;
         out->wall_depths = outer_walls ? 2 : 0; // the outer two walls
-        out->support     = support ? 1 : 0;
+        // Only the contact zones of the support are banded unless the range is "all" (Gen 2026-11-01).
+        const bool all_support = magpie::param_str(ctx, "support_scope").value_or("contact") == "all";
+        out->support     = !support ? 0 : all_support ? MP_LAYER_BANDS_SUPPORT_ALL : MP_LAYER_BANDS_SUPPORT_CONTACT;
         if (!outer_walls && !support)
             return;
         out->band_count       = 2;

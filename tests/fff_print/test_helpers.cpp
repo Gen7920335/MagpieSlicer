@@ -582,17 +582,19 @@ void multi_nozzle_params(DynamicPrintConfig &config, const nlohmann::json &param
     set_mod_params(config, prefixed);
 }
 
-void half_layer_params(DynamicPrintConfig &config, bool outer_walls, bool support)
+void half_layer_params(DynamicPrintConfig &config, bool outer_walls, bool support, const std::string &support_scope)
 {
-    set_mod_params(config, {{"half_layer.outer_walls", outer_walls}, {"half_layer.support", support}});
+    set_mod_params(config, {{"half_layer.outer_walls", outer_walls}, {"half_layer.support", support},
+                            {"half_layer.support_scope", support_scope}});
 }
 
-void half_layer_object_params(ModelConfig &config, bool outer_walls, bool support)
+void half_layer_object_params(ModelConfig &config, bool outer_walls, bool support, const std::string &support_scope)
 {
     const auto    *stored = dynamic_cast<const ConfigOptionString *>(config.option("object_mod_settings"));
     nlohmann::json values = stored != nullptr && !stored->value.empty() ? nlohmann::json::parse(stored->value) : nlohmann::json::object();
     values["half_layer.outer_walls"] = outer_walls;
     values["half_layer.support"]     = support;
+    values["half_layer.support_scope"] = support_scope;
     config.set_key_value("object_mod_settings", new ConfigOptionString(values.dump()));
 }
 

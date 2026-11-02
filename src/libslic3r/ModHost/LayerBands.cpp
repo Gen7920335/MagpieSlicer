@@ -122,6 +122,7 @@ LayerBandPlan layer_band_plan(const DynamicPrintConfig &print_config, const Prin
         plan.mod_id      = entry->mod->id();
         plan.wall_depths = std::max(0, int(answer.wall_depths));
         plan.support     = answer.support != 0;
+        plan.support_contact_only = answer.support == MP_LAYER_BANDS_SUPPORT_CONTACT;
         plan.band_fractions.clear();
         for (uint32_t i = 0; i < answer.band_count && i < MP_LAYER_BANDS_MAX; ++i)
             plan.band_fractions.push_back(answer.band_fraction[i]);
