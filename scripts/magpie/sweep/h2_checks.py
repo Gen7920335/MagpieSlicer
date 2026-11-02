@@ -21,7 +21,9 @@ Checks of one G-code:
   tower_height   a tower (prime tower, temperature drop tower) layer is as tall as its rise from the
                  tower's previous layer (H/2 bands made the drop tower print half its rise)
 Checks of a "contact" G-code against the same case sliced with "all" and with H/2 off:
-  coverage       the support's XY footprint at each Z is the same as both
+  coverage       the support's XY footprint at each Z is the same as both, and against "all" no support
+                 island (a group of touching coarse cells) is there in one G-code and gone in the other,
+                 however small
   model          the object's paths are the same as "all" (the range changes the support only)
   time           "contact" takes no longer than "all"
 
@@ -58,7 +60,7 @@ Z_SAFETY_MM = 0.02           # material this far above a path's bottom, or a tra
 # Footprint change per Z bin that counts, mm2, in cells one support line pitch wide (~9 mm2). Against
 # "all" correct builds differ by 0 (102 cases of seed 31, 2026-11-02); against H/2 off by up to 117 mm2, 3.6 %
 # (hilda03: a 0.1 mm interface band fills at its own line pitch, the lines at the edges move; every band holds the
-# whole layer's polygons, probe 2026-11-02). An island smaller than the threshold can vanish unseen.
+# whole layer's polygons, probe 2026-11-02). An island smaller than the threshold is caught on its own below.
 COVER_MIN_MM2 = 20.0
 COVER_OFF_MIN_MM2 = 60.0
 COVER_OFF_SHARE = 0.05       # ... and this share of the footprint, against H/2 off
@@ -647,6 +649,23 @@ def footprint(g, size):
     return out, step
 
 
+def islands(cells):
+    """The groups of cells touching each other (by a side or a corner)."""
+    left, out = set(cells), []
+    while left:
+        group = [left.pop()]
+        stack = list(group)
+        while stack:
+            x, y = stack.pop()
+            for n in ((x + dx, y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)):
+                if n in left:
+                    left.remove(n)
+                    group.append(n)
+                    stack.append(n)
+        out.append(group)
+    return out
+
+
 def compare_pair(contact_path, all_path, off_path=None):
     """coverage (against "all" and H/2 off), model and time of a "contact" G-code against "all"."""
     gc, ga = Gcode(contact_path), Gcode(all_path)
@@ -681,6 +700,17 @@ def compare_pair(contact_path, all_path, off_path=None):
                 some = sorted(a ^ b)[0]
                 report.add(issue(check, f'support footprint differs from {other_name}', (k + 0.5) * step,
                                  (some[0] * size, some[1] * size), measured))
+            elif other_name == 'all':
+                # An island below the area threshold that one side lacks entirely (Z bins of "all" and
+                # "contact" hold the same polygons, so none is lost by rounding).
+                for here, there, side in ((b, a, 'contact'), (a, b, 'all')):
+                    gone = next((g for g in islands(here) if not any(c in there for c in g)), None)
+                    if gone is not None:
+                        some = min(gone)
+                        report.add(issue(check, f'support island missing from {side}', (k + 0.5) * step,
+                                         (some[0] * size, some[1] * size),
+                                         {'island_mm2': round(len(gone) * size * size, 1), 'differs_mm2': round(diff, 1)}))
+                        break
 
     # The object's paths: same type, Z, height, ends and extrusion in both (any order).
     def model_paths(g):

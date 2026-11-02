@@ -257,6 +257,17 @@ def main():
     record('coverage', f'support within 4 mm of ({cx:.1f}, {cy:.1f}) left out, {len(drop)} paths',
            H.compare_pair(path, ga, go), base_pair)
 
+    # coverage, small island: a copy of one short support path 6 mm right of everything printed (relative E),
+    # an island of one or two coarse cells, below COVER_MIN_MM2.
+    m = pick(support, lambda m: m.kind == 'Support' and 1.0 < m.length < 2.5 and m.z > s.first + 2 * s.layer)
+    dx = max(max(k.x0, k.x1) for k in g.extrusions()) + 6.0 - min(m.x0, m.x1)
+    i = m.line - 1
+    e = next(w for w in lines[i].split(';', 1)[0].split(' ') if w.startswith('E'))
+    extra = [f'G1 X{m.x0 + dx:.3f} Y{m.y0:.3f}', f'G1 X{m.x1 + dx:.3f} Y{m.y1:.3f} {e}', f'G1 X{m.x1:.3f} Y{m.y1:.3f}']
+    path = write(lines[:i + 1] + extra + lines[i + 1:], tmp, 'coverage_small')
+    record('coverage', f'a {m.length:.1f} mm support island added at Z {m.z:.3f}, X {m.x0 + dx:.1f}',
+           H.compare_pair(path, ga, go), base_pair)
+
     # model: one object path extruding 1.1 x.
     m = pick(g.model(), lambda m: m.length > 3)
     out = list(lines)
