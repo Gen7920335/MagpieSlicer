@@ -1283,6 +1283,13 @@ void ToolOrdering::initialize_layers(std::vector<coordf_t> &zs)
 LayerTools& ToolOrdering::tools_for_deadline(coordf_t physical_print_z)
 {
     auto it = std::lower_bound(m_layer_tools.begin(), m_layer_tools.end(), LayerTools(physical_print_z - EPSILON));
+    // MAGPIE: a layer the wipe tower alone needs (inserted where the support layers are thicker than the tower may
+    // print) is no G-code layer of the objects, so a band planned into it was never printed: resin support under a
+    // lifted object, 0.42 mm support layers and H/2 outer walls on an H2D lost the 4.44 and 4.50 mm bands of a frame
+    // inserted at 4.59 mm, a hole at 80 columns (seed 138 of the multi-printer random round 3039). The band goes to the
+    // next layer the objects print.
+    while (it != m_layer_tools.end() && it->has_wipe_tower && !it->has_object && !it->has_support)
+        ++it;
     if (it == m_layer_tools.end())
         throw std::logic_error("Half-layer physical support exceeds the execution event grid");
     return *it;
