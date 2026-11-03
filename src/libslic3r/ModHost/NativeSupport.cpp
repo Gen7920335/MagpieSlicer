@@ -281,9 +281,15 @@ void generate(PrintObject &object, const NativeEntry &entry, const std::vector<P
     // object's gap: support there stands on the raft, from its top (as Orca's own generator prints it). It started
     // 0.1 mm over the raft (seeds 103 and 185 of the multi-printer random test, cura support on a raft).
     const SlicingParameters &slicing_params = object.slicing_parameters();
-    auto layer_bottom = [&slicing_params](size_t idx, const Layer &object_layer) {
-        return idx == 0 && slicing_params.has_raft() && slicing_params.object_z_offset <= 0. ?
-                   std::min(object_layer.bottom_z(), slicing_params.raft_contact_top_z) : object_layer.bottom_z();
+    // No taller than a support layer may be (a 0.2 mm gap under a 0.2 mm layer made a 0.4 mm layer on a 0.4 mm nozzle,
+    // seed 15 of the multi-printer random round 3026): then it keeps the object's bottom, and the gap.
+    const double max_support_layer_mm = slicing_params.max_suport_layer_height > 0. ? slicing_params.max_suport_layer_height :
+                                                                                       slicing_params.max_layer_height;
+    auto layer_bottom = [&slicing_params, max_support_layer_mm](size_t idx, const Layer &object_layer) {
+        if (idx != 0 || !slicing_params.has_raft() || slicing_params.object_z_offset > 0.)
+            return object_layer.bottom_z();
+        const double on_raft = std::min(object_layer.bottom_z(), slicing_params.raft_contact_top_z);
+        return object_layer.print_z - on_raft <= max_support_layer_mm + EPSILON ? on_raft : object_layer.bottom_z();
     };
     auto make_layer = [&](size_t idx, SupporLayerType type, Polygons &&polygons) {
         const Layer           &object_layer = *object.get_layer(int(idx));
