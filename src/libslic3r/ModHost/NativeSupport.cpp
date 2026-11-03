@@ -277,12 +277,20 @@ void generate(PrintObject &object, const NativeEntry &entry, const std::vector<P
         support_params.aligned_first_layer = true;
     SupportGeneratorLayerStorage storage;
     SupportGeneratorLayersPtr    base_layers, interface_layers, empty;
+    // MAGPIE: the first object layer over a raft starts the raft's contact distance above its top, which is the
+    // object's gap: support there stands on the raft, from its top (as Orca's own generator prints it). It started
+    // 0.1 mm over the raft (seeds 103 and 185 of the multi-printer random test, cura support on a raft).
+    const SlicingParameters &slicing_params = object.slicing_parameters();
+    auto layer_bottom = [&slicing_params](size_t idx, const Layer &object_layer) {
+        return idx == 0 && slicing_params.has_raft() && slicing_params.object_z_offset <= 0. ?
+                   std::min(object_layer.bottom_z(), slicing_params.raft_contact_top_z) : object_layer.bottom_z();
+    };
     auto make_layer = [&](size_t idx, SupporLayerType type, Polygons &&polygons) {
         const Layer           &object_layer = *object.get_layer(int(idx));
         SupportGeneratorLayer &layer        = storage.allocate(type);
         layer.print_z  = object_layer.print_z;
-        layer.bottom_z = object_layer.bottom_z();
-        layer.height   = object_layer.height;
+        layer.bottom_z = layer_bottom(idx, object_layer);
+        layer.height   = layer.print_z - layer.bottom_z;
         layer.polygons = std::move(polygons);
         return &layer;
     };
@@ -301,11 +309,11 @@ void generate(PrintObject &object, const NativeEntry &entry, const std::vector<P
         if (whole_layers_only)
             return fractional_drop_mm <= 0.5 * object_layer.height ? make_layer(idx, type, std::move(polygons)) : nullptr;
         const double print_z      = object_layer.print_z - fractional_drop_mm;
-        if (print_z - object_layer.bottom_z() < object.slicing_parameters().min_layer_height - EPSILON)
+        if (print_z - layer_bottom(idx, object_layer) < object.slicing_parameters().min_layer_height - EPSILON)
             return nullptr;
         SupportGeneratorLayer &layer = storage.allocate(type);
         layer.print_z  = print_z;
-        layer.bottom_z = object_layer.bottom_z();
+        layer.bottom_z = layer_bottom(idx, object_layer);
         layer.height   = print_z - layer.bottom_z;
         layer.polygons = std::move(polygons);
         // A lowered roof touches the model: the top of its interface stack, whatever lies above it in XY
@@ -337,7 +345,6 @@ void generate(PrintObject &object, const NativeEntry &entry, const std::vector<P
     // interface below it. Without it the raft comes out empty and the object, lifted by the raft
     // height, prints in the air.
     SupportGeneratorLayersPtr top_contacts;
-    const SlicingParameters  &slicing_params = object.slicing_parameters();
     if (slicing_params.has_raft()) {
         const Layer &first_layer  = *object.layers().front();
         Polygons     raft_contact = to_polygons(first_layer.lslices);
