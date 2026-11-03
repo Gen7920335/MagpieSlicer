@@ -262,6 +262,8 @@ struct LayerResult {
 	// Is indicating if this LayerResult should be processed, or it is just inserted artificial LayerResult.
     // It is used for the pressure equalizer because it needs to buffer one layer back.
     bool        nop_layer_result { false };
+    // MAGPIE: the layer the cooling buffer's first-layer fan gate and ramp count, when it is not layer_id (max).
+    size_t      fan_layer_id { std::numeric_limits<size_t>::max() };
 
     static LayerResult make_nop_layer_result() { return {"", std::numeric_limits<size_t>::max(), false, false, true}; }
 };

@@ -6,6 +6,7 @@
 #include <map>
 #include <string>
 #include <cfloat>
+#include <limits>
 #include <vector>
 
 namespace Slic3r {
@@ -32,7 +33,9 @@ public:
     CoolingBuffer(GCode &gcodegen);
     void        reset(const Vec3d &position);
     void        set_current_extruder(unsigned int extruder_id, unsigned int nozzle_id) { m_current_extruder = extruder_id; m_current_nozzle = nozzle_id; }
-    std::string process_layer(std::string &&gcode, size_t layer_id, bool flush);
+    // fan_layer_id: the layer the first-layer fan gate and ramp count (MAGPIE, an object lifted over its support),
+    // max: layer_id.
+    std::string process_layer(std::string &&gcode, size_t layer_id, bool flush, size_t fan_layer_id = std::numeric_limits<size_t>::max());
 
 private:
 	CoolingBuffer& operator=(const CoolingBuffer&) = delete;
@@ -64,6 +67,7 @@ private:
     const GCode                &m_gcodegen;
     unsigned int                m_current_extruder;
     unsigned int                m_current_nozzle;
+    size_t                      m_fan_layer_id { std::numeric_limits<size_t>::max() };
     //BBS: current fan speed
     int                         m_current_fan_speed;
     // Belt printers: the extrusion being processed lies in the first-layer band above the

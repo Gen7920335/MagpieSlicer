@@ -6359,7 +6359,9 @@ void GCode::process_layers(
                 
             spiral_mode.enable(in.spiral_vase_enable);
             bool last_layer = in.layer_id == layers_to_print.size() - 1;
-            return { spiral_mode.process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush};
+            LayerResult out { spiral_mode.process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush };
+            out.fan_layer_id = in.fan_layer_id;
+            return out;
         });
     const auto pressure_equalizer = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
         [pressure_equalizer = this->m_pressure_equalizer.get()](LayerResult in) -> LayerResult {
@@ -6369,7 +6371,7 @@ void GCode::process_layers(
         [&cooling_buffer = *this->m_cooling_buffer.get()](LayerResult in) -> std::string {
         	if (in.nop_layer_result)
                 return in.gcode;
-            return cooling_buffer.process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush);
+            return cooling_buffer.process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush, in.fan_layer_id);
         });
     const auto pa_processor_filter = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
             [&pa_processor = *this->m_pa_processor](std::string in) -> std::string {
@@ -6457,7 +6459,9 @@ void GCode::process_layers(
                 return in;
             spiral_mode.enable(in.spiral_vase_enable);
             bool last_layer = in.layer_id == layers_to_print.size() - 1;
-            return { spiral_mode.process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush };
+            LayerResult out { spiral_mode.process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush };
+            out.fan_layer_id = in.fan_layer_id;
+            return out;
         });
     const auto pressure_equalizer = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
         [pressure_equalizer = this->m_pressure_equalizer.get()](LayerResult in) -> LayerResult {
@@ -6467,7 +6471,7 @@ void GCode::process_layers(
         [&cooling_buffer = *this->m_cooling_buffer.get()](LayerResult in)->std::string {
             if (in.nop_layer_result)
                 return in.gcode;
-            return cooling_buffer.process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush);
+            return cooling_buffer.process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush, in.fan_layer_id);
         });
     const auto pa_processor_filter = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
         [&pa_processor = *this->m_pa_processor](std::string in) -> std::string {
@@ -10286,6 +10290,31 @@ LayerResult GCode::process_layer(
 
     result.gcode = std::move(gcode);
     result.cooling_buffer_flush = object_layer || raft_layer || last_layer;
+    // MAGPIE: an object lifted over its support (object_z_offset) has its layer 0 well above the bed. The cooling
+    // buffer counted its first layers by that id and turned the fan off again there (0, then 50 % on the next layer,
+    // seed 41 of the multi-printer random test, resin support on a Prusa XL), and the support layers under it, kept
+    // until that layer, went with it. Those support layers are flushed one by one like a raft, and the fan counts the
+    // object's layers from the bed: its support layers by their id, its layers after the support layers under it
+    // (per object, so a sequential print starts each object at 0).
+    for (const LayerToPrint &l : layers) {
+        const PrintObject *object = l.object_layer ? l.object_layer->object() : l.support_layer ? l.support_layer->object() : nullptr;
+        if (object == nullptr || object->slicing_parameters().object_z_offset <= 0.)
+            continue;
+        const coordf_t object_bottom = object->slicing_parameters().object_print_z_min + EPSILON;
+        if (l.object_layer != nullptr) {
+            size_t below = 0;
+            for (const SupportLayer *s : object->support_layers())
+                if (s->print_z < object_bottom)
+                    ++below;
+            // Object layer ids start after the raft, which the support layers below count already.
+            result.fan_layer_id = l.object_layer->id() - object->slicing_parameters().raft_layers() + below;
+        } else {
+            result.fan_layer_id = l.support_layer->id();
+            if (! object_layer && l.support_layer->print_z < object_bottom)
+                result.cooling_buffer_flush = true;
+        }
+        break;
+    }
     return result;
 }
 
@@ -12103,6 +12132,11 @@ std::string GCode::_extrude(const ExtrusionPath &path, const std::string &path_d
                 speed = std::min(speed, m_config.min_resonance_avoidance_speed.value);
             } else {
                 speed = m_config.max_resonance_avoidance_speed.value;
+                // MAGPIE: boosted past the filament's volumetric limit (90 mm/s of 0.96 mm walls on a 0.8 mm nozzle,
+                // 16 mm3/s over 14, seed 213 of the multi-printer random test, U1), the wall drops below the band.
+                // The limit as the speed was set: adaptive volumetric speed may lower it.
+                if (filament_max_volumetric_speed > 0 && speed > filament_max_volumetric_speed / _mm3_per_mm + EPSILON)
+                    speed = std::min(m_config.min_resonance_avoidance_speed.value, filament_max_volumetric_speed / _mm3_per_mm);
             }
         }
 

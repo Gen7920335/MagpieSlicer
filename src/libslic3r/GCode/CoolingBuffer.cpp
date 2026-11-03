@@ -337,8 +337,9 @@ finished:
 	return new_feedrate;
 }
 
-std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush)
+std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush, size_t fan_layer_id)
 {
+    m_fan_layer_id = fan_layer_id;
     // Cache the input G-code.
     if (m_gcode.empty())
         m_gcode = std::move(gcode);
@@ -765,7 +766,9 @@ std::string CoolingBuffer::apply_layer_cooldown(
     int  supp_interface_fan_speed = 0;
     bool ironing_fan_control= false; // ORCA: Add support for ironing fan speed control
     int  ironing_fan_speed   = 0; // ORCA: Add support for ironing fan speed control
-    auto change_extruder_set_fan = [ this, layer_id, layer_time, &new_gcode, part_cooling_fan_min_pwm,
+    // MAGPIE: the first-layer gate and the ramp count fan_layer, the printed layer of a lifted object.
+    const size_t fan_layer = m_fan_layer_id != std::numeric_limits<size_t>::max() ? m_fan_layer_id : layer_id;
+    auto change_extruder_set_fan = [ this, layer_id, fan_layer, layer_time, &new_gcode, part_cooling_fan_min_pwm,
         &overhang_fan_control, &overhang_fan_speed,
         &internal_bridge_fan_control, &internal_bridge_fan_speed,
         &supp_interface_fan_control, &supp_interface_fan_speed,
@@ -800,7 +803,7 @@ std::string CoolingBuffer::apply_layer_cooldown(
         // value >= 0, layer 0 emits exactly that percentage so the entire first layer
         // is at one stable fan speed. The override wins over the `close_fan_the_first_x_layers` gate when
         // layer_id == 0. From layer 1 onwards the regular logic resumes. 
-        if (has_initial_layer_override && layer_id == 0) {
+        if (has_initial_layer_override && fan_layer == 0) {
             fan_speed_new             = initial_layer_fan_speed;
             overhang_fan_speed        = initial_layer_fan_speed;
             overhang_fan_control      = false;
@@ -812,7 +815,7 @@ std::string CoolingBuffer::apply_layer_cooldown(
             ironing_fan_control         = false;
             // additional_fan_speed_new is left at its configured value (auxiliary fan is independent of the
             // part-cooling override).
-        } else if (int(layer_id) >= close_fan_the_first_x_layers) {
+        } else if (int(fan_layer) >= close_fan_the_first_x_layers) {
             float   fan_max_speed             = m_config.fan_max_speed.get_at(config_index);
             float slow_down_layer_time = float(EXTRUDER_CONFIG(slow_down_layer_time));
             float fan_cooling_layer_time      = float(EXTRUDER_CONFIG(fan_cooling_layer_time));
@@ -829,7 +832,7 @@ std::string CoolingBuffer::apply_layer_cooldown(
                 }
             //}
             overhang_fan_speed   = EXTRUDER_CONFIG(overhang_fan_speed);
-            if (int(layer_id) >= close_fan_the_first_x_layers && int(layer_id) + 1 < full_fan_speed_layer) {
+            if (int(fan_layer) >= close_fan_the_first_x_layers && int(fan_layer) + 1 < full_fan_speed_layer) {
                 if (has_initial_layer_override && close_fan_the_first_x_layers == 0 && full_fan_speed_layer > 1) {
                     // ORCA: Option-B anchored ramp. When the first-layer override is configured and there's
                     // no "no cooling" gate, the ramp interpolates linearly from `initial_layer_fan_speed` on
@@ -840,12 +843,12 @@ std::string CoolingBuffer::apply_layer_cooldown(
                     // even when the override is larger than the natural 1/M starting value.
                     const float anchor = float(initial_layer_fan_speed);
                     const float denom  = float(full_fan_speed_layer - 1);
-                    const float t      = float(int(layer_id)) / denom;
+                    const float t      = float(int(fan_layer)) / denom;
                     fan_speed_new      = std::clamp(int(anchor + t * (float(fan_speed_new) - anchor) + 0.5f), 0, 255);
                     overhang_fan_speed = std::clamp(int(anchor + t * (float(overhang_fan_speed) - anchor) + 0.5f), 0, 255);
                 } else {
                     // Ramp up the fan speed from close_fan_the_first_x_layers to full_fan_speed_layer.
-                    float factor = float(int(layer_id + 1) - close_fan_the_first_x_layers) / float(full_fan_speed_layer - close_fan_the_first_x_layers);
+                    float factor = float(int(fan_layer + 1) - close_fan_the_first_x_layers) / float(full_fan_speed_layer - close_fan_the_first_x_layers);
                     fan_speed_new    = std::clamp(int(float(fan_speed_new) * factor + 0.5f), 0, 255);
                     overhang_fan_speed = std::clamp(int(float(overhang_fan_speed) * factor + 0.5f), 0, 255);
                 }
