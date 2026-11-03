@@ -2534,13 +2534,21 @@ void generate_support_toolpaths(
                         done = true;
                     }
                     if (! done && support_params.keep_narrow_islands) {
-                        // MAGPIE: island by island, so a pillar the walls or the fill miss still prints.
+                        // MAGPIE: island by island, so a pillar the walls or the fill miss still prints. A column of the
+                        // module's body at least two lines wide gets a wall unless the support style sets the walls:
+                        // filled only at the base pattern's 2.5 mm spacing, a 4 mm resin pillar base got one short line
+                        // or none from its second layer up, and the pillar stood on it in the air (seed 68 of the
+                        // multi-printer random test, X1C). A narrower column keeps the narrow fill (a wall there would
+                        // trace one bead twice).
+                        const bool column_walls = ! sheath && support_params.normal_wall_loops < 0;
                         for (const ExPolygon &island : union_safety_offset_ex(base.polygons_to_extrude())) {
                             const size_t before = base.extrusions.size();
-                            if (sheath)
+                            // At least two lines wide all along: a slanted brace's bounding box would not tell.
+                            const bool   walls  = sheath || (column_walls && ! offset(island, -float(flow.scaled_width())).empty());
+                            if (walls)
                                 fill_expolygons_with_sheath_generate_paths(base.extrusions, to_polygons(island), filler, density,
                                                                            ExtrusionRole::erSupportMaterial, flow, support_params, true, no_sort);
-                            if (! sheath || base.extrusions.size() == before)
+                            if (! walls || base.extrusions.size() == before)
                                 fill_expolygons_generate_paths(base.extrusions, ExPolygons{island}, filler, density,
                                                                ExtrusionRole::erSupportMaterial, flow, true);
                         }

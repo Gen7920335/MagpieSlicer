@@ -529,8 +529,28 @@ void PrintObjectSupportMaterial::generate(PrintObject &object)
         for (const SupportGeneratorLayer *layer : intermediate_layers)
             print_z.push_back(layer->print_z);
         std::vector<ExPolygons> body = m_overrides.body_at(print_z);
-        for (size_t i = 0; i < intermediate_layers.size(); ++ i)
-            intermediate_layers[i]->polygons = i < body.size() ? to_polygons(union_ex(body[i])) : Polygons{};
+        // As generate_base_layers trims its base layers: a base layer lying wholly inside a top or bottom contact
+        // layer in Z leaves that contact's area to it. The module's body came untrimmed, and under an object lifted
+        // by resin support base and contact were both printed at one place (a 0.15 mm base inside a 0.2 mm contact,
+        // seed 170 of the multi-printer random test, U1).
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, intermediate_layers.size()),
+            [&](const tbb::blocked_range<size_t> &range) {
+                for (size_t i = range.begin(); i < range.end(); ++ i) {
+                    SupportGeneratorLayer &layer = *intermediate_layers[i];
+                    layer.polygons = i < body.size() ? to_polygons(union_ex(body[i])) : Polygons{};
+                    if (layer.polygons.empty())
+                        continue;
+                    Polygons trimming;
+                    for (const SupportGeneratorLayer *top : top_contacts)
+                        if (layer.print_z <= top->print_z + EPSILON && layer.bottom_z >= top->bottom_z - EPSILON)
+                            polygons_append(trimming, top->polygons);
+                    for (const SupportGeneratorLayer *bottom : bottom_contacts)
+                        if (layer.print_z <= bottom->print_z + EPSILON && layer.bottom_z >= bottom->bottom_print_z() - EPSILON)
+                            polygons_append(trimming, bottom->polygons);
+                    if (! trimming.empty())
+                        layer.polygons = diff(layer.polygons, trimming, ApplySafetyOffset::Yes);
+                }
+            });
         this->trim_support_layers_by_object(object, intermediate_layers, m_slicing_params.gap_support_object,
                                             m_slicing_params.gap_object_support, m_support_params.gap_xy);
     }
@@ -1984,9 +2004,12 @@ static inline void fill_contact_layer(
 #endif // SLIC3R_DEBUG
     )
 {
-    if (contact_demand && layer_id == 0 && new_layer.print_z > slicing_params.raft_contact_top_z + EPSILON) {
-        // MAGPIE: the first layer of an object lifted off the bed or raft. A module's demand here is
-        // a contact like any other, not the footprint of a raft, so it is kept as it is.
+    if (contact_demand && (layer_id > 0 || new_layer.print_z > slicing_params.raft_contact_top_z + EPSILON)) {
+        // MAGPIE: a module's demand is the contact as it is. Stretched into the support grid, a resin head's 0.4 mm
+        // disc grew into a patch of a grid cell or more (3 x 6 mm, seed 17 of the multi-printer random test) whose
+        // interface layer below was cut to the module's body, a pillar tip, so the patch hung in the air. On the first
+        // layer of an object lifted off the bed or raft the demand is a contact like any other, not the footprint of
+        // a raft; on a raft the first layer keeps the raft contact detect_overhangs gave it.
         new_layer.polygons          = overhang_polygons;
         new_layer.contact_polygons  = std::make_unique<Polygons>(overhang_polygons);
         new_layer.overhang_polygons = std::make_unique<Polygons>(overhang_polygons);
