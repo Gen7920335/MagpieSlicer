@@ -9219,19 +9219,34 @@ LayerResult GCode::process_layer(
                 return false;
             if (single_object_instance_idx != size_t(-1) && task.instance_id != single_object_instance_idx)
                 return false;
-            return std::any_of(layers.begin(), layers.end(), [&](const LayerToPrint &candidate) {
+            bool object_here = false;
+            for (const LayerToPrint &candidate : layers) {
                 if (candidate.original_object != task.object)
-                    return false;
-                if (task.support)
-                    return std::abs(candidate.print_z() - half_layer_frame->print_z) < EPSILON;
-                return candidate.object_layer == task.logical_layer;
-            });
+                    continue;
+                object_here = true;
+                if (task.support ? std::abs(candidate.print_z() - half_layer_frame->print_z) < EPSILON :
+                                   candidate.object_layer == task.logical_layer)
+                    return true;
+            }
+            // MAGPIE: a support band is planned into the frame of the first G-code layer at or above its top (its
+            // deadline), which may be another object's layer only: printing all objects together, an object with no
+            // layer of its own there prints its band there too. Dropped, the lowest band of a contact zone left a
+            // 0.08 mm hole over the first layer (H/2 outer walls, two frogs on a U1, seed 34 of the multi-printer random
+            // round 3011; the build before had it too).
+            return task.support && !object_here && single_object_instance_idx == size_t(-1);
+        };
+        // Whether the task's object has a layer of its own in this frame. The auxiliary context (a skirt, a brim, the
+        // layer time tower) comes from such a task first: one planned in from above sets the Z of its own logical
+        // layer, above this frame's.
+        const auto task_object_here = [&](const HalfLayerExecutionTask &task) {
+            return std::any_of(layers.begin(), layers.end(), [&](const LayerToPrint &candidate) { return candidate.original_object == task.object; });
         };
         const HalfLayerExecutionTask *first_active_task = nullptr;
         for (const HalfLayerExecutionTask &task : half_layer_frame->plan.tasks)
-            if (task_is_active(task)) {
+            if (task_is_active(task) && (first_active_task == nullptr || task_object_here(task))) {
                 first_active_task = &task;
-                break;
+                if (task_object_here(task))
+                    break;
             }
         if (first_active_task == nullptr)
             throw std::logic_error("Half-layer frame has no task for the current logical layer");
@@ -9324,9 +9339,10 @@ LayerResult GCode::process_layer(
             const bool final_visit = visit_index + 1 == half_layer_frame->plan.visits.size();
             const HalfLayerExecutionTask *visit_task = nullptr;
             for (size_t i = visit.begin; i < visit.end; ++i)
-                if (task_is_active(half_layer_frame->plan.tasks[i])) {
+                if (task_is_active(half_layer_frame->plan.tasks[i]) && (visit_task == nullptr || task_object_here(half_layer_frame->plan.tasks[i]))) {
                     visit_task = &half_layer_frame->plan.tasks[i];
-                    break;
+                    if (task_object_here(*visit_task))
+                        break;
                 }
             if (visit_task == nullptr && visit.tower_only)
                 visit_task = first_active_task;
@@ -9428,7 +9444,7 @@ LayerResult GCode::process_layer(
                     continue;
                 }
                 const auto object_instance = std::make_pair(task.object, task.instance_id);
-                if (auxiliary_done.insert(object_instance).second) {
+                if (task_object_here(task) && auxiliary_done.insert(object_instance).second) {
                     set_logical_auxiliary_context(task);
                     gcode += generate_object_skirt_group(print, *task.object, task.instance_id, layer_tools, layer, visit.tool.filament);
                     gcode += generate_object_brim(print, *task.object, task.instance_id, first_layer, visit.tool.filament, task.logical_layer);
