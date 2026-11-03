@@ -2346,6 +2346,14 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
             }
     }
 
+    // MAGPIE: a Bambu Lab printer (printer_model, as SlicingParameters reads it outside a Print) is known before the
+    // slicing parameters read it for the filament map. The GUI told the print only when it validated or processed it
+    // and the CLI after apply(), so a raft interface on the 0.4 mm nozzle of an H2D came out 0.6 mm thick, as for the
+    // other, 0.8 mm nozzle (seed 71 of the multi-printer random round 3023). Another printer model clears it, as a
+    // switch from a Bambu Lab printer would otherwise keep it until the next validation; an empty model (tests) keeps
+    // what the caller set.
+    if (!m_config.printer_model.value.empty())
+        m_isBBLPrinter = m_config.printer_model.value.compare(0, 9, "Bambu Lab") == 0;
     // Update SlicingParameters for each object where the SlicingParameters is not valid.
     // If it is not valid, then it is ensured that PrintObject.m_slicing_params is not in use
     // (posSlicing and posSupportMaterial was invalidated).

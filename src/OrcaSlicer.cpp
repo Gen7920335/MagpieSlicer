@@ -6925,11 +6925,10 @@ int CLI::run(int argc, char **argv)
                             ConfigOptionEnumsGeneric* final_nozzle_volume_type_opt = new_print_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type", true);
                             final_nozzle_volume_type_opt->values.resize(new_extruder_count, nvtStandard);
                         }
-                        print->apply(model, new_print_config);
-                        BOOST_LOG_TRIVIAL(info) << boost::format("set no_check to %1%:")%no_check;
-                        print->set_no_check_flag(no_check);//BBS
-
                         // Set is_BBL_printer flag before validation as the validation depends on it.
+                        // MAGPIE: and before apply(): the objects' slicing parameters read it there for the filament map (a
+                        // raft interface of a 0.4 mm nozzle came out 0.6 mm thick, as for the other, 0.8 mm nozzle of an H2D,
+                        // seed 71 of the multi-printer random round 3023).
                         std::string& printer_model_string = new_print_config.opt_string("printer_model", true);
                         bool is_bbl_vendor_preset = false;
 
@@ -6945,6 +6944,10 @@ int CLI::run(int argc, char **argv)
                             BOOST_LOG_TRIVIAL(info) << boost::format("new_printer_name: %1%, current_printer_system_name %2%, is_bbl_vendor_preset %3%")%new_printer_name %current_printer_system_name %is_bbl_vendor_preset;
                         }
                         (dynamic_cast<Print*>(print))->is_BBL_printer() = is_bbl_vendor_preset;
+
+                        print->apply(model, new_print_config);
+                        BOOST_LOG_TRIVIAL(info) << boost::format("set no_check to %1%:")%no_check;
+                        print->set_no_check_flag(no_check);//BBS
 
                         std::vector<StringObjectException> warnings;
                         print_fff->set_check_multi_filaments_compatibility(!allow_mix_temp);
