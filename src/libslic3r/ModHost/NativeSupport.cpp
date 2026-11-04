@@ -137,8 +137,11 @@ void gather(const PrintObject &object, const std::vector<Polygons> *mask, Input 
     in.c.interface_line_width = int64_t(support_material_interface_flow(&object).scaled_width());
     const Flow support_flow   = support_material_flow(&object);
     in.c.support_nozzle_diameter = int64_t(scale_(support_flow.nozzle_diameter()));
+    // The outer wall's nozzle, the one setting the object's finest feature (Orca's own overhang tests take its flow too):
+    // with the inner walls on a 0.8 mm nozzle the inner walls' nozzle opened a 0.4 mm frog's overhangs away, no support
+    // at all (multi-printer random test, seed 3063, U1).
     in.c.object_nozzle_diameter  = object.num_printing_regions() > 0 ?
-        int64_t(scale_(object.printing_region(0).flow(object, frPerimeter, object.config().layer_height.value).nozzle_diameter())) :
+        int64_t(scale_(object.printing_region(0).flow(object, frExternalPerimeter, object.config().layer_height.value).nozzle_diameter())) :
         in.c.support_nozzle_diameter;
     in.c.adhesion_margin = int64_t(scale_(adhesion_margin_mm(object)));
 }

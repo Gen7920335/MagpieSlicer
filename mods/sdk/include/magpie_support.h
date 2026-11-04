@@ -36,7 +36,7 @@ typedef struct mp_support_input_v1 {
     int64_t           support_line_width;   /* the support flow's width, integer units */
     int64_t           interface_line_width; /* the support interface flow's width, integer units */
     int64_t           support_nozzle_diameter; /* the nozzle printing the support flow, integer units */
-    int64_t           object_nozzle_diameter;  /* the nozzle printing the object's walls, integer units */
+    int64_t           object_nozzle_diameter;  /* the nozzle printing the object's outer walls, integer units */
     /* How far the first layer's brim, skirt or raft reaches past the object on the bed, integer units:
      * room a generator leaves free between its support and the edge of the printable area. */
     int64_t           adhesion_margin;
