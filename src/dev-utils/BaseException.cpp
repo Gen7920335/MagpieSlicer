@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <ctime>
 #include <excpt.h>
+#include <dbghelp.h>
 
 static std::string g_log_folder;
 static std::atomic<int> g_crash_log_count = 0;
@@ -46,6 +47,7 @@ CBaseException::CBaseException(HANDLE hProcess, WORD wPID, LPCTSTR lpSymbolPath,
 		auto crash_log_path = boost::filesystem::path(log_folder / buf.str()).make_preferred();
 		std::string log_filename = crash_log_path.string();
 		output_file->open(log_filename, std::ios::out | std::ios::app);
+		m_log_path = crash_log_path;
 
 		// Output app build info in crash log so we could look for the correct PDB files
         OutputString(_T("%s\n\n"), _T(SLIC3R_APP_NAME " " SoftFever_VERSION " Build " GIT_COMMIT_HASH GIT_COMMIT_SUFFIX));
@@ -409,5 +411,39 @@ void CBaseException::ShowExceptionInformation()
 
 	ShowRegistorInformation(m_pEp->ContextRecord);
 
+	// Before the call stack: the stack walk can stop in a damaged process (a thread run at a bad address never got
+	// past "Show CallStack"), and the dump holds the stack too. The lines above are on disk already, as OutputString
+	// flushes each.
+	WriteMiniDump();
+
 	ShowCallstack(GetCurrentThread(), m_pEp->ContextRecord);
+}
+
+void CBaseException::WriteMiniDump()
+{
+	if (m_log_path.empty())
+		return;
+	const boost::filesystem::path dump_path = boost::filesystem::path(m_log_path).replace_extension(".dmp");
+	HANDLE file = CreateFileW(dump_path.wstring().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (file == INVALID_HANDLE_VALUE) {
+		OutputString(_T("\nMinidump: cannot create the file (error %lu)\n"), GetLastError());
+		return;
+	}
+	MINIDUMP_EXCEPTION_INFORMATION exception;
+	exception.ThreadId          = GetCurrentThreadId();
+	exception.ExceptionPointers = m_pEp;
+	exception.ClientPointers    = FALSE;
+	// Every thread's stack and registers with the memory they point at (the objects a crash corrupted, such as the
+	// G-code processor of seed 3096 c0140), and the modules' globals; not the whole heap, which can be gigabytes.
+	const MINIDUMP_TYPE type = MINIDUMP_TYPE(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithDataSegs | MiniDumpWithThreadInfo |
+	                                         MiniDumpWithUnloadedModules);
+	const BOOL written = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file, type, &exception, nullptr, nullptr);
+	const DWORD error = written ? 0 : GetLastError();
+	CloseHandle(file);
+	if (written) {
+		OutputString(_T("\nMinidump: %s\n"), dump_path.native().c_str());
+	} else {
+		DeleteFileW(dump_path.wstring().c_str());
+		OutputString(_T("\nMinidump: not written (error 0x%lx)\n"), error);
+	}
 }

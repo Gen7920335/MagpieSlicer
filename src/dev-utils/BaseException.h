@@ -1,6 +1,7 @@
 #pragma once
 #include <boost/nowide/cstdio.hpp>
 #include <boost/nowide/fstream.hpp>
+#include <boost/filesystem/path.hpp>
 #include "StackWalker.h"
 #include <eh.h>
 #include <cstddef>
@@ -18,6 +19,8 @@ public:
 	virtual BOOL GetLogicalAddress(PVOID addr, PTSTR szModule, DWORD len, DWORD& section, DWORD& offset );
 	virtual void ShowRegistorInformation(PCONTEXT pCtx);
 	virtual void ShowExceptionInformation();
+	// Magpie: a minidump next to the crash log (same name, .dmp), for crashes the log alone cannot explain.
+	void WriteMiniDump();
 	static LONG WINAPI UnhandledExceptionFilter(PEXCEPTION_POINTERS pExceptionInfo);
 	static LONG WINAPI UnhandledExceptionFilter2(PEXCEPTION_POINTERS pExceptionInfo);
 	static void STF(unsigned int ui,  PEXCEPTION_POINTERS pEp);
@@ -26,6 +29,8 @@ public:
 protected:
 	PEXCEPTION_POINTERS m_pEp;
 	boost::nowide::ofstream *output_file;
+	// The crash log's path, empty without a log folder.
+	boost::filesystem::path m_log_path;
 };
 
 #define SET_DEFULTER_HANDLER() SetUnhandledExceptionFilter(CBaseException::UnhandledExceptionFilter)
