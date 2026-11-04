@@ -3916,9 +3916,17 @@ int CLI::run(int argc, char **argv)
 
                 for (int eidx = 0; eidx < new_extruder_count; ++eidx) {
                     int index = 0;
+                    // MAGPIE: one value stands for every extruder (a profile's single "Standard" nozzle_volume_type on
+                    // an H2D); reading past it took a heap neighbour's bytes as the volume type (AddressSanitizer,
+                    // multi-printer random test).
+                    const int extruder_type = extruders.empty() ? int(ExtruderType::etDirectDrive) : extruders[std::min<size_t>(eidx, extruders.size() - 1)];
+                    const int volume_type   = volume_types.empty() ? int(NozzleVolumeType::nvtStandard) : volume_types[std::min<size_t>(eidx, volume_types.size() - 1)];
                     if (m_print_config.has("printer_extruder_id") && m_print_config.has("printer_extruder_variant"))
-                        index = m_print_config.get_index_for_extruder(eidx + 1, "printer_extruder_id", ExtruderType(extruders[eidx]), NozzleVolumeType(volume_types[eidx]), "printer_extruder_variant");
-                    nozzle_flush_dataset[eidx] = nozzle_flush_dataset_full[index];
+                        index = m_print_config.get_index_for_extruder(eidx + 1, "printer_extruder_id", ExtruderType(extruder_type), NozzleVolumeType(volume_type), "printer_extruder_variant");
+                    if (index < 0 || size_t(index) >= nozzle_flush_dataset_full.size())
+                        index = 0;
+                    if (!nozzle_flush_dataset_full.empty())
+                        nozzle_flush_dataset[eidx] = nozzle_flush_dataset_full[index];
                 }
             }
 
