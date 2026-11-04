@@ -1691,7 +1691,7 @@ bool half_height_support_island_overlaps_bands(const ExPolygon &island, double b
 static void refine_half_height_support_regions(const PrintObject &object,
     SupportGeneratorLayerStorage &storage,
     std::initializer_list<SupportGeneratorLayersPtr *> groups,
-    const SupportGeneratorLayersPtr *body_group)
+    const SupportGeneratorLayersPtr *body_group, const SupportGeneratorLayersPtr *base_interface_group)
 {
     const auto cuts_mm = half_height_support_z_grid(object);
     const auto [min_band_mm, max_band_mm] = half_height_support_band_limits_mm(object);
@@ -1758,12 +1758,16 @@ static void refine_half_height_support_regions(const PrintObject &object,
     std::map<SupportGeneratorLayer *, SupportGeneratorLayersPtr> refined;
     for (auto *group : groups) {
         const bool body = group == body_group && scope.contact_only();
+        // MAGPIE: the body's interface printed with the body's material keeps the bed's first layer as a body island on
+        // the bed does: banded there it printed a 0.05 mm band beside the 0.1 mm body on the bed (multi-printer random
+        // test, seed 3080, U1, frog legs, range "contact").
+        const bool kept_on_bed = group == base_interface_group && scope.contact_only();
         SupportGeneratorLayersPtr replacement;
         for (SupportGeneratorLayer *original : *group) {
             auto found = refined.find(original);
             if (found == refined.end()) {
                 SupportGeneratorLayersPtr bands;
-                if (never_banded(original)) {
+                if (never_banded(original) || (kept_on_bed && original->bottom_print_z() < EPSILON)) {
                     bands.push_back(original);
                 } else if (!body) {
                     make_bands(original, original->polygons, bands);
@@ -1963,7 +1967,7 @@ SupportGeneratorLayersPtr generate_support_layers(
     if (object.layer_bands().support && half_layer_storage != nullptr) {
         refine_half_height_support_regions(object, *half_layer_storage,
             {&raft_layers, &bottom_contacts, &top_contacts, &intermediate_layers, &interface_layers, &base_interface_layers},
-            &intermediate_layers);
+            &intermediate_layers, &base_interface_layers);
         // Discard only the just-created empty support descriptors. The broader
         // clear_support_layers() also clears model overhang/sharp-tail caches.
         for (SupportLayer *layer : object.support_layers())
