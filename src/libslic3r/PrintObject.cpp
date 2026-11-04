@@ -1091,6 +1091,62 @@ void PrintObject::generate_support_material(bool with_belt_brim)
         if ((this->has_support() && m_layers.size() > 1) || (this->has_raft() && !m_layers.empty())) {
             m_print->set_status(50, L("Generating support"));
 
+            // MAGPIE: under H/2 walls a layer's inner walls and fill take the union of its two half bands' sections
+            // (make_half_layer_region_wall_candidate), which reaches past the layer's own section where the model
+            // starts in its upper band. The support sees the layers as printed: planned on the layer's own section,
+            // a 3.0015 mm overhang bottom over a 3.00 mm slicing plane was printed on the interface with no gap
+            // (multi-printer random test, seed 3076, U1, overhang model at 0.16 mm layers).
+            struct PrintedSections {
+                LayerPtrs &layers;
+                // Per layer: its own sections and their boxes; per region: its own slices, kept where they changed.
+                std::vector<std::pair<ExPolygons, std::vector<BoundingBox>>>           saved;
+                std::vector<std::vector<std::pair<size_t, SurfaceCollection>>>         saved_regions;
+                ~PrintedSections()
+                {
+                    for (size_t i = 0; i < saved.size(); ++i) {
+                        layers[i]->lslices.swap(saved[i].first);
+                        layers[i]->lslices_bboxes.swap(saved[i].second);
+                        for (auto &[region, slices] : saved_regions[i])
+                            layers[i]->regions()[region]->slices = std::move(slices);
+                    }
+                }
+            } printed_sections{m_layers, {}, {}};
+            if (m_half_layer_sources) {
+                printed_sections.saved.resize(m_layers.size());
+                printed_sections.saved_regions.resize(m_layers.size());
+                for (size_t i = 0; i < m_layers.size(); ++i) {
+                    Layer &layer = *m_layers[i];
+                    std::vector<const Layer *> bands;
+                    for (const auto &phase : m_half_layer_sources->phases)
+                        if (i < phase.size() && phase[i])
+                            bands.push_back(phase[i].get());
+                    ExPolygons sections = layer.lslices;
+                    for (const Layer *band : bands)
+                        append(sections, band->lslices);
+                    sections = union_ex(sections);
+                    std::vector<BoundingBox> boxes;
+                    boxes.reserve(sections.size());
+                    for (const ExPolygon &section : sections)
+                        boxes.emplace_back(get_extents(section));
+                    printed_sections.saved[i] = {std::move(sections), std::move(boxes)};
+                    layer.lslices.swap(printed_sections.saved[i].first);
+                    layer.lslices_bboxes.swap(printed_sections.saved[i].second);
+                    // The regions too: the support finds an overhang by a layer's region slices over the layer below's
+                    // sections, so with the sections alone grown the model's start was supported nowhere.
+                    for (size_t r = 0; r < layer.regions().size(); ++r) {
+                        Polygons band_slices;
+                        for (const Layer *band : bands)
+                            if (r < band->regions().size())
+                                polygons_append(band_slices, to_polygons(band->regions()[r]->slices.surfaces));
+                        LayerRegion &region = *layer.regions()[r];
+                        ExPolygons   extra  = diff_ex(band_slices, to_polygons(region.slices.surfaces));
+                        if (extra.empty())
+                            continue;
+                        printed_sections.saved_regions[i].emplace_back(r, region.slices);
+                        region.slices.append(std::move(extra), stInternal);
+                    }
+                }
+            }
             this->_generate_support_material();
             m_print->throw_if_canceled();
         }

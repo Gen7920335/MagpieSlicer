@@ -434,11 +434,12 @@ TEST_CASE("Support heads longer than the lift stand on the bed, and the slice sa
         CHECK(warnings.find("10 support heads are longer than the 2.0 mm elevation") != std::string::npos);
     }
     SECTION("with the letters' overhangs supported too") {
-        // Before: refused, 9 of the 9 bottom points without a head (the letters' 5 heads fit on pillars).
+        // Before: refused, 9 of the 9 bottom points without a head (the letters' 5 heads fit on pillars). 10 since the
+        // support sees the layers as the seed's H/2 walls print them (the union of their two bands' sections).
         const auto [error, warnings] = lifted_cube(2.0, 0.2, {0.8, 0.4, 0.4, 0.6});
         CAPTURE(error, warnings);
         CHECK(error.empty());
-        CHECK(warnings.find("9 support heads are longer than the 2.0 mm elevation") != std::string::npos);
+        CHECK(warnings.find("10 support heads are longer than the 2.0 mm elevation") != std::string::npos);
     }
     SECTION("a higher lift fits the heads whole") {
         const auto [error, warnings] = lifted_cube(3.0, 0.26, {0.8, 0.4, 0.4, 0.6});
