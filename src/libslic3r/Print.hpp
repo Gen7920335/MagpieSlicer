@@ -818,6 +818,8 @@ struct FakeWipeTower
     float cone_angle;
     Vec2d plate_origin;
     Vec2f rib_offset{0.f,0.f};
+    // MAGPIE: a rib tower's outline (WipeTower::rib_section), scaled, in the frame of the fake box; empty for a box tower.
+    Polygon rib_outline;
     std::map<float , Polylines> outer_wall; //wipe tower's true outer wall and brim
 
     void set_fake_extrusion_data(Vec2f p, float w, float h, float lh, float d, float bd, Vec2d o)

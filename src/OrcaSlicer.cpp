@@ -7126,6 +7126,9 @@ int CLI::run(int argc, char **argv)
                                     std::string conflict_result = print_fff->get_conflict_string();
                                     if (!conflict_result.empty()) {
                                        BOOST_LOG_TRIVIAL(error) << "plate "<< index+1<< ": found slicing result conflict!"<< std::endl;
+                                       // MAGPIE: say which objects and where, as the GUI does; the CLI ended without a word.
+                                       boost::nowide::cout << "plate " << index + 1 << ": " << conflict_result << " at height "
+                                                           << print_fff->get_conflict_result()->_height << std::endl;
                                        record_exit_reson(outfile_dir, CLI_GCODE_PATH_CONFLICTS, index+1, cli_errors[CLI_GCODE_PATH_CONFLICTS], sliced_info);
                                        flush_and_exit(CLI_GCODE_PATH_CONFLICTS);
                                     }

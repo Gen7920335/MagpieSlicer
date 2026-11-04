@@ -6446,6 +6446,10 @@ void Print::_make_wipe_tower()
         // tower-local rib offset must be rotated into the bed frame first.
         m_fake_wipe_tower.rib_offset = Eigen::Rotation2Df(Geometry::deg2rad((float)config().wipe_tower_rotation_angle.value)) *
                                        wipe_tower.get_rib_offset();
+        m_fake_wipe_tower.rib_outline = config().wipe_tower_wall_type.value == WipeTowerWallType::wtwRib && wipe_tower.get_rib_length() > EPSILON ?
+            WipeTower::rib_section(wipe_tower.width(), wipe_tower.get_depth(), wipe_tower.get_rib_length(), wipe_tower.get_rib_width(),
+                                   config().wipe_tower_fillet_wall.value) :
+            Polygon();
         m_fake_wipe_tower.set_fake_extrusion_data(wipe_tower.position() + m_fake_wipe_tower.rib_offset, wipe_tower.width(), wipe_tower.get_wipe_tower_height(),
                                                   config().initial_layer_print_height, m_wipe_tower_data.depth,
                                                   m_wipe_tower_data.z_and_depth_pairs, m_wipe_tower_data.brim_width,
@@ -8142,6 +8146,28 @@ ExtrusionLayers FakeWipeTower::getTrueExtrusionLayersFromWipeTower() const
     //ORCA: Fallback for WipeTower2 if outer_wall is empty
     if (outer_wall.empty()) {
         auto fake_paths = getFakeExtrusionPathsFromWipeTower2();
+        // MAGPIE: a rib tower's box sticks out past its rounded ribs at the corners: an object's support passing a
+        // corner 1.2 mm off the printed tower was taken for a G-code path conflict (multi-printer random test, seed
+        // 3065, XL 5T, CLI exit -101). The box's lines are kept where the tower is (the first layer's with its brim).
+        if (!rib_outline.empty()) {
+            Polygons outline{rib_outline};
+            for (Polygon &p : outline) {
+                p.rotate(Geometry::deg2rad(rotation_angle));
+                p.translate(scale_(pos.x()), scale_(pos.y()));
+            }
+            const Polygons first_outline = offset(outline, float(scale_(brim_width)));
+            for (size_t i = 0; i < fake_paths.size(); ++i) {
+                ExtrusionPaths clipped;
+                for (const ExtrusionPath &path : fake_paths[i])
+                    for (const Polyline &inside : intersection_pl(path.polyline.to_polyline(), i == 0 ? first_outline : outline)) {
+                        ExtrusionPath piece = path;
+                        piece.polyline      = Polyline3(inside);
+                        clipped.push_back(std::move(piece));
+                    }
+                if (!clipped.empty())
+                    fake_paths[i] = std::move(clipped);
+            }
+        }
         float current_z = 0.f;
         for (auto& layer_paths : fake_paths) {
             if (layer_paths.empty()) continue;
