@@ -119,9 +119,9 @@ void CBaseException::ShowCallstack(HANDLE hThread, const CONTEXT* context)
     DWORD section, offset;
     for (LPSTACKINFO ps = phead; ps != nullptr; ps = ps->pNext) {
         if (GetLogicalAddress((PVOID) ps->szFncAddr, szFaultingModule, sizeof(szFaultingModule), section, offset)) {
-            OutputString(_T("0x%X 0x%X:0x%X %s\n"), ps->szFncAddr, section, offset, szFaultingModule);
+            OutputString(_T("0x%llX 0x%X:0x%X %s\n"), (unsigned long long) ps->szFncAddr, section, offset, szFaultingModule);
         } else {
-            OutputString(_T("0x%X Unknown\n"), ps->szFncAddr);
+            OutputString(_T("0x%llX Unknown\n"), (unsigned long long) ps->szFncAddr);
         }
     }
 
@@ -392,7 +392,8 @@ void CBaseException::ShowExceptionInformation()
 	OutputString(_T("NumberParameters :%ld \n"), m_pEp->ExceptionRecord->NumberParameters);
 	for (int i = 0; i < m_pEp->ExceptionRecord->NumberParameters; i++)
 	{
-		OutputString(_T("Param %d :0x%x \n"), i, m_pEp->ExceptionRecord->ExceptionInformation[i]);
+		// Magpie: 64-bit values whole (Param 1 is the faulting address); 0x%x printed their low 32 bits only.
+		OutputString(_T("Param %d :0x%llx \n"), i, (unsigned long long) m_pEp->ExceptionRecord->ExceptionInformation[i]);
 	}
 	OutputString(_T("Context :%p \n"), m_pEp->ContextRecord);
 #if defined(_M_ARM64)
@@ -404,7 +405,7 @@ void CBaseException::ShowExceptionInformation()
 	TCHAR szFaultingModule[MAX_PATH];
 	DWORD section, offset;
 	GetLogicalAddress(m_pEp->ExceptionRecord->ExceptionAddress, szFaultingModule, sizeof(szFaultingModule), section, offset );
-	OutputString( _T("Fault address:  0x%X 0x%X:0x%X %s\r\n"), m_pEp->ExceptionRecord->ExceptionAddress, section, offset, szFaultingModule );
+	OutputString( _T("Fault address:  0x%llX 0x%X:0x%X %s\r\n"), (unsigned long long) m_pEp->ExceptionRecord->ExceptionAddress, section, offset, szFaultingModule );
 
 	ShowRegistorInformation(m_pEp->ContextRecord);
 
