@@ -117,6 +117,11 @@ public:
     bool   fractional_top { false };
     double half_layer_parent_print_z_mm { 0. };
     double half_layer_parent_height_mm { 0. };
+    // MAGPIE: the Z range (bottom_z, print_z) of the layer an H/2 band was cut from; an empty range for a layer not cut.
+    double half_layer_logical_bottom_z { 0. };
+    double half_layer_logical_print_z { 0. };
+    double logical_bottom_z() const { return half_layer_logical_print_z > half_layer_logical_bottom_z ? half_layer_logical_bottom_z : bottom_z; }
+    double logical_print_z() const { return half_layer_logical_print_z > half_layer_logical_bottom_z ? half_layer_logical_print_z : print_z; }
 
 	// Polygons to be filled by the support pattern.
 	Polygons polygons;

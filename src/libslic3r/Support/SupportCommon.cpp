@@ -1719,6 +1719,8 @@ static void refine_half_height_support_regions(const PrintObject &object,
             band.half_layer_interface_id = original->half_layer_interface_id;
             band.half_layer_parent_print_z_mm = original->half_layer_parent_print_z_mm;
             band.half_layer_parent_height_mm = original->half_layer_parent_height_mm;
+            band.half_layer_logical_bottom_z = original->logical_bottom_z();
+            band.half_layer_logical_print_z = original->logical_print_z();
             band.polygons = i + 1 < ends.size() ? polygons : std::move(polygons);
             if (original->contact_polygons)
                 band.contact_polygons = std::make_unique<Polygons>(*original->contact_polygons);
@@ -1831,6 +1833,9 @@ static void refine_half_height_support_regions(const PrintObject &object,
                 united.fractional_top = last->fractional_top || layer->fractional_top;
                 united.half_layer_parent_print_z_mm = last->half_layer_parent_print_z_mm;
                 united.half_layer_parent_height_mm = last->half_layer_parent_height_mm;
+                // The Z range both were cut from (a narrower one contains fewer layers, see generate_support_toolpaths).
+                united.half_layer_logical_bottom_z = std::max(last->logical_bottom_z(), layer->logical_bottom_z());
+                united.half_layer_logical_print_z = std::min(last->logical_print_z(), layer->logical_print_z());
                 united.polygons = union_(last->polygons, layer->polygons);
                 auto unite = [](const std::unique_ptr<Polygons> &a, const std::unique_ptr<Polygons> &b) -> std::unique_ptr<Polygons> {
                     if (!a && !b)
@@ -2597,7 +2602,21 @@ void generate_support_toolpaths(
                     for (int i = int(idx_top) - 1; i >= 0 && layers[i]->print_z > bottom_z; -- i)
                         layer_cache_item.overlapping.push_back(layers[i]);
                 };
-                add_overlapping(top_contacts, idx_layer_top_contact);
+                // MAGPIE: a base layer (and the interfaces cut from it) lying wholly inside a top contact in Z was trimmed
+                // by that contact's area (generate_base_layers, the support body's trim): the two lie side by side, not
+                // on top of each other. Cut into H/2 bands on different cuts (a 4.56-4.76 contact at 4.70, the 4.56-4.707
+                // base at 4.653), a contact band ended inside a base band and the modulation, reaching half a line width
+                // past the contact, cut a whole resin body layer down to 0.007 mm, nothing extruded: a 0.054 mm hole in
+                // its columns (multi-printer random test, seed 3061, XL 5T, resin support with H/2 support of all).
+                const SupportGeneratorLayer &extruded = *layer_cache_item.layer_extruded->layer;
+                const bool cut_from_trimmed = extruded.layer_type != SupporLayerType::TopContact &&
+                                              extruded.layer_type != SupporLayerType::BottomContact &&
+                                              extruded.half_layer_logical_print_z > extruded.half_layer_logical_bottom_z;
+                for (int i = int(idx_layer_top_contact) - 1; i >= 0 && top_contacts[i]->print_z > bottom_z; -- i)
+                    if (! cut_from_trimmed || top_contacts[i]->half_layer_logical_print_z <= top_contacts[i]->half_layer_logical_bottom_z ||
+                        extruded.logical_print_z() > top_contacts[i]->logical_print_z() + EPSILON ||
+                        extruded.logical_bottom_z() < top_contacts[i]->logical_bottom_z() - EPSILON)
+                        layer_cache_item.overlapping.push_back(top_contacts[i]);
                 if (layer_cache_item.layer_extruded->layer->layer_type == SupporLayerType::BottomContact) {
                     // Bottom contact layer may overlap with a base layer, which may be changed to interface layer.
                     add_overlapping(intermediate_layers,   idx_layer_intermediate);
