@@ -4321,7 +4321,10 @@ void TabPrintPlate::on_value_change(const std::string& opt_key, const boost::any
                         for (int i = 0; i < n_colours; i++) {
                             initial_sequence.push_back(i + 1);
                         }
-                        std::vector<LayerPrintSequence> initial_layer_sequence{ std::make_pair(std::make_pair(2, INT_MAX), initial_sequence) };
+                        // "To the last layer" is INT_MAX - 1, as the plate settings dialog clamps it: INT_MAX is the nil
+                        // value of an int option, and a plate left with it (the dialog closed without OK) failed to
+                        // export with "Serializing NaN: other_layers_print_sequence".
+                        std::vector<LayerPrintSequence> initial_layer_sequence{ std::make_pair(std::make_pair(2, INT_MAX - 1), initial_sequence) };
                         plate->set_other_layers_print_sequence(initial_layer_sequence);
                     }
                     wxCommandEvent evt(EVT_OPEN_PLATESETTINGSDIALOG);
