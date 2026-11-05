@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <wx/dialog.h>
 #include <sstream>
@@ -298,6 +299,14 @@ static std::vector<float> MatrixFlatten(const WipingDialog::VolumeMatrix& matrix
     return vec;
 }
 
+// The side of one nozzle's square config matrix: the slot count it was last sized for. That is not always the
+// colour count: the nozzle-count top-up resizes the matrix to filament_presets, which can run ahead of the
+// colours, and a project can bring a matrix sized for its own filament count.
+static size_t matrix_side(const std::vector<double>& matrix)
+{
+    return size_t(std::lround(std::sqrt(double(matrix.size()))));
+}
+
 // Mixed-color slots are virtual and have no flushing volumes, so the dialog shows only the
 // physical filaments. That means converting between the full config matrix (indexed by config
 // slot) and a dense physical sub-matrix (indexed by row/column in the table).
@@ -311,7 +320,8 @@ static std::vector<double> extract_physical_sub_matrix(
         return sub;
     for (size_t pi = 0; pi < p; ++pi)
         for (size_t pj = 0; pj < p; ++pj)
-            sub[pi * p + pj] = full_matrix[indices[pi] * full_n + indices[pj]];
+            if (indices[pi] < full_n && indices[pj] < full_n)
+                sub[pi * p + pj] = full_matrix[indices[pi] * full_n + indices[pj]];
     return sub;
 }
 
@@ -323,12 +333,14 @@ static std::vector<double> expand_physical_to_full_matrix(
     const std::vector<double>& original_matrix)
 {
     std::vector<double> full = original_matrix;
-    if (full.size() < full_n * full_n)
-        return full;
     size_t p = indices.size();
+    // The table's matrix comes back from the web page: a short one, or a slot past the config, is left out.
+    if (full.size() < full_n * full_n || sub_matrix.size() < p * p)
+        return full;
     for (size_t pi = 0; pi < p; ++pi)
         for (size_t pj = 0; pj < p; ++pj)
-            full[indices[pi] * full_n + indices[pj]] = sub_matrix[pi * p + pj];
+            if (indices[pi] < full_n && indices[pj] < full_n)
+                full[indices[pi] * full_n + indices[pj]] = sub_matrix[pi * p + pj];
     return full;
 }
 
@@ -343,7 +355,6 @@ wxString WipingDialog::BuildTableObjStr()
 
     // Restrict the table to physical filaments; mixed slots have no flushing volumes.
     m_physical_indices = wxGetApp().preset_bundle->physical_filament_config_indices();
-    const size_t full_n = filament_colors.size();
     {
         std::vector<std::string> physical_colors;
         physical_colors.reserve(m_physical_indices.size());
@@ -356,7 +367,7 @@ wxString WipingDialog::BuildTableObjStr()
     std::vector<std::vector<double>> flush_matrixs;
     for (int idx = 0; idx < nozzle_num; ++idx) {
         auto fm = get_flush_volumes_matrix(raw_matrix_data, idx, nozzle_num);
-        flush_matrixs.emplace_back(extract_physical_sub_matrix(fm, full_n, m_physical_indices));
+        flush_matrixs.emplace_back(extract_physical_sub_matrix(fm, matrix_side(fm), m_physical_indices));
     }
     flush_multiplier.resize(nozzle_num, 1);
 
@@ -693,14 +704,15 @@ void WipingDialog::StoreFlushData(int extruder_num, const std::vector<std::vecto
 std::vector<double> WipingDialog::ExpandToFullMatrix(const std::vector<double>& sub_matrix, int nozzle_idx) const
 {
     const auto& project_config = wxGetApp().preset_bundle->project_config;
-    const size_t full_n = project_config.option<ConfigOptionStrings>("filament_colour")->values.size();
-    if (m_physical_indices.size() == full_n)
-        return sub_matrix;   // no mixed slots: sub-matrix already is the full matrix
-
     auto raw = project_config.option<ConfigOptionFloats>("flush_volumes_matrix")->values;
     int nozzle_num = (int)wxGetApp().preset_bundle->project_config.option<ConfigOptionFloats>("flush_multiplier")->values.size();
     if (nozzle_num < 1) nozzle_num = 1;
     auto original = get_flush_volumes_matrix(raw, nozzle_idx, nozzle_num);
+    // Write back into the matrix as it is laid out. Taking the colour count for its side wrote past a matrix sized
+    // for fewer slots (an X1C project with four filaments, then a one-filament H2D project: heap corruption).
+    const size_t full_n = matrix_side(original);
+    if (m_physical_indices.size() == full_n && sub_matrix.size() == full_n * full_n)
+        return sub_matrix;   // no mixed slots: sub-matrix already is the full matrix
     return expand_physical_to_full_matrix(sub_matrix, m_physical_indices, full_n, original);
 }
 
