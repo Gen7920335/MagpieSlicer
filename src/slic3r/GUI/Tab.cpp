@@ -7729,9 +7729,16 @@ bool Tab::select_preset(
                 //{ Preset::Type::TYPE_SLA_MATERIAL,  &m_preset_bundle->sla_materials,ptSLA }
             };
             Preset *to_be_selected = m_presets->find_preset(preset_name, false, true);
+            // The list can still offer a preset that has left the collection: the project-embedded printer of a
+            // project whose loading was cancelled stays in the sidebar list. Picking it dereferenced a null preset;
+            // the selection is dropped instead, as a canceled one.
+            if (to_be_selected == nullptr) {
+                BOOST_LOG_TRIVIAL(warning) << "select printer: preset " << preset_name << " is no longer in the collection";
+                canceled = true;
+            }
             ConfigOptionStrings* cur_opt2 = dynamic_cast <ConfigOptionStrings *>(m_presets->get_edited_preset().config.option("printer_extruder_variant"));
-            ConfigOptionStrings* to_select_opt2 = dynamic_cast <ConfigOptionStrings *>(to_be_selected->config.option("printer_extruder_variant"));
-            bool no_transfer_variant = cur_opt2->values != to_select_opt2->values;
+            ConfigOptionStrings* to_select_opt2 = to_be_selected ? dynamic_cast <ConfigOptionStrings *>(to_be_selected->config.option("printer_extruder_variant")) : nullptr;
+            bool no_transfer_variant = cur_opt2 == nullptr || to_select_opt2 == nullptr || cur_opt2->values != to_select_opt2->values;
             for (PresetUpdate &pu : updates) {
                 pu.old_preset_dirty = (old_printer_technology == pu.technology) && pu.presets->current_is_dirty();
                 pu.new_preset_compatible = (new_printer_technology == pu.technology) && is_compatible_with_printer(pu.presets->get_edited_preset_with_vendor_profile(), new_printer_preset_with_vendor_profile);
