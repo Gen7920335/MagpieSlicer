@@ -61,13 +61,17 @@ void DragCanvas::set_shape_list(const std::vector<std::string>& colors, const st
     m_dragshape_list.clear();
 
     for (int i = 0; i < order.size(); i++) {
+        // A stored sequence can name more filaments than there are colours (the filament presets of a
+        // multi-nozzle printer are topped up to the nozzle count, the colours are not): those are left out.
+        if (order[i] < 1 || order[i] > int(colors.size()))
+            continue;
         wxBitmap* bmp = get_extruder_color_icon(colors[order[i] - 1], std::to_string(order[i]), SHAPE_SIZE, SHAPE_SIZE);
         DragShape* shape = new DragShape(*bmp, order[i]);
         m_dragshape_list.push_back(shape);
     }
 
     // wrapping lines
-    for (int i = 0; i < order.size(); i++) {
+    for (int i = 0; i < m_dragshape_list.size(); i++) {
         int shape_pos_x = FromDIP(10) + i * SHAPE_GAP;
         int shape_pos_y = FromDIP(5);
         while (shape_pos_x + SHAPE_SIZE > CANVAS_WIDTH) {

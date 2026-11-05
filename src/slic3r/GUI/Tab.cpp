@@ -4292,8 +4292,11 @@ void TabPrintPlate::on_value_change(const std::string& opt_key, const boost::any
                 else if (first_layer_seq_choice == LayerSeq::flsCustomize) {
                     const DynamicPrintConfig& plate_config = plate_item.second->get();
                     if (!plate_config.has("first_layer_print_sequence")) {
+                        // One entry per filament colour, the slots the plate settings dialog draws: the filament
+                        // presets of a multi-nozzle printer are topped up to the nozzle count, the colours are not.
                         std::vector<int> initial_sequence;
-                        for (int i = 0; i < wxGetApp().filaments_cnt(); i++) {
+                        const int n_colours = int(wxGetApp().plater()->get_extruder_colors_from_plater_config().size());
+                        for (int i = 0; i < n_colours; i++) {
                             initial_sequence.push_back(i + 1);
                         }
                         plate->set_first_layer_print_sequence(initial_sequence);
@@ -4314,7 +4317,8 @@ void TabPrintPlate::on_value_change(const std::string& opt_key, const boost::any
                     const DynamicPrintConfig& plate_config = plate_item.second->get();
                     if (!plate_config.has("other_layers_print_sequence")) {
                         std::vector<int> initial_sequence;
-                        for (int i = 0; i < wxGetApp().filaments_cnt(); i++) {
+                        const int n_colours = int(wxGetApp().plater()->get_extruder_colors_from_plater_config().size());
+                        for (int i = 0; i < n_colours; i++) {
                             initial_sequence.push_back(i + 1);
                         }
                         std::vector<LayerPrintSequence> initial_layer_sequence{ std::make_pair(std::make_pair(2, INT_MAX), initial_sequence) };
