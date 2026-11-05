@@ -607,6 +607,24 @@ static inline void fill_expolygon_generate_paths(
         polylines = filler->fill_surface(&surface, fill_params);
     } catch (InfillFailedException &) {
     }
+    if (keep_narrow_island && density > 0.f && ! polylines.empty()) {
+        // MAGPIE: on an island narrower than the fill's line pitch the fill only meets the island by the lines' phase,
+        // and may clip a stub off a line at its edge: that counts as a miss. A 1 mm resin pillar joined by a brace
+        // printed 0.04 to 0.24 mm of line on three layers and stood in the air between them (seed 3121 c0057 of the
+        // random test, XL): alone, the pillar got the inset loop below; joined, the island grew enough for the fill to
+        // touch it. Half the island's area was too little at the fill's density (0.27): 0.16 mm of line passed.
+        const auto   size         = get_extents(surface.expolygon).size();
+        const double island_width = unscale<double>(std::min(size.x(), size.y()));          // mm
+        const double line_pitch   = double(filler->spacing) / std::min(1., double(density)); // mm
+        double       laid_length  = 0.;                                                       // mm
+        for (const Polyline &polyline : polylines)
+            laid_length += unscale<double>(polyline.length());
+        const double laid_area    = laid_length * double(flow.width());                         // mm2
+        const double island_area  = surface.expolygon.area() * SCALING_FACTOR * SCALING_FACTOR;  // mm2
+        // The fill's beads cover less than half the island, which the inset loop covers most of.
+        if (island_width < line_pitch && laid_area < 0.5 * island_area)
+            polylines.clear();
+    }
     if (keep_narrow_island && density > 0.f && polylines.empty()) {
         // MAGPIE: the fill missed this island (a pillar narrower than the line spacing). Print an
         // inset loop with a bead no wider than half the island, so the island is neither lost nor
