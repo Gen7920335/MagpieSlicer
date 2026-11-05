@@ -10524,10 +10524,16 @@ void GCode::append_full_config(const Print &print, std::string &str)
             if (key == "wipe_tower_x" || key == "wipe_tower_y") {
                 ss << std::fixed << std::setprecision(3) << "; " << key << " = " << dynamic_cast<const ConfigOptionFloats*>(cfg.option(key))->get_at(print.get_plate_index()) << "\n";
             }
-            if(key == "extruder_colour")
-                ss << "; " << key << " = " << cfg.opt_serialize("filament_colour") << "\n";
-            else
-                ss << "; " << key << " = " << cfg.opt_serialize(key) << "\n";
+            // A value that cannot be written (a nil in an option that is not nullable) names its setting: the bare
+            // "Serializing NaN" of the option left the user and the bug report without it.
+            try {
+                if(key == "extruder_colour")
+                    ss << "; " << key << " = " << cfg.opt_serialize("filament_colour") << "\n";
+                else
+                    ss << "; " << key << " = " << cfg.opt_serialize(key) << "\n";
+            } catch (const ConfigurationError &ex) {
+                throw ConfigurationError(std::string(ex.what()) + ": " + key);
+            }
         }
     }
     str += ss.str();
