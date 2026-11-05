@@ -2288,7 +2288,14 @@ std::string Print::slicing_errors_message(const SlicingErrors &errors) const
 
 StringObjectException Print::validate(std::vector<StringObjectException> *warnings, Polygons* collison_polygons, std::vector<std::pair<Polygon, float>>* height_polygons) const
 {
-    return this->validate_impl(warnings, collison_polygons, height_polygons, false);
+    // The checks compute flows (the support flows of organic supports, for one) before the layer height check, and
+    // a layer height above the line width makes those throw. The GUI validates on its main thread, where that
+    // exception closed the app: it is the validation error instead.
+    try {
+        return this->validate_impl(warnings, collison_polygons, height_polygons, false);
+    } catch (const FlowError &ex) {
+        return { ex.what() };
+    }
 }
 
 // MAGPIE: map_final: the filament map is the one the print uses (process() after an automatic mode derived it), so the
