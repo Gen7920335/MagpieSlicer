@@ -400,6 +400,12 @@ std::vector<PerExtruderAdjustments> CoolingBuffer::parse_layer_gcode(const std::
     // Time of any other movements before the first extrusion will be excluded from the layer time.
     bool layer_had_extrusion = false;
 
+    // MAGPIE: G91 (custom G-code) makes X, Y and Z relative until G90. Read as absolute, the U1's tool change lift
+    // (G91 G1 Z1.5 G90) put the tracked head at Z 1.5, so the writer's "G1 Z1.5 F30000" down to a 1.5 mm H/2 band
+    // right after it read as a move of no length at the current feedrate and was removed: the outer wall printed
+    // 2 mm up in the air (seed 3160 c0235 of the random test). The G-code block of a layer holds the whole macro.
+    bool relative_xyz = false;
+
     for (; *line_start != 0; line_start = line_end)
     {
         while (*line_end != '\n' && *line_end != 0)
@@ -410,6 +416,10 @@ std::vector<PerExtruderAdjustments> CoolingBuffer::parse_layer_gcode(const std::
         if (*line_end == '\n')
             ++ line_end;
         CoolingLine line(0, line_start - gcode.c_str(), line_end - gcode.c_str());
+        if (sline == "G90" || boost::starts_with(sline, "G90 ") || boost::starts_with(sline, "G90;"))
+            relative_xyz = false;
+        else if (sline == "G91" || boost::starts_with(sline, "G91 ") || boost::starts_with(sline, "G91;"))
+            relative_xyz = true;
         if (boost::starts_with(sline, "G0 "))
             line.type = CoolingLine::TYPE_G0;
         else if (boost::starts_with(sline, "G1 "))
@@ -438,6 +448,8 @@ std::vector<PerExtruderAdjustments> CoolingBuffer::parse_layer_gcode(const std::
                 if (axis != size_t(-1)) {
                     ++ c;
                     new_pos[axis] = float(atof_decimal_point(std::string_view(c, sline.data() + sline.size() - c)));
+                    if (relative_xyz && axis < 3 && (line.type & CoolingLine::TYPE_G92) == 0)
+                        new_pos[axis] += current_pos[axis];
                     if (axis == 4) {
                         // Convert mm/min to mm/sec.
                         new_pos[4] /= 60.f;
