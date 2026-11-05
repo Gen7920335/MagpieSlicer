@@ -5572,6 +5572,18 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
     if (filament_volume_maps.size() != num_filaments) {
         filament_volume_maps.resize(num_filaments, nvtStandard);
     }
+    // The nozzle-count top-up in update_multi_material_filament_presets() grows filament_presets ahead of the
+    // per-filament project arrays (the sidebar opens the colour slot afterwards, if at all). In that middle state
+    // the print still gets one colour per filament, the last one repeated, as it gets the filament maps above:
+    // the filament grouping and other print code take the colour count as the filament count and indexed past it.
+    if (auto *colours = out.option<ConfigOptionStrings>("filament_colour");
+        colours != nullptr && !colours->values.empty() && colours->values.size() < num_filaments) {
+        const size_t old_slots = colours->values.size();
+        for (const char *key : { "filament_colour", "filament_multi_colour", "filament_colour_type" })
+            if (auto *opt = out.option<ConfigOptionStrings>(key); opt != nullptr && !opt->values.empty() && opt->values.size() < num_filaments)
+                opt->values.resize(num_filaments, opt->values.back());
+        resize_mixed_filament_metadata(out, old_slots, num_filaments);
+    }
 
     auto* extruder_diameter = dynamic_cast<const ConfigOptionFloats*>(out.option("nozzle_diameter"));
     // Collect the "compatible_printers_condition" and "inherits" values over all presets (print, filaments, printers) into a single vector.
