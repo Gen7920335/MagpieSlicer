@@ -43535,3 +43535,99 @@ msgstr "서포트 엔진"
 
 msgid "Nozzle cooling and waits"
 msgstr "노즐 냉각·대기"
+
+# MAGPIE: printer connection panel and printer agent
+msgid "Orca"
+msgstr "Orca"
+
+msgid "(stored; type to replace)"
+msgstr "(저장됨, 입력하면 바뀜)"
+
+#, boost-format
+msgid "%1%: printer connection"
+msgstr "%1%: 프린터 연결"
+
+msgid "Choose a mod's printer connection under Printer Agent first."
+msgstr "먼저 프린터 에이전트에서 모드의 프린터 연결을 고르세요."
+
+msgid "Connected."
+msgstr "연결됨."
+
+msgid "Connection failed."
+msgstr "연결에 실패했습니다."
+
+msgid "Network access"
+msgstr "네트워크 액세스"
+
+msgid "Network access: allowed."
+msgstr "네트워크 액세스: 허용됨."
+
+msgid "Network access: not allowed yet. The printer cannot connect until you allow it."
+msgstr "네트워크 액세스: 아직 허용되지 않았습니다. 허용하기 전에는 프린터에 연결할 수 없습니다."
+
+msgid "Not connected."
+msgstr "연결되지 않음."
+
+msgid "ports"
+msgstr "포트"
+
+#, boost-format
+msgid "Printer address: %1%"
+msgstr "프린터 주소: %1%"
+
+msgid "printers on your local network"
+msgstr "로컬 네트워크의 프린터"
+
+#, boost-format
+msgid "Progress: %1%"
+msgstr "진행 상황: %1%"
+
+msgid "Review and allow..."
+msgstr "검토 후 허용..."
+
+msgid "Set the printer's address (Host) in the printer settings first."
+msgstr "먼저 프린터 설정에서 프린터 주소(호스트)를 설정하세요."
+
+#, boost-format
+msgid "State: %1%"
+msgstr "상태: %1%"
+
+#, boost-format
+msgid "The mod \"%1%\" connects to:\n\n%3%\n%2%\n\nAllow it? You can withdraw this in the printer connection panel."
+msgstr "모드 \"%1%\"이(가) 다음에 연결합니다:\n\n%3%\n%2%\n\n허용할까요? 프린터 연결 패널에서 언제든 철회할 수 있습니다."
+
+msgid "The mod's page is missing from its folder."
+msgstr "모드 폴더에 모드 페이지가 없습니다."
+
+msgid "The system's credential store did not accept the value."
+msgstr "시스템 자격 증명 저장소가 값을 받아들이지 않았습니다."
+
+msgid "The web view is not available on this system."
+msgstr "이 시스템에서는 웹 보기를 사용할 수 없습니다."
+
+msgid "Withdraw"
+msgstr "철회"
+
+msgid "Connection settings, network access and controls of the printer agent a mod provides."
+msgstr "모드가 제공하는 프린터 에이전트의 연결 설정, 네트워크 액세스, 제어입니다."
+
+msgid "Printer connection..."
+msgstr "프린터 연결..."
+
+msgid "Agree to the mod's network access in the printer connection panel first."
+msgstr "먼저 프린터 연결 패널에서 모드의 네트워크 액세스를 허용하세요."
+
+msgid "The printer is not connected."
+msgstr "프린터가 연결되어 있지 않습니다."
+
+msgid "The printer mod does not know this command."
+msgstr "프린터 모드가 이 명령을 알지 못합니다."
+
+msgid "The printer mod failed."
+msgstr "프린터 모드가 실패했습니다."
+
+msgid "The printer mod gave no camera information."
+msgstr "프린터 모드가 카메라 정보를 주지 않았습니다."
+
+msgid "This cannot be done while the printer is printing."
+msgstr "프린터가 출력 중일 때는 할 수 없습니다."
