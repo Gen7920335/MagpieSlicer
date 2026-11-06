@@ -92,6 +92,8 @@ The developer documentation and the SDK live in the [magpie-mods](https://github
 - **SDK** ([`sdk/`](https://github.com/Gen7920335/magpie-mods/tree/main/sdk), identical to `mods/sdk` here): the C header `magpie_mod_api.h` and per-slot headers, the C++ helper `magpie_mod.hpp`, the CMake template `MagpieMod.cmake`. MIT licensed, so mods built with it may use any license.
 - **Official mod sources** ([`mods/`](https://github.com/Gen7920335/magpie-mods/tree/main/mods)): a starting point for new mods.
 
+A mod places its settings next to Orca's with the manifest's `"ui"`: right after a setting's line (`after`), in a page's group (`page`, `group`, `group_after`), or merged with an Orca setting into one control (`merge_into`). From 2.5.0.2.1 a new group can also name the foldable category it goes under (`category`, e.g. `"Support engines"`, `"Walls"`); without one it takes the category of the group before it. The guide's section 4.9 lists each page's categories and the rules.
+
 There are two kinds of mods.
 
 | Kind | Content |
@@ -107,7 +109,7 @@ Slots a native mod can implement, with the official mods as examples:
 | `support.areas` / `support.compose` / `support.contacts` | Support generation (areas / composed from core generators / contacts and body) | cura_support / mixed_support / resin_support |
 | `support.style` | Interface pattern, sublayers, wall counts | support_extras |
 | `object.z_offset` | Object lift | resin_support |
-| `layer.bands` | Physical band split within a layer | half_layer |
+| `layer.bands` | Physical band split within a layer (support: all of it or the contact zones only) | half_layer |
 | `gcode.events` | G-code export events (temperatures, waits, auxiliary towers, start G-code filter) | low_temp_interface, snapmaker_u1 |
 | `gcode.time_plan` | Layer time wait planning | layer_time_blend |
 | `calibration.project` | Calibration menu entries and project generation | low_temp_calibration |

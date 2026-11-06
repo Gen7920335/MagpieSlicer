@@ -92,6 +92,8 @@ Magpie Slicer는 [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer) 나이�
 - **SDK** ([`sdk/`](https://github.com/Gen7920335/magpie-mods/tree/main/sdk), 이 저장소의 `mods/sdk`와 같음): C 헤더 `magpie_mod_api.h`와 슬롯별 헤더, C++ 도우미 `magpie_mod.hpp`, CMake 템플릿 `MagpieMod.cmake`. MIT 라이선스라 SDK로 만든 모드는 원하는 라이선스로 배포할 수 있습니다.
 - **공식 모드 소스** ([`mods/`](https://github.com/Gen7920335/magpie-mods/tree/main/mods)): 새 모드의 출발점으로 쓸 수 있습니다.
 
+모드 설정은 매니페스트의 `"ui"`로 Orca 설정 옆에 놓습니다. 특정 설정 줄 바로 뒤(`after`), 페이지의 그룹(`page`, `group`, `group_after`), Orca 설정과 한 컨트롤로 합치기(`merge_into`)가 있고, 2.5.0.2.1부터는 새 그룹이 들어갈 접는 범주(`category`, 예: `"Support engines"`, `"Walls"`)도 정할 수 있습니다. 범주를 정하지 않으면 바로 앞 그룹의 범주를 따릅니다. 페이지별 범주 목록과 규칙은 가이드 4.9절에 있습니다.
+
 모드는 두 종류입니다.
 
 | 종류 | 내용 |
@@ -107,7 +109,7 @@ Magpie Slicer는 [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer) 나이�
 | `support.areas` / `support.compose` / `support.contacts` | 서포트 생성(영역 / 코어 생성기 조합 / 접점·몸체) | cura_support / mixed_support / resin_support |
 | `support.style` | 접점 패턴·서브레이어·벽 수 | support_extras |
 | `object.z_offset` | 오브젝트 띄우기 | resin_support |
-| `layer.bands` | 레이어 안 물리 밴드 분할 | half_layer |
+| `layer.bands` | 레이어 안 물리 밴드 분할(서포트는 전체 또는 접촉 영역만) | half_layer |
 | `gcode.events` | G-code 내보내기 이벤트(온도·대기·보조 타워·시작 G-code 필터) | low_temp_interface, snapmaker_u1 |
 | `gcode.time_plan` | 레이어 시간 대기 계획 | layer_time_blend |
 | `calibration.project` | 캘리브레이션 메뉴 항목과 프로젝트 생성 | low_temp_calibration |
