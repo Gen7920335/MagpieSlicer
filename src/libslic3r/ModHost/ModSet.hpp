@@ -64,6 +64,11 @@ struct ModParamUi
     std::string page;
     std::string group;
     std::string group_after;
+    // The foldable category of the page a new group goes under (Tab.cpp page_categories, in English as the source
+    // writes it, "Support engines"): the group is put at the end of that category, or after `group_after` when
+    // that group is in it. Without one the group takes the category of the group it follows. A category the page
+    // does not have is made at the end of the page, titled by the mod's own text (its label translations).
+    std::string category;
     // How the value is edited: "" (by its type), "toolhead" (an int: 0 = automatic, n = toolhead n, as a
     // dropdown named by the printer's nozzles) or "layer_ranges" (a string of first:last:toolhead entries, as
     // a table, ModHost::parse_layer_ranges).

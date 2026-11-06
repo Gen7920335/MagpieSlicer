@@ -64,7 +64,8 @@ public:
     std::function<void(bool modified)> on_modified;
     // Called with whether any row shows, after rows were shown or hidden by their conditions, so a group holding only
     // this panel can hide with it.
-    std::function<void(bool any_shown)> on_rows_shown;
+    // Called when whether any row shows, or how many, changes.
+    std::function<void(bool any_shown, size_t shown)> on_rows_shown;
     // Shows each row's modified state against saved_text.
     void update_modified();
     // For a single row without labels: how far its control sits right of the panel's left edge (the revert button and
@@ -107,6 +108,7 @@ private:
     bool                                   m_loading = false;
     bool                                   m_any_modified = false;
     std::optional<bool>                    m_any_shown;
+    size_t                                 m_shown_count = 0;
 };
 
 } // namespace GUI

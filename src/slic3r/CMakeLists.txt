@@ -660,6 +660,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/Widgets/StaticBox.hpp
     GUI/Widgets/StaticLine.cpp
     GUI/Widgets/StaticLine.hpp
+    GUI/Widgets/CategoryHeader.cpp
+    GUI/Widgets/CategoryHeader.hpp
     GUI/Widgets/StepCtrl.cpp
     GUI/Widgets/StepCtrl.hpp
     GUI/Widgets/SwitchButton.cpp

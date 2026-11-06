@@ -537,12 +537,15 @@ void ModParamsPanel::update_visibility()
         if (wxWindow *parent = GetParent())
             parent->Layout();
     }
-    bool any_shown = false;
+    size_t shown = 0;
     for (const Row &row : m_rows)
-        any_shown = any_shown || row.control->IsShown();
-    if (on_rows_shown && m_any_shown != any_shown) {
-        m_any_shown = any_shown;
-        on_rows_shown(any_shown);
+        if (row.control->IsShown())
+            ++shown;
+    const bool any_shown = shown > 0;
+    if (on_rows_shown && (m_any_shown != any_shown || m_shown_count != shown)) {
+        m_any_shown   = any_shown;
+        m_shown_count = shown;
+        on_rows_shown(any_shown, shown);
     }
 }
 

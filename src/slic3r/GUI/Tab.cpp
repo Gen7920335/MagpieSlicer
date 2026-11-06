@@ -111,6 +111,7 @@
 
 #include "Widgets/ComboBox.hpp"
 #include "Widgets/Label.hpp"
+#include "Widgets/CategoryHeader.hpp"
 #include "Widgets/MultiNozzleSync.hpp"
 #include "Widgets/SwitchButton.hpp"
 #include "Widgets/TabCtrl.hpp"
@@ -2661,6 +2662,14 @@ void Tab::activate_option(const std::string& opt_key, const wxString& category)
         break;
     }
 
+    // MAGPIE: a folded category opens for the option it holds, so the field can take the focus.
+    for (PageShp page : m_pages)
+        if (page->expand_for(opt_key)) {
+            m_page_view->Layout();
+            m_page_view->GetParent()->Layout();
+            break;
+        }
+
     auto set_focus = [](wxWindow* win) {
         win->SetFocus();
 #ifdef WIN32
@@ -3464,6 +3473,7 @@ void TabPrint::build()
         option.opt.height = 25;//250;
         optgroup->append_single_option_line(option, "others_settings_notes");
 
+    add_categories();
     add_mods_page("process");
 
     // Orca: hide the dependencies tab for process for now. The UI is not ready yet.
@@ -5194,6 +5204,7 @@ void TabFilament::build()
         option.opt.height = notes_field_height;// 250;
         optgroup->append_single_option_line(option);
 
+    add_categories();
     add_mods_page("filament");
 
         //build_preset_description_line(optgroup.get());
@@ -5892,6 +5903,7 @@ void TabPrinter::build_fff()
         option.opt.height = notes_field_height;//250;
         optgroup->append_single_option_line(option);
 
+    add_categories();
     add_mods_page("printer");
 #if 0
     //page = add_options_page(L("Dependencies"), "advanced");
@@ -8433,6 +8445,57 @@ void Tab::write_merged(const std::string& option, const std::string& option_valu
     update();
 }
 
+// MAGPIE: the foldable categories of the settings pages ("process/Quality" is the process tab's Quality page; the
+// tab names are the preset collections': process, filament, machine), each from the Orca group it starts at, as L()
+// writes it, to the next category's start. A page not listed, or a start group the page lacks, gets no header there;
+// the mods add their own (mod.json "ui" "category").
+static const std::vector<std::pair<const char*, const char*>>& page_categories(const std::string& tab, const wxString& page)
+{
+    static const std::map<std::string, std::vector<std::pair<const char*, const char*>>> categories = {
+        { "process/Quality",            { { L("Layers and line width"), L("Layer height") },
+                                        { L("Seam, precision and ironing"), L("Seam") },
+                                        { L("Walls"), L("Wall generator") },
+                                        { L("Bridging and overhangs"), L("Bridging") } } },
+        { "process/Strength",           { { L("Shells"), L("Walls") },
+                                        { L("Infill"), L("Infill") } } },
+        { "process/Speed",              { { L("Print speed"), L("First layer speed") },
+                                        { L("Acceleration and jerk"), L("Acceleration") } } },
+        { "process/Support",            { { L("Support"), L("Support") } } },
+        { "process/Multimaterial",      { { L("Prime tower"), L("Prime tower") },
+                                        { L("Ooze prevention and flushing"), L("Ooze prevention") } } },
+        { "process/Others",             { { L("Adhesion"), L("Skirt") },
+                                        { L("Special modes"), L("Special mode") },
+                                        { L("G-code and plugins"), L("G-code output") } } },
+        { "filament/Filament",        { { L("Filament"), L("Basic information") },
+                                        { L("Temperatures"), L("Print chamber temperature") },
+                                        { L("Volumetric speed"), L("Volumetric speed limitation") } } },
+        { "filament/Cooling",         { { L("Layer cooling"), L("Cooling for specific layer") },
+                                        { L("Fans"), L("Part cooling fan") } } },
+        { "filament/Multimaterial",   { { L("Wipe tower"), L("Wipe tower parameters") },
+                                        { L("Tool change"), L("Tool change parameters with single extruder MM printers") } } },
+        { "machine/Basic information", { { L("Machine"), L("Printable space") },
+                                         { L("Cooling, clearance and accessories"), L("Cooling Fan") } } },
+        { "machine/Machine G-code",   { { L("Start and end G-code"), L("File header G-code") },
+                                        { L("Layer and object G-code"), L("Printing by object G-code") },
+                                        { L("Filament and other G-code"), L("Change filament G-code") } } },
+    };
+    static const std::vector<std::pair<const char*, const char*>> none;
+    const auto it = categories.find(tab + "/" + into_u8(page));
+    return it == categories.end() ? none : it->second;
+}
+
+void Tab::add_categories()
+{
+    for (PageShp page : m_pages)
+        for (const auto& [title, first_group] : page_categories(name(), page->title())) {
+            const wxString group_title = wxString::FromUTF8(first_group);
+            const auto     it          = std::find_if(page->m_optgroups.begin(), page->m_optgroups.end(),
+                                                      [&group_title](const ConfigOptionsGroupShp& g) { return g->title == group_title; });
+            if (it != page->m_optgroups.end())
+                page->add_category(wxString::FromUTF8(title), size_t(it - page->m_optgroups.begin()));
+        }
+}
+
 void Tab::add_mods_page(const std::string& scope)
 {
     // Mod parameters are per preset; the per-object tabs have no Mods page yet.
@@ -8528,15 +8591,32 @@ void Tab::add_mods_page(const std::string& scope)
                     group = find_group(page, title);
                 if (group == nullptr) {
                     ConfigOptionsGroupShp after = p->ui.group_after.empty() ? nullptr : find_group(page, p->ui.group_after);
+                    // MAGPIE: the category the group goes under. Named, it is the page's category of that title, or
+                    // a new one at the end of the page; `group_after` places the group only inside that category.
+                    int category = -1;
+                    if (!p->ui.category.empty()) {
+                        category = page->find_category(wxString::FromUTF8(p->ui.category));
+                        if (category < 0) {
+                            page->add_category(wxString::FromUTF8(p->ui.category), page->m_optgroups.size());
+                            category = page->find_category(wxString::FromUTF8(p->ui.category));
+                        }
+                        if (after) {
+                            const size_t after_index = size_t(std::find(page->m_optgroups.begin(), page->m_optgroups.end(), after) - page->m_optgroups.begin());
+                            if (page->category_of_group(after_index) != category)
+                                after = nullptr;
+                        }
+                    }
                     // With the icon of the group it follows, or of the page's first group.
                     const wxString icon = after ? after->icon : !page->m_optgroups.empty() ? page->m_optgroups.front()->icon : wxString(L"param_advanced");
                     group = page->new_optgroup(wxString::FromUTF8(title), icon);
-                    // Moved from the end of the page to right after group_after (and the groups put there before).
+                    // Moved from the end of the page to right after group_after (and the groups put there before), or
+                    // to the end of its category.
                     if (after) {
                         auto& groups = page->m_optgroups;
-                        groups.pop_back();
                         const size_t at = size_t(std::find(groups.begin(), groups.end(), after) - groups.begin()) + 1 + groups_after[after.get()]++;
-                        groups.insert(groups.begin() + std::min(at, groups.size()), group);
+                        page->move_last_group_to(at);
+                    } else if (category >= 0) {
+                        page->move_last_group_to(page->category_end(size_t(category)));
                     }
                 }
                 auto it = std::find_if(group_keys.begin(), group_keys.end(), [&group](const auto& g) { return g.first == group; });
@@ -8595,11 +8675,19 @@ void Tab::add_mods_page(const std::string& scope)
             ModParamsPanel* panel = add_mod_params_panel(parent, mods, scope, panel_keys, true);
             sizer->Add(panel, 1, wxEXPAND);
             if (own_group) {
-                panel->on_rows_shown = [this, weak_group](bool any_shown) {
+                panel->on_rows_shown = [this, weak_group](bool any_shown, size_t rows) {
                     ConfigOptionsGroupShp group = weak_group.lock();
                     if (!group || group->sizer == nullptr)
                         return;
-                    group->Show(any_shown);
+                    // Through the page, which keeps the group hidden while its category is folded.
+                    PageShp page;
+                    for (PageShp p : m_pages)
+                        if (std::find(p->m_optgroups.begin(), p->m_optgroups.end(), group) != p->m_optgroups.end())
+                            page = p;
+                    if (page)
+                        page->set_group_rows_shown(group.get(), any_shown, rows);
+                    else
+                        group->Show(any_shown);
                     m_page_view->Layout();
                     m_page_view->GetParent()->Layout();
                 };
@@ -10362,6 +10450,7 @@ void Page::reload_config()
 void Page::update_visibility(ConfigOptionMode mode, bool update_contolls_visibility)
 {
     bool ret_val = false;
+    m_mode = mode;
 #if HIDE_FIRST_SPLIT_LINE
     // BBS: no line spliter for first group
     bool first = true;
@@ -10381,8 +10470,11 @@ void Page::update_visibility(ConfigOptionMode mode, bool update_contolls_visibil
     }
 
     m_show = ret_val;
-    if (update_contolls_visibility)
+    if (update_contolls_visibility) {
         m_visibility_applied = true;
+        // MAGPIE: the groups shown for the mode fold again under their folded categories.
+        apply_categories(false);
+    }
 #ifdef __WXMSW__
     if (!m_show) return;
     // BBS: fix field control position
@@ -10437,6 +10529,31 @@ bool Page::activate_group(size_t i, ConfigOptionMode mode, std::function<void()>
     if (!group->activate(throw_if_canceled))
         return false;
     m_visibility_applied = false;
+    m_mode = mode;
+    // MAGPIE: the header of the category that starts at this group goes right above it. The groups build in
+    // order, so the headers land between the right groups.
+    if (const int ci = category_of_group(i); ci >= 0 && m_categories[size_t(ci)].first_group == i && m_categories[size_t(ci)].header == nullptr) {
+        Category& c      = m_categories[size_t(ci)];
+        auto*     header = new CategoryHeader(m_parent, _(c.title), category_collapsed(size_t(ci)));
+        c.header         = header;
+        std::weak_ptr<Page> wp = shared_from_this();
+        header->on_toggle = [wp, ci](bool collapsed) {
+            PageShp page = wp.lock();
+            if (!page)
+                return;
+            page->set_category_collapsed(size_t(ci), collapsed, true);
+            page->parent()->Layout();
+            page->parent()->GetParent()->Layout();
+        };
+        // The page's controls can be cleared without Page::clear() (a cancelled build); forget the header then.
+        header->Bind(wxEVT_DESTROY, [wp, ci, header](wxWindowDestroyEvent& event) {
+            if (event.GetEventObject() == header)
+                if (PageShp page = wp.lock(); page && size_t(ci) < page->m_categories.size() && page->m_categories[size_t(ci)].header == header)
+                    page->m_categories[size_t(ci)].header = nullptr;
+            event.Skip();
+        });
+        m_vsizer->Add(header, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, m_parent->FromDIP(5));
+    }
     m_vsizer->Add(group->sizer, 0, wxEXPAND | (group->is_legend_line() ? (wxLEFT|wxTOP) : wxALL), m_parent->FromDIP(5)); // ORCA use less margin on parameters section
     group->update_visibility(mode);
 #if HIDE_FIRST_SPLIT_LINE
@@ -10444,6 +10561,9 @@ bool Page::activate_group(size_t i, ConfigOptionMode mode, std::function<void()>
     if (i == 0) group->stb->Hide();
 #endif
     group->reload_config();
+    // MAGPIE: built folded when its category is.
+    if (const int ci = category_of_group(i); ci >= 0 && category_collapsed(size_t(ci)))
+        group->Show(false);
     return true;
 }
 
@@ -10472,18 +10592,189 @@ void Page::clear()
         group->clear();
     m_page_title = NULL;
     m_visibility_applied = false;
+    // MAGPIE: the headers go with the page's controls (ParamsPanel::clear_page destroys them).
+    for (Category& c : m_categories)
+        c.header = nullptr;
+    m_groups_without_rows.clear();
 }
 
 void Page::msw_rescale()
 {
     for (auto group : m_optgroups)
         group->msw_rescale();
+    for (Category& c : m_categories)
+        if (c.header)
+            c.header->Rescale();
 }
 
 void Page::sys_color_changed()
 {
     for (auto group : m_optgroups)
         group->sys_color_changed();
+    for (Category& c : m_categories)
+        if (c.header)
+            c.header->Refresh();
+}
+
+// MAGPIE: foldable categories (Page::Category).
+
+void Page::add_category(const wxString& title, size_t first_group)
+{
+    for (Category& c : m_categories)
+        if (c.first_group == first_group) {
+            c.title = title;
+            return;
+        }
+    Category c;
+    c.title       = title;
+    c.first_group = first_group;
+    auto at = std::find_if(m_categories.begin(), m_categories.end(), [first_group](const Category& o) { return o.first_group > first_group; });
+    m_categories.insert(at, std::move(c));
+}
+
+int Page::find_category(const wxString& title) const
+{
+    for (size_t i = 0; i < m_categories.size(); ++i)
+        if (m_categories[i].title == title)
+            return int(i);
+    return -1;
+}
+
+int Page::category_of_group(size_t group) const
+{
+    int found = -1;
+    for (size_t i = 0; i < m_categories.size(); ++i)
+        if (m_categories[i].first_group <= group)
+            found = int(i);
+    return found;
+}
+
+size_t Page::category_end(size_t category) const
+{
+    return category + 1 < m_categories.size() ? m_categories[category + 1].first_group : m_optgroups.size();
+}
+
+void Page::move_last_group_to(size_t at)
+{
+    if (m_optgroups.empty())
+        return;
+    const size_t          last  = m_optgroups.size() - 1;
+    ConfigOptionsGroupShp group = m_optgroups.back();
+    m_optgroups.pop_back();
+    at = std::min(at, m_optgroups.size());
+    m_optgroups.insert(m_optgroups.begin() + at, group);
+    // The categories of the groups pushed down start one later; a category made for this group (at the end) stays.
+    for (Category& c : m_categories)
+        if (c.first_group >= at && c.first_group < last)
+            ++c.first_group;
+}
+
+std::string Page::fold_config_key(size_t category) const
+{
+    std::string key = static_cast<Tab*>(m_tab_owner)->name() + "/" + into_u8(m_title) + "/" + into_u8(m_categories[category].title);
+    std::replace(key.begin(), key.end(), ' ', '_');
+    return key;
+}
+
+bool Page::category_collapsed(size_t category)
+{
+    Category& c = m_categories[category];
+    if (!c.collapsed_loaded) {
+        c.collapsed_loaded = true;
+        std::string value;
+        if (wxGetApp().app_config->get("settings_fold", fold_config_key(category), value))
+            c.collapsed = value == "1";
+        else
+            c.collapsed = category > 0; // the first category of a page open, the others folded
+    }
+    return c.collapsed;
+}
+
+void Page::set_category_collapsed(size_t category, bool collapsed, bool remember)
+{
+    if (category >= m_categories.size())
+        return;
+    category_collapsed(category);
+    Category& c = m_categories[category];
+    c.collapsed = collapsed;
+    if (c.header)
+        c.header->SetCollapsed(collapsed);
+    if (remember)
+        wxGetApp().app_config->set("settings_fold", fold_config_key(category), collapsed ? "1" : "0");
+    apply_categories(true);
+}
+
+// Hides the built groups of the folded categories, and the header of a category with nothing to show for the
+// mode. With `restore`, the groups of the open categories show again for the mode.
+void Page::apply_categories(bool restore)
+{
+    for (size_t ci = 0; ci < m_categories.size(); ++ci) {
+        Category&    c         = m_categories[ci];
+        const bool   collapsed = category_collapsed(ci);
+        bool         any_shown = false;
+        size_t       count     = 0;
+        const size_t end       = std::min(category_end(ci), m_optgroups.size());
+        for (size_t i = c.first_group; i < end; ++i) {
+            ConfigOptionsGroupShp group   = m_optgroups[i];
+            const bool            visible = m_groups_without_rows.count(group.get()) == 0 && group->is_visible(m_mode);
+            any_shown |= visible;
+            if (visible) {
+                if (auto rows = m_mod_rows.find(group.get()); rows != m_mod_rows.end())
+                    count += rows->second;
+                else
+                    for (const Line& line : group->get_lines())
+                        count += line.get_options().size();
+            }
+            if (group->sizer == nullptr)
+                continue;
+            if (collapsed || !visible)
+                group->Show(false);
+            else if (restore) {
+                group->Show(true);
+                group->update_visibility(m_mode);
+            }
+        }
+        if (c.header) {
+            c.header->Show(any_shown);
+            c.header->SetCount(count);
+        }
+    }
+}
+
+bool Page::expand_for(const t_config_option_key& opt_key)
+{
+    for (size_t i = 0; i < m_optgroups.size(); ++i) {
+        bool has = false;
+        for (const Line& line : m_optgroups[i]->get_lines())
+            for (const Option& option : line.get_options())
+                if (option.opt.opt_key == opt_key)
+                    has = true;
+        if (!has)
+            continue;
+        const int ci = category_of_group(i);
+        if (ci < 0 || !category_collapsed(size_t(ci)))
+            return false;
+        set_category_collapsed(size_t(ci), false, false);
+        return true;
+    }
+    return false;
+}
+
+void Page::set_group_rows_shown(ConfigOptionsGroup* group, bool shown, size_t rows)
+{
+    m_mod_rows[group] = rows;
+    if (shown)
+        m_groups_without_rows.erase(group);
+    else
+        m_groups_without_rows.insert(group);
+    const auto it = std::find_if(m_optgroups.begin(), m_optgroups.end(), [group](const ConfigOptionsGroupShp& g) { return g.get() == group; });
+    if (it == m_optgroups.end())
+        return;
+    const int ci = category_of_group(size_t(it - m_optgroups.begin()));
+    if (group->sizer)
+        group->Show(shown && (ci < 0 || !category_collapsed(size_t(ci))));
+    if (ci >= 0)
+        apply_categories(false);
 }
 
 void Page::refresh()

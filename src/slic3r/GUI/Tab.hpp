@@ -38,6 +38,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <vector>
 #include <memory>
 
@@ -59,6 +60,7 @@ class ModeSwitchButton;
 class SwitchButton;
 class MultiSwitchButton;
 
+class CategoryHeader;
 namespace Slic3r {
 
 class ModelConfig;
@@ -141,7 +143,40 @@ public:
 
     std::map<std::string, std::string> m_opt_id_map;
 
+    // MAGPIE: foldable categories. A category is a run of option groups under one clickable header
+    // (CategoryHeader): it starts at m_optgroups[first_group] and runs to the next category's first group.
+    // Groups before the first category have none and always show. A fold hides the groups' controls; the state
+    // is kept per tab, page and category in the app config ("settings_fold"), the first category of a page
+    // open and the others folded until the user changes them.
+    struct Category
+    {
+        wxString        title; // untranslated, as L() writes it
+        size_t          first_group;
+        bool            collapsed = false;
+        bool            collapsed_loaded = false;
+        CategoryHeader* header = nullptr;
+    };
+    std::vector<Category> m_categories;
+    void   add_category(const wxString& title, size_t first_group);
+    int    find_category(const wxString& title) const;
+    int    category_of_group(size_t group) const;
+    size_t category_end(size_t category) const;
+    // Moves the group new_optgroup() just appended to index `at`, keeping the categories' starts.
+    void   move_last_group_to(size_t at);
+    void   set_category_collapsed(size_t category, bool collapsed, bool remember);
+    // Opens the category holding this option; true when it was folded.
+    bool   expand_for(const t_config_option_key& opt_key);
+    // A group whose rows are all hidden (a mod's own group) stays hidden while open too.
+    void   set_group_rows_shown(ConfigOptionsGroup* group, bool shown, size_t rows);
+
 protected:
+    ConfigOptionMode               m_mode = comExpert;
+    std::set<ConfigOptionsGroup*>  m_groups_without_rows;
+    // Rows a mod's panel shows, for the folded header's count.
+    std::map<ConfigOptionsGroup*, size_t> m_mod_rows;
+    bool        category_collapsed(size_t category);
+    void        apply_categories(bool restore);
+    std::string fold_config_key(size_t category) const;
     size_t      next_group_to_build() const;
     bool        activate_group(size_t i, ConfigOptionMode mode, std::function<void()> throw_if_canceled);
 	// Color of TreeCtrlItem. The wxColour will be updated only if the new wxColour pointer differs from the currently rendered one.
@@ -515,6 +550,8 @@ protected:
 	// Parameters a mod places next to Orca's own settings (ModParamUi) go there instead: a row after an option's
 	// line, or a group of the page; a place this tab does not have leaves the row on the Mods page.
 	void			add_mods_page(const std::string& scope);
+	// MAGPIE: the foldable categories of this tab's pages (page_categories), before the mods add their groups.
+	void			add_categories();
 	// A panel of `keys` on this tab, kept in m_mod_params_panels while it lives.
 	ModParamsPanel* add_mod_params_panel(wxWindow* parent, std::shared_ptr<const ModHost::ModSet> mods, const std::string& scope,
 	                                     const std::vector<std::string>& keys, bool labels);

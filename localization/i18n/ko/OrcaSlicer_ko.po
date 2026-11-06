@@ -43477,3 +43477,61 @@ msgstr "플레이트 %1%의 프라임 타워가 놓인 자리에 더 이상 들�
 #, boost-format
 msgid "The prime tower on plate %1% no longer fits where it was placed, so it was moved to free space on the plate."
 msgstr "플레이트 %1%의 프라임 타워가 놓인 자리에 더 이상 들어가지 않아 플레이트의 빈 공간으로 옮겼습니다."
+
+# MAGPIE: foldable settings categories (Tab.cpp page_categories)
+msgid "Layers and line width"
+msgstr "레이어·선 폭"
+
+msgid "Seam, precision and ironing"
+msgstr "솔기·정밀도·다림질"
+
+msgid "Bridging and overhangs"
+msgstr "브리지·오버행"
+
+msgid "Shells"
+msgstr "쉘"
+
+msgid "Print speed"
+msgstr "출력 속도"
+
+msgid "Acceleration and jerk"
+msgstr "가속·저크"
+
+msgid "Ooze prevention and flushing"
+msgstr "누출 방지·플러시"
+
+msgid "Adhesion"
+msgstr "접착"
+
+msgid "Special modes"
+msgstr "특수 모드"
+
+msgid "G-code and plugins"
+msgstr "G-code·플러그인"
+
+msgid "Layer cooling"
+msgstr "레이어 냉각"
+
+msgid "Fans"
+msgstr "팬"
+
+msgid "Tool change"
+msgstr "툴 교체"
+
+msgid "Cooling, clearance and accessories"
+msgstr "냉각·간격·부속"
+
+msgid "Start and end G-code"
+msgstr "시작·종료 G-code"
+
+msgid "Layer and object G-code"
+msgstr "레이어·객체 G-code"
+
+msgid "Filament and other G-code"
+msgstr "필라멘트·기타 G-code"
+
+msgid "Support engines"
+msgstr "서포트 엔진"
+
+msgid "Nozzle cooling and waits"
+msgstr "노즐 냉각·대기"

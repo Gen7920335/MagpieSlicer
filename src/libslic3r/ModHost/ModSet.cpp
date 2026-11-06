@@ -708,6 +708,7 @@ Mod ModSet::parse_mod(const std::string &json_text)
                 p.ui.page        = optional_string(*ui, "page");
                 p.ui.group       = optional_string(*ui, "group");
                 p.ui.group_after = optional_string(*ui, "group_after");
+                p.ui.category    = optional_string(*ui, "category");
                 p.ui.widget      = optional_string(*ui, "widget");
                 p.ui.merge_into  = optional_string(*ui, "merge_into");
                 if (std::string text = optional_string(*ui, "merge_when"); !text.empty())
@@ -722,6 +723,8 @@ Mod ModSet::parse_mod(const std::string &json_text)
                     throw ModError(where + ": \"ui\" names a row \"after\" an option or a \"group\", not both");
                 if (!p.ui.group.empty() && p.ui.page.empty())
                     throw ModError(where + ": a \"ui\" \"group\" needs the \"page\" it is on");
+                if (!p.ui.category.empty() && p.ui.group.empty())
+                    throw ModError(where + ": a \"ui\" \"category\" is for a \"group\"; a row \"after\" an option takes that option's category");
                 if (!p.ui.widget.empty() && p.ui.widget != "toolhead" && p.ui.widget != "layer_ranges")
                     throw ModError(where + ": \"ui\" \"widget\" must be toolhead or layer_ranges");
                 if (p.ui.widget == "toolhead" && p.type != "int")
