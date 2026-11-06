@@ -24,7 +24,18 @@ Magpie Slicer is based on [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer)
 - **Manual update check:** Help > Check for updates queries the GitHub releases. Nothing is checked automatically at start.
 - **Korean translation** of the app and of every mod's names and settings.
 
-Versions follow `<Orca version>.<Magpie line>.<revision>` (currently 2.5.0.2.1). The Windows 10/11 x64 installer is on the [Releases](../../releases) page.
+Versions follow `<Orca version>.<Magpie line>.<revision>`. The latest stable release is 2.5.0.2.0 and the latest beta is [2.5.0.2.1 beta](../../releases/tag/v2.5.0.2.1). The Windows 10/11 x64 installer is on the [Releases](../../releases) page.
+
+### What's new in 2.5.0.2.1 beta
+
+- **Settings categories:** options on the process, filament and printer tabs are grouped into foldable categories with option counts and a header that stays pinned while scrolling.
+- **Complete Korean translation,** including the printer connection panel and the category titles.
+- **Snapmaker U1 tool change height:** the cooling pass now reads G91 moves in tool change macros as relative, so outer walls are no longer printed 2 mm in the air after a tool change.
+- **H/2 support:** an option to use half-height support only in the contact zones, plus several band fixes.
+- **Error and crash fixes:** the "Serializing NaN" slicing error, the H2D 0.4/0.6 nozzle tag crash, a hang when reslicing after Bambu dual-nozzle auto-mapping, plate filament sequence and flow validation crashes, the tree support radius 0 error. Crash logs now come with a minidump.
+- **Support and output:** resin support contacts and pillar bases, first support layer over a raft, narrow islands, per-nozzle prime tower width, low-temperature interface drop tower layer heights.
+
+See the [release notes](../../releases/tag/v2.5.0.2.1) for the full list.
 
 ## Bundled mods
 
@@ -33,7 +44,7 @@ The 10 official mods bundled with the app. Their sources are in `mods/` here and
 | Mod | What it does | Where |
 | --- | --- | --- |
 | Multi-nozzle walls (`multi_nozzle_walls`) | Uses toolheads with different nozzle sizes together: sharp outer walls with the small nozzle, the rest with the large one. Automatic or chosen detail tool, per-layer-range toolhead override | Quality > Multi-nozzle walls |
-| Half-height outer walls and support (`half_layer`, H/2) | Prints the two outermost walls and the support twice at half the layer height; the second pass is slotted mid-layer for even cooling | next to Quality > Wall loops, next to Support |
+| Half-height outer walls and support (`half_layer`, H/2) | Prints the two outermost walls and the support twice at half the layer height; the second pass is slotted mid-layer for even cooling; support can be limited to the contact zones | next to Quality > Wall loops, next to Support |
 | Cura support (`cura_support`) | CuraEngine-style normal (area) support with Cura's stair, tower and conical settings | Support > Type |
 | Mixed support (`mixed_support`) | Normal support where it stands on the bed, tree support elsewhere; regions can be painted | Support > Type |
 | Resin support (`resin_support`) | PrusaSlicer's SLA support trees printed as FFF support; the object is lifted and held by point contacts | Support > Type |
@@ -49,7 +60,7 @@ A Snapmaker U1 monitor plugin is included as well.
 
 - **Per-nozzle line widths:** on a printer with mixed nozzle sizes, absolute widths (mm) are read as a share of the reference nozzle and scaled to each nozzle. Set them per nozzle with the nozzle switch under Quality > Line width.
 - **Tool view palette:** toolheads sharing a filament colour are still told apart in the preview's Tool view.
-- **Tidier settings:** a child setting of a switched-off parent is hidden instead of greyed, and settings duplicated between a mod and Orca are shown as one.
+- **Tidier settings:** a child setting of a switched-off parent is hidden instead of greyed, and settings duplicated between a mod and Orca are shown as one. Options on the settings tabs are grouped into foldable categories.
 
 ## Mods
 
