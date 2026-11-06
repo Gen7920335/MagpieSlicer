@@ -3881,6 +3881,10 @@ void TabPrintModel::build()
     m_pages.erase(std::remove_if(m_pages.begin(), m_pages.end(), [](auto & p) {
         return p->m_optgroups.empty();
     }), m_pages.end());
+    // MAGPIE: the groups left have moved; the categories start again from the groups that remain.
+    for (PageShp p : m_pages)
+        p->m_categories.clear();
+    add_categories();
 }
 
 void TabPrintModel::set_model_config(std::map<ObjectBase *, ModelConfig *> const & object_configs)
@@ -10552,7 +10556,8 @@ bool Page::activate_group(size_t i, ConfigOptionMode mode, std::function<void()>
                     page->m_categories[size_t(ci)].header = nullptr;
             event.Skip();
         });
-        m_vsizer->Add(header, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, m_parent->FromDIP(5));
+        m_vsizer->AddSpacer(m_parent->FromDIP(6));
+        m_vsizer->Add(header, 0, wxEXPAND | wxLEFT | wxRIGHT, m_parent->FromDIP(5));
     }
     m_vsizer->Add(group->sizer, 0, wxEXPAND | (group->is_legend_line() ? (wxLEFT|wxTOP) : wxALL), m_parent->FromDIP(5)); // ORCA use less margin on parameters section
     group->update_visibility(mode);

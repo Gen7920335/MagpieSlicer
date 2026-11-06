@@ -22,6 +22,7 @@ public:
 
 private:
     bool     m_collapsed;
+    bool     m_hover = false;
     size_t   m_count = 0;
     wxColour m_lineColor;
 
