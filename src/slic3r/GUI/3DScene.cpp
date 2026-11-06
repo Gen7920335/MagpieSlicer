@@ -1613,7 +1613,12 @@ bool GLVolumeCollection::check_outside_state(const BuildVolume &build_volume, Mo
 
                 }
 
-                if (state == BuildVolume::ObjectState::Limited) {
+                // Only a model volume carries filaments to mark: a wipe tower (its object id is 1000 + the plate) can
+                // come out Limited too, and indexing model_objects with its id read past the list (opening an H2C
+                // project with 0.8 mm nozzles crashed while loading).
+                const bool is_model_volume = volume->object_idx() >= 0 && volume->object_idx() < int(model_objects.size()) &&
+                    volume->volume_idx() >= 0 && volume->volume_idx() < int(model_objects[volume->object_idx()]->volumes.size());
+                if (state == BuildVolume::ObjectState::Limited && is_model_volume) {
                     //unprintable_filament_ids.resize(inside_extruders.size());
                     ModelObject *model_object = model_objects[volume->object_idx()];
                     ModelVolume *model_volume = model_object->volumes[volume->volume_idx()];
