@@ -384,6 +384,9 @@ public:
     ~Tab() {}
 
 	wxWindow*	parent() const { return m_parent; }
+	// MAGPIE: the panel that holds the page view (the sticky category header lives there).
+	ParamsPanel* params_panel() const { return m_parent; }
+	Page*		active_page() const { return m_active_page; }
 	wxString	title()	 const { return m_title; }
 	std::string	name()	 const { return m_presets->name(); }
     Preset::Type type()  const { return m_type; }

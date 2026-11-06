@@ -8857,6 +8857,8 @@ void Tab::activate_selected_page(std::function<void()> throw_if_canceled)
     if (m_active_page && !(m_active_page->title() == "Dependencies"))
         toggle_options();
     m_active_page->update_visibility(m_mode, true); // for taggle line
+    // MAGPIE: the sticky category header follows the page shown, once it is laid out.
+    m_parent->CallAfter([parent = m_parent]() { parent->update_sticky_category(); });
 }
 
 //BBS: GUI refactor
@@ -10548,6 +10550,7 @@ bool Page::activate_group(size_t i, ConfigOptionMode mode, std::function<void()>
             page->set_category_collapsed(size_t(ci), collapsed, true);
             page->parent()->Layout();
             page->parent()->GetParent()->Layout();
+            static_cast<Tab*>(page->m_tab_owner)->params_panel()->update_sticky_category();
         };
         // The page's controls can be cleared without Page::clear() (a cancelled build); forget the header then.
         header->Bind(wxEVT_DESTROY, [wp, ci, header](wxWindowDestroyEvent& event) {

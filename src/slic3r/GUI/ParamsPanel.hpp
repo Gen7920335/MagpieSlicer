@@ -38,6 +38,7 @@
 class ModeSwitchButton;
 class SwitchButton;
 class StaticBox;
+class CategoryHeader;
 
 namespace Slic3r {
 namespace GUI {
@@ -115,6 +116,9 @@ class ParamsPanel : public wxPanel
         //wxBoxSizer* m_right_sizer { nullptr };
         wxScrolledWindow* m_page_view { nullptr };
         wxBoxSizer* m_page_sizer { nullptr };
+        // MAGPIE: a copy of the category header scrolled above the page view, pinned over its top edge
+        // (update_sticky_category), so the category of the settings in view stays readable.
+        CategoryHeader* m_sticky_header { nullptr };
 
         ScalableButton*		m_setting_btn { nullptr };
         ScalableButton*		m_search_btn { nullptr };
@@ -189,6 +193,8 @@ class ParamsPanel : public wxPanel
 
         wxScrolledWindow* get_paged_view() { return m_page_view;}
         wxPanel*    get_current_tab() { return m_current_tab; }
+        // MAGPIE: shows, moves or hides the pinned category header for the page view's scroll position.
+        void        update_sticky_category();
 
 };
 

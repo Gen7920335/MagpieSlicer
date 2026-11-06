@@ -15,6 +15,7 @@
 #include "Widgets/Label.hpp"
 #include "Widgets/SwitchButton.hpp"
 #include "Widgets/Button.hpp"
+#include "Widgets/CategoryHeader.hpp"
 #include "GUI_Factories.hpp"
 #include "I18N.hpp"
 #include "libslic3r/Config.hpp"
@@ -34,6 +35,8 @@
 #include <wx/anybutton.h>
 #include <wx/timer.h>
 #include <cstddef>
+#include <climits>
+#include <algorithm>
 #include <boost/log/trivial.hpp>
 #include <wx/wupdlock.h>
 #include <vector>
@@ -413,6 +416,12 @@ ParamsPanel::ParamsPanel( wxWindow* parent, wxWindowID id, const wxPoint& pos, c
     m_page_view->SetSizer(m_page_sizer);
     m_page_view->SetScrollbars(1, FromDIP(20), 1, 2);
     //m_page_view->SetScrollRate( 5, 5 );
+    // MAGPIE: the pinned category header follows every scroll and resize of the page view, after the view moved.
+    for (const wxEventTypeTag<wxScrollWinEvent>* type : { &wxEVT_SCROLLWIN_TOP, &wxEVT_SCROLLWIN_BOTTOM, &wxEVT_SCROLLWIN_LINEUP, &wxEVT_SCROLLWIN_LINEDOWN,
+                                                          &wxEVT_SCROLLWIN_PAGEUP, &wxEVT_SCROLLWIN_PAGEDOWN, &wxEVT_SCROLLWIN_THUMBTRACK, &wxEVT_SCROLLWIN_THUMBRELEASE })
+        m_page_view->Bind(*type, [this](wxScrollWinEvent& e) { e.Skip(); CallAfter([this] { update_sticky_category(); }); });
+    m_page_view->Bind(wxEVT_MOUSEWHEEL, [this](wxMouseEvent& e) { e.Skip(); CallAfter([this] { update_sticky_category(); }); });
+    m_page_view->Bind(wxEVT_SIZE, [this](wxSizeEvent& e) { e.Skip(); CallAfter([this] { update_sticky_category(); }); });
 
     if (m_mode_region)
         m_mode_region->Bind(wxEVT_TOGGLEBUTTON, &ParamsPanel::OnToggled, this);
@@ -564,6 +573,75 @@ void ParamsPanel::clear_page()
 {
     if (m_page_sizer)
         m_page_sizer->Clear(true);
+    if (m_sticky_header)
+        m_sticky_header->Hide();
+}
+
+// MAGPIE: the pinned category header. Of the category headers scrolled above the page view's top, the lowest one
+// names the category of the settings in view; a copy of it sits over the view's top edge until the next header
+// reaches it. A click on the copy scrolls the real header to the top and folds or unfolds its category there.
+void ParamsPanel::update_sticky_category()
+{
+    Tab*  tab  = dynamic_cast<Tab*>(m_current_tab);
+    Page* page = tab != nullptr && m_page_view != nullptr && m_page_view->IsShown() ? tab->active_page() : nullptr;
+    int   best = -1;
+    if (page != nullptr) {
+        int best_y = 0;
+        int next_y = INT_MAX;
+        for (size_t i = 0; i < page->m_categories.size(); ++i) {
+            const CategoryHeader* header = page->m_categories[i].header;
+            if (header == nullptr || !header->IsShown())
+                continue;
+            const int y = header->GetPosition().y;
+            if (y < 0) {
+                if (best < 0 || y > best_y) {
+                    best   = int(i);
+                    best_y = y;
+                }
+            } else {
+                next_y = std::min(next_y, y);
+            }
+        }
+        // The next header pushes the copy away as it comes up.
+        if (best >= 0 && next_y < (m_sticky_header ? m_sticky_header->GetSize().y : FromDIP(30)))
+            best = -1;
+    }
+    if (best < 0) {
+        if (m_sticky_header)
+            m_sticky_header->Hide();
+        return;
+    }
+    Page::Category& c = page->m_categories[size_t(best)];
+    if (m_sticky_header == nullptr) {
+        m_sticky_header = new CategoryHeader(m_page_view->GetParent(), _(c.title), c.collapsed);
+        m_sticky_header->Hide();
+    }
+    m_sticky_header->SetLabel(_(c.title));
+    m_sticky_header->SetCollapsed(c.collapsed);
+    m_sticky_header->SetCount(c.header->GetCount());
+    std::weak_ptr<Page> wp = page->weak_from_this();
+    m_sticky_header->on_toggle = [this, wp, best](bool collapsed) {
+        PageShp p = wp.lock();
+        if (!p || size_t(best) >= p->m_categories.size())
+            return;
+        if (CategoryHeader* header = p->m_categories[size_t(best)].header) {
+            int x = 0, y = 0;
+            m_page_view->CalcUnscrolledPosition(0, header->GetPosition().y, &x, &y);
+            int unit_x = 0, unit_y = 0;
+            m_page_view->GetScrollPixelsPerUnit(&unit_x, &unit_y);
+            m_page_view->Scroll(-1, unit_y > 0 ? y / unit_y : 0);
+        }
+        p->set_category_collapsed(size_t(best), collapsed, true);
+        m_page_view->Layout();
+        m_page_view->GetParent()->Layout();
+        CallAfter([this] { update_sticky_category(); });
+    };
+    const wxPoint pos  = m_page_view->GetPosition();
+    const wxSize  size = m_page_view->GetClientSize();
+    m_sticky_header->SetSize(pos.x + FromDIP(5), pos.y, size.x - FromDIP(10), m_sticky_header->GetMinSize().y);
+    m_sticky_header->Show();
+    m_sticky_header->Raise();
+    m_sticky_header->Refresh();
 }
 
 
@@ -671,6 +749,10 @@ void ParamsPanel::set_active_tab(wxPanel* tab)
         if (tab_print)
             tab_print->toggle_line("print_flow_ratio", false);
     }
+    // MAGPIE: the pinned category header is the new tab's, once its page is shown.
+    if (m_sticky_header)
+        m_sticky_header->Hide();
+    CallAfter([this] { update_sticky_category(); });
 }
 
 bool ParamsPanel::is_active_and_shown_tab(wxPanel* tab)

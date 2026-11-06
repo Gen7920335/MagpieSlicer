@@ -16,6 +16,7 @@ public:
     bool IsCollapsed() const { return m_collapsed; }
     // How many settings the header stands for while folded; 0 shows none.
     void SetCount(size_t count);
+    size_t GetCount() const { return m_count; }
     void Rescale();
 
     std::function<void(bool collapsed)> on_toggle;
